@@ -1,0 +1,9 @@
+{
+  "branch": "fix/listing-url-link-misplaced-in-summary-column",
+  "title": "listing-URL-link-misplaced-in-summary-column",
+  "type": "fix",
+  "stage": "pr-opened",
+  "attempt": 1,
+  "summary": "Remove redundant listing-URL link from summary column (delete listingLinkWrap div, listing link block in calc(), openListingLink() function, and .listing-link-btn CSS rules)",
+  "pr_url": "https://github.com/alanvardon/bostadskalkyl/pull/5"
+}

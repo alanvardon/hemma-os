@@ -1,0 +1,15 @@
+2026-05-20T21:00:17Z coordinator confirmed — planning PLAN COMPLETE: title=listing-URL-link-misplaced-in-summary-column, type=fix
+2026-05-20T21:00:17Z coordinator stage — planning-done
+2026-05-20T21:00:17Z coordinator confirmed — create-feature-branch BRANCH RESULT: CREATED — fix/listing-url-link-misplaced-in-summary-column
+2026-05-20T21:00:17Z coordinator stage — branch-created
+2026-05-20T21:00:30Z implementation invoked — MODE: implement
+2026-05-20T21:03:33Z implementation emitted — SUMMARY: Remove redundant listing-URL link from summary column (delete listingLinkWrap div, listing link block in calc(), openListingLink() function, and .listing-link-btn CSS rules)
+2026-05-20T21:03:52Z coordinator confirmed — implementation SUMMARY captured
+2026-05-20T21:03:52Z coordinator stage — implementation-done
+2026-05-20T21:03:59Z qa invoked
+2026-05-20T21:05:37Z qa emitted — QA RESULT: PASS
+2026-05-20T21:06:00Z coordinator confirmed — qa PASS
+2026-05-20T21:06:00Z coordinator stage — qa-passed
+2026-05-20T21:06:52Z coordinator confirmed — commit-and-open-pr PR_URL: https://github.com/alanvardon/bostadskalkyl/pull/5
+2026-05-20T21:06:52Z coordinator stage — pr-opened
+2026-05-20T21:06:52Z coordinator success — https://github.com/alanvardon/bostadskalkyl/pull/5
