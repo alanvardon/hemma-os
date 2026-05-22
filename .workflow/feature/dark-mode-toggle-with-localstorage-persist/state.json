@@ -2,7 +2,8 @@
   "branch": "feature/dark-mode-toggle-with-localstorage-persist",
   "title": "dark-mode-toggle-with-localstorage-persistence",
   "type": "feature",
-  "stage": "qa-passed",
+  "stage": "pr-opened",
   "attempt": 1,
-  "summary": "Add dark mode toggle with localStorage persistence, theme-aware Chart.js colours, and CSS variable-driven palette"
+  "summary": "Add dark mode toggle with localStorage persistence, theme-aware Chart.js colours, and CSS variable-driven palette",
+  "pr_url": "https://github.com/alanvardon/bostadskalkyl/pull/4"
 }

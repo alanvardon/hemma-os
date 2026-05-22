@@ -10,3 +10,6 @@
 2026-05-18T21:19:17Z qa emitted — QA RESULT: PASS
 2026-05-18T21:19:39Z coordinator confirmed — qa PASS
 2026-05-18T21:19:39Z coordinator stage — qa-passed
+2026-05-18T21:20:21Z coordinator confirmed — pr PR_URL: https://github.com/alanvardon/bostadskalkyl/pull/4
+2026-05-18T21:20:21Z coordinator stage — pr-opened
+2026-05-18T21:20:21Z coordinator success — https://github.com/alanvardon/bostadskalkyl/pull/4
