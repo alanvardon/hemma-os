@@ -1,0 +1,25 @@
+2026-05-22T18:13:52Z coordinator confirmed — planning PLAN COMPLETE: title=Tier 2 modular split — calc, dom, storage, modals, charts, orchestrator app, type=refactor
+2026-05-22T18:13:52Z coordinator stage — planning-done
+2026-05-22T18:13:52Z coordinator confirmed — create-feature-branch BRANCH RESULT: CREATED — refactor/tier-2-modular-split-calc-dom-storage-modals-chart
+2026-05-22T18:13:52Z coordinator stage — branch-created
+2026-05-22T18:14:26Z implementation invoked — MODE: implement
+2026-05-22T18:39:25Z implementation invoked — MODE: implement
+2026-05-22T19:16:01Z implementation emitted — SUMMARY: Split bostadskalkyl.html into calc.js, dom.js, storage.js, modals.js, charts.js, app.js with async boot, App.recalc rename, versioned storage keys, and removal of all inline event handlers
+2026-05-22T19:16:50Z coordinator confirmed — implementation SUMMARY captured
+2026-05-22T19:16:50Z coordinator stage — implementation-done
+2026-05-22T19:17:06Z qa invoked
+2026-05-22T19:25:27Z qa emitted — QA RESULT: FAIL
+2026-05-22T19:26:21Z coordinator confirmed — qa FAIL — .workflow/refactor/tier-2-modular-split-calc-dom-storage-modals-chart/qa-failures.md
+2026-05-22T19:26:21Z coordinator stage — qa-failed
+2026-05-22T19:26:21Z coordinator attempt — 2 of 3
+2026-05-22T19:26:35Z implementation invoked — MODE: fix
+2026-05-22T19:28:26Z implementation emitted — SUMMARY: Fix bare renderAmortChart() call in modals.js — change to App.charts.renderAmortChart()
+2026-05-22T19:28:48Z coordinator confirmed — implementation SUMMARY captured
+2026-05-22T19:28:48Z coordinator stage — implementation-done
+2026-05-22T19:28:59Z qa invoked
+2026-05-22T19:33:43Z qa emitted — QA RESULT: PASS
+2026-05-22T19:34:29Z coordinator confirmed — qa PASS
+2026-05-22T19:34:29Z coordinator stage — qa-passed
+2026-05-23T06:18:25Z coordinator confirmed — commit-and-open-pr PR_URL: https://github.com/alanvardon/bostadskalkyl/pull/7
+2026-05-23T06:18:25Z coordinator stage — pr-opened
+2026-05-23T06:18:25Z coordinator success — https://github.com/alanvardon/bostadskalkyl/pull/7

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# static-checks.sh — mechanical correctness checks for index.html
+# static-checks.sh — mechanical correctness checks for the modular split
 # Exit 0 on pass, 1 on any failure. Violations printed to stderr.
 
 set -uo pipefail
@@ -12,19 +12,34 @@ mkdir -p "$WORKFLOW_DIR"
 fail() { printf '✗ FAIL — %s\n' "$1" >&2; VIOLATIONS=$((VIOLATIONS + 1)); }
 pass() { printf '✓ PASS — %s\n' "$1"; }
 
-DIFF_ADDED=$(git diff HEAD -- index.html | grep '^+' | grep -v '^+++' || true)
+JS_FILES="calc.js dom.js storage.js modals.js charts.js app.js"
+ALL_FILES="index.html $JS_FILES styles.css"
 
-# 1. Syntax — node --check on extracted inline JS
-awk '/^[[:space:]]*<script>[[:space:]]*$/{p=1;next}/^[[:space:]]*<\/script>[[:space:]]*$/{p=0}p' \
-  index.html > "$WORKFLOW_DIR/syntax-check.js"
-if node --check "$WORKFLOW_DIR/syntax-check.js" 2>/dev/null; then
-  pass "Syntax: inline JS parses cleanly"
+DIFF_ADDED=$(git diff HEAD -- $ALL_FILES | grep '^+' | grep -v '^+++' || true)
+
+# 1. Syntax — node --check on each JS file
+ALL_SYNTAX_OK=1
+for f in $JS_FILES; do
+  if [ -f "$f" ]; then
+    if node --check "$f" 2>/dev/null; then
+      pass "Syntax: $f parses cleanly"
+    else
+      node --check "$f" 2>&1 | sed 's/^/  /' >&2
+      fail "Syntax: node --check failed on $f (see above)"
+      ALL_SYNTAX_OK=0
+    fi
+  fi
+done
+
+# 2. Unit tests
+if node --test calc.test.js 2>/dev/null; then
+  pass "Tests: calc.test.js all pass"
 else
-  node --check "$WORKFLOW_DIR/syntax-check.js" 2>&1 | sed 's/^/  /' >&2
-  fail "Syntax: node --check failed (see above)"
+  node --test calc.test.js 2>&1 | tail -20 | sed 's/^/  /' >&2
+  fail "Tests: calc.test.js has failing tests (see above)"
 fi
 
-# 2. classList — no el.className = in added lines
+# 3. classList — no el.className = in added lines across all JS files
 CLS=$(echo "$DIFF_ADDED" | grep -E '\.className\s*=' || true)
 if [ -n "$CLS" ]; then
   fail "classList: el.className = found (use classList.add/remove):"$'\n'"$(echo "$CLS" | sed 's/^./  /')"
@@ -32,7 +47,7 @@ else
   pass "classList: no el.className = assignments"
 fi
 
-# 3. Hex colours — no hardcoded hex in added lines
+# 4. Hex colours — no hardcoded hex in added lines
 # Excludes CSS variable definitions (-- prefix) and :root block lines
 HEX=$(echo "$DIFF_ADDED" | grep -Ei '#[0-9a-fA-F]{3,6}\b' | grep -v -- '--[a-zA-Z]' | grep -v ':root' || true)
 if [ -n "$HEX" ]; then
@@ -41,16 +56,16 @@ else
   pass "Colours: no hardcoded hex colours"
 fi
 
-# 4. New input IDs must appear in CURRENCY_IDS, NUMBER_IDS, or TEXT_IDS
+# 5. New input IDs must appear in CURRENCY_IDS, NUMBER_IDS, or TEXT_IDS
 NEW_IDS=$(echo "$DIFF_ADDED" | grep -E 'type="(text|number)"|data-type=' | grep -oE 'id="[^"]+"' | sed 's/id="//;s/"//' || true)
 if [ -n "$NEW_IDS" ]; then
   while IFS= read -r id; do
     [ -z "$id" ] && continue
-    if ! grep -qE "(CURRENCY_IDS|NUMBER_IDS|TEXT_IDS)\s*=\s*\[" index.html; then
-      fail "IDs: ID arrays not found in index.html"
+    if ! grep -qE "(CURRENCY_IDS|NUMBER_IDS|TEXT_IDS)\s*=\s*\[" app.js 2>/dev/null; then
+      fail "IDs: ID arrays not found in app.js"
       break
     fi
-    if ! grep -E "(CURRENCY_IDS|NUMBER_IDS|TEXT_IDS)" index.html | grep -qE "\"${id}\"|'${id}'"; then
+    if ! grep -E "(CURRENCY_IDS|NUMBER_IDS|TEXT_IDS)" app.js | grep -qE "\"${id}\"|'${id}'"; then
       fail "IDs: input id=\"$id\" missing from CURRENCY_IDS, NUMBER_IDS, and TEXT_IDS"
     fi
   done <<< "$NEW_IDS"
@@ -59,7 +74,7 @@ else
   pass "IDs: no new input elements in diff"
 fi
 
-# 5. localStorage keys — must start with bostadskalkyl_
+# 6. localStorage keys — must start with bostadskalkyl_
 LS_KEYS=$(echo "$DIFF_ADDED" | grep -oE "localStorage\.(setItem|getItem)\(['\"][^'\"]+['\"]" | grep -oE "['\"][^'\"]+['\"]" | tr -d "'\"" || true)
 if [ -n "$LS_KEYS" ]; then
   ALL_OK=1

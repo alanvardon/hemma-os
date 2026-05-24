@@ -52,9 +52,9 @@ The coordinator writes its own `confirmed`, `stage`, and `halt` entries after pa
 ## Checklist
 
 ### Calculation integrity
-- [ ] calc() function is intact and callable
-- [ ] All new derived values are set inside calc()
-- [ ] All new inputs are read inside calc() using val()
+- [ ] App.recalc() function is intact and callable (was renamed from calc() in the modular split)
+- [ ] All new derived values are set inside App.recalc()
+- [ ] All new inputs are read inside App.recalc() using val()
 
 ### Modals (if a modal was added)
 - [ ] Follows open/close pattern from CLAUDE.md

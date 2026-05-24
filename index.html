@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bostadskalkyl</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="page-header">
+  <div>
+    <h1>Bostadskalkyl</h1>
+    <p>Swedish house purchase calculator — upfront costs &amp; monthly payments</p>
+  </div>
+  <div class="header-actions">
+    <span id="activeScenarioLabel" class="active-scenario-label" style="display:none"></span>
+    <button id="themeToggleBtn" class="btn btn-ghost theme-toggle-btn" title="Toggle dark mode">&#9728;</button>
+    <button class="btn btn-ghost" id="scenariosBtn">Scenarios</button>
+    <button class="btn btn-primary" id="saveBtn">Save</button>
+  </div>
+</div>
+
+<!-- Scenarios modal -->
+<div class="modal-backdrop" id="scenariosModal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Saved Scenarios</span>
+      <button class="modal-close" id="scenariosCloseBtn">&times;</button>
+    </div>
+    <div class="modal-body" id="scenariosBody"></div>
+  </div>
+</div>
+
+<!-- Save prompt -->
+<div class="save-prompt" id="savePrompt">
+  <div class="save-prompt-box">
+    <p class="save-prompt-title" id="savePromptTitle">Save scenario</p>
+    <input type="text" id="saveNameInput" placeholder="e.g. Lidingö house, Scenario A…">
+    <div class="save-prompt-actions">
+      <button class="btn btn-ghost" id="saveCancelBtn">Cancel</button>
+      <button class="btn btn-primary" id="saveConfirmBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+
+  <!-- INPUTS -->
+  <div class="inputs-col inputs-loading">
+
+    <!-- Section 1: Current property -->
+    <div class="section">
+      <div class="section-label">
+        <span class="section-num">1</span>
+        <span class="section-title">Selling your current property</span>
+      </div>
+
+      <div class="field-grid">
+        <div class="field">
+          <label>Sale price (prospective)</label>
+          <div class="input-wrap has-suffix">
+            <input type="text" inputmode="numeric" data-type="currency" id="salePrice" value="4 500 000">
+            <span class="suffix">kr</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Current mortgage balance</label>
+          <div class="input-wrap has-suffix">
+            <input type="text" inputmode="numeric" data-type="currency" id="currentMortgage" value="2 000 000">
+            <span class="suffix">kr</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Agent / selling cost</label>
+          <div class="input-wrap has-suffix">
+            <input type="text" inputmode="numeric" data-type="currency" id="agentCost" value="120 000">
+            <span class="suffix">kr</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Moving cost</label>
+          <div class="input-wrap has-suffix">
+            <input type="text" inputmode="numeric" data-type="currency" id="movingCost" value="20 000">
+            <span class="suffix">kr</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Current mortgage remaining term</label>
+          <div class="input-wrap has-suffix">
+            <input type="number" id="currentTerm" value="48" min="1" max="100" step="1">
+            <span class="suffix">yrs</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Current amortisation rate</label>
+          <div class="input-wrap has-suffix">
+            <input type="number" id="currentAmortRate" value="2" min="0" max="10" step="0.1">
+            <span class="suffix">%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="derived-box">
+        <div class="derived-row">
+          <span class="derived-label">Total takeaway (sale − mortgage)</span>
+          <span class="derived-value positive" id="d-takeaway">—</span>
+        </div>
+        <div class="derived-row">
+          <span class="derived-label">Net proceeds (after agent &amp; moving)</span>
+          <span class="derived-value positive" id="d-netProceeds">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 2: New property purchase -->
+    <div class="section">
+      <div class="section-label">
+        <span class="section-num">2</span>
+        <span class="section-title">Buying your new property</span>
+      </div>
+
+      <div class="field-grid">
+        <div class="field">
+          <label>New property price</label>
+          <div class="input-wrap has-suffix">
+            <input type="text" inputmode="numeric" data-type="currency" id="newPrice" value="6 500 000">
+            <span class="suffix">kr</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Deposit</label>
+          <div class="input-wrap has-suffix">
+            <input type="text" inputmode="numeric" data-type="currency" id="deposit" value="650 000">
+            <span class="suffix">kr</span>
+          </div>
+          <span class="hint" id="depositPct">— % of purchase price</span>
+        </div>
+        <div class="field">
+          <label>Current total pantbrev held</label>
+          <div class="input-wrap has-suffix">
+            <input type="text" inputmode="numeric" data-type="currency" id="existingPantbrev" value="2 000 000">
+            <span class="suffix">kr</span>
+          </div>
+          <span class="hint">Pantbrev already registered on property</span>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Property listing URL</label>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input type="text" id="listingUrl" placeholder="https://www.hemnet.se/bostad/…" style="font-size:13px; flex:1;">
+            <button class="btn btn-ghost" id="openListingBtn" style="flex-shrink:0; font-size:12px; padding:7px 12px;">Open ›</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="derived-box">
+        <div class="derived-row">
+          <span class="derived-label">Loan amount (price − deposit)</span>
+          <span class="derived-value" id="d-loanAmount">—</span>
+        </div>
+        <div class="derived-row">
+          <span class="derived-label">Lagfart (1.5% of purchase price)</span>
+          <span class="derived-value" id="d-lagfart">—</span>
+        </div>
+        <div class="derived-row">
+          <span class="derived-label">New pantbrev needed (loan − existing)</span>
+          <span class="derived-value" id="d-newPantbrevAmt">—</span>
+        </div>
+        <div class="derived-row">
+          <span class="derived-label">New pantbrev cost (2% of new amount)</span>
+          <span class="derived-value" id="d-pantbrevCost">—</span>
+        </div>
+        <div class="derived-row" style="border-top: 1px solid var(--rule); padding-top: 10px; margin-top: 4px;">
+          <span class="derived-label" style="font-weight:500; color: var(--ink);">Total upfront cash needed</span>
+          <span class="derived-value" id="d-totalUpfront" style="font-size:16px;">—</span>
+        </div>
+        <div class="derived-row">
+          <span class="derived-label" style="font-weight:500; color: var(--ink);">Cash surplus / shortfall</span>
+          <span class="derived-value" id="d-cashBalance">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 3: Monthly costs -->
+    <div class="section">
+      <div class="section-label">
+        <span class="section-num">3</span>
+        <span class="section-title">Monthly costs</span>
+      </div>
+
+      <!-- Shared inputs -->
+      <div class="field-grid" style="margin-bottom: 1.25rem;">
+        <div class="field">
+          <label>Amortisation rate</label>
+          <div class="input-wrap has-suffix">
+            <input type="number" id="amortRate" value="2" min="0" max="10" step="0.1">
+            <span class="suffix">%</span>
+          </div>
+          <span class="hint">Annual % of loan repaid each year</span>
+        </div>
+        <div class="field">
+          <label>Property tax (fastighetsavgift)</label>
+          <div class="input-wrap has-suffix">
+            <input type="text" inputmode="numeric" data-type="currency" id="propertyTax" value="9 287">
+            <span class="suffix">kr/yr</span>
+          </div>
+          <span class="hint">Max 9 287 kr/yr (2024)</span>
+        </div>
+        <div class="field">
+          <label>Driftkostnad (running costs)</label>
+          <div class="input-wrap has-suffix">
+            <input type="text" inputmode="numeric" data-type="currency" id="driftkostnad" value="3 000">
+            <span class="suffix">kr/mo</span>
+          </div>
+          <span class="hint">Heating, water, electricity etc.</span>
+        </div>
+      </div>
+
+      <!-- Bank comparison -->
+      <div class="bank-compare">
+
+        <!-- Bank A -->
+        <div class="bank-col">
+          <div class="bank-header">
+            <input type="text" class="bank-name-input" id="bankAName" value="Bank A" placeholder="Bank name">
+          </div>
+          <div class="field" style="margin-bottom: 0.75rem;">
+            <label>Interest rate</label>
+            <div class="input-wrap has-suffix">
+              <input type="number" id="interestRateA" value="3.5" min="0" max="20" step="0.1">
+              <span class="suffix">%</span>
+            </div>
+          </div>
+          <div class="bank-breakdown">
+            <div class="derived-row">
+              <span class="derived-label">Monthly interest</span>
+              <span class="derived-value" id="d-interestA">—</span>
+            </div>
+            <div class="derived-row">
+              <span class="derived-label">Amortisation</span>
+              <span class="derived-value" id="d-amortA">—</span>
+            </div>
+            <div class="derived-row">
+              <span class="derived-label">Property tax</span>
+              <span class="derived-value" id="d-taxA">—</span>
+            </div>
+            <div class="derived-row">
+              <span class="derived-label">Driftkostnad</span>
+              <span class="derived-value" id="d-driftA">—</span>
+            </div>
+            <div class="derived-row bank-total-row">
+              <span class="derived-label">Total monthly</span>
+              <span class="derived-value" id="d-totalA">—</span>
+            </div>
+            <div class="derived-row" style="border-top: 1px dashed var(--rule); margin-top:4px; padding-top:8px;">
+              <span class="derived-label" style="color:var(--accent);">Ränteavdrag relief</span>
+              <span class="derived-value positive" id="d-reliefA">—</span>
+            </div>
+            <div class="derived-row">
+              <span class="derived-label" style="color:var(--accent); font-weight:500;">Effective monthly</span>
+              <span class="derived-value positive" id="d-effectiveA">—</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="bank-divider"></div>
+
+        <!-- Bank B -->
+        <div class="bank-col">
+          <div class="bank-header">
+            <input type="text" class="bank-name-input" id="bankBName" value="Bank B" placeholder="Bank name">
+          </div>
+          <div class="field" style="margin-bottom: 0.75rem;">
+            <label>Interest rate</label>
+            <div class="input-wrap has-suffix">
+              <input type="number" id="interestRateB" value="3.9" min="0" max="20" step="0.1">
+              <span class="suffix">%</span>
+            </div>
+          </div>
+          <div class="bank-breakdown">
+            <div class="derived-row">
+              <span class="derived-label">Monthly interest</span>
+              <span class="derived-value" id="d-interestB">—</span>
+            </div>
+            <div class="derived-row">
+              <span class="derived-label">Amortisation</span>
+              <span class="derived-value" id="d-amortB">—</span>
+            </div>
+            <div class="derived-row">
+              <span class="derived-label">Property tax</span>
+              <span class="derived-value" id="d-taxB">—</span>
+            </div>
+            <div class="derived-row">
+              <span class="derived-label">Driftkostnad</span>
+              <span class="derived-value" id="d-driftB">—</span>
+            </div>
+            <div class="derived-row bank-total-row">
+              <span class="derived-label">Total monthly</span>
+              <span class="derived-value" id="d-totalB">—</span>
+            </div>
+            <div class="derived-row" style="border-top: 1px dashed var(--rule); margin-top:4px; padding-top:8px;">
+              <span class="derived-label" style="color:var(--accent);">Ränteavdrag relief</span>
+              <span class="derived-value positive" id="d-reliefB">—</span>
+            </div>
+            <div class="derived-row">
+              <span class="derived-label" style="color:var(--accent); font-weight:500;">Effective monthly</span>
+              <span class="derived-value positive" id="d-effectiveB">—</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Difference row -->
+      <div class="bank-diff-row">
+        <span class="derived-label" id="d-bankDiffLabel">Difference</span>
+        <span class="derived-value" id="d-bankDiff">—</span>
+      </div>
+
+    </div>
+
+    <!-- Section 4: Interest rate stress test -->
+    <div class="section">
+      <div class="section-label">
+        <span class="section-num">4</span>
+        <span class="section-title">Interest rate stress test</span>
+      </div>
+      <div class="stress-slider-wrap">
+        <div class="stress-slider-header">
+          <span class="stress-slider-label">Interest rate</span>
+          <span class="stress-slider-rate" id="stressRateDisplay">3.5%</span>
+        </div>
+        <input type="range" id="stressSlider" class="stress-slider-input"
+               min="0.5" max="12" step="0.01" value="3.5">
+        <div class="stress-slider-bounds">
+          <span>0.5%</span>
+          <span>12%</span>
+        </div>
+        <div class="stress-results">
+          <div class="stress-result-row">
+            <span class="stress-result-label">Monthly interest</span>
+            <span class="stress-result-value" id="stressMonthlyInterest">—</span>
+          </div>
+          <div class="stress-result-row">
+            <span class="stress-result-label">Total monthly</span>
+            <span class="stress-result-value" id="stressTotalMonthly">—</span>
+          </div>
+          <div class="stress-result-row">
+            <span class="stress-result-label">After ränteavdrag</span>
+            <span class="stress-result-value stress-result-relief" id="stressAfterRelief">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- SUMMARY -->
+  <div class="summary-col">
+    <p class="summary-title">Summary</p>
+
+    <div class="sum-card sum-card-clickable" id="pnl-card" title="Click to manage savings">
+      <div class="sum-card-title-row">
+        <div class="sum-card-title">Cash surplus / shortfall</div>
+        <span class="sum-card-hint">Add savings ›</span>
+      </div>
+      <div class="sum-big" id="s-cashBalance">—</div>
+      <div class="sum-rows">
+        <div class="sum-row">
+          <span class="sum-row-label">Net from sale</span>
+          <span class="sum-row-val" id="s-pnl-net">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Less upfront costs</span>
+          <span class="sum-row-val" id="s-pnl-upfront">—</span>
+        </div>
+        <div class="sum-row" id="s-savings-row" style="display:none;">
+          <span class="sum-row-label">Savings</span>
+          <span class="sum-row-val positive" id="s-savings-total">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sum-card">
+      <div class="sum-card-title">Net from sale</div>
+      <div class="sum-big positive" id="s-netProceeds">—</div>
+      <div class="sum-rows">
+        <div class="sum-row">
+          <span class="sum-row-label">Total takeaway</span>
+          <span class="sum-row-val" id="s-takeaway">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Less agent &amp; moving</span>
+          <span class="sum-row-val" id="s-costs">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sum-card">
+      <div class="sum-card-title">Total upfront needed</div>
+      <div class="sum-big" id="s-totalUpfront">—</div>
+      <div class="sum-rows">
+        <div class="sum-row">
+          <span class="sum-row-label">Deposit</span>
+          <span class="sum-row-val" id="s-deposit">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Lagfart</span>
+          <span class="sum-row-val" id="s-lagfart">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Pantbrev cost</span>
+          <span class="sum-row-val" id="s-pantbrev">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sum-card sum-card-clickable" id="mortgageCard" title="Click to see payoff comparison">
+      <div class="sum-card-title-row">
+        <div class="sum-card-title">New mortgage</div>
+        <span class="sum-card-hint">View payoff chart ›</span>
+      </div>
+      <div class="sum-big" id="s-loanAmount">—</div>
+      <div class="ltv-bar-wrap">
+        <div class="ltv-bar-bg">
+          <div class="ltv-bar-fill" id="ltv-bar" style="width:0%"></div>
+        </div>
+        <div class="ltv-labels">
+          <span>Equity: <strong id="s-ltv">—</strong></span>
+          <span>15% min</span>
+        </div>
+      </div>
+    </div>
+
+    <hr class="sum-divider">
+
+    <div class="sum-card sum-card-clickable" id="driftCard" title="Click to itemise driftkostnad">
+      <div class="sum-card-title-row">
+        <div class="sum-card-title">Total monthly cost</div>
+        <span class="sum-card-hint">Itemise driftkostnad ›</span>
+      </div>
+      <div class="sum-big" id="s-totalMonthly">—</div>
+      <div class="sum-rows">
+        <div class="sum-row">
+          <span class="sum-row-label">Interest</span>
+          <span class="sum-row-val" id="s-interest">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Amortisation</span>
+          <span class="sum-row-val" id="s-amort">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Property tax</span>
+          <span class="sum-row-val" id="s-tax">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Driftkostnad</span>
+          <span class="sum-row-val" id="s-drift">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sum-card" id="ranteavdragCard">
+      <div class="sum-card-title">Ränteavdrag (tax relief)</div>
+      <div class="sum-big positive" id="s-ranteavdrag">—</div>
+      <div class="sum-rows">
+        <div class="sum-row">
+          <span class="sum-row-label">Annual interest</span>
+          <span class="sum-row-val" id="s-annualInterest">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Back from Skatteverket</span>
+          <span class="sum-row-val positive" id="s-skatteverket">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Effective monthly</span>
+          <span class="sum-row-val" id="s-effectiveMonthly">—</span>
+        </div>
+      </div>
+    </div>
+
+    <hr class="sum-divider">
+
+    <div class="sum-card">
+      <div class="sum-card-title">Affordability</div>
+      <div class="sum-big" id="s-reqSalary">—</div>
+      <div class="sum-card-subtitle">gross monthly salary needed</div>
+      <div class="sum-rows" style="margin-top:0.5rem;">
+        <div class="sum-row" style="align-items:center; border-top:none; padding-top:6px;">
+          <span class="sum-row-label">Threshold</span>
+          <span style="display:flex;align-items:center;gap:4px;">
+            <input type="number" id="affordThreshold" value="30" min="1" max="100" step="1" style="width:48px;padding:3px 6px;font-size:12px;text-align:center;">
+            <span style="font-size:12px;color:var(--ink-soft);">% of gross salary</span>
+          </span>
+        </div>
+        <div class="sum-row" style="align-items:center; padding-top:6px;">
+          <span class="sum-row-label">Include ränteavdrag</span>
+          <label class="toggle" style="margin-left:auto;">
+            <input type="checkbox" id="ranteavdragToggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="sum-card">
+      <div class="sum-card-title">Equity after 10 years</div>
+      <div class="sum-big positive" id="s-equity10">—</div>
+      <div class="sum-rows">
+        <div class="sum-row">
+          <span class="sum-row-label">Equity at year 5</span>
+          <span class="sum-row-val" id="s-equity5">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Equity at year 20</span>
+          <span class="sum-row-val" id="s-equity20">—</span>
+        </div>
+      </div>
+    </div>
+
+
+  </div>
+</div>
+
+<!-- Amortisation modal -->
+<div class="modal-backdrop" id="amortModal">
+  <div class="modal amort-modal">
+    <div class="modal-header">
+      <span class="modal-title">Mortgage payoff comparison</span>
+      <button class="modal-close" id="amortCloseBtn">&times;</button>
+    </div>
+    <div class="modal-body amort-modal-body">
+      <div class="amort-meta" id="amortMeta"></div>
+      <div class="amort-chart-wrap" id="amortChartWrap">
+        <canvas id="amortChart"></canvas>
+        <span class="chart-expand-hint">⤢ Expand</span>
+      </div>
+      <div class="amort-lump-section">
+        <div class="amort-two-col">
+
+          <div class="amort-lump-col">
+            <div class="amort-lump-title">Lump sum payments</div>
+            <div class="amort-lump-hint">Add one-off payments to see how they accelerate payoff</div>
+            <div id="lumpSumList"></div>
+            <button class="btn btn-ghost amort-add-btn" id="addLumpSumBtn">+ Add payment</button>
+          </div>
+
+          <div class="amort-lump-divider"></div>
+
+          <div class="amort-lump-col">
+            <div class="amort-lump-title">Calculate lump sum for target payoff</div>
+            <div class="amort-lump-hint">Enter a target year to find the required lump sum (paid in year 1)</div>
+            <div class="amort-target-fields" style="grid-template-columns: 1fr;">
+              <div class="field">
+                <label>Target payoff year</label>
+                <div class="input-wrap has-suffix">
+                  <input type="number" id="targetPayoffYear" min="1" max="100" step="1" placeholder="e.g. 25">
+                  <span class="suffix">yrs</span>
+                </div>
+              </div>
+            </div>
+            <div class="field" style="margin-bottom: 0.75rem;">
+              <label>Lump sum required</label>
+              <div class="input-wrap has-suffix">
+                <input type="text" id="targetLumpResult" readonly placeholder="—" style="background: var(--paper-warm); color: var(--ink); cursor: default;">
+                <span class="suffix">kr</span>
+              </div>
+            </div>
+            <div class="amort-target-result" id="targetResult"></div>
+            <button class="btn btn-ghost amort-add-btn" id="calcTargetBtn">Calculate</button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
+<!-- Fullscreen chart modal -->
+<div class="chart-fullscreen-backdrop" id="chartFullscreen">
+  <div class="chart-fullscreen-box">
+    <div class="chart-fullscreen-header">
+      <span class="chart-fullscreen-title">Mortgage payoff comparison</span>
+      <button class="modal-close" id="fullscreenCloseBtn">&times;</button>
+    </div>
+    <div class="chart-fullscreen-canvas-wrap">
+      <canvas id="amortChartFull"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Driftkostnad modal -->
+<div class="modal-backdrop" id="driftModal">
+  <div class="modal" style="width:520px;">
+    <div class="modal-header">
+      <span class="modal-title">Driftkostnad breakdown</span>
+      <button class="modal-close" id="driftCloseBtn">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
+        <p style="font-size:13px; color:var(--ink-soft); margin:0;">Enter costs per category. Total updates Section 3 automatically.</p>
+        <div style="display:flex; align-items:center; gap:8px; flex-shrink:0; margin-left:1rem;">
+          <span style="font-size:12px; color:var(--ink-soft);" id="driftModeLabel">Monthly</span>
+          <label class="toggle">
+            <input type="checkbox" id="driftYearlyToggle">
+            <span class="toggle-slider"></span>
+          </label>
+          <span style="font-size:12px; color:var(--ink-soft);">Yearly</span>
+        </div>
+      </div>
+      <div id="driftItemList"></div>
+      <button class="btn btn-ghost" id="addDriftItemBtn" style="margin-top:0.75rem; font-size:13px; padding:6px 14px;">+ Add item</button>
+      <div class="drift-total-row">
+        <span style="font-size:13px; font-weight:500; color:var(--ink-mid);">Total monthly driftkostnad</span>
+        <span style="font-family:'DM Serif Display',serif; font-size:1.2rem;" id="driftModalTotal">—</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Savings modal -->
+<div class="modal-backdrop" id="savingsModal">
+  <div class="modal" style="width:480px;">
+    <div class="modal-header">
+      <span class="modal-title">Savings</span>
+      <button class="modal-close" id="savingsCloseBtn">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px; color:var(--ink-soft); margin-bottom:1.25rem;">Add savings entries to include them in your cash surplus / shortfall calculation.</p>
+      <div id="savingsItemList"></div>
+      <button class="btn btn-ghost" id="addSavingsItemBtn" style="margin-top:0.75rem; font-size:13px; padding:6px 14px;">+ Add entry</button>
+      <div class="drift-total-row">
+        <span style="font-size:13px; font-weight:500; color:var(--ink-mid);">Total savings</span>
+        <span style="font-family:'DM Serif Display',serif; font-size:1.2rem; color:var(--accent);" id="savingsModalTotal">—</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="calc.js"></script>
+<script src="dom.js"></script>
+<script src="storage.js"></script>
+<script src="modals.js"></script>
+<script src="charts.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

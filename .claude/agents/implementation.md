@@ -82,14 +82,16 @@ The coordinator writes its own `confirmed`, `stage`, and `halt` entries after pa
 
 ### JavaScript
 - Use classList.add() and classList.remove() — never el.className =
-- All new derived values must be calculated and set inside calc()
-- All new inputs must be read inside calc() using val()
+- All new derived values must be calculated and set inside App.recalc()
+- All new inputs must be read inside App.recalc() using val()
 - New currency inputs must have data-type='currency' attribute
 - New currency inputs must be added to CURRENCY_IDS array
 - New number inputs must be added to NUMBER_IDS array
 - New text inputs must be added to TEXT_IDS array
 - New localStorage keys must follow the bostadskalkyl_* naming convention
 - New localStorage keys must be handled in readInputs() and writeInputs()
+- New localStorage keys must use the bostadskalkyl_*_v1 versioned naming
+- Each window.App.* key must have exactly one writer file (one-writer rule)
 
 ### Modals
 - Follow the open/close pattern in CLAUDE.md exactly
@@ -115,7 +117,7 @@ The coordinator writes its own `confirmed`, `stage`, and `halt` entries after pa
    ```
    - [ ] Open the new stress test modal and verify each scenario rate
    - [ ] Confirm existing scenarios still render correctly
-   - [ ] Verify calc() still updates summary panel on every input change
+   - [ ] Verify App.recalc() still updates summary panel on every input change
    ```
 
 4. Append the `emitted` log line to `PROGRESS_LOG_FILE` (see Logging section).

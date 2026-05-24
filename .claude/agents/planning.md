@@ -20,7 +20,7 @@ Sentinels in this document use `<angle brackets>` to mark placeholders. When you
 
 ## When invoked
 1. Read CLAUDE.md thoroughly
-2. Read index.html to understand the current structure
+2. Read index.html and the relevant JS files (calc.js, dom.js, storage.js, modals.js, charts.js, app.js) to understand the current structure
 3. Analyse the request
 
 Output a structured plan covering:
@@ -46,7 +46,8 @@ One of: `feature`, `fix`, `refactor`. This drives the branch prefix.
 ### Functions impacted
 - Which existing functions are modified
 - Which new functions are needed
-- Any impact on calc() specifically
+- Any impact on App.recalc() specifically
+- Which App.* namespace is the correct home for any new functions
 
 ### localStorage
 - Any new keys needed following the bostadskalkyl_* convention

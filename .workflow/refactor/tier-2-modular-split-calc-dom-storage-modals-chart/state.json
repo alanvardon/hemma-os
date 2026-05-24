@@ -1,0 +1,9 @@
+{
+  "branch": "refactor/tier-2-modular-split-calc-dom-storage-modals-chart",
+  "title": "Tier 2 modular split — calc, dom, storage, modals, charts, orchestrator app",
+  "type": "refactor",
+  "stage": "pr-opened",
+  "attempt": 2,
+  "summary": "Split bostadskalkyl.html into calc.js, dom.js, storage.js, modals.js, charts.js, app.js with async boot, App.recalc rename, versioned storage keys, and removal of all inline event handlers; fix bare renderAmortChart() call to App.charts.renderAmortChart()",
+  "pr_url": "https://github.com/alanvardon/bostadskalkyl/pull/7"
+}
