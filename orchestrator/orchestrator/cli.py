@@ -53,6 +53,19 @@ def _format_elapsed(seconds: float) -> str:
 # rename the @entrypoint function, update this constant.
 _ENTRYPOINT_NAME = "workflow"
 
+# Maps "task that just completed" -> "task that's now running", so the
+# heartbeat can show what's actually happening rather than what's behind
+# us. The `qa` case is ambiguous (PASS goes to commit_and_pr, FAIL loops
+# back to implementation) — handled inline by reading the QaResult.
+# Keep in sync with the workflow body in orchestrator/workflow.py.
+_NEXT_STAGE = {
+    None: "verify_clean_tree",
+    "verify_clean_tree": "planning",
+    "create_branch": "implementation",
+    "implementation": "qa",
+    "commit_and_pr": "finishing",
+}
+
 
 async def _run_with_progress(workflow, input_data, config) -> dict:
     """Stream the workflow with per-task progress markers and a heartbeat.
@@ -60,9 +73,11 @@ async def _run_with_progress(workflow, input_data, config) -> dict:
     Emits:
       - ``done: <task> (Xs)`` after each @task completes, with the time
         that task itself took (not cumulative)
-      - ``... after <task> (Ys elapsed)`` every HEARTBEAT_INTERVAL seconds
-        while a task is still running — catches long-running stages
-        (implementation_task is 5+ min) that otherwise look hung
+      - ``... running <task> (Ys elapsed)`` every HEARTBEAT_INTERVAL
+        seconds while a task is still running — catches long-running
+        stages (implementation_task is 5+ min) that otherwise look hung.
+        Label is predicted from the workflow's known task order, so it
+        tells you what's CURRENTLY running, not what just finished.
 
     Returns the workflow result dict: either ``{"__interrupt__": [...]}``
     if the workflow paused for plan approval, or the entrypoint's return
@@ -71,7 +86,7 @@ async def _run_with_progress(workflow, input_data, config) -> dict:
     heartbeat_interval = float(os.environ.get("HEARTBEAT_INTERVAL", "15"))
     last_event_time = time.monotonic()
     final_result: dict | None = None
-    current_label = "starting"
+    current_label = f"running {_NEXT_STAGE[None]}"
     stop = asyncio.Event()
 
     async def heartbeat() -> None:
@@ -108,7 +123,19 @@ async def _run_with_progress(workflow, input_data, config) -> dict:
                         f"  done: {name} ({_format_elapsed(task_elapsed)})",
                         file=sys.stderr,
                     )
-                    current_label = f"after {name}"
+                    # Predict what's running now so the heartbeat label
+                    # is accurate. qa is ambiguous (PASS → commit_and_pr,
+                    # FAIL → another implementation attempt) — disambiguate
+                    # by reading the QaResult.
+                    if name == "qa":
+                        next_stage = (
+                            "commit_and_pr"
+                            if getattr(value, "result", None) == "PASS"
+                            else "implementation (retry)"
+                        )
+                    else:
+                        next_stage = _NEXT_STAGE.get(name, "next stage")
+                    current_label = f"running {next_stage}"
     finally:
         stop.set()
         await hb
