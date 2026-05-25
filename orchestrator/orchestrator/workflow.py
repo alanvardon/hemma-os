@@ -7,6 +7,7 @@ from typing import AsyncIterator
 # you write a workflow as ordinary async Python and get durability,
 # tracing, and resume-on-crash semantics for free.
 from langgraph.func import entrypoint, task
+from langgraph.types import interrupt
 
 # AsyncSqliteSaver replaces Phase 2's MemorySaver. Same checkpointer API,
 # but state is written to a SQLite file on disk — durable across process
@@ -22,7 +23,7 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from orchestrator.agents.planning import plan, PlanResult
 from orchestrator.agents.implementation import implement, ImplementationResult
 from orchestrator.agents.qa import qa, QaResult
-from orchestrator.git_ops import create_branch, commit_and_pr
+from orchestrator.git_ops import create_branch, commit_and_pr, verify_clean_tree
 
 
 # Future LangGraph versions will refuse to deserialize types that aren't
@@ -49,6 +50,16 @@ _CUSTOM_SERDE = JsonPlusSerializer(
 @task
 async def planning_task(request: str) -> PlanResult:
     return await plan(request)
+
+
+# Pre-flight check. Runs FIRST in the workflow — before planning — so a
+# dirty working tree fails fast with zero LLM cost and no wasted approval
+# round. Defence in depth: create_branch_task also calls verify_clean_tree
+# internally, since the tree could be dirtied between approval and branch
+# creation (the user has time to make edits during plan review).
+@task
+async def verify_clean_tree_task() -> None:
+    await asyncio.to_thread(verify_clean_tree)
 
 
 # Deterministic git task (Phase 6a). Wraps the synchronous create_branch
@@ -146,10 +157,69 @@ async def build_workflow(
 
         @entrypoint(checkpointer=checkpointer)
         async def workflow(request: str) -> dict:
+            # Fail fast on a dirty tree BEFORE the planning LLM call —
+            # otherwise we'd waste tokens (and the user's approval time)
+            # only to fail at create_branch_task downstream.
+            await verify_clean_tree_task()
+
             plan_result = await planning_task(request)
+
+            # Phase 8: plan approval interrupt. The loop runs until the
+            # user replies "yes". Any other reply is treated as feedback:
+            # the plan is regenerated with the feedback appended to the
+            # original request, then the new plan is surfaced for another
+            # round of review.
+            #
+            # Landmine #4: create_branch_task (the first side effect) is
+            # intentionally AFTER this block. interrupt() re-executes the
+            # entrypoint body on resume; tasks already completed with the
+            # same inputs return their cached result without a new LLM call,
+            # so planning_task(request) on re-execution is effectively free.
+            while True:
+                approval = interrupt({
+                    "kind": "plan_approval",
+                    "plan": plan_result.model_dump(),
+                    "ask": "Approve this plan? Reply 'yes' or describe changes.",
+                })
+                if approval == "yes":
+                    break
+                plan_result = await planning_task(
+                    f"{request}\n\nFeedback: {approval}"
+                )
+
             branch_name = await create_branch_task(plan_result)
-            impl_result = await implementation_task(plan_result)
-            qa_result = await qa_task(plan_result)
+
+            # Phase 7: retry loop. Up to 3 attempts: first is always
+            # "implement" (fresh execution); subsequent attempts are
+            # "fix" mode, passing qa_failures so the agent knows exactly
+            # what to correct without re-doing passing work.
+            #
+            # Python's for/else: the `else` block runs only if the loop
+            # exhausted all attempts WITHOUT hitting `break`. A `break`
+            # means QA passed — the else block (failure path) is skipped.
+            qa_failures: str | None = None
+            impl_result = None
+            for attempt in range(1, 4):
+                mode = "implement" if attempt == 1 else "fix"
+                impl_result = await implementation_task(
+                    plan_result, mode=mode, qa_failures=qa_failures
+                )
+                qa_result = await qa_task(plan_result)
+                if qa_result.result == "PASS":
+                    break
+                qa_failures = qa_result.failures
+            else:
+                # All 3 attempts failed QA. Return without opening a PR —
+                # a broken PR is worse than no PR. The branch and all the
+                # attempted diffs are still in the repo; a human can review
+                # and decide what to do with them.
+                return {
+                    "status": "failed",
+                    "plan": plan_result.model_dump(),
+                    "branch": branch_name,
+                    "qa_failures": qa_failures,
+                }
+
             pr_url = await commit_and_pr_task(
                 branch_name,
                 plan_result.title,
@@ -157,6 +227,7 @@ async def build_workflow(
                 impl_result.test_plan,
             )
             return {
+                "status": "succeeded",
                 "plan": plan_result.model_dump(),
                 "branch": branch_name,
                 "implementation": impl_result.model_dump(),

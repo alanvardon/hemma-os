@@ -685,6 +685,95 @@ approve → see the PR URL.
 
 ---
 
+## Phase 13 — User-facing config file (1 hour)
+
+**Build:** an optional `orchestrator.toml` at the project root that exposes
+the tuning knobs without forcing users to edit Python.
+**Learn:** how to keep the config surface tight — every knob is a new
+failure mode and a new doc obligation.
+
+Add `orchestrator/config.py` with a single Pydantic `OrchestratorConfig`
+model, loaded once at `build_workflow()` time via `tomllib` (stdlib).
+If `orchestrator.toml` is missing, fall back to defaults — the file is
+optional.
+
+Exposed fields (start minimal — resist growing this):
+
+```toml
+# orchestrator.toml — all fields optional, defaults shown
+max_retries = 3                    # implementation+qa loop attempts
+db_path = ".orchestrator/checkpoints.db"
+
+[models]
+planning       = "claude-sonnet-4-6"
+implementation = "claude-sonnet-4-6"
+qa             = "claude-sonnet-4-6"
+
+[human_in_loop]
+# Each toggle gates an `interrupt()` at that stage boundary.
+# false = fully autonomous (current Phase 7 behaviour).
+approve_plan           = true   # before any code is written (Phase 8 default)
+approve_branch         = false  # before create_branch_task runs
+approve_implementation = false  # after each impl attempt, before QA
+approve_qa_failure     = false  # on QA FAIL, ask before retrying vs. abandoning
+approve_pr             = false  # before commit_and_pr opens the PR
+
+[branch]
+max_slug_length = 50            # truncation cap in _slugify
+
+[pr]
+base_branch = "main"            # some repos use "develop" or "trunk"
+draft       = false             # open as draft vs ready-for-review
+reviewers   = []                # GitHub usernames to request review from
+labels      = []                # labels to attach to the PR
+```
+
+**What is deliberately NOT in the config:**
+
+- **System prompts.** Tightly coupled to structured-output schemas; a typo
+  here breaks the agent loop in ways that are painful to debug. Keep in code.
+- **Allowed-tools lists per agent.** Security-sensitive (QA must stay
+  read-only). Keep in code.
+- **Per-attempt mode logic** (`implement` vs `fix`). Workflow behaviour,
+  not user preference.
+
+**Wiring:**
+
+1. `config.py` exports `load_config(path: Path | None = None) -> OrchestratorConfig`.
+2. `build_workflow()` accepts an optional `config: OrchestratorConfig`
+   argument; if omitted, calls `load_config()` itself.
+3. The Phase 7 retry loop reads `config.max_retries` instead of the
+   hardcoded `range(1, 4)`.
+4. Each agent's `ClaudeAgentOptions(model=...)` reads from `config.models.*`.
+5. Each `interrupt()` call in the workflow is gated by the relevant
+   `config.human_in_loop.*` flag — `if config.human_in_loop.approve_plan: interrupt(...)`.
+6. `git_ops._slugify` reads `config.branch.max_slug_length` instead of the
+   hardcoded `50`.
+7. `git_ops.commit_and_pr` reads `config.pr.*` and passes the values to
+   `gh pr create` — `--base`, `--draft`, repeated `--reviewer`,
+   repeated `--label`. Empty lists mean "omit the flag entirely".
+
+**Granular human-in-loop — why per-stage flags work:**
+
+LangGraph's `interrupt()` is a workflow primitive, not a global mode. It
+pauses execution at the call site, persists state to the checkpointer, and
+returns whatever value the user supplies on resume. That means you can
+stack as many or as few as you want; each one is just an `if` around a
+function call. The five stages above are the natural boundaries — adding
+more (e.g., post-planning-revision) is straightforward later.
+
+**Pedagogical landmine carried forward:** `interrupt()` re-runs its
+calling task on resume (see landmine #4). Every gated interrupt MUST have
+its side effects after the interrupt, not before. The Phase 8 work
+already proves this pattern; Phase 13 just multiplies the call sites.
+
+**Run this and see X:** drop an `orchestrator.toml` with
+`max_retries = 1` and `approve_pr = true` → run a feature request → on QA
+PASS, see the workflow pause for PR approval. Delete the file → run again
+→ workflow uses defaults and runs end-to-end without prompts.
+
+---
+
 ## What to skip on the first pass
 
 Defer until the basic version runs end-to-end:
@@ -697,7 +786,8 @@ Defer until the basic version runs end-to-end:
 - **Tests beyond a smoke test on each task.**
 - **Migrating old `.workflow/` runs.** Start fresh.
 - **QA failures as interrupts.** Today's behaviour (auto-retry 3x) is fine.
-  Adding a user-judgement step is a Phase 13+ enhancement.
+  A user-judgement step is configurable in Phase 13 via
+  `human_in_loop.approve_qa_failure`.
 
 ## Pedagogical landmines
 
@@ -725,7 +815,8 @@ These don't change the plan but you'll want to decide as you go:
 - **How do you want the planning prompt to handle revisions?** Today's
   coordinator appends user feedback to the original request. Surfaces in Phase 8.
 - **Should QA failures be interruptible** (surface to user for judgement)
-  or always auto-retry (current behaviour)? Surfaces in Phase 7.
+  or always auto-retry (current behaviour)? Surfaces in Phase 7; made
+  configurable in Phase 13.
 - **Implementation tasks take 5+ min; what does Claude Code show during that?**
   MCP supports progress notifications. Surfaces in Phase 11.
 - **Worktree-per-feature** for future parallelism — design now or retrofit
@@ -748,7 +839,8 @@ These don't change the plan but you'll want to decide as you go:
 | 10. CLI debug interface | 1 hour |
 | 11. MCP server | 1.5 hours |
 | 12. Register with Claude Code | 30 min |
-| **Total** | **~10–15 focused hours** |
+| 13. User-facing config file | 1 hour |
+| **Total** | **~11–16 focused hours** |
 
 **Spread across multiple sessions.** The pedagogical value comes from
 running each phase and letting the model click before adding the next

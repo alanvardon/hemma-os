@@ -68,6 +68,22 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
     )
 
 
+def verify_clean_tree() -> None:
+    """Raise BranchCreationError if the working tree has uncommitted changes.
+
+    Pre-flight check used at the very start of the workflow (so a dirty
+    tree fails before paying for any LLM calls) and again inside
+    create_branch (defence in depth — the tree might have become dirty
+    between plan approval and branch creation).
+    """
+    status = _run(["git", "status", "--porcelain"])
+    if status.stdout.strip():
+        raise BranchCreationError(
+            f"working tree is dirty. Commit or stash your changes, then "
+            f"retry.\n\n{status.stdout.strip()}"
+        )
+
+
 def create_branch(plan: PlanResult) -> str:
     """Create a feature branch from main based on the plan's title and type.
 
@@ -85,11 +101,7 @@ def create_branch(plan: PlanResult) -> str:
     # 1. Working tree must be clean. We can't safely switch branches
     # otherwise — uncommitted work would either be lost or carried into
     # the new branch (both bad).
-    status = _run(["git", "status", "--porcelain"])
-    if status.stdout.strip():
-        raise BranchCreationError(
-            f"working tree is dirty:\n{status.stdout.strip()}"
-        )
+    verify_clean_tree()
 
     # 2. Sync with origin/main first. Branching from a stale local main
     # is how you end up with PRs that conflict from day one.
