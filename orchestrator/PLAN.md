@@ -437,11 +437,22 @@ to re-run from the top when resumed, with the resume value injected.
 **Side effects must come AFTER `interrupt()`, never before** — otherwise
 they happen twice.
 
-For now you'll test this programmatically (raising `GraphInterrupt`).
-The actual user-facing approval happens through the MCP layer in Phase 10.
+For now you'll test this programmatically. The actual user-facing
+approval happens through the MCP layer in Phase 10.
 
-**Run this and see X:** workflow pauses at the interrupt, raises
-`GraphInterrupt`. Resume with `Command(resume="yes")` and it continues.
+**Note on the interrupt return shape (verified empirically — the older
+docs and many third-party examples are stale on this point):** in the
+*functional* API, `ainvoke()` does NOT raise `GraphInterrupt` when it
+hits `interrupt()`. It returns a dict shaped like
+`{"__interrupt__": [Interrupt(value=<your dict>, id="...")]}`. Resume by
+calling `ainvoke(Command(resume=<value>), config=config)` against the
+same `thread_id`. (`GraphInterrupt` *does* exist and IS raised in some
+internal code paths and in the state-graph API, but its own docstring
+says "never raised directly, or surfaced to the user" — trust the dict.)
+
+**Run this and see X:** workflow pauses at the interrupt; `ainvoke`
+returns a dict containing `__interrupt__`. Resume with
+`Command(resume="yes")` and it continues to completion.
 
 ---
 
@@ -474,19 +485,23 @@ interface — a *debug surface* you'll keep around.
 ```python
 import asyncio, sys, uuid
 from langgraph.types import Command
-from orchestrator.workflow import workflow
+from orchestrator.workflow import build_workflow
 
 async def run():
     request = " ".join(sys.argv[1:])
     config = {"configurable": {"thread_id": f"cli-{uuid.uuid4().hex[:8]}"}}
-    try:
-        result = await workflow.ainvoke({"request": request}, config=config)
-        print(result)
-    except GraphInterrupt as i:
-        # Surface the plan, ask user, resume
-        print(i.value["plan"])
-        response = input("Approve? ")
-        result = await workflow.ainvoke(Command(resume=response), config=config)
+    async with build_workflow() as workflow:
+        result = await workflow.ainvoke(request, config=config)
+        # interrupt() in the functional API does NOT raise — it returns
+        # a dict containing "__interrupt__". Loop until the workflow
+        # completes normally (no __interrupt__ in the return value).
+        # A feedback reply triggers a re-plan and another interrupt, so
+        # the loop is required, not optional.
+        while "__interrupt__" in result:
+            interrupt_val = result["__interrupt__"][0].value
+            print(interrupt_val["plan"]["plan_text"])
+            response = input("Approve? ")
+            result = await workflow.ainvoke(Command(resume=response), config=config)
         print(result)
 
 def main():
@@ -510,12 +525,12 @@ can defer until they annoy you. Tackle in this order.
 
 **Functional (must fix):**
 
-1. **Multi-turn approval loop.** The snippet handles ONE approval cycle.
-   If the user replies with feedback instead of "yes", the workflow
-   re-plans and hits `interrupt()` again — but the snippet doesn't loop,
-   so the second `GraphInterrupt` escapes uncaught. Wrap the
-   `try/except GraphInterrupt` in a `while True:` and break only when
-   `ainvoke` returns normally.
+1. **Multi-turn approval loop.** The snippet above already handles this
+   via `while "__interrupt__" in result:`. If you simplify the snippet
+   later (e.g. for a one-shot demo), keep the loop — a feedback reply
+   triggers a re-plan and another interrupt; without the loop, the
+   second `__interrupt__` would be silently ignored and you'd act on
+   the original plan.
 
 2. **Progress signal during long tasks.** `implementation_task` runs for
    5+ minutes (Claude Agent SDK editing files). `await workflow.ainvoke`
@@ -577,10 +592,21 @@ Claude → Done. PR: https://github.com/.../pull/8
 from uuid import uuid4
 from mcp.server.fastmcp import FastMCP
 from langgraph.types import Command
-from langgraph.errors import GraphInterrupt
-from orchestrator.workflow import workflow
+from orchestrator.workflow import build_workflow
 
 mcp = FastMCP("bostadskalkyl-orchestrator")
+
+# Reminder (see Phase 8 note): in the functional API, `ainvoke()` does
+# NOT raise on interrupt — it returns a dict containing "__interrupt__".
+
+def _awaiting_approval(thread_id: str, result: dict, hint: str) -> dict:
+    interrupt_val = result["__interrupt__"][0].value
+    return {
+        "status": "awaiting_approval",
+        "thread_id": thread_id,
+        "plan": interrupt_val["plan"],
+        "next": hint,
+    }
 
 @mcp.tool()
 async def implement_feature(request: str) -> dict:
@@ -589,15 +615,13 @@ async def implement_feature(request: str) -> dict:
     before any code is written."""
     thread_id = f"run-{uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread_id}}
-    try:
-        await workflow.ainvoke({"request": request}, config=config)
-    except GraphInterrupt as i:
-        return {
-            "status": "awaiting_approval",
-            "thread_id": thread_id,
-            "plan": i.value["plan"],
-            "next": "Call approve_plan with thread_id and the user's response.",
-        }
+    async with build_workflow() as workflow:
+        result = await workflow.ainvoke(request, config=config)
+    if "__interrupt__" in result:
+        return _awaiting_approval(
+            thread_id, result,
+            "Call approve_plan with thread_id and the user's response.",
+        )
     raise RuntimeError("Workflow completed without hitting plan approval interrupt")
 
 @mcp.tool()
@@ -605,16 +629,14 @@ async def approve_plan(thread_id: str, response: str) -> dict:
     """Resume a workflow at the plan-approval step. Response is either
     'yes' to proceed, or feedback describing required changes."""
     config = {"configurable": {"thread_id": thread_id}}
-    try:
+    async with build_workflow() as workflow:
         result = await workflow.ainvoke(Command(resume=response), config=config)
-        return {"status": "complete", **result}
-    except GraphInterrupt as i:
-        return {
-            "status": "awaiting_approval",
-            "thread_id": thread_id,
-            "plan": i.value["plan"],
-            "next": "Plan was revised. Show to user and call approve_plan again.",
-        }
+    if "__interrupt__" in result:
+        return _awaiting_approval(
+            thread_id, result,
+            "Plan was revised. Show to user and call approve_plan again.",
+        )
+    return {"status": "complete", **result}
 
 if __name__ == "__main__":
     mcp.run()

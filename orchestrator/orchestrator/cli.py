@@ -21,7 +21,6 @@ import sys
 import time
 import traceback
 import uuid
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -49,35 +48,74 @@ def _format_elapsed(seconds: float) -> str:
     return f"{mins}m {secs}s" if mins else f"{secs}s"
 
 
-@asynccontextmanager
-async def _heartbeat(label: str, interval: float | None = None):
-    """Print a progress ping every `interval` seconds while the body runs.
+# The entrypoint function in orchestrator.workflow is named `workflow`,
+# so its final-result stream event arrives keyed by that name. If you
+# rename the @entrypoint function, update this constant.
+_ENTRYPOINT_NAME = "workflow"
 
-    Implementation_task takes 5+ minutes; without this the user thinks the
-    CLI has hung. Cancellation is automatic on exit — even if the body
-    raises, the heartbeat task is cancelled in the `finally` block.
+
+async def _run_with_progress(workflow, input_data, config) -> dict:
+    """Stream the workflow with per-task progress markers and a heartbeat.
+
+    Emits:
+      - ``done: <task> (Xs)`` after each @task completes, with the time
+        that task itself took (not cumulative)
+      - ``... after <task> (Ys elapsed)`` every HEARTBEAT_INTERVAL seconds
+        while a task is still running — catches long-running stages
+        (implementation_task is 5+ min) that otherwise look hung
+
+    Returns the workflow result dict: either ``{"__interrupt__": [...]}``
+    if the workflow paused for plan approval, or the entrypoint's return
+    value (the final ``{"status": ..., ...}`` dict).
     """
-    if interval is None:
-        interval = float(os.environ.get("HEARTBEAT_INTERVAL", "15"))
+    heartbeat_interval = float(os.environ.get("HEARTBEAT_INTERVAL", "15"))
+    last_event_time = time.monotonic()
+    final_result: dict | None = None
+    current_label = "starting"
+    stop = asyncio.Event()
 
-    async def beat() -> None:
-        start = time.monotonic()
+    async def heartbeat() -> None:
         while True:
-            await asyncio.sleep(interval)
-            print(
-                f"  ... {label} ({_format_elapsed(time.monotonic() - start)} elapsed)",
-                file=sys.stderr,
-            )
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=heartbeat_interval)
+                return
+            except asyncio.TimeoutError:
+                elapsed = time.monotonic() - last_event_time
+                print(
+                    f"  ... {current_label} ({_format_elapsed(elapsed)} elapsed)",
+                    file=sys.stderr,
+                )
 
-    task = asyncio.create_task(beat())
+    hb = asyncio.create_task(heartbeat())
     try:
-        yield
+        async for event in workflow.astream(
+            input_data, config=config, stream_mode="updates"
+        ):
+            for key, value in event.items():
+                now = time.monotonic()
+                task_elapsed = now - last_event_time
+                last_event_time = now
+
+                if key == "__interrupt__":
+                    final_result = {"__interrupt__": value}
+                elif key == _ENTRYPOINT_NAME:
+                    final_result = value
+                else:
+                    # Strip the _task suffix for readable output —
+                    # "implementation" reads better than "implementation_task".
+                    name = key.removesuffix("_task")
+                    print(
+                        f"  done: {name} ({_format_elapsed(task_elapsed)})",
+                        file=sys.stderr,
+                    )
+                    current_label = f"after {name}"
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        stop.set()
+        await hb
+
+    if final_result is None:
+        raise RuntimeError("astream completed without a final result")
+    return final_result
 
 
 def _print_success(result: dict) -> None:
@@ -152,8 +190,7 @@ async def run() -> None:
 
     try:
         async with build_workflow() as workflow:
-            async with _heartbeat("planning"):
-                result = await workflow.ainvoke(request, config=config)
+            result = await _run_with_progress(workflow, request, config)
 
             # Phase 8: plan-approval interrupt loop. Each user reply
             # either approves ("yes") or triggers a re-plan with feedback.
@@ -163,10 +200,9 @@ async def run() -> None:
                 print(interrupt_val["plan"]["plan_text"])
                 print("\n" + interrupt_val["ask"])
                 response = input("> ").strip()
-                async with _heartbeat("running workflow"):
-                    result = await workflow.ainvoke(
-                        Command(resume=response), config=config
-                    )
+                result = await _run_with_progress(
+                    workflow, Command(resume=response), config
+                )
 
             # Workflow returned without an interrupt. Branch on status.
             status = result.get("status")
