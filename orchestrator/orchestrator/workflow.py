@@ -24,7 +24,11 @@ from orchestrator.agents.implementation import implement, ImplementationResult
 from orchestrator.agents.qa import qa, QaResult
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 from orchestrator.git_ops import create_branch
+=======
+from orchestrator.git_ops import create_branch, commit_and_pr
+>>>>>>> Stashed changes
 =======
 from orchestrator.git_ops import create_branch, commit_and_pr
 >>>>>>> Stashed changes
@@ -109,7 +113,10 @@ async def qa_task(plan_result: PlanResult) -> QaResult:
 
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 =======
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
 # Phase 6d. Deterministic git/PR task. Same shape as create_branch_task:
@@ -138,6 +145,9 @@ async def commit_and_pr_task(
 
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
@@ -169,7 +179,10 @@ async def build_workflow(
             qa_result = await qa_task(plan_result)
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 =======
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
             pr_url = await commit_and_pr_task(
@@ -179,6 +192,9 @@ async def build_workflow(
                 impl_result.test_plan,
             )
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
@@ -189,6 +205,10 @@ async def build_workflow(
                 "qa": qa_result.model_dump(),
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
+=======
+                "pr_url": pr_url,
+>>>>>>> Stashed changes
 =======
                 "pr_url": pr_url,
 >>>>>>> Stashed changes
