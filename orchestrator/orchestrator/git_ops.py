@@ -5,9 +5,9 @@ The orchestrator has a hard split:
   - control  (branch creation, commit, PR)   → subprocess, deterministic
 
 This module owns the deterministic side. No prompts, no models, no
-structured output — just shell commands wrapped in Python. Port of
-.claude/skills/create-feature-branch.md (Phase 6a) and eventually
-.claude/skills/commit-and-pr.md (Phase 6d).
+structured output — just shell commands wrapped in Python. Ports of
+.claude/skills/create-feature-branch.md (Phase 6a) and
+.claude/skills/commit-and-open-pr.md (Phase 6d).
 """
 
 import re
@@ -118,11 +118,147 @@ def create_branch(plan: PlanResult) -> str:
     return branch_name
 
 
+class CommitAndPrError(RuntimeError):
+    """Raised when commit_and_pr can't safely complete.
+
+    Collapses several distinct failure modes (wrong branch, empty diff,
+    push failure, gh pr create failure) into one exception type. The
+    orchestrator treats this as a terminal workflow failure — the
+    implementation's checkpoint is preserved so you can fix the
+    underlying issue (e.g. log in to gh) and re-trigger without
+    re-paying for the LLM call.
+    """
+
+
+def commit_and_pr(
+    branch: str,
+    title: str,
+    summary: str,
+    test_plan: str,
+) -> str:
+    """Stage all changes on the current branch, commit, push, open a PR.
+
+    Returns the PR URL on success. Raises CommitAndPrError if:
+      - the current branch doesn't match `branch` (refuse to commit to
+        the wrong place — most likely main if create_branch_task was
+        skipped)
+      - there are no changes to commit
+      - git push fails (network, auth, permissions)
+      - `gh pr create` fails (no remote, no gh auth, PR already exists)
+
+    Port of .claude/skills/commit-and-open-pr.md. Differences from the
+    skill:
+      - The skill staged specific files plus .workflow/<branch>/* state
+        files. Here we use `git add .` — the orchestrator's checkpointer
+        replaces the .workflow/ directory entirely, and project hooks
+        + .gitignore block secrets and noise.
+      - The skill's "scope" field is inferred from the diff by an LLM.
+        Deterministic Python can't do that reliably, so we omit it
+        (the skill explicitly permits this when scope is unclear).
+      - `test_plan` arrives as a string (from ImplementationResult),
+        not a file path — no read-from-disk branch.
+    """
+    # 1. Verify the current branch. If create_branch_task was skipped
+    # for any reason, the only way we get here is on main — and a
+    # commit-to-main is the single most important thing this function
+    # must refuse.
+    current = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+    if current != branch:
+        raise CommitAndPrError(
+            f"wrong branch: expected {branch!r}, got {current!r}"
+        )
+
+    # 2. Guard against an empty diff. Better to fail loudly than to
+    # create an empty commit.
+    status = _run(["git", "status", "--porcelain"])
+    if not status.stdout.strip():
+        raise CommitAndPrError("no changes to commit")
+
+    # 3. Stage everything. .gitignore excludes .env, .orchestrator/,
+    # caches, etc; project pre-commit hooks block sensitive content as
+    # a second line of defence. `git add .` is the documented safe
+    # default for this project (see CLAUDE.md / user memory).
+    _run(["git", "add", "."])
+
+    # 4. Compose the commit message.
+    # Type prefix derived from the branch name (e.g. "feature/foo" →
+    # "feature"). Matches the convention in
+    # .claude/skills/commit-and-open-pr.md. Scope is omitted because
+    # we can't infer it deterministically; the skill explicitly allows
+    # this.
+    type_prefix = branch.split("/", 1)[0] if "/" in branch else "feature"
+    subject = f"{type_prefix}: {title.lower()}"
+    commit_msg = f"{subject}\n\n- {summary}"
+
+    try:
+        _run(
+            [
+                "git",
+                "commit",
+                "--author=Claude <claude@anthropic.com>",
+                "-m",
+                commit_msg,
+            ]
+        )
+    except subprocess.CalledProcessError as e:
+        raise CommitAndPrError(
+            f"commit failed: {(e.stderr or e.stdout).strip()}"
+        ) from e
+
+    # 5. Push and set upstream. -u is important on first push of a new
+    # branch — without it the branch exists on origin but isn't tracking,
+    # and subsequent `git pull` / `gh pr create` behave inconsistently.
+    try:
+        _run(["git", "push", "-u", "origin", branch])
+    except subprocess.CalledProcessError as e:
+        raise CommitAndPrError(
+            f"push failed: {(e.stderr or e.stdout).strip()}"
+        ) from e
+
+    # 6. Open the PR. test_plan arrives as markdown bullets from
+    # ImplementationResult; we embed it directly. Body includes the
+    # Claude Code attribution per the skill's template.
+    pr_body = (
+        f"## Summary\n{summary}\n\n"
+        f"## Test plan\n{test_plan}\n\n"
+        "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+    )
+    try:
+        result = _run(
+            [
+                "gh",
+                "pr",
+                "create",
+                "--title",
+                title,
+                "--body",
+                pr_body,
+            ]
+        )
+    except subprocess.CalledProcessError as e:
+        raise CommitAndPrError(
+            f"gh pr create failed: {(e.stderr or e.stdout).strip()}"
+        ) from e
+
+    # 7. `gh pr create` prints the PR URL on stdout (last line). Earlier
+    # lines may contain progress messages; take the last non-empty line.
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise CommitAndPrError("gh pr create produced no output")
+    return lines[-1].strip()
+
+
 if __name__ == "__main__":
-    # Standalone test:
+    # Standalone test for create_branch only:
     #   python -m orchestrator.git_ops "Stress test for variable rates" feature
     # No LLM call; doesn't touch the checkpointer. Just exercises the
     # subprocess plumbing against your real repo.
+    #
+    # commit_and_pr isn't exposed here because (a) its inputs are
+    # awkward to pass as positional args (multi-line summary, markdown
+    # test plan) and (b) its side effects — a real PR opening on
+    # GitHub — make ad-hoc testing expensive. Test it via the workflow
+    # end-to-end run instead.
     title = sys.argv[1] if len(sys.argv) > 1 else "test branch creation"
     branch_type = sys.argv[2] if len(sys.argv) > 2 else "feature"
     fake_plan = PlanResult(title=title, type=branch_type, plan_text="(test)")
