@@ -94,6 +94,7 @@
 
   // ── Calc ───────────────────────────────────────────────────────
   function recalc() {
+    console.log('[App.recalc] called');
     const salePrice        = val('salePrice');
     const currentMortgage  = val('currentMortgage');
     const agentCost        = val('agentCost');
