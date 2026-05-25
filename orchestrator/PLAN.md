@@ -48,7 +48,7 @@ The split that matters:
 
 ## Pedagogical structure
 
-15 phases (0–14). Each phase introduces **one** concept and ends with a
+16 phases (0–15). Each phase introduces **one** concept and ends with a
 "run this and see X" verification step. Don't move on until the current
 phase runs cleanly — debugging gets exponentially harder with each
 layer of indirection added on top.
@@ -910,6 +910,166 @@ to within a few percent (rounding + cache attribution differences).
 
 ---
 
+## Phase 15 — Resumable commit/push/PR + thread_id surfacing (1.5 hours)
+
+**Build:** split `commit_and_pr_task` into three independently
+checkpointed `@task`s (commit, push, pr_create), each idempotent. Add
+a `resume_run(thread_id)` MCP tool so a partial failure can be picked
+up from where it stopped. Surface `thread_id` in every CLI banner and
+every MCP response so the user can recover without spelunking.
+**Learn:** how `@task`'s "checkpoint successful results only" contract
+turns partial failures into resumable state — but only if your tasks
+are sized to the resume granularity you want.
+
+### The failure mode this fixes
+
+A real dogfood run (2026-05-25) failed after `commit_and_pr_task` had
+already committed locally but before `git push` succeeded. The commit
+left the working tree clean. The orchestrator's retry then re-entered
+`commit_and_pr_task` from scratch, hit `git status --porcelain` (step 2:
+"guard against empty diff"), and raised "no changes to commit". The
+work was done but the orchestrator couldn't get it across the line.
+Manual `git push` + `gh pr create` recovered the run.
+
+Root cause: `commit_and_pr_task` is **atomic from LangGraph's view but
+non-atomic in reality** — it performs commit + push + gh pr create as
+one function, but those three operations have independent failure modes
+and independent persistence. The task either succeeds (cached) or
+raises (no cache), so any partial-success state is unrecoverable.
+
+### Steps
+
+1. **Refactor `git_ops.py`** — split into three idempotent functions
+   replacing today's `commit_and_pr`:
+
+   ```python
+   def commit(branch: str, title: str, summary: str) -> str:
+       """Return commit SHA. Idempotent: if HEAD already has the
+       expected diff vs main and a commit subject we'd have generated,
+       return HEAD's SHA without re-committing."""
+
+   def push(branch: str) -> None:
+       """Push branch to origin. Idempotent: re-running after a
+       successful push is a no-op (git's own behaviour)."""
+
+   def pr_create(branch: str, title: str, body: str) -> str:
+       """Return PR URL. Idempotent: if a PR already exists for this
+       branch (via `gh pr view <branch> --json url`), return that URL
+       instead of opening a new one."""
+   ```
+
+   The idempotency checks are the load-bearing piece — without them,
+   a re-run double-writes. Pattern: "look at git state first; only act
+   if the desired state isn't already there."
+
+2. **Refactor `workflow.py`** — replace the single `commit_and_pr_task`
+   with three `@task`s called in sequence. Each task name appears in
+   the LangSmith trace and the CLI `done:` markers, so you'll see the
+   failure point at a glance:
+
+   ```python
+   commit_sha = await commit_task(branch_name, plan.title, impl.summary)
+   await push_task(branch_name)
+   pr_url = await pr_create_task(branch_name, plan.title, body)
+   ```
+
+3. **Add MCP tool `resume_run(thread_id) -> dict`.** Resumes a stalled
+   workflow without starting a new one:
+
+   ```python
+   @mcp.tool()
+   async def resume_run(thread_id: str) -> dict:
+       """Resume a workflow that failed mid-task. The completed tasks
+       are cached in the checkpointer, so only the failed task and any
+       downstream tasks re-run. Use this AFTER fixing the underlying
+       issue (e.g. authenticating gh, restoring network, fixing a
+       merge conflict on the branch)."""
+       config = {"configurable": {"thread_id": thread_id}}
+       async with build_workflow() as workflow:
+           result = await workflow.ainvoke(None, config=config)
+       result["thread_id"] = thread_id
+       return result
+   ```
+
+   The `None` input is the LangGraph signal to resume rather than
+   start fresh. Tasks that ran successfully on the prior attempt
+   return their cached result instantly; only the failed task (and
+   anything downstream) executes fresh.
+
+4. **Surface `thread_id` in every MCP response.** Today's success path
+   returns the workflow's dict as-is, which doesn't include thread_id.
+   Add it explicitly at the MCP-server layer so Claude Code always
+   sees it in chat:
+
+   ```python
+   result["thread_id"] = thread_id  # in implement_feature, approve_plan
+   ```
+
+5. **Update the slash command** (`.claude/commands/implement.md`) to
+   explicitly require Claude Code to show the thread_id on every
+   message, not just on the first approval cycle. Without this
+   instruction, Claude tends to elide the id after the first turn —
+   which is exactly when the user needs it most.
+
+6. **Surface `thread_id` in CLI banners** (`cli.py`):
+   - Already shown at run start.
+   - Add to the plan-approval prompt header.
+   - Add to the success banner (alongside Branch and PR).
+   - Add to the QA-exhausted failure banner.
+   - **Don't** add to per-task `done:` lines or heartbeat lines —
+     that's noise. The transitions are enough.
+
+### Pedagogical landmines
+
+1. **`@task`'s checkpoint granularity == your resume granularity.** A
+   single `@task` is atomic from LangGraph's view: either the whole
+   function succeeds (cached) or it raises (no cache, full re-run on
+   retry). If you need partial-state resumability, you must split the
+   task. This is the lesson Phase 15 teaches by counter-example.
+
+2. **Idempotency is YOUR responsibility, not LangGraph's.** A re-run
+   re-invokes your function with the same inputs. If the function
+   writes side effects (git commit, git push, PR creation), it must
+   detect "already done" state and skip — otherwise you get duplicate
+   commits, double-pushed branches, or a "PR already exists" error
+   from gh.
+
+3. **`ainvoke(None, config)` is the resume incantation in the
+   functional API.** Not `ainvoke({}, ...)` or `ainvoke(Command(...))`
+   — those start a new run or resume from an interrupt respectively.
+   `None` specifically means "resume the workflow associated with
+   this thread_id from its last checkpoint."
+
+4. **The user has to know the thread_id to recover.** This is why the
+   surfacing work matters — if a partial failure happens at hour 3 of
+   a multi-step run and the thread_id was only printed at the top,
+   the user has to scroll through chat history (or hunt
+   `.orchestrator/checkpoints.db`) to find it. Always-on visibility
+   is the whole point.
+
+### What is deliberately NOT in Phase 15
+
+- **Per-task retries.** A push that fails because of a network blip
+  should be the user's choice to retry, not silent magic. The
+  `resume_run` tool makes that one user action; that's the right
+  cadence for a workflow whose tasks have side effects.
+- **Auto-recovery on tool failure.** Same reasoning. The MCP server
+  could detect a failure and call `resume_run` itself, but that hides
+  the failure from Claude Code (which means hidden from the user).
+  Keep the loop explicit.
+- **Branch cleanup on abandoned runs.** A workflow that crashed and
+  was never resumed leaves a feature branch + maybe a commit lying
+  around. Detecting and cleaning these up is a separate
+  garbage-collection project — out of scope here.
+
+**Run this and see X:** force a `push` failure (kill network, or
+temporarily `git remote set-url origin /nonsense`) → see the workflow
+error with thread_id in the response → restore network → `resume_run`
+from Claude Code chat → workflow completes from the push step without
+re-running commit or anything upstream → PR URL appears.
+
+---
+
 ## What to skip on the first pass
 
 Defer until the basic version runs end-to-end:
@@ -979,7 +1139,8 @@ These don't change the plan but you'll want to decide as you go:
 | 12. Register with Claude Code | 30 min |
 | 13. User-facing config file | 1 hour |
 | 14. Token and cost tracking | 1.5 hours |
-| **Total** | **~12–17 focused hours** |
+| 15. Resumable commit/push/PR + thread_id surfacing | 1.5 hours |
+| **Total** | **~13–18 focused hours** |
 
 **Spread across multiple sessions.** The pedagogical value comes from
 running each phase and letting the model click before adding the next
