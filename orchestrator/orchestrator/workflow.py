@@ -22,7 +22,15 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from orchestrator.agents.planning import plan, PlanResult
 from orchestrator.agents.implementation import implement, ImplementationResult
 from orchestrator.agents.qa import qa, QaResult
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
 from orchestrator.git_ops import create_branch
+=======
+from orchestrator.git_ops import create_branch, commit_and_pr
+>>>>>>> Stashed changes
+=======
+from orchestrator.git_ops import create_branch, commit_and_pr
+>>>>>>> Stashed changes
 
 
 # Future LangGraph versions will refuse to deserialize types that aren't
@@ -99,6 +107,40 @@ async def qa_task(plan_result: PlanResult) -> QaResult:
     return await qa(plan_result)
 
 
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+=======
+=======
+>>>>>>> Stashed changes
+# Phase 6d. Deterministic git/PR task. Same shape as create_branch_task:
+# sync subprocess function in git_ops.py, bridged to async via
+# asyncio.to_thread. Returns the PR URL on success.
+#
+# Inputs come from upstream tasks:
+#   - branch: from create_branch_task
+#   - title:  from PlanResult
+#   - summary, test_plan: from ImplementationResult
+#
+# Currently fires unconditionally after qa_task. Phase 7's retry loop
+# will gate this on `qa.result == "PASS"` — for now a FAIL just opens
+# a PR that needs manual fixing, which is no worse than the existing
+# coordinator's behaviour.
+@task
+async def commit_and_pr_task(
+    branch: str,
+    title: str,
+    summary: str,
+    test_plan: str,
+) -> str:
+    return await asyncio.to_thread(
+        commit_and_pr, branch, title, summary, test_plan
+    )
+
+
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
 # build_workflow is a factory, not a module-level workflow definition.
 # Why: AsyncSqliteSaver.from_conn_string returns an async context manager
 # that opens the SQLite connection on entry and closes it on exit. The
@@ -125,11 +167,34 @@ async def build_workflow(
             branch_name = await create_branch_task(plan_result)
             impl_result = await implementation_task(plan_result)
             qa_result = await qa_task(plan_result)
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+=======
+=======
+>>>>>>> Stashed changes
+            pr_url = await commit_and_pr_task(
+                branch_name,
+                plan_result.title,
+                impl_result.summary,
+                impl_result.test_plan,
+            )
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
             return {
                 "plan": plan_result.model_dump(),
                 "branch": branch_name,
                 "implementation": impl_result.model_dump(),
                 "qa": qa_result.model_dump(),
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+=======
+                "pr_url": pr_url,
+>>>>>>> Stashed changes
+=======
+                "pr_url": pr_url,
+>>>>>>> Stashed changes
             }
 
         yield workflow
