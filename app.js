@@ -342,6 +342,7 @@
   // ── Boot ───────────────────────────────────────────────────────
   initTheme();
   (async function boot() {
+    console.log('App initialised');
     var driftItems = await App.storage.loadDriftItems();
     App.modals.setDriftItems(driftItems);
     var savingsItems = await App.storage.loadSavingsItems();
