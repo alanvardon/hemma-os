@@ -34,6 +34,7 @@ load_dotenv()
 from langgraph.types import Command
 from mcp.server.fastmcp import FastMCP
 
+from orchestrator.run_log import append_run
 from orchestrator.workflow import build_workflow
 
 
@@ -93,6 +94,7 @@ async def implement_feature(request: str) -> dict:
     """
     thread_id = f"run-{uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread_id}}
+    append_run(thread_id, request, source="mcp")
     async with build_workflow() as workflow:
         result = await workflow.ainvoke(request, config=config)
     if "__interrupt__" in result:

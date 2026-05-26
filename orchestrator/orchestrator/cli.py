@@ -30,6 +30,7 @@ load_dotenv()
 from langgraph.types import Command
 
 from orchestrator.git_ops import BranchCreationError, CommitAndPrError
+from orchestrator.run_log import append_run
 from orchestrator.workflow import build_workflow
 
 
@@ -215,6 +216,7 @@ async def run() -> None:
     thread_id = f"cli-{uuid.uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread_id}}
     Path(".orchestrator").mkdir(exist_ok=True)
+    append_run(thread_id, request, source="cli")
 
     print(f"thread_id: {thread_id}")
     print(f"request:   {request}")
