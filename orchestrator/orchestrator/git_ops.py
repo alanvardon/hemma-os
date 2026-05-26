@@ -39,6 +39,23 @@ class BranchCreationError(RuntimeError):
     """
 
 
+def _sanitize_type(raw: str, max_len: int = 20) -> str:
+    """Sanitize a free-form plan type into a safe git branch prefix.
+
+    Strips to [a-z0-9-], truncates to max_len, rejects empty result.
+    Needed because PlanResult.type is now a free-form str — a planner
+    that emits type="add a tooltip" would otherwise produce an invalid
+    git ref like "add a tooltip/the-slug".
+    """
+    sanitized = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    sanitized = sanitized[:max_len].rstrip("-")
+    if not sanitized:
+        raise BranchCreationError(
+            f"plan type {raw!r} produced an empty branch prefix after sanitization"
+        )
+    return sanitized
+
+
 def _slugify(title: str, max_len: int = 50) -> str:
     """Convert a plan title into a kebab-case branch slug.
 
@@ -117,9 +134,10 @@ def create_branch(plan: PlanResult, max_slug_length: int = 50) -> str:
         ) from e
 
     # 3. Derive the branch name. `<type>/<kebab-slug>` — same scheme as
-    # your current coordinator.
+    # your current coordinator. Sanitize type since it's now free-form.
+    type_prefix = _sanitize_type(plan.type)
     slug = _slugify(plan.title, max_slug_length)
-    branch_name = f"{plan.type}/{slug}"
+    branch_name = f"{type_prefix}/{slug}"
 
     # 4. Refuse to clobber an existing branch. If the user retries a
     # request that already produced a branch, they need to either delete

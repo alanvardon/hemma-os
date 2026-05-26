@@ -18,12 +18,7 @@ from anthropic import AsyncAnthropic
 # type coercion and a clean __repr__ — no need to write __init__ or validate
 # fields manually. The model acts as a typed contract between the planning
 # agent and anything that consumes its output.
-from pydantic import BaseModel
-
-# Literal constrains a field to a fixed set of string values at *type-check*
-# time (mypy / pyright) AND at runtime when Pydantic validates the object.
-# Anything outside the allowed set raises a ValidationError immediately.
-from typing import Literal
+from pydantic import BaseModel, Field
 
 from orchestrator.usage import TaskUsage
 from orchestrator.prompt_loader import load_prompt
@@ -39,7 +34,10 @@ _PLANNING_SYSTEM_PROMPT = load_prompt("planning")
 # the model is never asked to fill in token-count data.
 class _PlanSchema(BaseModel):
     title: str
-    type: Literal["feature", "fix", "refactor"]
+    type: str = Field(
+        description="short kebab-case category like 'feature', 'fix', "
+                    "'migration', 'config' — used as the branch prefix"
+    )
     plan_text: str
 
 

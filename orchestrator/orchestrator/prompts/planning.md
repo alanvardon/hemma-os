@@ -26,10 +26,7 @@ Do not begin the title with the type verb — the branch prefix already carries 
 - Refactor: `Amortisation chart rendering logic` (not "Refactor amortisation...")
 
 ### Type
-One of: `feature`, `fix`, `refactor`. This drives the branch prefix.
-- `feature` — new functionality
-- `fix` — corrects a bug or broken behaviour
-- `refactor` — restructures existing code without changing behaviour
+Short kebab-case category used as the git branch prefix. Use your project's natural vocabulary — one word, lowercase. Common values: `feature`, `fix`, `refactor`, `migration`, `config`, `chore`. Keep it short (one word is ideal; two at most).
 
 ### Affected areas
 - Which part of the CSS block needs changing
