@@ -20,6 +20,8 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 # with an explicit allowlist of custom types — see _CUSTOM_SERDE.
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from langgraph.config import get_config
+
 from orchestrator.agents.planning import plan, PlanResult
 from orchestrator.agents.implementation import implement, ImplementationResult
 from orchestrator.agents.qa import qa, QaResult
@@ -29,6 +31,12 @@ from orchestrator.git_ops import (
     pr_create,
     push,
     verify_clean_tree,
+)
+from orchestrator.run_artifacts import (
+    rename_with_branch,
+    write_implementation,
+    write_plan,
+    write_qa,
 )
 
 
@@ -174,12 +182,15 @@ async def build_workflow(
 
         @entrypoint(checkpointer=checkpointer)
         async def workflow(request: str) -> dict:
+            thread_id = get_config()["configurable"]["thread_id"]
+
             # Fail fast on a dirty tree BEFORE the planning LLM call —
             # otherwise we'd waste tokens (and the user's approval time)
             # only to fail at create_branch_task downstream.
             await verify_clean_tree_task()
 
             plan_result = await planning_task(request)
+            write_plan(thread_id, plan_result)
 
             # Phase 8: plan approval interrupt. The loop runs until the
             # user replies "yes". Any other reply is treated as feedback:
@@ -203,8 +214,10 @@ async def build_workflow(
                 plan_result = await planning_task(
                     f"{request}\n\nFeedback: {approval}"
                 )
+                write_plan(thread_id, plan_result)
 
             branch_name = await create_branch_task(plan_result)
+            rename_with_branch(thread_id, branch_name)
 
             # Phase 7: retry loop. Up to 3 attempts: first is always
             # "implement" (fresh execution); subsequent attempts are
@@ -221,7 +234,9 @@ async def build_workflow(
                 impl_result = await implementation_task(
                     plan_result, mode=mode, qa_failures=qa_failures
                 )
+                write_implementation(thread_id, impl_result)
                 qa_result = await qa_task(plan_result)
+                write_qa(thread_id, qa_result)
                 if qa_result.result == "PASS":
                     break
                 qa_failures = qa_result.failures
