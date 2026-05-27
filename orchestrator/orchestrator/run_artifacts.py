@@ -23,8 +23,9 @@ from pathlib import Path
 from orchestrator.agents.implementation import ImplementationResult
 from orchestrator.agents.planning import PlanResult
 from orchestrator.agents.qa import QaResult
+from orchestrator.paths import find_project_root
 
-_RUNS_DIR = Path(".orchestrator") / "runs"
+_RUNS_DIR = find_project_root() / ".orchestrator" / "runs"
 
 
 def _run_dir(thread_id: str) -> Path:

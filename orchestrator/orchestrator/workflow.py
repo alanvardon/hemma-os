@@ -38,6 +38,7 @@ from orchestrator.git_ops import (
     verify_clean_tree,
     PreHookError,
 )
+from orchestrator.paths import find_project_root
 from orchestrator.pre_hooks import run_pre_hooks
 from orchestrator.run_artifacts import (
     rename_with_branch,
@@ -207,7 +208,9 @@ async def build_workflow(
 ) -> AsyncIterator:
     if config is None:
         config = load_config()
-    effective_db_path = db_path if db_path is not None else config.db_path
+    raw_path = db_path if db_path is not None else config.db_path
+    p = Path(raw_path)
+    effective_db_path = str(p if p.is_absolute() else find_project_root() / p)
 
     async with AsyncSqliteSaver.from_conn_string(effective_db_path) as checkpointer:
         # AsyncSqliteSaver.from_conn_string doesn't accept a custom serde,

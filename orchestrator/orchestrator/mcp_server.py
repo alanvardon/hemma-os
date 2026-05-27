@@ -34,13 +34,14 @@ load_dotenv()
 from langgraph.types import Command
 from mcp.server.fastmcp import FastMCP
 
+from orchestrator.paths import find_project_root
 from orchestrator.run_log import append_run
 from orchestrator.workflow import build_workflow
 
 
 # AsyncSqliteSaver creates the .db file on demand but not its parent.
 # Run once at import (server startup) rather than per-tool-call.
-Path(".orchestrator").mkdir(exist_ok=True)
+(find_project_root() / ".orchestrator").mkdir(exist_ok=True)
 
 mcp = FastMCP("bostadskalkyl-orchestrator")
 

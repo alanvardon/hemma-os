@@ -19,13 +19,10 @@ import sys
 from pathlib import Path
 
 from orchestrator.agents.planning import PlanResult
+from orchestrator.paths import find_project_root
 
 
-# Where to run git commands. The bostadskalkyl repo is the parent of the
-# orchestrator/ subproject. Resolving from __file__ rather than process
-# cwd so this works whether you launch from orchestrator/, the project
-# root, or anywhere else.
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+REPO_ROOT = find_project_root()
 
 
 class BranchCreationError(RuntimeError):

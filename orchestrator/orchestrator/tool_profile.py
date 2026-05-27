@@ -57,12 +57,9 @@ class ToolProfile:
 
 
 def _resolve_config_path() -> Path:
-    """Resolve orchestrator.toml using the same approach as config.py.
-
-    Returns a relative Path("orchestrator.toml"), which is resolved
-    against the process cwd (the project root when invoked normally).
-    """
-    return Path("orchestrator.toml")
+    """Resolve orchestrator.toml to an absolute path via git-root discovery."""
+    from orchestrator.paths import find_project_root
+    return find_project_root() / "orchestrator.toml"
 
 
 def load_tool_profile(

@@ -15,12 +15,10 @@ and the orchestrator handles the structured-output wiring automatically.
 
 from pathlib import Path
 
+from orchestrator.paths import find_project_root
+
 # Bundled defaults live next to this file in orchestrator/prompts/.
 _BUNDLED_DIR = Path(__file__).parent / "prompts"
-
-# Target-repo override directory, resolved relative to cwd at call time
-# so it picks up whichever repo the orchestrator is running inside.
-_OVERRIDE_SUBDIR = Path(".orchestrator") / "prompts"
 
 # Tool-call footers appended unconditionally after the prompt body.
 # These tell the agent how to return its result to the orchestrator.
@@ -81,7 +79,7 @@ def load_prompt(name: str) -> str:
     then appends the tool-call footer for agents that require one.
     Raises FileNotFoundError if neither source exists (broken package).
     """
-    override = _OVERRIDE_SUBDIR / f"{name}.md"
+    override = find_project_root() / ".orchestrator" / "prompts" / f"{name}.md"
     if override.exists():
         body = override.read_text(encoding="utf-8")
     else:

@@ -3,7 +3,7 @@
     "orchestrator": {
       "command": "/Users/avardon/.pyenv/versions/bk-orchestrator-env/bin/python",
       "args": ["-m", "orchestrator.mcp_server"],
-      "cwd": "/Users/avardon/Programming/bostadskalkyl/orchestrator"
+      "cwd": "/Users/avardon/Programming/bostadskalkyl"
     }
   }
 }

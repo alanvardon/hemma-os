@@ -25,7 +25,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-_LOG_PATH = Path(".orchestrator") / "runs.jsonl"
+from orchestrator.paths import find_project_root
+
+_LOG_PATH = find_project_root() / ".orchestrator" / "runs.jsonl"
 
 
 def append_run(thread_id: str, request: str, source: str) -> None:

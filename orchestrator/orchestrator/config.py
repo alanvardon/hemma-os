@@ -42,6 +42,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from orchestrator.paths import find_project_root
+
 
 class ModelsConfig(BaseModel):
     planning: str = "claude-sonnet-4-6"
@@ -84,7 +86,7 @@ class OrchestratorConfig(BaseModel):
 def load_config(path: Path | None = None) -> OrchestratorConfig:
     """Load config from orchestrator.toml; return defaults if file is missing."""
     if path is None:
-        path = Path("orchestrator.toml")
+        path = find_project_root() / "orchestrator.toml"
     if not path.exists():
         return OrchestratorConfig()
     with path.open("rb") as f:
