@@ -34,6 +34,11 @@ load_dotenv()
 from langgraph.types import Command
 from mcp.server.fastmcp import FastMCP
 
+from orchestrator.cancellation import (
+    clear_cancelled,
+    is_cancelled,
+    mark_cancelled,
+)
 from orchestrator.config import apply_overrides, load_config
 from orchestrator.paths import find_project_root
 from orchestrator.run_log import append_run
@@ -129,7 +134,7 @@ async def implement_feature(
 
 
 @mcp.tool()
-async def resume_run(thread_id: str) -> dict:
+async def resume_run(thread_id: str, force: bool = False) -> dict:
     """Resume a workflow that failed mid-task without restarting it.
 
     Use this when a previous `implement_feature` or `approve_plan` call
@@ -148,14 +153,33 @@ async def resume_run(thread_id: str) -> dict:
     `approve_plan` is for. resume_run is specifically for recovering
     from a task failure.
 
+    Phase 16: if the thread has been marked cancelled via `cancel_run`,
+    resume_run refuses with {"status": "refused_cancelled", ...} unless
+    `force=True` is passed (which clears the cancel flag first).
+
     Args:
         thread_id: The thread_id from the prior failed response.
+        force: When the thread is cancelled, set True to clear the
+            cancel flag and resume anyway. Default False refuses.
 
     Returns:
         Same shape as approve_plan: another awaiting_approval (rare,
         only if the workflow re-entered the planning loop somehow), a
-        succeeded dict with pr_url, or a failed dict.
+        succeeded dict with pr_url, or a failed dict. If the thread is
+        cancelled and `force` is False, a refused_cancelled dict.
     """
+    if is_cancelled(thread_id):
+        if not force:
+            return {
+                "status": "refused_cancelled",
+                "thread_id": thread_id,
+                "next": (
+                    "This run was cancelled via cancel_run. Call resume_run "
+                    "again with force=True to clear the cancel flag and resume."
+                ),
+            }
+        clear_cancelled(thread_id)
+
     config = {"configurable": {"thread_id": thread_id}}
     # The functional API's resume incantation: ainvoke(None, config)
     # continues a paused/failed workflow from its last checkpoint
@@ -171,6 +195,42 @@ async def resume_run(thread_id: str) -> dict:
         )
     result["thread_id"] = thread_id
     return result
+
+
+@mcp.tool()
+async def cancel_run(thread_id: str) -> dict:
+    """Signal cancellation for a running or paused workflow (Phase 16).
+
+    The workflow checks the cancel flag between @task boundaries; the
+    task currently executing (if any) completes before cancellation
+    takes effect. LLM tokens already spent on the in-flight task are
+    NOT refunded — "cancel" means "stop after the current task," not
+    "abort instantly."
+
+    Use this when:
+      - A run is stuck in a plan-approval loop you no longer want to drive
+      - An implementation_task is mid-flight and the request was wrong
+      - A QA-retry loop is wasting attempts on something unfixable
+
+    The cancel flag is persisted in `.orchestrator/checkpoints.db`. To
+    resume a cancelled thread later, call `resume_run(thread_id,
+    force=True)` — that clears the flag and re-enters the workflow.
+
+    Args:
+        thread_id: The thread_id of the run to cancel.
+
+    Returns:
+        {"status": "cancellation_signalled", "thread_id": thread_id}
+    """
+    mark_cancelled(thread_id)
+    return {
+        "status": "cancellation_signalled",
+        "thread_id": thread_id,
+        "next": (
+            "The workflow will exit at the next task boundary. To resume "
+            "the run later, call resume_run with force=True."
+        ),
+    }
 
 
 @mcp.tool()

@@ -29,6 +29,7 @@ from langgraph.config import get_config
 from orchestrator.agents.planning import plan, PlanResult
 from orchestrator.agents.implementation import implement, ImplementationResult
 from orchestrator.agents.qa import qa, QaResult
+from orchestrator.cancellation import WorkflowCancelled, raise_if_cancelled
 from orchestrator.config import OrchestratorConfig, load_config
 from orchestrator.usage import TaskUsage, aggregate_usage
 from orchestrator.git_ops import (
@@ -216,183 +217,219 @@ async def build_workflow(
         async def workflow(request: str) -> dict:
             thread_id = get_config()["configurable"]["thread_id"]
 
-            await verify_clean_tree_task()
+            # Phase 16: cancel-check helper closed over thread_id.
+            # Called before each task; raises WorkflowCancelled if the
+            # cancel_run MCP tool has marked this thread. The except
+            # clause at the bottom of the body converts the exception
+            # into a status="cancelled" return dict.
+            def _check_cancel() -> None:
+                raise_if_cancelled(thread_id)
 
             # Accumulate token usage across all agent calls for the run.
             # Keys map to lists so retries (multiple impl/qa calls) are
-            # all summed in the final aggregate.
+            # all summed in the final aggregate. Defined OUTSIDE the
+            # try block so the cancel-handler can still report whatever
+            # tokens were spent before the cancel signal landed.
             usage_by_task: dict[str, list[TaskUsage]] = {
                 "planning": [],
                 "implementation": [],
                 "qa": [],
             }
 
-            plan_result = await planning_task(request, config.models.planning)
-            if plan_result.usage:
-                usage_by_task["planning"].append(plan_result.usage)
-            write_plan(thread_id, plan_result)
+            try:
+                _check_cancel()
+                await verify_clean_tree_task()
 
-            # Phase 8: plan approval interrupt. The loop runs until the
-            # user replies "yes". Any other reply is treated as feedback:
-            # the plan is regenerated with the feedback appended to the
-            # original request, then the new plan is surfaced for another
-            # round of review.
-            #
-            # Phase 13: gated by config.human_in_loop.approve_plan.
-            # false = auto-approve (fully autonomous mode).
-            #
-            # Landmine #4: create_branch_task (the first side effect) is
-            # intentionally AFTER this block. interrupt() re-executes the
-            # entrypoint body on resume; tasks already completed with the
-            # same inputs return their cached result without a new LLM call,
-            # so planning_task(request) on re-execution is effectively free.
-            while True:
-                if config.human_in_loop.approve_plan:
-                    approval = interrupt({
-                        "kind": "plan_approval",
-                        "plan": plan_result.model_dump(),
-                        "ask": "Approve this plan? Reply 'yes' or describe changes.",
-                    })
-                else:
-                    approval = "yes"
-                if approval == "yes":
-                    break
-                plan_result = await planning_task(
-                    f"{request}\n\nFeedback: {approval}",
-                    config.models.planning,
-                )
+                _check_cancel()
+                plan_result = await planning_task(request, config.models.planning)
                 if plan_result.usage:
                     usage_by_task["planning"].append(plan_result.usage)
                 write_plan(thread_id, plan_result)
 
-            # Phase 13: optional branch-creation approval gate.
-            if config.human_in_loop.approve_branch:
-                interrupt({
-                    "kind": "branch_approval",
-                    "ask": "Proceed with branch creation?",
-                })
-
-            branch_name = await create_branch_task(
-                plan_result, config.branch.max_slug_length, thread_id
-            )
-            rename_with_branch(thread_id, branch_name)
-
-            # Phase 7: retry loop. Up to config.max_retries attempts: first
-            # is always "implement" (fresh execution); subsequent attempts
-            # are "fix" mode, passing qa_failures so the agent knows exactly
-            # what to correct without re-doing passing work.
-            #
-            # Python's for/else: the `else` block runs only if the loop
-            # exhausted all attempts WITHOUT hitting `break`. A `break`
-            # means QA passed — the else block (failure path) is skipped.
-            qa_failures: str | None = None
-            impl_result = None
-            for attempt in range(1, config.max_retries + 1):
-                mode = "implement" if attempt == 1 else "fix"
-                impl_result = await implementation_task(
-                    plan_result,
-                    mode=mode,
-                    qa_failures=qa_failures,
-                    model=config.models.implementation,
-                )
-                if impl_result.usage:
-                    usage_by_task["implementation"].append(impl_result.usage)
-                write_implementation(thread_id, impl_result)
-
-                if config.human_in_loop.approve_implementation:
-                    interrupt({
-                        "kind": "implementation_approval",
-                        "ask": "Implementation complete. Proceed to QA?",
-                    })
-
-                qa_result = await qa_task(plan_result, config.models.qa)
-                if qa_result.usage:
-                    usage_by_task["qa"].append(qa_result.usage)
-                write_qa(thread_id, qa_result)
-                if qa_result.result == "PASS":
-                    break
-
-                # Log QA failure at ERROR level so scripted-gate failures
-                # (Phase 28) and LLM failures are both visible in the log.
-                logger.error(
-                    "QA FAIL (attempt %d/%d):\n%s",
-                    attempt,
-                    config.max_retries,
-                    qa_result.failures or "(no failure details)",
-                )
-
-                # Phase 13: optional gate on QA failure — user can abort
-                # rather than burning another retry attempt.
-                if config.human_in_loop.approve_qa_failure:
-                    decision = interrupt({
-                        "kind": "qa_failure",
-                        "failures": qa_result.failures,
-                        "ask": (
-                            f"QA FAIL (attempt {attempt}/{config.max_retries}). "
-                            "Retry? Reply 'yes' or 'abort'."
-                        ),
-                    })
-                    if decision == "abort":
-                        _usage = aggregate_usage(usage_by_task)
-                        write_usage(thread_id, _usage)
-                        return {
-                            "status": "failed",
+                # Phase 8: plan approval interrupt. The loop runs until the
+                # user replies "yes". Any other reply is treated as feedback:
+                # the plan is regenerated with the feedback appended to the
+                # original request, then the new plan is surfaced for another
+                # round of review.
+                #
+                # Phase 13: gated by config.human_in_loop.approve_plan.
+                # false = auto-approve (fully autonomous mode).
+                #
+                # Landmine #4: create_branch_task (the first side effect) is
+                # intentionally AFTER this block. interrupt() re-executes the
+                # entrypoint body on resume; tasks already completed with the
+                # same inputs return their cached result without a new LLM call,
+                # so planning_task(request) on re-execution is effectively free.
+                while True:
+                    if config.human_in_loop.approve_plan:
+                        approval = interrupt({
+                            "kind": "plan_approval",
                             "plan": plan_result.model_dump(),
-                            "branch": branch_name,
-                            "qa_failures": qa_result.failures,
-                            "usage": _usage,
-                        }
+                            "ask": "Approve this plan? Reply 'yes' or describe changes.",
+                        })
+                    else:
+                        approval = "yes"
+                    if approval == "yes":
+                        break
+                    _check_cancel()
+                    plan_result = await planning_task(
+                        f"{request}\n\nFeedback: {approval}",
+                        config.models.planning,
+                    )
+                    if plan_result.usage:
+                        usage_by_task["planning"].append(plan_result.usage)
+                    write_plan(thread_id, plan_result)
 
-                qa_failures = qa_result.failures
-            else:
+                # Phase 13: optional branch-creation approval gate.
+                if config.human_in_loop.approve_branch:
+                    interrupt({
+                        "kind": "branch_approval",
+                        "ask": "Proceed with branch creation?",
+                    })
+
+                _check_cancel()
+                branch_name = await create_branch_task(
+                    plan_result, config.branch.max_slug_length, thread_id
+                )
+                rename_with_branch(thread_id, branch_name)
+
+                # Phase 7: retry loop. Up to config.max_retries attempts: first
+                # is always "implement" (fresh execution); subsequent attempts
+                # are "fix" mode, passing qa_failures so the agent knows exactly
+                # what to correct without re-doing passing work.
+                #
+                # Python's for/else: the `else` block runs only if the loop
+                # exhausted all attempts WITHOUT hitting `break`. A `break`
+                # means QA passed — the else block (failure path) is skipped.
+                qa_failures: str | None = None
+                impl_result = None
+                for attempt in range(1, config.max_retries + 1):
+                    _check_cancel()
+                    mode = "implement" if attempt == 1 else "fix"
+                    impl_result = await implementation_task(
+                        plan_result,
+                        mode=mode,
+                        qa_failures=qa_failures,
+                        model=config.models.implementation,
+                    )
+                    if impl_result.usage:
+                        usage_by_task["implementation"].append(impl_result.usage)
+                    write_implementation(thread_id, impl_result)
+
+                    if config.human_in_loop.approve_implementation:
+                        interrupt({
+                            "kind": "implementation_approval",
+                            "ask": "Implementation complete. Proceed to QA?",
+                        })
+
+                    _check_cancel()
+                    qa_result = await qa_task(plan_result, config.models.qa)
+                    if qa_result.usage:
+                        usage_by_task["qa"].append(qa_result.usage)
+                    write_qa(thread_id, qa_result)
+                    if qa_result.result == "PASS":
+                        break
+
+                    # Log QA failure at ERROR level so scripted-gate failures
+                    # (Phase 28) and LLM failures are both visible in the log.
+                    logger.error(
+                        "QA FAIL (attempt %d/%d):\n%s",
+                        attempt,
+                        config.max_retries,
+                        qa_result.failures or "(no failure details)",
+                    )
+
+                    # Phase 13: optional gate on QA failure — user can abort
+                    # rather than burning another retry attempt.
+                    if config.human_in_loop.approve_qa_failure:
+                        decision = interrupt({
+                            "kind": "qa_failure",
+                            "failures": qa_result.failures,
+                            "ask": (
+                                f"QA FAIL (attempt {attempt}/{config.max_retries}). "
+                                "Retry? Reply 'yes' or 'abort'."
+                            ),
+                        })
+                        if decision == "abort":
+                            _usage = aggregate_usage(usage_by_task)
+                            write_usage(thread_id, _usage)
+                            return {
+                                "status": "failed",
+                                "plan": plan_result.model_dump(),
+                                "branch": branch_name,
+                                "qa_failures": qa_result.failures,
+                                "usage": _usage,
+                            }
+
+                    qa_failures = qa_result.failures
+                else:
+                    _usage = aggregate_usage(usage_by_task)
+                    write_usage(thread_id, _usage)
+                    return {
+                        "status": "failed",
+                        "plan": plan_result.model_dump(),
+                        "branch": branch_name,
+                        "qa_failures": qa_failures,
+                        "usage": _usage,
+                    }
+
+                # Phase 13: optional gate before committing and opening PR.
+                if config.human_in_loop.approve_pr:
+                    interrupt({
+                        "kind": "pr_approval",
+                        "ask": "QA passed. Open a PR?",
+                    })
+
+                # Phase 15: three separate @tasks instead of one
+                # commit_and_pr_task. A failure between commit and push
+                # (or push and PR creation) is resumable via resume_run —
+                # completed tasks return cached SHAs/URLs; the failed task
+                # re-executes against the now-fixed underlying issue.
+                #
+                # No cancel checks between commit/push/pr_create: by the time
+                # the commit has landed, "cancelling" would leave the branch
+                # in a confusing half-shipped state. If you need to abort
+                # after commit, do it with git, not the orchestrator.
+                _check_cancel()
+                sha = await commit_task(
+                    branch_name, plan_result.title, impl_result.summary,
+                    config.pr.base_branch,
+                )
+                await push_task(branch_name, sha)
+                pr_url = await pr_create_task(
+                    branch_name,
+                    plan_result.title,
+                    impl_result.summary,
+                    impl_result.test_plan,
+                    sha,
+                    config.pr.base_branch,
+                    config.pr.draft,
+                    config.pr.reviewers,
+                    config.pr.labels,
+                )
                 _usage = aggregate_usage(usage_by_task)
                 write_usage(thread_id, _usage)
                 return {
-                    "status": "failed",
+                    "status": "succeeded",
                     "plan": plan_result.model_dump(),
                     "branch": branch_name,
-                    "qa_failures": qa_failures,
+                    "implementation": impl_result.model_dump(),
+                    "qa": qa_result.model_dump(),
+                    "pr_url": pr_url,
                     "usage": _usage,
                 }
 
-            # Phase 13: optional gate before committing and opening PR.
-            if config.human_in_loop.approve_pr:
-                interrupt({
-                    "kind": "pr_approval",
-                    "ask": "QA passed. Open a PR?",
-                })
-
-            # Phase 15: three separate @tasks instead of one
-            # commit_and_pr_task. A failure between commit and push
-            # (or push and PR creation) is resumable via resume_run —
-            # completed tasks return cached SHAs/URLs; the failed task
-            # re-executes against the now-fixed underlying issue.
-            sha = await commit_task(
-                branch_name, plan_result.title, impl_result.summary,
-                config.pr.base_branch,
-            )
-            await push_task(branch_name, sha)
-            pr_url = await pr_create_task(
-                branch_name,
-                plan_result.title,
-                impl_result.summary,
-                impl_result.test_plan,
-                sha,
-                config.pr.base_branch,
-                config.pr.draft,
-                config.pr.reviewers,
-                config.pr.labels,
-            )
-            _usage = aggregate_usage(usage_by_task)
-            write_usage(thread_id, _usage)
-            return {
-                "status": "succeeded",
-                "plan": plan_result.model_dump(),
-                "branch": branch_name,
-                "implementation": impl_result.model_dump(),
-                "qa": qa_result.model_dump(),
-                "pr_url": pr_url,
-                "usage": _usage,
-            }
+            except WorkflowCancelled:
+                # Phase 16: a between-task check found the cancel flag set.
+                # Whatever was in progress has completed (the SDK doesn't
+                # interrupt mid-task); we still owe the caller a final
+                # status and the usage accumulated so far.
+                _usage = aggregate_usage(usage_by_task)
+                write_usage(thread_id, _usage)
+                return {
+                    "status": "cancelled",
+                    "thread_id": thread_id,
+                    "usage": _usage,
+                }
 
         yield workflow
