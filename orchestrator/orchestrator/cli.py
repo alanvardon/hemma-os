@@ -15,6 +15,7 @@ Env vars:
     HEARTBEAT_INTERVAL=15  seconds between progress pings (default 15)
 """
 
+import argparse
 import asyncio
 import os
 import sys
@@ -29,6 +30,7 @@ load_dotenv()
 
 from langgraph.types import Command
 
+from orchestrator.config import apply_overrides, load_config
 from orchestrator.git_ops import BranchCreationError, CommitAndPrError, PreHookError
 from orchestrator.run_log import append_run
 from orchestrator.workflow import build_workflow
@@ -250,18 +252,63 @@ def _report_failure(thread_id: str, exc: Exception) -> None:
     )
 
 
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse CLI args. Flags must precede the request text.
+
+    All override flags default to None — that's the signal to
+    apply_overrides() to fall back to the env var, then the config file.
+    """
+    parser = argparse.ArgumentParser(
+        prog="implement-feature",
+        description="Run the orchestrator end-to-end against a request.",
+    )
+    parser.add_argument(
+        "--no-approve-plan",
+        dest="approve_plan",
+        action="store_false",
+        default=None,
+        help="Skip the plan-approval pause for this run.",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=None,
+        help="Override max impl/QA retry attempts for this run.",
+    )
+    parser.add_argument(
+        "--base-branch",
+        type=str,
+        default=None,
+        help="Override the PR base branch for this run.",
+    )
+    parser.add_argument(
+        "request",
+        nargs=argparse.REMAINDER,
+        help="The feature/fix/refactor request (joined with spaces).",
+    )
+    return parser.parse_args(argv)
+
+
 async def run() -> None:
-    request = " ".join(sys.argv[1:]) or "add a dark mode toggle"
+    args = _parse_args(sys.argv[1:])
+    request = " ".join(args.request) if args.request else "add a dark mode toggle"
     thread_id = f"cli-{uuid.uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread_id}}
     Path(".orchestrator").mkdir(exist_ok=True)
     append_run(thread_id, request, source="cli")
 
+    effective_config = apply_overrides(
+        load_config(),
+        approve_plan=args.approve_plan,
+        max_retries=args.max_retries,
+        base_branch=args.base_branch,
+    )
+
     print(f"thread_id: {thread_id}")
     print(f"request:   {request}")
 
     try:
-        async with build_workflow() as workflow:
+        async with build_workflow(config=effective_config) as workflow:
             result = await _run_with_progress(workflow, request, config)
 
             # Phase 8: plan-approval interrupt loop. Each user reply
