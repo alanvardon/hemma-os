@@ -34,6 +34,7 @@ load_dotenv()
 from langgraph.types import Command
 from mcp.server.fastmcp import FastMCP
 
+from orchestrator.config import apply_overrides, load_config
 from orchestrator.paths import find_project_root
 from orchestrator.run_log import append_run
 from orchestrator.workflow import build_workflow
@@ -62,7 +63,12 @@ def _awaiting_approval(thread_id: str, result: dict, hint: str) -> dict:
 
 
 @mcp.tool()
-async def implement_feature(request: str) -> dict:
+async def implement_feature(
+    request: str,
+    approve_plan: bool | None = None,
+    max_retries: int | None = None,
+    base_branch: str | None = None,
+) -> dict:
     """Start a feature, fix, or refactor implementation workflow.
 
     Use this when the user asks to implement, change, or fix something in
@@ -71,9 +77,11 @@ async def implement_feature(request: str) -> dict:
       - "fix the rounding bug in lagfart"
       - "refactor the modal close handlers"
 
-    The workflow ALWAYS pauses for plan approval before writing any code.
-    This tool returns {"status": "awaiting_approval", ...} containing the
-    plan and a thread_id. You MUST then:
+    The workflow ALWAYS pauses for plan approval before writing any code
+    (unless `approve_plan=False` is passed, or `ORCHESTRATOR_APPROVE_PLAN`
+    is set in the environment). When it pauses, this tool returns
+    {"status": "awaiting_approval", ...} containing the plan and a
+    thread_id. You MUST then:
       1. Show the plan's `plan_text` to the user.
       2. Ask whether they approve, or what they want changed.
       3. Call `approve_plan` with the same thread_id and their response.
@@ -84,19 +92,27 @@ async def implement_feature(request: str) -> dict:
 
     Args:
         request: Natural-language description of what to implement.
+        approve_plan: Per-invocation override for the plan-approval gate.
+            None = use `orchestrator.toml` / env var. False = skip the
+            approval pause and run straight through to PR. True = require
+            approval regardless of config.
+        max_retries: Per-invocation override for the impl/QA retry count.
+        base_branch: Per-invocation override for the PR base branch.
 
     Returns:
-        Awaiting-approval dict: {
-            "status": "awaiting_approval",
-            "thread_id": str,
-            "plan": {"title": str, "type": str, "plan_text": str},
-            "next": str
-        }
+        Awaiting-approval dict (or, if approve_plan was overridden to
+        False, the final succeeded/failed dict).
     """
     thread_id = f"run-{uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread_id}}
     append_run(thread_id, request, source="mcp")
-    async with build_workflow() as workflow:
+    effective_config = apply_overrides(
+        load_config(),
+        approve_plan=approve_plan,
+        max_retries=max_retries,
+        base_branch=base_branch,
+    )
+    async with build_workflow(config=effective_config) as workflow:
         result = await workflow.ainvoke(request, config=config)
     if "__interrupt__" in result:
         return _awaiting_approval(
@@ -106,12 +122,10 @@ async def implement_feature(request: str) -> dict:
             "want changes. Then call approve_plan with this same thread_id "
             "and their response ('yes' to proceed, or feedback to revise).",
         )
-    # Shouldn't happen: the workflow always hits the plan-approval interrupt
-    # before doing any side effects. If we reach here, the workflow body
-    # was changed in a way that bypasses Phase 8.
-    raise RuntimeError(
-        "Workflow completed without hitting plan approval interrupt"
-    )
+    # With approve_plan overridden to False the workflow can complete on
+    # the first ainvoke — pass the result straight through.
+    result["thread_id"] = thread_id
+    return result
 
 
 @mcp.tool()
