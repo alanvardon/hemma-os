@@ -136,8 +136,8 @@ async def implement(
         allowed_tools=_allowed_tools,
         disallowed_tools=_profile.disallowed_tools,
         mcp_servers={"orchestrator": orchestrator_mcp},
-        # cwd must be the bostadskalkyl repo root — the agent edits
-        # files there, not in the orchestrator/ subdirectory.
+        # cwd must be the target repo root — the agent edits files
+        # there, not in the orchestrator/ subdirectory.
         cwd=str(REPO_ROOT),
         # acceptEdits = skip per-edit human approval. We're running
         # unattended; the orchestrator already approved the plan with
@@ -185,7 +185,7 @@ async def implement(
 # Standalone test:
 #   python -m orchestrator.agents.implementation "tiny test"
 # Creates a fake minimal plan, runs the agent, prints the structured
-# result. Will actually edit files in the bostadskalkyl repo, so:
+# result. Will actually edit files in the target repo, so:
 #   - run on a branch you don't mind being modified
 #   - have a clean tree first
 if __name__ == "__main__":

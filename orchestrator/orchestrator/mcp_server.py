@@ -44,7 +44,7 @@ from orchestrator.workflow import build_workflow
 # Run once at import (server startup) rather than per-tool-call.
 (find_project_root() / ".orchestrator").mkdir(exist_ok=True)
 
-mcp = FastMCP("bostadskalkyl-orchestrator")
+mcp = FastMCP("orchestrator")
 
 
 def _awaiting_approval(thread_id: str, result: dict, hint: str) -> dict:
@@ -72,9 +72,9 @@ async def implement_feature(
     """Start a feature, fix, or refactor implementation workflow.
 
     Use this when the user asks to implement, change, or fix something in
-    the bostadskalkyl repo. Example user intents:
+    the target repo. Example user intents:
       - "add a tooltip showing what LTV means"
-      - "fix the rounding bug in lagfart"
+      - "fix the rounding bug in the X calculation"
       - "refactor the modal close handlers"
 
     The workflow ALWAYS pauses for plan approval before writing any code

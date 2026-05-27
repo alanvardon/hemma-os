@@ -1,10 +1,11 @@
 """Project root discovery.
 
 Walk up from CWD to find the nearest .git directory. This works for any
-git repo regardless of where the orchestrator package is installed, making
-it safe for both the embedded (bostadskalkyl) and extracted (Phase 32)
-cases — unlike __file__-based resolution, which breaks once the package
-lives in site-packages.
+git repo regardless of where the orchestrator package is installed,
+making it safe for both the drop-in case (orchestrator/ folder lives
+inside the target repo) and the extracted case (orchestrator installed
+globally, target repo lives elsewhere). __file__-based resolution would
+break the extracted case once the package lives in site-packages.
 """
 
 from pathlib import Path

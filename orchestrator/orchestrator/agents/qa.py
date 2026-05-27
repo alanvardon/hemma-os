@@ -145,7 +145,7 @@ async def qa(plan: PlanResult, model: str = "claude-sonnet-4-6") -> QaResult:
         disallowed_tools=_profile.disallowed_tools,
         mcp_servers={"orchestrator": orchestrator_mcp},
         # Same repo root as implementation — QA reviews changes in the
-        # bostadskalkyl tree, not the orchestrator/ subdirectory.
+        # target repo's tree, not the orchestrator/ subdirectory.
         cwd=str(REPO_ROOT),
         # acceptEdits is moot here (no Edit/Write in allowed_tools) but
         # keep it set for consistency. The real safety floor is the
@@ -185,7 +185,7 @@ async def qa(plan: PlanResult, model: str = "claude-sonnet-4-6") -> QaResult:
 # Standalone test:
 #   python -m orchestrator.agents.qa "tiny test"
 # Builds a fake plan, runs QA against whatever uncommitted changes are
-# in the bostadskalkyl tree right now, prints the verdict. Useful for
+# in the target repo right now, prints the verdict. Useful for
 # iterating on the QA prompt without going through the whole workflow.
 if __name__ == "__main__":
     request = " ".join(sys.argv[1:]) or "review whatever's currently uncommitted"
