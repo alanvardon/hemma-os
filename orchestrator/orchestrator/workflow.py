@@ -6,6 +6,35 @@ from typing import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
+
+# Phase 20: workflow body version. Bump on INCOMPATIBLE changes to the
+# entrypoint body — reordered/removed tasks, new required tasks, changed
+# control flow that a half-finished checkpoint can't safely resume into.
+# Pure additive changes (a new optional gate, a new trailing task that
+# legacy checkpoints simply haven't reached) don't strictly require a bump.
+# On every resume, the version stored at run creation is compared against
+# this constant; a mismatch refuses the resume with a clear error instead
+# of risking a confusing deserialization failure mid-run.
+WORKFLOW_VERSION = "1.0.0"
+
+
+class IncompatibleCheckpointError(RuntimeError):
+    """Raised on resume when the checkpoint was created by a different
+    WORKFLOW_VERSION than the code now attempting to resume it.
+
+    Carries both versions so callers can show a clear message and decide
+    whether to abandon the run and start fresh.
+    """
+
+    def __init__(self, stored_version: str, current_version: str) -> None:
+        self.stored_version = stored_version
+        self.current_version = current_version
+        super().__init__(
+            f"checkpoint was created with workflow v{stored_version}; "
+            f"current is v{current_version}. This run cannot be safely "
+            f"resumed — start a fresh run."
+        )
+
 # LangGraph's Functional API: @entrypoint marks the top-level workflow
 # function, @task marks a checkpointable unit of work. Together they let
 # you write a workflow as ordinary async Python and get durability,
@@ -73,6 +102,26 @@ _CUSTOM_SERDE = JsonPlusSerializer(
 #   - surface it as a span in the LangSmith trace tree
 # @task knows nothing about which checkpointer is in use — that's
 # configured on the @entrypoint below.
+# Phase 20: the version gate's storage mechanism. This task records the
+# WORKFLOW_VERSION current at the moment a run is first created. Because
+# @task results are checkpointed and replayed (not recomputed) on resume,
+# calling it at the top of the body returns:
+#   - on the first run: the live WORKFLOW_VERSION (and persists it)
+#   - on every resume:   the CACHED value — the version that created the run
+# That cached value is exactly "what version of the workflow created this
+# checkpoint", which LangGraph doesn't expose natively (see the landmine in
+# phase_20_schema_versioning.md). The body compares it against the live
+# constant and refuses the resume on mismatch.
+#
+# Adding this as a new task is safe for checkpoints created before Phase 20:
+# @task cache keys are per-function-name, so inserting a new name doesn't
+# shift the keys of existing tasks. A legacy checkpoint simply runs this
+# task fresh on resume (returning the live version → no false mismatch).
+@task
+async def record_version_task() -> str:
+    return WORKFLOW_VERSION
+
+
 @task
 async def planning_task(request: str, model: str = "claude-sonnet-4-6") -> PlanResult:
     return await plan(request, model=model)
@@ -237,6 +286,19 @@ async def build_workflow(
             }
 
             try:
+                # Phase 20: workflow-version gate. Runs first on every
+                # invocation. On a fresh run this records and returns the
+                # live WORKFLOW_VERSION; on a resume it returns the cached
+                # version that created the run. A mismatch means the body
+                # changed incompatibly since this run started — refuse
+                # rather than resume into a shifted task graph. Raised here
+                # (not inside a @task) so it propagates straight out of
+                # ainvoke without mutating the checkpoint, leaving the run
+                # resumable once the code is reverted or the run abandoned.
+                stored_version = await record_version_task()
+                if stored_version != WORKFLOW_VERSION:
+                    raise IncompatibleCheckpointError(stored_version, WORKFLOW_VERSION)
+
                 _check_cancel()
                 await verify_clean_tree_task()
 

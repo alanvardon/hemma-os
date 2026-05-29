@@ -42,6 +42,11 @@ class _PlanSchema(BaseModel):
 
 
 class PlanResult(_PlanSchema):
+    # Phase 20: schema version for this result model. Bump on incompatible
+    # shape changes (renamed/removed fields); pure additions of optional
+    # fields don't need a bump. Defined here, NOT on _PlanSchema, so it
+    # never leaks into the emit_plan tool's input_schema.
+    schema_version: int = 1
     # Populated after the API call returns; not part of the LLM tool schema.
     usage: TaskUsage | None = None
 

@@ -30,7 +30,7 @@ class _Stubs:
         self.plan_called = True
         return PlanResult(title="t", type="feature", plan_text="p")
 
-    def create_branch(self, plan: PlanResult, max_slug_length: int = 50) -> str:
+    def create_branch(self, plan: PlanResult, max_slug_length: int = 50, thread_id: str = "") -> str:
         return "feature/test"
 
     async def implement(self, plan, mode="implement", qa_failures=None, model="claude-sonnet-4-6"):

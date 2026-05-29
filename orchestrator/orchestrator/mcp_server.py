@@ -43,7 +43,7 @@ from orchestrator.config import apply_overrides, load_config
 from orchestrator.mcp_progress import run_with_progress
 from orchestrator.paths import find_project_root
 from orchestrator.run_log import append_run
-from orchestrator.workflow import build_workflow
+from orchestrator.workflow import build_workflow, IncompatibleCheckpointError
 
 
 # AsyncSqliteSaver creates the .db file on demand but not its parent.
@@ -51,6 +51,29 @@ from orchestrator.workflow import build_workflow
 (find_project_root() / ".orchestrator").mkdir(exist_ok=True)
 
 mcp = FastMCP("orchestrator")
+
+
+def _incompatible_checkpoint(
+    thread_id: str, exc: IncompatibleCheckpointError
+) -> dict:
+    """Shape an IncompatibleCheckpointError into a structured response.
+
+    Phase 20: the workflow body refuses to resume a checkpoint created by a
+    different WORKFLOW_VERSION. Surface both versions so the chat can explain
+    why and offer "start a fresh implement_feature" as the next step.
+    """
+    return {
+        "status": "incompatible_checkpoint",
+        "thread_id": thread_id,
+        "stored_version": exc.stored_version,
+        "current_version": exc.current_version,
+        "next": (
+            f"This run was created with workflow v{exc.stored_version}, but the "
+            f"current code is v{exc.current_version}. In-flight runs can't be "
+            "resumed across an incompatible version change — start a fresh "
+            "implement_feature for this work."
+        ),
+    }
 
 
 def _awaiting_approval(thread_id: str, result: dict, hint: str) -> dict:
@@ -194,8 +217,11 @@ async def resume_run(
     # last checkpoint instead of starting a fresh run. We route
     # through run_with_progress so the resumed run streams MCP
     # progress events the same way a fresh run does.
-    async with build_workflow() as workflow:
-        result = await run_with_progress(workflow, None, config, ctx)
+    try:
+        async with build_workflow() as workflow:
+            result = await run_with_progress(workflow, None, config, ctx)
+    except IncompatibleCheckpointError as exc:
+        return _incompatible_checkpoint(thread_id, exc)
     if "__interrupt__" in result:
         return _awaiting_approval(
             thread_id,
@@ -283,10 +309,13 @@ async def approve_plan(
     # off the longest section of the workflow (planning → impl → QA
     # → commit → push → PR), so this is the call that benefits most
     # from progress notifications.
-    async with build_workflow() as workflow:
-        result = await run_with_progress(
-            workflow, Command(resume=response), config, ctx
-        )
+    try:
+        async with build_workflow() as workflow:
+            result = await run_with_progress(
+                workflow, Command(resume=response), config, ctx
+            )
+    except IncompatibleCheckpointError as exc:
+        return _incompatible_checkpoint(thread_id, exc)
     if "__interrupt__" in result:
         return _awaiting_approval(
             thread_id,

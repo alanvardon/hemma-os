@@ -48,6 +48,9 @@ _IMPLEMENTATION_SYSTEM_PROMPT = load_prompt("implementation")
 
 
 class ImplementationResult(BaseModel):
+    # Phase 20: bump on incompatible shape changes (renamed/removed fields);
+    # pure additions of optional fields don't need a bump.
+    schema_version: int = 1
     summary: str
     test_plan: str
     usage: TaskUsage | None = None

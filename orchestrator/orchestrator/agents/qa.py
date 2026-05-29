@@ -53,6 +53,9 @@ _QA_SYSTEM_PROMPT = load_prompt("qa")
 
 
 class QaResult(BaseModel):
+    # Phase 20: bump on incompatible shape changes (renamed/removed fields);
+    # pure additions of optional fields don't need a bump.
+    schema_version: int = 1
     result: Literal["PASS", "FAIL"]
     failures: str | None = None
     usage: TaskUsage | None = None
