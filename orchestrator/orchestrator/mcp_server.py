@@ -40,6 +40,7 @@ from orchestrator.cancellation import (
     mark_cancelled,
 )
 from orchestrator.config import apply_overrides, load_config
+from orchestrator.idempotency import reserve as idempotency_reserve
 from orchestrator.mcp_progress import run_with_progress
 from orchestrator.paths import find_project_root
 from orchestrator.run_log import append_run
@@ -68,12 +69,71 @@ def _awaiting_approval(thread_id: str, result: dict, hint: str) -> dict:
     }
 
 
+async def _fetch_existing_state(thread_id: str) -> dict:
+    """Return the current state of an existing thread (Phase 18).
+
+    Used when an idempotency_key collides — instead of starting a new
+    workflow, peek at the checkpointer for the run already claimed by
+    that key and return a response in the same shape the caller would
+    get from a fresh implement_feature / approve_plan / resume_run.
+
+    The `replayed: True` marker tells the caller that this is not a
+    new run — useful for logging and for avoiding showing the plan
+    to the user a second time on a double-click.
+    """
+    config = {"configurable": {"thread_id": thread_id}}
+    async with build_workflow() as workflow:
+        snapshot = await workflow.aget_state(config)
+
+    # If the run is paused at an interrupt, its pending tasks carry
+    # the interrupt values. Surface the plan exactly like a fresh
+    # awaiting_approval would.
+    interrupts = []
+    for task in snapshot.tasks:
+        interrupts.extend(task.interrupts)
+    if interrupts:
+        interrupt_val = interrupts[0].value
+        return {
+            "status": "awaiting_approval",
+            "thread_id": thread_id,
+            "plan": interrupt_val.get("plan"),
+            "next": (
+                "Replayed from idempotency key. Show the plan to the user "
+                "and call approve_plan with this thread_id."
+            ),
+            "replayed": True,
+        }
+
+    # Workflow completed (status: succeeded / failed / cancelled).
+    # snapshot.values is the entrypoint's return dict.
+    if isinstance(snapshot.values, dict) and "status" in snapshot.values:
+        result = dict(snapshot.values)
+        result["thread_id"] = thread_id
+        result["replayed"] = True
+        return result
+
+    # Reservation exists but no completed state and no interrupt — the
+    # run is mid-task. The caller should poll or call resume_run after
+    # whatever they're waiting on has settled.
+    return {
+        "status": "in_progress",
+        "thread_id": thread_id,
+        "next": (
+            "A run is already underway for this idempotency key. Poll "
+            "again later, or call resume_run if you believe the run has "
+            "stalled."
+        ),
+        "replayed": True,
+    }
+
+
 @mcp.tool()
 async def implement_feature(
     request: str,
     approve_plan: bool | None = None,
     max_retries: int | None = None,
     base_branch: str | None = None,
+    idempotency_key: str | None = None,
     ctx: Context | None = None,
 ) -> dict:
     """Start a feature, fix, or refactor implementation workflow.
@@ -97,6 +157,13 @@ async def implement_feature(
     with a new thread_id, losing the user's review context. To revise an
     in-flight plan, send feedback via `approve_plan` instead.
 
+    Phase 18 — idempotency: when `idempotency_key` is provided, the
+    first call with that key claims it and runs the workflow as
+    normal. A second call with the SAME key (e.g. double-click, retry,
+    CI re-run) returns the existing thread's current state — same
+    `thread_id`, no new run, with `replayed: True` added so the caller
+    can tell. Keys must match `[A-Za-z0-9._-]+` and are ≤128 chars.
+
     Args:
         request: Natural-language description of what to implement.
         approve_plan: Per-invocation override for the plan-approval gate.
@@ -105,14 +172,28 @@ async def implement_feature(
             approval regardless of config.
         max_retries: Per-invocation override for the impl/QA retry count.
         base_branch: Per-invocation override for the PR base branch.
+        idempotency_key: Optional caller-supplied key. Reusing a key
+            returns the existing run instead of starting a new one.
 
     Returns:
         Awaiting-approval dict (or, if approve_plan was overridden to
-        False, the final succeeded/failed dict).
+        False, the final succeeded/failed dict). When an idempotency
+        key replays an existing run, the dict carries `replayed: True`.
     """
-    thread_id = f"run-{uuid4().hex[:8]}"
+    # Phase 18: idempotency claim happens BEFORE any other side effect
+    # (run_log entry, workflow build). If the key collides, return the
+    # original run's state without writing anything new.
+    if idempotency_key is not None:
+        candidate_thread_id = f"run-{uuid4().hex[:8]}"
+        existing = idempotency_reserve(idempotency_key, candidate_thread_id)
+        if existing is not None:
+            return await _fetch_existing_state(existing)
+        thread_id = candidate_thread_id
+    else:
+        thread_id = f"run-{uuid4().hex[:8]}"
+
     config = {"configurable": {"thread_id": thread_id}}
-    append_run(thread_id, request, source="mcp")
+    append_run(thread_id, request, source="mcp", idempotency_key=idempotency_key)
     effective_config = apply_overrides(
         load_config(),
         approve_plan=approve_plan,
