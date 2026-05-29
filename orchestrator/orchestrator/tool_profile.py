@@ -38,6 +38,12 @@ DEFAULTS: dict[str, dict[str, list[str]]] = {
         "allowed_tools": ["Read", "Grep", "Bash"],
         "disallowed_tools": [],
     },
+    # Docs agent edits markdown only; the extension guardrail in
+    # agents/docs.py — not this allowlist — is what enforces that.
+    "docs": {
+        "allowed_tools": ["Read", "Edit", "Write", "Bash", "Grep"],
+        "disallowed_tools": [],
+    },
     # Informational only — planning uses the raw Anthropic SDK and
     # ignores ClaudeAgentOptions entirely. Never actually consumed.
     "planning": {

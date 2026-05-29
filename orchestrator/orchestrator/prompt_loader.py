@@ -66,14 +66,25 @@ Call `emit_qa_result` exactly once with:
 This call is how the orchestrator captures your verdict. If you don't call it, the workflow has nothing to record and will fail. Do not modify any files — your only output is the `emit_qa_result` call.
 """
 
+_DOCS_FOOTER = """\
+## When done
+
+Call `emit_doc_result` exactly once with:
+
+- `summary`: a one-line description of the documentation you updated (which files and why), or — if no update was needed — a short reason (e.g. "internal refactor only; no user-facing docs affected").
+
+This call is how the orchestrator captures your result. If you don't call it, the workflow has nothing to record and will fail. Edit only documentation files — editing source, config, or test files aborts the workflow.
+"""
+
 _FOOTERS: dict[str, str] = {
     "implementation": _IMPLEMENTATION_FOOTER,
     "qa": _QA_FOOTER,
+    "docs": _DOCS_FOOTER,
 }
 
 
 def load_prompt(name: str) -> str:
-    """Return the full prompt for `name` ('planning', 'implementation', 'qa').
+    """Return the full prompt for `name` ('planning', 'implementation', 'qa', 'docs').
 
     Loads the body from the target repo override or the bundled default,
     then appends the tool-call footer for agents that require one.

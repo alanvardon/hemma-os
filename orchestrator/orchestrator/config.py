@@ -19,6 +19,7 @@ Sample orchestrator.toml (all fields optional, defaults shown):
     planning       = "claude-sonnet-4-6"
     implementation = "claude-sonnet-4-6"
     qa             = "claude-sonnet-4-6"
+    docs           = "claude-sonnet-4-6"
 
     [human_in_loop]
     approve_plan           = true
@@ -26,6 +27,11 @@ Sample orchestrator.toml (all fields optional, defaults shown):
     approve_implementation = false
     approve_qa_failure     = false
     approve_pr             = false
+    docs                   = false
+
+    [docs]
+    enabled            = true
+    allowed_extensions = [".md", ".rst", ".txt"]
 
     [branch]
     max_slug_length = 50
@@ -84,6 +90,7 @@ class ModelsConfig(BaseModel):
     planning: str = "claude-sonnet-4-6"
     implementation: str = "claude-sonnet-4-6"
     qa: str = "claude-sonnet-4-6"
+    docs: str = "claude-sonnet-4-6"
 
 
 class HumanInLoopConfig(BaseModel):
@@ -92,6 +99,18 @@ class HumanInLoopConfig(BaseModel):
     approve_implementation: bool = False
     approve_qa_failure: bool = False
     approve_pr: bool = False
+    docs: bool = False
+
+
+class DocsConfig(BaseModel):
+    # Run the documentation agent after QA passes (Phase 26). Disable to
+    # skip the doc step entirely.
+    enabled: bool = True
+    # Extensions the doc agent is allowed to write. Touching anything else
+    # raises DocScopeError and aborts the workflow.
+    allowed_extensions: list[str] = Field(
+        default_factory=lambda: [".md", ".rst", ".txt"]
+    )
 
 
 class BranchConfig(BaseModel):
@@ -116,6 +135,7 @@ class OrchestratorConfig(BaseModel):
     human_in_loop: HumanInLoopConfig = Field(default_factory=HumanInLoopConfig)
     branch: BranchConfig = Field(default_factory=BranchConfig)
     pr: PrConfig = Field(default_factory=PrConfig)
+    docs: DocsConfig = Field(default_factory=DocsConfig)
 
 
 def load_config(path: Path | None = None) -> OrchestratorConfig:

@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from langgraph.types import Command, Interrupt
 
+from orchestrator.agents.docs import DocResult
 from orchestrator.agents.implementation import ImplementationResult
 from orchestrator.agents.planning import PlanResult
 from orchestrator.agents.qa import QaResult
@@ -39,7 +40,7 @@ class _Stubs:
         n = len(self.plan_calls)
         return PlanResult(title=f"title-{n}", type="feature", plan_text=f"plan-{n}")
 
-    def create_branch(self, plan: PlanResult, max_slug_length: int = 50) -> str:
+    def create_branch(self, plan: PlanResult, max_slug_length: int = 50, thread_id: str = "") -> str:
         return "feature/test"
 
     async def implement(self, plan, mode="implement", qa_failures=None, model="claude-sonnet-4-6"):
@@ -49,6 +50,9 @@ class _Stubs:
 
     async def qa(self, plan: PlanResult, model: str = "claude-sonnet-4-6") -> QaResult:
         return QaResult(result="PASS")
+
+    async def document(self, plan: PlanResult, model: str = "claude-sonnet-4-6") -> DocResult:
+        return DocResult(updated=False, summary="no docs needed")
 
     def commit(self, branch, title, summary, base_branch="main") -> str:
         return "abc123def456"
@@ -69,6 +73,7 @@ def _patch(stubs: _Stubs, monkeypatch) -> None:
     monkeypatch.setattr("orchestrator.workflow.create_branch", stubs.create_branch)
     monkeypatch.setattr("orchestrator.workflow.implement", stubs.implement)
     monkeypatch.setattr("orchestrator.workflow.qa", stubs.qa)
+    monkeypatch.setattr("orchestrator.workflow.document", stubs.document)
     monkeypatch.setattr("orchestrator.workflow.commit", stubs.commit)
     monkeypatch.setattr("orchestrator.workflow.push", stubs.push)
     monkeypatch.setattr("orchestrator.workflow.pr_create", stubs.pr_create)

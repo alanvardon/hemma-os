@@ -22,6 +22,7 @@ db_path = ".orchestrator/checkpoints.db"
 planning       = "claude-sonnet-4-6"
 implementation = "claude-sonnet-4-6"
 qa             = "claude-sonnet-4-6"
+docs           = "claude-sonnet-4-6"  # documentation agent (Phase 26)
 
 [human_in_loop]
 # Each flag gates an interrupt() at that workflow stage boundary.
@@ -31,6 +32,17 @@ approve_branch         = false  # pause before the feature branch is created
 approve_implementation = false  # pause after each implementation attempt, before QA
 approve_qa_failure     = false  # pause on QA FAIL — lets you abort instead of retrying
 approve_pr             = false  # pause after QA PASS, before commit + PR is opened
+docs                   = false  # pause after the doc agent runs, before commit
+
+[docs]
+# Documentation agent (Phase 26). Runs after QA passes and before commit;
+# reads the plan + diff and updates affected markdown docs so they land in
+# the same commit as the code change. Set enabled = false to skip it.
+enabled = true
+# Extensions the doc agent is allowed to write. Touching anything else aborts
+# the workflow with a clear scope error — the hard gate behind the agent's
+# "documentation only" instruction.
+allowed_extensions = [".md", ".rst", ".txt"]
 
 [branch]
 # Maximum length of the kebab-case slug in the branch name.
@@ -65,4 +77,11 @@ disallowed_tools = []
 
 [tools.qa]
 allowed_tools    = ["Read", "Grep", "Bash"]
+disallowed_tools = []
+
+# Doc agent edits markdown only. The extension guardrail in agents/docs.py
+# (see [docs] allowed_extensions) — not this allowlist — is what enforces
+# that; these tools just let it read the diff and write the doc files.
+[tools.docs]
+allowed_tools    = ["Read", "Edit", "Write", "Bash", "Grep"]
 disallowed_tools = []

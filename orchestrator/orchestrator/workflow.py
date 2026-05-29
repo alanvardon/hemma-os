@@ -29,6 +29,7 @@ from langgraph.config import get_config
 from orchestrator.agents.planning import plan, PlanResult
 from orchestrator.agents.implementation import implement, ImplementationResult
 from orchestrator.agents.qa import qa, QaResult
+from orchestrator.agents.docs import document, DocResult
 from orchestrator.cancellation import WorkflowCancelled, raise_if_cancelled
 from orchestrator.config import OrchestratorConfig, load_config
 from orchestrator.usage import TaskUsage, aggregate_usage
@@ -44,6 +45,7 @@ from orchestrator.paths import find_project_root
 from orchestrator.pre_hooks import run_pre_hooks
 from orchestrator.run_artifacts import (
     rename_with_branch,
+    write_docs,
     write_implementation,
     write_plan,
     write_qa,
@@ -59,6 +61,7 @@ _ALLOWED_MSGPACK_MODULES = [
     ("orchestrator.agents.planning", "PlanResult"),
     ("orchestrator.agents.implementation", "ImplementationResult"),
     ("orchestrator.agents.qa", "QaResult"),
+    ("orchestrator.agents.docs", "DocResult"),
     ("orchestrator.usage", "TaskUsage"),
 ]
 
@@ -137,6 +140,20 @@ async def qa_task(
     plan_result: PlanResult, model: str = "claude-sonnet-4-6"
 ) -> QaResult:
     return await qa(plan_result, model=model)
+
+
+# Phase 26. Runs after QA passes and before commit, on the uncommitted
+# implementation changes. The doc agent reads the plan + diff and updates
+# affected documentation; it edits markdown only (enforced by a scope
+# guardrail inside document()). It may make no changes if nothing
+# user-facing changed — that's a valid DocResult with updated=False.
+# Checkpointed like the other agent tasks so a resume after this point
+# doesn't re-run it.
+@task
+async def doc_task(
+    plan_result: PlanResult, model: str = "claude-sonnet-4-6"
+) -> DocResult:
+    return await document(plan_result, model=model)
 
 
 # Phase 15: the old commit_and_pr_task split into three idempotent
@@ -234,6 +251,7 @@ async def build_workflow(
                 "planning": [],
                 "implementation": [],
                 "qa": [],
+                "docs": [],
             }
 
             try:
@@ -373,6 +391,27 @@ async def build_workflow(
                         "usage": _usage,
                     }
 
+                # Phase 26: documentation agent. Runs after QA passes, before
+                # commit, so its doc edits land in the same commit as the code.
+                # Gated by config.docs.enabled. The optional human_in_loop.docs
+                # interrupt lets the user review the proposed doc changes before
+                # they're committed. doc_result is recorded but never blocks the
+                # PR — a doc miss shouldn't sink a passing change.
+                doc_result: DocResult | None = None
+                if config.docs.enabled:
+                    _check_cancel()
+                    doc_result = await doc_task(plan_result, config.models.docs)
+                    if doc_result.usage:
+                        usage_by_task["docs"].append(doc_result.usage)
+                    write_docs(thread_id, doc_result)
+
+                    if config.human_in_loop.docs:
+                        interrupt({
+                            "kind": "docs_approval",
+                            "docs": doc_result.model_dump(),
+                            "ask": "Documentation updated. Proceed to commit?",
+                        })
+
                 # Phase 13: optional gate before committing and opening PR.
                 if config.human_in_loop.approve_pr:
                     interrupt({
@@ -415,6 +454,7 @@ async def build_workflow(
                     "branch": branch_name,
                     "implementation": impl_result.model_dump(),
                     "qa": qa_result.model_dump(),
+                    "docs": doc_result.model_dump() if doc_result else None,
                     "pr_url": pr_url,
                     "usage": _usage,
                 }

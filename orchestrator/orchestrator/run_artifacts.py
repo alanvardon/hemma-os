@@ -12,7 +12,7 @@ these files are for human debugging only.
 
 Usage in workflow.py:
     from orchestrator.run_artifacts import (
-        write_plan, write_implementation, write_qa, write_usage,
+        write_plan, write_implementation, write_qa, write_docs, write_usage,
         rename_with_branch,
     )
 """
@@ -20,6 +20,7 @@ Usage in workflow.py:
 import json
 from pathlib import Path
 
+from orchestrator.agents.docs import DocResult
 from orchestrator.agents.implementation import ImplementationResult
 from orchestrator.agents.planning import PlanResult
 from orchestrator.agents.qa import QaResult
@@ -81,6 +82,26 @@ def write_qa(thread_id: str, qa: QaResult) -> None:
         )
         content = f"# QA Result: {qa.result}{failures_section}\n"
         (d / "qa.md").write_text(content, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def write_docs(thread_id: str, docs: DocResult) -> None:
+    """Write docs.md — the documentation agent's result for the run."""
+    try:
+        d = _run_dir(thread_id)
+        d.mkdir(parents=True, exist_ok=True)
+        files_section = (
+            "\n## Files\n\n"
+            + "\n".join(f"- {f}" for f in docs.changed_files)
+            + "\n"
+            if docs.changed_files
+            else ""
+        )
+        content = (
+            f"# Docs updated: {docs.updated}\n\n{docs.summary}\n{files_section}"
+        )
+        (d / "docs.md").write_text(content, encoding="utf-8")
     except OSError:
         pass
 
