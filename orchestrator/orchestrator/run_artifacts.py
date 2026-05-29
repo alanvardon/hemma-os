@@ -25,7 +25,13 @@ from orchestrator.agents.planning import PlanResult
 from orchestrator.agents.qa import QaResult
 from orchestrator.paths import find_project_root
 
-_RUNS_DIR = find_project_root() / ".orchestrator" / "runs"
+def _runs_dir() -> Path:
+    """Resolve the runs directory lazily.
+
+    Why: tests monkeypatch.chdir() after import, so a module-level
+    constant would freeze to the real repo and leak test artifacts there.
+    """
+    return find_project_root() / ".orchestrator" / "runs"
 
 
 def _run_dir(thread_id: str) -> Path:
@@ -35,11 +41,12 @@ def _run_dir(thread_id: str) -> Path:
     then falls back to the bare {thread_id} folder (pre-branch or
     branch creation failed). Creates the folder if it doesn't exist yet.
     """
-    _RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    matches = sorted(_RUNS_DIR.glob(f"{thread_id}-*"))
+    runs = _runs_dir()
+    runs.mkdir(parents=True, exist_ok=True)
+    matches = sorted(runs.glob(f"{thread_id}-*"))
     if matches:
         return matches[0]
-    return _RUNS_DIR / thread_id
+    return runs / thread_id
 
 
 def write_plan(thread_id: str, plan: PlanResult) -> None:
@@ -99,8 +106,9 @@ def rename_with_branch(thread_id: str, branch: str) -> None:
     """
     try:
         slug = branch.split("/", 1)[-1] if "/" in branch else branch
-        src = _RUNS_DIR / thread_id
-        dst = _RUNS_DIR / f"{thread_id}-{slug}"
+        runs = _runs_dir()
+        src = runs / thread_id
+        dst = runs / f"{thread_id}-{slug}"
         if src.exists() and not dst.exists():
             src.rename(dst)
     except OSError:
