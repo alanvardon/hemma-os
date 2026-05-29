@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from langgraph.types import Command
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from orchestrator.cancellation import (
     clear_cancelled,
@@ -40,6 +40,7 @@ from orchestrator.cancellation import (
     mark_cancelled,
 )
 from orchestrator.config import apply_overrides, load_config
+from orchestrator.mcp_progress import run_with_progress
 from orchestrator.paths import find_project_root
 from orchestrator.run_log import append_run
 from orchestrator.workflow import build_workflow
@@ -73,6 +74,7 @@ async def implement_feature(
     approve_plan: bool | None = None,
     max_retries: int | None = None,
     base_branch: str | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Start a feature, fix, or refactor implementation workflow.
 
@@ -117,8 +119,12 @@ async def implement_feature(
         max_retries=max_retries,
         base_branch=base_branch,
     )
+    # Phase 19: stream via run_with_progress so the MCP client sees
+    # per-task progress notifications during the 5+ min runs. ctx is
+    # injected by FastMCP; None when called outside the MCP transport
+    # (tests, ad-hoc invocations).
     async with build_workflow(config=effective_config) as workflow:
-        result = await workflow.ainvoke(request, config=config)
+        result = await run_with_progress(workflow, request, config, ctx)
     if "__interrupt__" in result:
         return _awaiting_approval(
             thread_id,
@@ -128,13 +134,15 @@ async def implement_feature(
             "and their response ('yes' to proceed, or feedback to revise).",
         )
     # With approve_plan overridden to False the workflow can complete on
-    # the first ainvoke — pass the result straight through.
+    # the first call — pass the result straight through.
     result["thread_id"] = thread_id
     return result
 
 
 @mcp.tool()
-async def resume_run(thread_id: str, force: bool = False) -> dict:
+async def resume_run(
+    thread_id: str, force: bool = False, ctx: Context | None = None
+) -> dict:
     """Resume a workflow that failed mid-task without restarting it.
 
     Use this when a previous `implement_feature` or `approve_plan` call
@@ -181,11 +189,13 @@ async def resume_run(thread_id: str, force: bool = False) -> dict:
         clear_cancelled(thread_id)
 
     config = {"configurable": {"thread_id": thread_id}}
-    # The functional API's resume incantation: ainvoke(None, config)
-    # continues a paused/failed workflow from its last checkpoint
-    # instead of starting a fresh run.
+    # The functional API's resume incantation: passing None to
+    # the entrypoint continues a paused/failed workflow from its
+    # last checkpoint instead of starting a fresh run. We route
+    # through run_with_progress so the resumed run streams MCP
+    # progress events the same way a fresh run does.
     async with build_workflow() as workflow:
-        result = await workflow.ainvoke(None, config=config)
+        result = await run_with_progress(workflow, None, config, ctx)
     if "__interrupt__" in result:
         return _awaiting_approval(
             thread_id,
@@ -234,7 +244,9 @@ async def cancel_run(thread_id: str) -> dict:
 
 
 @mcp.tool()
-async def approve_plan(thread_id: str, response: str) -> dict:
+async def approve_plan(
+    thread_id: str, response: str, ctx: Context | None = None
+) -> dict:
     """Resume an awaiting workflow with the user's response to the plan.
 
     Call this ONLY after `implement_feature` (or a prior `approve_plan`)
@@ -267,8 +279,14 @@ async def approve_plan(thread_id: str, response: str) -> dict:
         On QA exhaustion: {"status": "failed", "qa_failures": str, ...}
     """
     config = {"configurable": {"thread_id": thread_id}}
+    # Phase 19: stream via run_with_progress. "yes" on approval kicks
+    # off the longest section of the workflow (planning → impl → QA
+    # → commit → push → PR), so this is the call that benefits most
+    # from progress notifications.
     async with build_workflow() as workflow:
-        result = await workflow.ainvoke(Command(resume=response), config=config)
+        result = await run_with_progress(
+            workflow, Command(resume=response), config, ctx
+        )
     if "__interrupt__" in result:
         return _awaiting_approval(
             thread_id,
