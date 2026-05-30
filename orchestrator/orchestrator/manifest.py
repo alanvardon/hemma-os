@@ -109,6 +109,9 @@ class StepResult(BaseModel):
     kind: str
     ok: bool = True
     detail: str = ""
+    # Phase 42: gate verdict. None = this step is not a gate; True/False = a
+    # gate's pass/fail. The retry engine fails closed on a None in a gate slot.
+    passed: bool | None = None
     usage: TaskUsage | None = None
 
 
