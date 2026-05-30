@@ -1,71 +1,79 @@
-# orchestrator.toml — all fields are optional; values shown are the defaults.
+# orchestrator.toml — all config fields are optional; values shown are the defaults.
 # Place this file at the project root (same directory you run the CLI from).
+#
+# Phase 40: per-agent settings are consolidated under [workflow.<step>] — one
+# table per spine step carries its model, human-in-loop gate, tool permissions,
+# and optional timeout. Unknown keys are rejected at load time (fail-loud), so a
+# typo can't be silently ignored.
 
-# [qa]
-# Directory (relative to project root) containing executable scripted QA checks.
-# Every executable file is run in sorted order before the LLM QA agent.
-# A non-zero exit from any script aborts QA immediately.
-# qa_scripts_dir = ".orchestrator/qa"
-# Maximum seconds allowed per script before it is killed (exit code 124).
-# qa_scripts_timeout = 60
-
-# Maximum number of implementation+QA loop attempts before giving up.
-# On failure the branch and diffs are preserved for manual review.
-max_retries = 3
+# Model used by any [workflow.*] step whose `model` is left unset.
+# Swap to "claude-opus-4-7" for higher quality, "claude-haiku-4-5-20251001" for speed/cost.
+default_model = "claude-sonnet-4-6"
 
 # SQLite checkpoint database path (relative to cwd / project root).
 db_path = ".orchestrator/checkpoints.db"
 
-[models]
-# Claude model IDs used by each agent.
-# Swap to "claude-opus-4-7" for higher quality, "claude-haiku-4-5-20251001" for speed/cost.
-planning       = "claude-sonnet-4-6"
-implementation = "claude-sonnet-4-6"
-qa             = "claude-sonnet-4-6"
+# Directory (relative to project root) where pluggable-step agent prompts live.
+agents_dir = ".orchestrator/agents"
 
-[human_in_loop]
-# Each flag gates an interrupt() at that workflow stage boundary.
-# true  = pause and ask; false = auto-proceed (fully autonomous for that stage).
-approve_plan           = true   # pause for plan review before any code is written
-approve_branch         = false  # pause before the feature branch is created
-approve_implementation = false  # pause after each implementation attempt, before QA
-approve_qa_failure     = false  # pause on QA FAIL — lets you abort instead of retrying
-approve_pr             = false  # pause after QA PASS, before commit + PR is opened
+[pre_hooks]
+# Pre-flight scripts run after the clean-tree check, before any LLM spend.
+# A non-zero exit aborts the run.
+dir     = ".orchestrator/pre-hooks"
+timeout = 30
 
-[branch]
-# Maximum length of the kebab-case slug in the branch name.
-# e.g. "feature/ltv-calculation-rounding-error" — slug part only, not the prefix.
-max_slug_length = 50
+[qa]
+# Scripted QA gate: every executable file in scripts_dir runs (sorted) before
+# the LLM QA agent. A non-zero exit fails QA immediately. Distinct from
+# [workflow.qa] below, which configures the QA *agent*.
+scripts_dir     = ".orchestrator/qa"
+scripts_timeout = 60
+
+# ---------------------------------------------------------------------------
+# Built-in workflow steps. One [workflow.<step>] table per spine step:
+#   model            — omit to inherit default_model
+#   human_in_loop    — pause with an interrupt() at that stage boundary
+#   allowed_tools    — agent tool allowlist (implementation / qa)
+#   disallowed_tools — agent tool denylist
+#   timeout          — wall-clock seconds for the agent loop (omit = no limit)
+# Counterpart to [steps.*] below: [workflow.*] = built-in, [steps.*] = injected.
+# ---------------------------------------------------------------------------
+
+[workflow.planning]
+human_in_loop = true     # pause for plan review before any code is written
+
+[workflow.branch]
+max_slug_length = 50     # kebab-case slug length in the branch name (slug part only)
+human_in_loop   = false  # pause before the feature branch is created
+
+[workflow.implementation]
+human_in_loop    = false  # pause after each implementation attempt, before QA
+allowed_tools    = ["Read", "Edit", "Write", "Bash"]
+disallowed_tools = []
+
+[workflow.qa]
+human_in_loop    = false  # pause on QA FAIL — lets you abort instead of retrying
+allowed_tools    = ["Read", "Grep", "Bash"]
+disallowed_tools = []
+max_retries      = 3      # implementation+QA loop attempts before giving up
+
+[workflow.docs]
+# Baked-in docs agent (Phase 41). Haiku by default — a read-diff / edit-md task.
+model   = "claude-haiku-4-5-20251001"
+timeout = 120
+
+[workflow.commit]
+human_in_loop = false    # pause after QA PASS, before commit + PR is opened
 
 [pr]
 # Base branch the PR targets.
 base_branch = "main"
-
 # Open the PR as a draft (true) or ready-for-review (false).
 draft = false
-
 # GitHub usernames to request review from. Empty list = no reviewers requested.
 reviewers = []
-
-# Labels to attach to the PR. Empty list = no labels attached.
-labels = ["feature", "bug", "refactor", "chore"]
-
-# ---------------------------------------------------------------------------
-# Tool permission profiles
-# Pinned MCP server tools (e.g. mcp__orchestrator__emit_implementation_result)
-# are injected automatically by the orchestrator and do not need to be listed
-# here.
-# Note: [tools.planning] has no effect — the planning agent uses the raw
-# Anthropic SDK and ignores this section. A warning is emitted if present.
-# ---------------------------------------------------------------------------
-
-[tools.implementation]
-allowed_tools    = ["Read", "Edit", "Write", "Bash"]
-disallowed_tools = []
-
-[tools.qa]
-allowed_tools    = ["Read", "Grep", "Bash"]
-disallowed_tools = []
+# Note: the PR label is auto-applied from the plan type (feature → "feature",
+# fix → "bug", refactor → "refactor", chore → "chore"). There is no `labels` key.
 
 # ---------------------------------------------------------------------------
 # Pluggable steps (Phase 33)
@@ -85,7 +93,7 @@ disallowed_tools = []
 #                 (must be chmod +x with a shebang — see NOTES.md)
 #   human_gate  — pause for a decision: reply 'abort' (or 'no'/'stop') to stop
 #                 the run, any other reply to proceed
-#   llm_agent   — run a markdown agent at .orchestrator/agents/<agent>.md
+#   llm_agent   — run a markdown agent at <agents_dir>/<agent>.md
 #
 # `id` is the step's resume identity — don't rename it mid-run. The manifest
 # is validated at load time (unknown seam, duplicate id, missing script,

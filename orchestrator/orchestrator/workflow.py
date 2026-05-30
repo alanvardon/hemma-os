@@ -313,7 +313,7 @@ async def verify_clean_tree_task() -> None:
     await asyncio.to_thread(verify_clean_tree)
     _cfg = load_config()
     await asyncio.to_thread(ensure_on_main, _cfg.pr.base_branch)
-    await asyncio.to_thread(run_pre_hooks, _cfg.pre_hooks_dir, _cfg.pre_hooks_timeout)
+    await asyncio.to_thread(run_pre_hooks, _cfg.pre_hooks.dir, _cfg.pre_hooks.timeout)
 
 
 # Deterministic git task (Phase 6a). Wraps the synchronous create_branch
@@ -402,13 +402,16 @@ async def pr_create_task(
     base_branch: str | None = None,
     draft: bool = False,
     reviewers: list[str] | None = None,
-    labels: list[str] | None = None,
+    plan_type: str | None = None,
 ) -> str:
     """Open a PR and return its URL. Idempotent: if a PR already exists
-    for this branch, returns its URL instead of opening another."""
+    for this branch, returns its URL instead of opening another.
+
+    Phase 40: `plan_type` (plan_result.type) is passed through to pr_create,
+    which auto-derives the PR label from it (replacing the old pr.labels list)."""
     return await asyncio.to_thread(
         pr_create, branch, title, summary, test_plan,
-        base_branch, draft, reviewers or [], labels or [],
+        base_branch, draft, reviewers or [], plan_type,
     )
 
 
@@ -508,7 +511,7 @@ async def build_workflow(
 
                 _check_cancel()
                 async with audited(_audit, thread_id, "planning"):
-                    plan_result = await planning_task(request, config.models.planning)
+                    plan_result = await planning_task(request, config.resolved_model(config.workflow.planning))
                 if plan_result.usage:
                     usage_by_task["planning"].append(plan_result.usage)
                 write_plan(thread_id, plan_result)
@@ -519,7 +522,7 @@ async def build_workflow(
                 # original request, then the new plan is surfaced for another
                 # round of review.
                 #
-                # Phase 13: gated by config.human_in_loop.approve_plan.
+                # Phase 13: gated by config.workflow.planning.human_in_loop.
                 # false = auto-approve (fully autonomous mode).
                 #
                 # Landmine #4: create_branch_task (the first side effect) is
@@ -528,7 +531,7 @@ async def build_workflow(
                 # same inputs return their cached result without a new LLM call,
                 # so planning_task(request) on re-execution is effectively free.
                 while True:
-                    if config.human_in_loop.approve_plan:
+                    if config.workflow.planning.human_in_loop:
                         emit_event(_audit, thread_id, "interrupt", payload={"kind": "plan_approval"})
                         approval = interrupt({
                             "kind": "plan_approval",
@@ -543,7 +546,7 @@ async def build_workflow(
                     async with audited(_audit, thread_id, "planning"):
                         plan_result = await planning_task(
                             f"{request}\n\nFeedback: {approval}",
-                            config.models.planning,
+                            config.resolved_model(config.workflow.planning),
                         )
                     if plan_result.usage:
                         usage_by_task["planning"].append(plan_result.usage)
@@ -556,7 +559,7 @@ async def build_workflow(
                 )
 
                 # Phase 13: optional branch-creation approval gate.
-                if config.human_in_loop.approve_branch:
+                if config.workflow.branch.human_in_loop:
                     emit_event(_audit, thread_id, "interrupt", payload={"kind": "branch_approval"})
                     interrupt({
                         "kind": "branch_approval",
@@ -566,11 +569,11 @@ async def build_workflow(
                 _check_cancel()
                 async with audited(_audit, thread_id, "create_branch"):
                     branch_name = await create_branch_task(
-                        plan_result, config.branch.max_slug_length, thread_id
+                        plan_result, config.workflow.branch.max_slug_length, thread_id
                     )
                 rename_with_branch(thread_id, branch_name)
 
-                # Phase 7: retry loop. Up to config.max_retries attempts: first
+                # Phase 7: retry loop. Up to config.workflow.qa.max_retries attempts: first
                 # is always "implement" (fresh execution); subsequent attempts
                 # are "fix" mode, passing qa_failures so the agent knows exactly
                 # what to correct without re-doing passing work.
@@ -580,7 +583,7 @@ async def build_workflow(
                 # means QA passed — the else block (failure path) is skipped.
                 qa_failures: str | None = None
                 impl_result = None
-                for attempt in range(1, config.max_retries + 1):
+                for attempt in range(1, config.workflow.qa.max_retries + 1):
                     _check_cancel()
                     mode = "implement" if attempt == 1 else "fix"
                     async with audited(_audit, thread_id, "implementation"):
@@ -588,7 +591,7 @@ async def build_workflow(
                             plan_result,
                             mode=mode,
                             qa_failures=qa_failures,
-                            model=config.models.implementation,
+                            model=config.resolved_model(config.workflow.implementation),
                         )
                     if impl_result.usage:
                         usage_by_task["implementation"].append(impl_result.usage)
@@ -602,7 +605,7 @@ async def build_workflow(
                         _check_cancel, usage_by_task, attempt,
                     )
 
-                    if config.human_in_loop.approve_implementation:
+                    if config.workflow.implementation.human_in_loop:
                         emit_event(_audit, thread_id, "interrupt", payload={"kind": "implementation_approval"})
                         interrupt({
                             "kind": "implementation_approval",
@@ -611,7 +614,9 @@ async def build_workflow(
 
                     _check_cancel()
                     async with audited(_audit, thread_id, "qa"):
-                        qa_result = await qa_task(plan_result, config.models.qa)
+                        qa_result = await qa_task(
+                            plan_result, config.resolved_model(config.workflow.qa)
+                        )
                     if qa_result.usage:
                         usage_by_task["qa"].append(qa_result.usage)
                     write_qa(thread_id, qa_result)
@@ -631,19 +636,19 @@ async def build_workflow(
                     logger.error(
                         "QA FAIL (attempt %d/%d):\n%s",
                         attempt,
-                        config.max_retries,
+                        config.workflow.qa.max_retries,
                         qa_result.failures or "(no failure details)",
                     )
 
                     # Phase 13: optional gate on QA failure — user can abort
                     # rather than burning another retry attempt.
-                    if config.human_in_loop.approve_qa_failure:
+                    if config.workflow.qa.human_in_loop:
                         emit_event(_audit, thread_id, "interrupt", payload={"kind": "qa_failure"})
                         decision = interrupt({
                             "kind": "qa_failure",
                             "failures": qa_result.failures,
                             "ask": (
-                                f"QA FAIL (attempt {attempt}/{config.max_retries}). "
+                                f"QA FAIL (attempt {attempt}/{config.workflow.qa.max_retries}). "
                                 "Retry? Reply 'yes' or 'abort'."
                             ),
                         })
@@ -671,7 +676,7 @@ async def build_workflow(
                     }
 
                 # Phase 13: optional gate before committing and opening PR.
-                if config.human_in_loop.approve_pr:
+                if config.workflow.commit.human_in_loop:
                     emit_event(_audit, thread_id, "interrupt", payload={"kind": "pr_approval"})
                     interrupt({
                         "kind": "pr_approval",
@@ -713,7 +718,7 @@ async def build_workflow(
                         config.pr.base_branch,
                         config.pr.draft,
                         config.pr.reviewers,
-                        config.pr.labels,
+                        plan_result.type,
                     )
                 _usage = aggregate_usage(usage_by_task)
                 write_usage(thread_id, _usage)

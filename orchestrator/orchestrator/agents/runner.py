@@ -22,6 +22,7 @@ own `StepError` to preserve that module's contract.)
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -65,6 +66,7 @@ async def run_structured_agent(
     allowed_tools: list[str],
     disallowed_tools: list[str],
     cwd: Path,
+    timeout: int | None = None,
     emit_tool_name: str,
     emit_tool_description: str,
     emit_tool_fields: dict[str, type],
@@ -101,9 +103,26 @@ async def run_structured_agent(
     )
 
     result_msg: ResultMessage | None = None
-    async for msg in query(prompt=user_message, options=options):
-        if isinstance(msg, ResultMessage):
-            result_msg = msg
+
+    async def _consume() -> None:
+        nonlocal result_msg
+        async for msg in query(prompt=user_message, options=options):
+            if isinstance(msg, ResultMessage):
+                result_msg = msg
+
+    # Phase 40: optional wall-clock timeout over the whole agent loop. None =
+    # no limit (the original behaviour). On expiry asyncio cancels the query;
+    # we surface a FatalError so the run aborts with a clear reason. This is a
+    # wall-clock bound, NOT the SDK's max_turns (a turn count) — different knob.
+    if timeout is not None:
+        try:
+            await asyncio.wait_for(_consume(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise FatalError(
+                f"agent timed out after {timeout}s before calling {emit_tool_name}"
+            ) from exc
+    else:
+        await _consume()
 
     if not captured:
         raise FatalError(f"agent did not call {emit_tool_name}")

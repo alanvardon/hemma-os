@@ -138,8 +138,10 @@ class WorkflowManifest(BaseModel):
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
-def _agent_file(project_root: Path, agent: str) -> Path:
-    return project_root / ".orchestrator" / "agents" / f"{agent}.md"
+def _agent_file(
+    project_root: Path, agent: str, agents_dir: str = ".orchestrator/agents"
+) -> Path:
+    return project_root / agents_dir / f"{agent}.md"
 
 
 def load_manifest(
@@ -161,6 +163,11 @@ def load_manifest(
 
     with config_path.open("rb") as f:
         data = tomllib.load(f)
+
+    # Phase 40: agent prompts may live in a configurable dir (config.agents_dir).
+    # Read it from the same TOML so load-time validation and runtime loading
+    # (steps._load_agent_prompt) resolve agent files identically.
+    agents_dir = data.get("agents_dir", ".orchestrator/agents")
 
     raw = data.get("steps", {})
     if not raw:
@@ -205,10 +212,10 @@ def load_manifest(
                         f"step {step.id!r}: script not found at {step.path!r}."
                     )
             elif isinstance(step, LlmAgentStep):
-                if not _agent_file(project_root, step.agent).exists():
+                if not _agent_file(project_root, step.agent, agents_dir).exists():
                     raise ManifestError(
                         f"step {step.id!r}: agent file not found at "
-                        f".orchestrator/agents/{step.agent}.md."
+                        f"{agents_dir}/{step.agent}.md."
                     )
 
             parsed.append(step)

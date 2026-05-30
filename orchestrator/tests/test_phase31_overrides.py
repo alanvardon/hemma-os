@@ -27,12 +27,12 @@ def _base() -> OrchestratorConfig:
 
 def test_kwarg_overrides_approve_plan():
     cfg = apply_overrides(_base(), approve_plan=False)
-    assert cfg.human_in_loop.approve_plan is False
+    assert cfg.workflow.planning.human_in_loop is False
 
 
 def test_kwarg_overrides_max_retries():
     cfg = apply_overrides(_base(), max_retries=7)
-    assert cfg.max_retries == 7
+    assert cfg.workflow.qa.max_retries == 7
 
 
 def test_kwarg_overrides_base_branch():
@@ -43,7 +43,7 @@ def test_kwarg_overrides_base_branch():
 def test_kwarg_wins_over_env_var(monkeypatch):
     monkeypatch.setenv(ENV_APPROVE_PLAN, "true")
     cfg = apply_overrides(_base(), approve_plan=False)
-    assert cfg.human_in_loop.approve_plan is False
+    assert cfg.workflow.planning.human_in_loop is False
 
 
 # ---------------------------------------------------------------------------
@@ -60,13 +60,13 @@ def test_kwarg_wins_over_env_var(monkeypatch):
 def test_env_var_approve_plan_accepted_values(monkeypatch, value, expected):
     monkeypatch.setenv(ENV_APPROVE_PLAN, value)
     cfg = apply_overrides(_base())
-    assert cfg.human_in_loop.approve_plan is expected
+    assert cfg.workflow.planning.human_in_loop is expected
 
 
 def test_env_var_max_retries(monkeypatch):
     monkeypatch.setenv(ENV_MAX_RETRIES, "5")
     cfg = apply_overrides(_base())
-    assert cfg.max_retries == 5
+    assert cfg.workflow.qa.max_retries == 5
 
 
 def test_env_var_base_branch(monkeypatch):
@@ -81,8 +81,8 @@ def test_env_var_used_when_kwarg_is_none(monkeypatch):
     monkeypatch.setenv(ENV_MAX_RETRIES, "9")
     monkeypatch.setenv(ENV_BASE_BRANCH, "trunk")
     cfg = apply_overrides(_base())
-    assert cfg.human_in_loop.approve_plan is False
-    assert cfg.max_retries == 9
+    assert cfg.workflow.planning.human_in_loop is False
+    assert cfg.workflow.qa.max_retries == 9
     assert cfg.pr.base_branch == "trunk"
 
 
@@ -105,8 +105,8 @@ def test_no_kwargs_no_env_returns_config_unchanged(monkeypatch):
 def test_input_config_not_mutated(monkeypatch):
     original = _base()
     apply_overrides(original, approve_plan=False, max_retries=99, base_branch="x")
-    assert original.human_in_loop.approve_plan is True
-    assert original.max_retries == 3
+    assert original.workflow.planning.human_in_loop is True
+    assert original.workflow.qa.max_retries == 3
     assert original.pr.base_branch == "main"
 
 

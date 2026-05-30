@@ -201,26 +201,27 @@ def test_script_timeout_raises_pre_hook_error(tmp_path: Path) -> None:
 
 
 def test_config_defaults_for_pre_hooks(tmp_path: Path) -> None:
-    """pre_hooks_dir and pre_hooks_timeout default correctly from a minimal TOML."""
+    """[pre_hooks] dir/timeout default correctly from a minimal TOML."""
     toml_path = tmp_path / "orchestrator.toml"
-    # Write a minimal TOML that sets an unrelated field, leaving pre_hooks* absent.
-    toml_path.write_text("max_retries = 5\n")
+    # Write a minimal TOML that sets an unrelated field, leaving [pre_hooks] absent.
+    toml_path.write_text('db_path = ".orchestrator/checkpoints.db"\n')
 
     cfg = load_config(toml_path)
 
-    assert cfg.pre_hooks_dir == ".orchestrator/pre-hooks"
-    assert cfg.pre_hooks_timeout == 30
+    assert cfg.pre_hooks.dir == ".orchestrator/pre-hooks"
+    assert cfg.pre_hooks.timeout == 30
 
 
 def test_config_pre_hooks_overridable(tmp_path: Path) -> None:
-    """pre_hooks_dir and pre_hooks_timeout can be overridden in orchestrator.toml."""
+    """[pre_hooks] dir/timeout can be overridden in orchestrator.toml."""
     toml_path = tmp_path / "orchestrator.toml"
     toml_path.write_text(
-        'pre_hooks_dir = ".custom/hooks"\n'
-        "pre_hooks_timeout = 60\n"
+        "[pre_hooks]\n"
+        'dir = ".custom/hooks"\n'
+        "timeout = 60\n"
     )
 
     cfg = load_config(toml_path)
 
-    assert cfg.pre_hooks_dir == ".custom/hooks"
-    assert cfg.pre_hooks_timeout == 60
+    assert cfg.pre_hooks.dir == ".custom/hooks"
+    assert cfg.pre_hooks.timeout == 60

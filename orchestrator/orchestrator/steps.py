@@ -22,6 +22,7 @@ import subprocess
 from pathlib import Path
 
 from orchestrator.agents.runner import run_structured_agent
+from orchestrator.config import load_config
 from orchestrator.errors import FatalError
 from orchestrator.manifest import LlmAgentStep, ScriptStep, StepResult
 
@@ -82,19 +83,22 @@ async def execute_script(step: ScriptStep, repo_root: Path) -> StepResult:
     return await asyncio.to_thread(_run_script_sync, step, repo_root)
 
 
-def _load_agent_prompt(project_root: Path, agent: str) -> str:
+def _load_agent_prompt(
+    project_root: Path, agent: str, agents_dir: str = ".orchestrator/agents"
+) -> str:
     """Read the agent's markdown file, stripping any YAML frontmatter.
 
     The body is the system prompt. Frontmatter (a leading `---` block) is
     optional and ignored for v1 — the step config already carries the model,
     and the agent reads the diff itself via Bash, so reads/writes injection
     isn't needed yet.
+
+    `agents_dir` (Phase 40: `config.agents_dir`) is the directory, relative to
+    the project root, where pluggable-step agent prompts live.
     """
-    path = project_root / ".orchestrator" / "agents" / f"{agent}.md"
+    path = project_root / agents_dir / f"{agent}.md"
     if not path.exists():
-        raise StepError(
-            f"agent file not found at .orchestrator/agents/{agent}.md"
-        )
+        raise StepError(f"agent file not found at {agents_dir}/{agent}.md")
     text = path.read_text(encoding="utf-8")
     return _strip_frontmatter(text)
 
@@ -120,7 +124,9 @@ async def execute_llm_agent(
     `git diff HEAD` itself to see the changes (like the qa agent).
     """
     log = _logger(step.id)
-    system_prompt = _load_agent_prompt(project_root, step.agent)
+    system_prompt = _load_agent_prompt(
+        project_root, step.agent, load_config().agents_dir
+    )
 
     log.info("running llm_agent step %r (agent=%s)", step.id, step.agent)
     # The shared runner raises FatalError on a missing emit; re-wrap it as

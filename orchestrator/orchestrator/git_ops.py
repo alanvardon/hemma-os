@@ -409,6 +409,17 @@ def push(branch: str, base_branch: str | None = None, auto_rebase: bool = True) 
         ) from e
 
 
+# Phase 40: the PR label is auto-derived from the plan's type — no more operator
+# `labels` config. Plan type "fix" maps to GitHub's conventional "bug" label;
+# an unknown type yields no label.
+_PLAN_TYPE_LABELS = {
+    "feature": "feature",
+    "fix": "bug",
+    "refactor": "refactor",
+    "chore": "chore",
+}
+
+
 def pr_create(
     branch: str,
     title: str,
@@ -417,7 +428,7 @@ def pr_create(
     base_branch: str | None = None,
     draft: bool = False,
     reviewers: list[str] | None = None,
-    labels: list[str] | None = None,
+    plan_type: str | None = None,
 ) -> str:
     """Open a PR for the branch and return its URL.
 
@@ -455,7 +466,8 @@ def pr_create(
         cmd.append("--draft")
     for reviewer in (reviewers or []):
         cmd += ["--reviewer", reviewer]
-    for label in (labels or []):
+    label = _PLAN_TYPE_LABELS.get(plan_type or "", "")
+    if label:
         cmd += ["--label", label]
     try:
         result = _run(cmd)

@@ -148,7 +148,7 @@ async def test_qa_scripted_gate_short_circuits_before_runner(monkeypatch):
 
     monkeypatch.setattr(
         qa_mod, "load_config",
-        lambda: SimpleNamespace(qa_scripts_dir="x", qa_scripts_timeout=60),
+        lambda: SimpleNamespace(qa=SimpleNamespace(scripts_dir="x", scripts_timeout=60)),
     )
     monkeypatch.setattr(
         qa_mod, "run_qa_scripts",

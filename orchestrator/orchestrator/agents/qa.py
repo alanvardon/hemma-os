@@ -42,7 +42,6 @@ from orchestrator.agents.runner import run_structured_agent
 from orchestrator.config import load_config
 from orchestrator.git_ops import REPO_ROOT
 from orchestrator.qa_scripts import run_qa_scripts
-from orchestrator.tool_profile import load_tool_profile
 
 
 _QA_SYSTEM_PROMPT = load_prompt("qa")
@@ -84,8 +83,8 @@ async def qa(plan: PlanResult, model: str = "claude-sonnet-4-6") -> QaResult:
     _config = load_config()
     _scripted_outcome = run_qa_scripts(
         repo_root=REPO_ROOT,
-        qa_scripts_dir=_config.qa_scripts_dir,
-        timeout=_config.qa_scripts_timeout,
+        qa_scripts_dir=_config.qa.scripts_dir,
+        timeout=_config.qa.scripts_timeout,
     )
     if not _scripted_outcome.passed:
         return QaResult(
@@ -98,19 +97,20 @@ async def qa(plan: PlanResult, model: str = "claude-sonnet-4-6") -> QaResult:
     # in-process emit tool, the fail-closed guard, and usage extraction all
     # live in run_structured_agent now (Phase 39). The pinned MCP tool
     # (emit_qa_result) is appended to allowed_tools by the runner.
-    _profile = load_tool_profile("qa")
+    _qa = _config.workflow.qa  # Phase 40: tools/timeout from [workflow.qa]
     return await run_structured_agent(
         system_prompt=_QA_SYSTEM_PROMPT,
         user_message=_build_user_message(plan),
         model=model,
-        # Read-only tools from the operator-configurable profile. The
-        # project's .claude/settings.json deny rules (via
-        # setting_sources=["project"], set in the runner) still apply.
-        allowed_tools=_profile.allowed_tools,
-        disallowed_tools=_profile.disallowed_tools,
+        # Read-only tools from [workflow.qa]. The project's
+        # .claude/settings.json deny rules (via setting_sources=["project"],
+        # set in the runner) still apply.
+        allowed_tools=_qa.allowed_tools,
+        disallowed_tools=_qa.disallowed_tools,
         # Same repo root as implementation — QA reviews changes in the
         # target repo's tree, not the orchestrator/ subdirectory.
         cwd=REPO_ROOT,
+        timeout=_qa.timeout,
         emit_tool_name="emit_qa_result",
         emit_tool_description=(
             "Emit the final QA verdict. Call this exactly once when review is "

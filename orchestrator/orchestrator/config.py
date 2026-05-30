@@ -12,23 +12,33 @@ Usage:
 
 Sample orchestrator.toml (all fields optional, defaults shown):
 
-    max_retries = 3
-    db_path = ".orchestrator/checkpoints.db"
+    default_model = "claude-sonnet-4-6"   # any [workflow.*] step with model unset inherits this
+    db_path       = ".orchestrator/checkpoints.db"
+    agents_dir    = ".orchestrator/agents"
 
-    [models]
-    planning       = "claude-sonnet-4-6"
-    implementation = "claude-sonnet-4-6"
-    qa             = "claude-sonnet-4-6"
+    [pre_hooks]
+    dir     = ".orchestrator/pre-hooks"
+    timeout = 30
 
-    [human_in_loop]
-    approve_plan           = true
-    approve_branch         = false
-    approve_implementation = false
-    approve_qa_failure     = false
-    approve_pr             = false
+    [qa]
+    scripts_dir     = ".orchestrator/qa"
+    scripts_timeout = 60
 
-    [branch]
+    [workflow.planning]
+    human_in_loop = true                  # pause for plan review before any code
+
+    [workflow.branch]
     max_slug_length = 50
+
+    [workflow.implementation]
+    allowed_tools = ["Read", "Edit", "Write", "Bash"]
+
+    [workflow.qa]
+    allowed_tools = ["Read", "Grep", "Bash"]
+    max_retries   = 3                      # impl↔QA loop budget
+
+    [workflow.docs]
+    model = "claude-haiku-4-5-20251001"    # baked-in docs agent (Phase 41)
 
     [git]
     auto_rebase = true   # rebase onto origin/<base_branch> if it moved before push
@@ -36,8 +46,7 @@ Sample orchestrator.toml (all fields optional, defaults shown):
     [pr]
     base_branch = "main"
     draft       = false
-    reviewers   = []
-    labels      = []
+    reviewers   = []                       # labels auto-applied from plan.type
 
     [audit]
     enabled         = true
@@ -49,7 +58,7 @@ import os
 import tomllib
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from orchestrator.paths import find_project_root
 
@@ -88,54 +97,113 @@ def _parse_int_env(name: str, value: str) -> int:
         ) from exc
 
 
-class ModelsConfig(BaseModel):
-    planning: str = "claude-sonnet-4-6"
-    implementation: str = "claude-sonnet-4-6"
-    qa: str = "claude-sonnet-4-6"
+# Default model used by any workflow step whose `model` is left unset.
+_DEFAULT_MODEL = "claude-sonnet-4-6"
+# The docs spine task (Phase 41) defaults to haiku — a read-diff / edit-md task,
+# not a reasoning task. Provisioned here so Phase 41 lands straight into it.
+_DEFAULT_DOCS_MODEL = "claude-haiku-4-5-20251001"
 
 
-class HumanInLoopConfig(BaseModel):
-    approve_plan: bool = True
-    approve_branch: bool = False
-    approve_implementation: bool = False
-    approve_qa_failure: bool = False
-    approve_pr: bool = False
+class WorkflowStepConfig(BaseModel):
+    """Per-step config for one built-in spine step (Phase 40).
+
+    One [workflow.<step>] table carries everything for that step: which model
+    it uses, whether it pauses for a human, its tool permissions, and an
+    optional wall-clock timeout. `model = None` inherits `default_model`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    model: str | None = None
+    human_in_loop: bool = False
+    allowed_tools: list[str] = Field(default_factory=list)
+    disallowed_tools: list[str] = Field(default_factory=list)
+    timeout: int | None = None  # wall-clock seconds for the agent loop; None = no limit
 
 
-class BranchConfig(BaseModel):
-    max_slug_length: int = 50
+class WorkflowBranchConfig(WorkflowStepConfig):
+    max_slug_length: int = 50  # moved from the old [branch] section
+
+
+class WorkflowQaConfig(WorkflowStepConfig):
+    max_retries: int = 3  # impl↔QA loop budget; moved from the old top-level key
+
+
+class WorkflowConfig(BaseModel):
+    """The built-in spine, one table per step. Counterpart to [steps.*] —
+    user-injected pluggable steps owned by manifest.py."""
+
+    model_config = ConfigDict(extra="forbid")
+    planning: WorkflowStepConfig = Field(
+        default_factory=lambda: WorkflowStepConfig(human_in_loop=True)
+    )
+    branch: WorkflowBranchConfig = Field(default_factory=WorkflowBranchConfig)
+    implementation: WorkflowStepConfig = Field(
+        default_factory=lambda: WorkflowStepConfig(
+            allowed_tools=["Read", "Edit", "Write", "Bash"]
+        )
+    )
+    qa: WorkflowQaConfig = Field(
+        default_factory=lambda: WorkflowQaConfig(allowed_tools=["Read", "Grep", "Bash"])
+    )
+    docs: WorkflowStepConfig = Field(
+        default_factory=lambda: WorkflowStepConfig(
+            model=_DEFAULT_DOCS_MODEL, timeout=120
+        )
+    )
+    commit: WorkflowStepConfig = Field(default_factory=WorkflowStepConfig)
+
+
+class PreHooksConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dir: str = ".orchestrator/pre-hooks"
+    timeout: int = 30
+
+
+class QaConfig(BaseModel):
+    """Scripted QA gate (Phase 28): the executable checks under scripts_dir that
+    run before the QA agent. Distinct from [workflow.qa] (the QA agent step)."""
+
+    model_config = ConfigDict(extra="forbid")
+    scripts_dir: str = ".orchestrator/qa"
+    scripts_timeout: int = 60
 
 
 class GitConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     auto_rebase: bool = True
 
 
 class PrConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     base_branch: str = "main"
     draft: bool = False
     reviewers: list[str] = Field(default_factory=list)
-    labels: list[str] = Field(default_factory=list)
+    # `labels` removed in Phase 40 — the PR label is auto-derived from plan.type
+    # in git_ops.pr_create.
 
 
 class AuditConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     enabled: bool = True
     log_path: str = ".orchestrator/audit.log"
     include_content: bool = False
 
 
 class OrchestratorConfig(BaseModel):
-    max_retries: int = 3
+    model_config = ConfigDict(extra="forbid")
+    default_model: str = _DEFAULT_MODEL
     db_path: str = ".orchestrator/checkpoints.db"
-    qa_scripts_dir: str = ".orchestrator/qa"
-    qa_scripts_timeout: int = 60
-    pre_hooks_dir: str = ".orchestrator/pre-hooks"
-    pre_hooks_timeout: int = 30
-    models: ModelsConfig = Field(default_factory=ModelsConfig)
-    human_in_loop: HumanInLoopConfig = Field(default_factory=HumanInLoopConfig)
-    branch: BranchConfig = Field(default_factory=BranchConfig)
+    agents_dir: str = ".orchestrator/agents"  # where pluggable-step agent prompts live
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+    pre_hooks: PreHooksConfig = Field(default_factory=PreHooksConfig)
+    qa: QaConfig = Field(default_factory=QaConfig)
     git: GitConfig = Field(default_factory=GitConfig)
     pr: PrConfig = Field(default_factory=PrConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
+
+    def resolved_model(self, step: WorkflowStepConfig) -> str:
+        """Return the step's model, falling back to default_model when unset."""
+        return step.model if step.model is not None else self.default_model
 
 
 def load_config(path: Path | None = None) -> OrchestratorConfig:
@@ -146,6 +214,11 @@ def load_config(path: Path | None = None) -> OrchestratorConfig:
         return OrchestratorConfig()
     with path.open("rb") as f:
         data = tomllib.load(f)
+    # [steps.*] is the pluggable-step manifest namespace (owned by manifest.py),
+    # not orchestrator config. Drop it before validation so extra="forbid" can
+    # guard the config keys without rejecting the manifest table that shares
+    # this file.
+    data.pop("steps", None)
     return OrchestratorConfig.model_validate(data)
 
 
@@ -173,13 +246,22 @@ def apply_overrides(
     if base_branch is None and (raw := os.environ.get(ENV_BASE_BRANCH)) is not None:
         base_branch = raw.strip() or None
 
-    updates: dict = {}
+    # approve_plan and max_retries both live under config.workflow now
+    # (workflow.planning.human_in_loop and workflow.qa.max_retries), so collect
+    # their nested updates and apply them to ONE workflow copy.
+    workflow_updates: dict = {}
     if approve_plan is not None:
-        updates["human_in_loop"] = config.human_in_loop.model_copy(
-            update={"approve_plan": approve_plan}
+        workflow_updates["planning"] = config.workflow.planning.model_copy(
+            update={"human_in_loop": approve_plan}
         )
     if max_retries is not None:
-        updates["max_retries"] = max_retries
+        workflow_updates["qa"] = config.workflow.qa.model_copy(
+            update={"max_retries": max_retries}
+        )
+
+    updates: dict = {}
+    if workflow_updates:
+        updates["workflow"] = config.workflow.model_copy(update=workflow_updates)
     if base_branch is not None:
         updates["pr"] = config.pr.model_copy(update={"base_branch": base_branch})
 

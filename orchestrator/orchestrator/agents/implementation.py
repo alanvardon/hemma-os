@@ -37,8 +37,8 @@ from orchestrator.prompt_loader import load_prompt
 
 from orchestrator.agents.planning import PlanResult
 from orchestrator.agents.runner import run_structured_agent
+from orchestrator.config import load_config
 from orchestrator.git_ops import REPO_ROOT
-from orchestrator.tool_profile import load_tool_profile
 
 
 _IMPLEMENTATION_SYSTEM_PROMPT = load_prompt("implementation")
@@ -90,20 +90,21 @@ async def implement(
     # The agent loop, the in-process emit tool, the fail-closed guard, and
     # usage extraction all live in run_structured_agent now (Phase 39). This
     # wrapper supplies the implementation-specific prompt, the implement/fix
-    # user message, the tool profile, and the typed ImplementationResult.
-    _profile = load_tool_profile("implementation")
+    # user message, the tools/timeout, and the typed ImplementationResult.
+    _impl = load_config().workflow.implementation  # Phase 40: [workflow.implementation]
     return await run_structured_agent(
         system_prompt=_IMPLEMENTATION_SYSTEM_PROMPT,
         user_message=_build_user_message(plan, mode, qa_failures),
         model=model,
-        # File-editing tools from the operator-configurable profile. No Git,
-        # no commit, no PR tools — the orchestrator owns those entirely. The
-        # pinned emit tool is appended by the runner.
-        allowed_tools=_profile.allowed_tools,
-        disallowed_tools=_profile.disallowed_tools,
+        # File-editing tools from [workflow.implementation]. No Git, no commit,
+        # no PR tools — the orchestrator owns those entirely. The pinned emit
+        # tool is appended by the runner.
+        allowed_tools=_impl.allowed_tools,
+        disallowed_tools=_impl.disallowed_tools,
         # cwd must be the target repo root — the agent edits files there,
         # not in the orchestrator/ subdirectory.
         cwd=REPO_ROOT,
+        timeout=_impl.timeout,
         emit_tool_name="emit_implementation_result",
         emit_tool_description=(
             "Emit the final implementation result. Call this exactly once when "

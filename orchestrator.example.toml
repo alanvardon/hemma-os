@@ -37,16 +37,16 @@
 
 
 # --- Standard config (unchanged by Phase 33; shown for a complete file) ------
+# Phase 40: per-agent settings live under [workflow.<step>] — one table per
+# spine step. `default_model` is inherited by any step that omits its `model`.
 
-max_retries = 3
+default_model = "claude-sonnet-4-6"
 
-[models]
-planning       = "claude-sonnet-4-6"
-implementation = "claude-sonnet-4-6"
-qa             = "claude-sonnet-4-6"
+[workflow.planning]
+human_in_loop = true   # pause for plan review before any code is written
 
-[human_in_loop]
-approve_plan = true
+[workflow.qa]
+max_retries = 3        # implementation+QA loop attempts before giving up
 
 
 # =============================================================================
