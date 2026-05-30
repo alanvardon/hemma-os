@@ -21,16 +21,9 @@ import logging
 import subprocess
 from pathlib import Path
 
-from claude_agent_sdk import (
-    ClaudeAgentOptions,
-    ResultMessage,
-    create_sdk_mcp_server,
-    query,
-    tool,
-)
-
+from orchestrator.agents.runner import run_structured_agent
+from orchestrator.errors import FatalError
 from orchestrator.manifest import LlmAgentStep, ScriptStep, StepResult
-from orchestrator.usage import TaskUsage
 
 
 class StepError(RuntimeError):
@@ -121,72 +114,42 @@ async def execute_llm_agent(
 ) -> StepResult:
     """Run a markdown-defined agent against the current working tree.
 
-    Same closure-capture structured-output pattern as the other agents: the
-    agent calls emit_step_result once with a summary; we read it back after
-    query() returns. The agent gets the plan in the user message and runs
+    The agent loop lives in run_structured_agent (Phase 39); this function
+    resolves the agent's markdown prompt, runs the loop, and shapes the result
+    into a StepResult. The agent gets the plan in the user message and runs
     `git diff HEAD` itself to see the changes (like the qa agent).
     """
     log = _logger(step.id)
     system_prompt = _load_agent_prompt(project_root, step.agent)
 
-    captured: dict[str, str] = {}
-
-    @tool(
-        "emit_step_result",
-        "Emit the final result of this step. Call exactly once when done, "
-        "with a one-line `summary` of what you did. After calling, stop.",
-        {"summary": str},
-    )
-    async def emit_step_result(args: dict) -> dict:
-        captured["summary"] = args.get("summary", "") or ""
-        return {"content": [{"type": "text", "text": "Captured. Stop now."}]}
-
-    orchestrator_mcp = create_sdk_mcp_server(
-        name="orchestrator", version="1.0.0", tools=[emit_step_result]
-    )
-
-    options = ClaudeAgentOptions(
-        system_prompt=system_prompt,
-        allowed_tools=[
-            "Read", "Edit", "Write", "Bash", "Grep",
-            "mcp__orchestrator__emit_step_result",
-        ],
-        mcp_servers={"orchestrator": orchestrator_mcp},
-        cwd=str(project_root),
-        permission_mode="acceptEdits",
-        model=step.model,
-        setting_sources=["project"],
-    )
-
-    user_message = "\n".join(["## Plan", "", plan_text])
-
     log.info("running llm_agent step %r (agent=%s)", step.id, step.agent)
-    result_msg: ResultMessage | None = None
-    async for msg in query(prompt=user_message, options=options):
-        if isinstance(msg, ResultMessage):
-            result_msg = msg
-
-    if "summary" not in captured:
+    # The shared runner raises FatalError on a missing emit; re-wrap it as
+    # StepError so this module keeps its single failure type. (Either error
+    # aborts the workflow, but StepError is the documented step contract.)
+    try:
+        return await run_structured_agent(
+            system_prompt=system_prompt,
+            user_message="\n".join(["## Plan", "", plan_text]),
+            model=step.model,
+            allowed_tools=["Read", "Edit", "Write", "Bash", "Grep"],
+            disallowed_tools=[],
+            cwd=project_root,
+            emit_tool_name="emit_step_result",
+            emit_tool_description=(
+                "Emit the final result of this step. Call exactly once when "
+                "done, with a one-line `summary` of what you did. After "
+                "calling, stop."
+            ),
+            emit_tool_fields={"summary": str},
+            result_factory=lambda captured, usage: StepResult(
+                step_id=step.id,
+                kind="llm_agent",
+                ok=True,
+                detail=captured.get("summary", "") or "",
+                usage=usage,
+            ),
+        )
+    except FatalError as exc:
         raise StepError(
             f"llm_agent step {step.id!r} did not call emit_step_result"
-        )
-
-    usage: TaskUsage | None = None
-    if result_msg is not None and result_msg.usage:
-        u = result_msg.usage
-        usage = TaskUsage(
-            model=step.model,
-            input_tokens=u.get("input_tokens", 0),
-            output_tokens=u.get("output_tokens", 0),
-            cache_read_tokens=u.get("cache_read_input_tokens", 0),
-            cache_creation_tokens=u.get("cache_creation_input_tokens", 0),
-            reported_cost_usd=result_msg.total_cost_usd,
-        )
-
-    return StepResult(
-        step_id=step.id,
-        kind="llm_agent",
-        ok=True,
-        detail=captured["summary"],
-        usage=usage,
-    )
+        ) from exc

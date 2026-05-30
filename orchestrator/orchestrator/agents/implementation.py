@@ -16,7 +16,11 @@ The structured-output story differs from planning.py:
     done. We capture the args via a closure into a holder dict.
 
 Same conceptual win — no sentinel parsing — different mechanism because
-the agent loop is different shape.
+the agent loop is a different shape. Phase 39: the loop itself (emit tool,
+query() loop, fail-closed guard, usage extraction) now lives in
+`run_structured_agent`; this module supplies the prompt, the implement/fix
+user message, the tools, the emit schema, and the ImplementationResult
+factory.
 """
 
 from dotenv import load_dotenv
@@ -26,21 +30,13 @@ load_dotenv()
 import asyncio
 import sys
 
-from anthropic import AsyncAnthropic
-from claude_agent_sdk import (
-    ClaudeAgentOptions,
-    ResultMessage,
-    create_sdk_mcp_server,
-    query,
-    tool,
-)
 from pydantic import BaseModel
 
-from orchestrator.errors import FatalError
 from orchestrator.usage import TaskUsage
 from orchestrator.prompt_loader import load_prompt
 
 from orchestrator.agents.planning import PlanResult
+from orchestrator.agents.runner import run_structured_agent
 from orchestrator.git_ops import REPO_ROOT
 from orchestrator.tool_profile import load_tool_profile
 
@@ -91,98 +87,35 @@ async def implement(
     if mode not in ("implement", "fix"):
         raise ValueError(f"unknown mode: {mode!r}")
 
-    # Closure-captured holder for the agent's final structured output.
-    # The @tool below writes into it; we read it after query() returns.
-    captured: dict[str, str] = {}
-
-    # Define the structured-output tool. The agent calls this exactly
-    # once when it's done; the call's arguments ARE the structured
-    # output. We acknowledge to the agent so it knows the orchestrator
-    # received the result.
-    @tool(
-        "emit_implementation_result",
-        "Emit the final implementation result. Call this exactly once when "
-        "the work is complete. After calling, stop and do not make further "
-        "edits — the orchestrator takes over from here.",
-        {"summary": str, "test_plan": str},
-    )
-    async def emit_implementation_result(args: dict) -> dict:
-        captured["summary"] = args["summary"]
-        captured["test_plan"] = args["test_plan"]
-        return {
-            "content": [
-                {"type": "text", "text": "Result captured. You may stop now."}
-            ]
-        }
-
-    # In-process MCP server holding our single tool. No subprocess, no
-    # IPC — runs in the same Python process as the orchestrator, which
-    # is how the captured dict above can leak state out of the tool.
-    orchestrator_mcp = create_sdk_mcp_server(
-        name="orchestrator",
-        version="1.0.0",
-        tools=[emit_implementation_result],
-    )
-
-    # Load tool profile from orchestrator.toml (falls back to defaults if
-    # absent). The pinned MCP tool for structured output is injected here
-    # and does not need to be listed in orchestrator.toml.
+    # The agent loop, the in-process emit tool, the fail-closed guard, and
+    # usage extraction all live in run_structured_agent now (Phase 39). This
+    # wrapper supplies the implementation-specific prompt, the implement/fix
+    # user message, the tool profile, and the typed ImplementationResult.
     _profile = load_tool_profile("implementation")
-    _allowed_tools = _profile.allowed_tools + [
-        "mcp__orchestrator__emit_implementation_result"
-    ]
-
-    options = ClaudeAgentOptions(
+    return await run_structured_agent(
         system_prompt=_IMPLEMENTATION_SYSTEM_PROMPT,
-        # File-editing tools from the operator-configurable profile, plus
-        # the pinned MCP tool for structured output. Note: no Git, no
-        # commit, no PR tools — the orchestrator owns those entirely.
-        allowed_tools=_allowed_tools,
-        disallowed_tools=_profile.disallowed_tools,
-        mcp_servers={"orchestrator": orchestrator_mcp},
-        # cwd must be the target repo root — the agent edits files
-        # there, not in the orchestrator/ subdirectory.
-        cwd=str(REPO_ROOT),
-        # acceptEdits = skip per-edit human approval. We're running
-        # unattended; the orchestrator already approved the plan with
-        # the user. Project-level deny rules in .claude/settings.json
-        # still apply (.env, secrets, etc.).
-        permission_mode="acceptEdits",
-        # Pin the model so behaviour is stable across SDK upgrades.
+        user_message=_build_user_message(plan, mode, qa_failures),
         model=model,
-        # Read CLAUDE.md and the project's .claude/settings.json so
-        # the agent inherits project rules and permission deny lists.
-        setting_sources=["project"],
-    )
-
-    user_message = _build_user_message(plan, mode, qa_failures)
-
-    result_msg: ResultMessage | None = None
-    async for msg in query(prompt=user_message, options=options):
-        if isinstance(msg, ResultMessage):
-            result_msg = msg
-
-    if "summary" not in captured:
-        raise FatalError(
-            "implementation agent did not call emit_implementation_result"
-        )
-
-    usage: TaskUsage | None = None
-    if result_msg is not None and result_msg.usage:
-        u = result_msg.usage
-        usage = TaskUsage(
-            model=model,
-            input_tokens=u.get("input_tokens", 0),
-            output_tokens=u.get("output_tokens", 0),
-            cache_read_tokens=u.get("cache_read_input_tokens", 0),
-            cache_creation_tokens=u.get("cache_creation_input_tokens", 0),
-            reported_cost_usd=result_msg.total_cost_usd,
-        )
-
-    return ImplementationResult(
-        summary=captured["summary"],
-        test_plan=captured["test_plan"],
-        usage=usage,
+        # File-editing tools from the operator-configurable profile. No Git,
+        # no commit, no PR tools — the orchestrator owns those entirely. The
+        # pinned emit tool is appended by the runner.
+        allowed_tools=_profile.allowed_tools,
+        disallowed_tools=_profile.disallowed_tools,
+        # cwd must be the target repo root — the agent edits files there,
+        # not in the orchestrator/ subdirectory.
+        cwd=REPO_ROOT,
+        emit_tool_name="emit_implementation_result",
+        emit_tool_description=(
+            "Emit the final implementation result. Call this exactly once when "
+            "the work is complete. After calling, stop and do not make further "
+            "edits — the orchestrator takes over from here."
+        ),
+        emit_tool_fields={"summary": str, "test_plan": str},
+        result_factory=lambda captured, usage: ImplementationResult(
+            summary=captured["summary"],
+            test_plan=captured["test_plan"],
+            usage=usage,
+        ),
     )
 
 
