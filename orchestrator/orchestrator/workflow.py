@@ -23,7 +23,12 @@ logger = logging.getLogger(__name__)
 # task graph. (Phase 33's later refinements — per-id step task names, after_qa
 # firing only on PASS, human_gate abort — all landed before 1.1.0 shipped, so
 # they fold into this same version.)
-WORKFLOW_VERSION = "1.1.0"
+# 1.1.0 → 1.2.0 (Phase 41): docs_task is now a permanent spine task, inserted
+# after the before_commit seam and before commit_task. A new required task in
+# the body is a control-flow change, so the bump refuses resume of any run
+# created before Phase 41 (clean version error) rather than resuming into a
+# task graph that lacks the docs step.
+WORKFLOW_VERSION = "1.2.0"
 
 
 from orchestrator.errors import FatalError
@@ -87,6 +92,7 @@ from langgraph.config import get_config
 from orchestrator.agents.planning import plan, PlanResult
 from orchestrator.agents.implementation import implement, ImplementationResult
 from orchestrator.agents.qa import qa, QaResult
+from orchestrator.agents.runner import run_structured_agent
 from orchestrator.audit import AuditSink, NoopAuditSink, audited, build_sink, emit_event
 from orchestrator.cancellation import WorkflowCancelled, raise_if_cancelled
 from orchestrator.config import OrchestratorConfig, load_config
@@ -98,7 +104,7 @@ from orchestrator.manifest import (
     WorkflowManifest,
     load_manifest,
 )
-from orchestrator.steps import execute_llm_agent, execute_script
+from orchestrator.steps import execute_llm_agent, execute_script, _strip_frontmatter
 from orchestrator.usage import TaskUsage, aggregate_usage
 from orchestrator.git_ops import (
     commit,
@@ -359,6 +365,59 @@ async def qa_task(
     return await qa(plan_result, model=model)
 
 
+# Phase 41: documentation agent, now a permanent spine task (was a pluggable
+# before_commit step). Runs once after the before_commit seam, before commit —
+# on the final, QA-passed code — so any doc edits land in the same commit. The
+# prompt ships in the package (orchestrator/agents/docs.md, tracked by git)
+# rather than .orchestrator/agents/ (gitignored), so a spine step never depends
+# on a local-only file. Built directly on Phase 39's run_structured_agent.
+_DOCS_PROMPT_PATH = Path(__file__).parent / "agents" / "docs.md"
+
+
+def _load_docs_prompt() -> str:
+    """Read the package-shipped docs agent prompt, stripping YAML frontmatter.
+
+    Loaded by path relative to this module — works for source / editable
+    installs, which is how the orchestrator runs."""
+    return _strip_frontmatter(_DOCS_PROMPT_PATH.read_text(encoding="utf-8"))
+
+
+@task
+async def docs_task(
+    plan_text: str, model: str = "claude-haiku-4-5-20251001"
+) -> StepResult:
+    """Run the documentation agent against the QA-passed working tree.
+
+    A @task like every other spine step: its StepResult is checkpointed, so a
+    crash between docs and commit replays the docs result on resume (no LLM
+    re-call). The package prompt is the system prompt; the agent reads
+    `git diff HEAD` itself and edits ONLY documentation (.md) — it never edits
+    source, including the workflow that orchestrates it. Returns a StepResult
+    (already on the serde allowlist)."""
+    return await run_structured_agent(
+        system_prompt=_load_docs_prompt(),
+        user_message="\n".join(["## Plan", "", plan_text]),
+        model=model,
+        allowed_tools=["Read", "Edit", "Write", "Bash", "Grep"],
+        disallowed_tools=[],
+        cwd=find_project_root(),
+        timeout=load_config().workflow.docs.timeout,
+        emit_tool_name="emit_step_result",
+        emit_tool_description=(
+            "Emit the final result of this step. Call exactly once when done, "
+            "with a one-line `summary` of what you did. After calling, stop."
+        ),
+        emit_tool_fields={"summary": str},
+        result_factory=lambda c, u: StepResult(
+            step_id="docs",
+            kind="llm_agent",
+            ok=True,
+            detail=c.get("summary", "") or "",
+            usage=u,
+        ),
+    )
+
+
 # Phase 15: the old commit_and_pr_task split into three idempotent
 # tasks. Each step's success is checkpointed independently, so a
 # failure at push or pr_create can be resumed via the resume_run MCP
@@ -472,6 +531,7 @@ async def build_workflow(
                 "planning": [],
                 "implementation": [],
                 "qa": [],
+                "docs": [],
             }
 
             try:
@@ -689,6 +749,20 @@ async def build_workflow(
                     "before_commit", manifest, plan_result.plan_text,
                     _check_cancel, usage_by_task,
                 )
+
+                # Phase 41: documentation agent — permanent spine task. Runs
+                # once on the final, QA-passed code, after any before_commit
+                # pluggable steps and before the commit, so doc edits land in
+                # the same commit. cwd is the target repo; cancel is still safe
+                # here (nothing committed yet).
+                _check_cancel()
+                async with audited(_audit, thread_id, "docs"):
+                    docs_result = await docs_task(
+                        plan_result.plan_text,
+                        config.resolved_model(config.workflow.docs),
+                    )
+                if docs_result.usage:
+                    usage_by_task["docs"].append(docs_result.usage)
 
                 # Phase 15: three separate @tasks instead of one
                 # commit_and_pr_task. A failure between commit and push

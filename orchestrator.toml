@@ -119,15 +119,10 @@ reviewers = []
 # ask  = "QA passed. Approve security posture before commit?"
 # ---------------------------------------------------------------------------
 
-# --- LIVE test step: documentation agent --------------------------------------
-# Active step (not commented) so you can try the pluggable llm_agent feature.
-# Runs once, at before_commit — on the final, QA-passed code, just before the
-# spine commits — so any doc edits land in the same commit. The agent is
-# defined at .orchestrator/agents/docs.md (local, gitignored).
-# To stop running it, comment out the three lines below.
-# Tip: set model = "claude-haiku-4-5-20251001" for a cheaper test run.
-[[steps.before_commit]]
-id    = "docs"
-type  = "llm_agent"
-agent = "docs"                       # → .orchestrator/agents/docs.md
-model = "claude-haiku-4-5"
+# --- Documentation agent: now a built-in spine task (Phase 41) ----------------
+# The docs agent used to be a live [[steps.before_commit]] step here. It is now
+# a permanent part of the workflow spine — its prompt ships in the package at
+# orchestrator/orchestrator/agents/docs.md (tracked) and it runs automatically
+# on every run, no [steps.*] entry required. Configure it under [workflow.docs]
+# above (model defaults to haiku; switch to sonnet for richer doc generation).
+# The before_commit seam remains open for your own pluggable steps.

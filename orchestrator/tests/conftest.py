@@ -38,3 +38,20 @@ def _isolate_manifest(monkeypatch):
         "orchestrator.workflow.load_manifest",
         lambda *a, **k: WorkflowManifest(),
     )
+
+
+@pytest.fixture(autouse=True)
+def _stub_docs_task(monkeypatch):
+    """Phase 41: docs_task is now a mandatory spine step that would spawn a real
+    Claude agent. Stub it for the whole suite so full-workflow tests never hit a
+    live model. Tests that exercise docs specifically override this with their
+    own monkeypatch (which runs after this fixture and wins)."""
+    from orchestrator.manifest import StepResult
+
+    async def _fake_docs_task(plan_text, model="claude-haiku-4-5-20251001"):
+        return StepResult(
+            step_id="docs", kind="llm_agent", ok=True,
+            detail="(docs stubbed in tests)", usage=None,
+        )
+
+    monkeypatch.setattr("orchestrator.workflow.docs_task", _fake_docs_task)
