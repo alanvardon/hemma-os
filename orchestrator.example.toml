@@ -12,7 +12,8 @@
 #   3. Run a feature as usual. Your steps run at the seam you named.
 #
 # The spine never changes:
-#   verify_clean_tree → plan → branch → impl → qa → commit → push → pr
+#   verify_clean_tree → plan → branch → impl ⇄ qa → summarize → docs → commit → push → pr
+# (impl ⇄ qa is the retry loop; summarize + docs are built-in spine agents.)
 #
 # Seams (insertion points), in workflow order — all run BEFORE the commit
 # line, so a step can never leave a half-shipped state on cancel:
@@ -29,8 +30,9 @@
 # (or after_qa) so they run only on the final, passing code.
 #
 # Validation: the manifest is checked at the start of every run (before any
-# LLM spend) — unknown seam, duplicate id, missing script, or unknown agent
-# all fail loudly. The resolved manifest is snapshotted per run, so editing
+# LLM spend) — unknown seam, duplicate id, missing script, unknown agent, and
+# (for retry blocks) unresolved produce/gate references all fail loudly. The
+# resolved manifest is snapshotted per run, so editing
 # it while a run is paused refuses the resume rather than silently changing
 # the graph. `id` is a step's resume identity — don't rename it mid-run.
 # =============================================================================

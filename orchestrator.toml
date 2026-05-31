@@ -99,8 +99,9 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # ---------------------------------------------------------------------------
 # Pluggable steps (Phase 33)
 # Inject extra steps into the workflow at fixed "seams" — no edits to
-# workflow.py. The spine (verify_clean_tree → plan → branch → impl → qa →
-# commit → push → pr) stays fixed; your steps run at the seam you name.
+# workflow.py. The spine (verify_clean_tree → plan → branch → impl ⇄ qa →
+# summarize → docs → commit → push → pr) stays fixed; your steps run at the
+# seam you name.
 #
 # Seams (all run before the commit line, so cancel stays safe):
 #   before_plan · after_plan · after_impl · after_qa · before_commit
