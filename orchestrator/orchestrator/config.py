@@ -14,7 +14,6 @@ Sample orchestrator.toml (all fields optional, defaults shown):
 
     default_model = "claude-sonnet-4-6"   # any [workflow.*] step with model unset inherits this
     db_path       = ".orchestrator/checkpoints.db"
-    agents_dir    = ".orchestrator/agents"
 
     [pre_hooks]
     dir     = ".orchestrator/pre-hooks"
@@ -208,7 +207,6 @@ class OrchestratorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     default_model: str = _DEFAULT_MODEL
     db_path: str = ".orchestrator/checkpoints.db"
-    agents_dir: str = ".orchestrator/agents"  # where pluggable-step agent prompts live
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     pre_hooks: PreHooksConfig = Field(default_factory=PreHooksConfig)
     qa: QaConfig = Field(default_factory=QaConfig)

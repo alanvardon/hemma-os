@@ -54,6 +54,7 @@ path = ".orchestrator/scripts/lint.sh"
 id = "docs"
 type = "ai_agent"
 agent = "docs"
+dir = ".orchestrator/agents"
 
 [[steps.after_qa]]
 id = "gate"
@@ -113,7 +114,7 @@ def test_missing_script_raises(tmp_path):
 def test_unknown_agent_raises(tmp_path):
     _write(
         tmp_path / "orchestrator.toml",
-        '[[steps.after_qa]]\nid="docs"\ntype="ai_agent"\nagent="ghost"\n',
+        '[[steps.after_qa]]\nid="docs"\ntype="ai_agent"\nagent="ghost"\ndir=".orchestrator/agents"\n',
     )
     with pytest.raises(ManifestError, match="agent file not found"):
         load_manifest(project_root=tmp_path)
@@ -376,7 +377,7 @@ def _fake_ai_agent_task(calls: list[tuple[str, int]]):
     from langgraph.func import task
 
     def make(step_id, *, as_gate=False):
-        async def run(step_id, agent, model, repo_root, plan_text, attempt=0, feedback=None):
+        async def run(step_id, agent, dir, model, repo_root, plan_text, attempt=0, feedback=None):
             calls.append((step_id, attempt))
             return StepResult(
                 step_id=step_id, kind="ai_agent", ok=True, detail="ran agent"
@@ -401,7 +402,7 @@ async def test_ai_agent_human_in_loop_pauses_then_proceeds(monkeypatch, tmp_path
     manifest = WorkflowManifest(
         steps={
             "after_qa": [
-                AiAgentStep(id="review", agent="reviewer", human_in_loop=True)
+                AiAgentStep(id="review", agent="reviewer", dir=".orchestrator/agents", human_in_loop=True)
             ]
         }
     )
@@ -449,7 +450,7 @@ async def test_ai_agent_human_in_loop_abort_stops_run(monkeypatch, tmp_path):
     manifest = WorkflowManifest(
         steps={
             "after_qa": [
-                AiAgentStep(id="review", agent="reviewer", human_in_loop=True)
+                AiAgentStep(id="review", agent="reviewer", dir=".orchestrator/agents", human_in_loop=True)
             ]
         }
     )

@@ -20,7 +20,8 @@ TOML shape (everything optional; no [steps] table = no injected steps):
     [[steps.after_qa]]
     id    = "docs"
     type  = "ai_agent"
-    agent = "docs"            # → .orchestrator/agents/docs.md
+    agent = "docs"            # file stem
+    dir   = "team/agents"     # → team/agents/docs.md (per-step, required)
     model = "claude-sonnet-4-6"
 
     [[steps.after_qa]]
@@ -43,6 +44,7 @@ producer attempt. produce/gate reference definitions under [steps.defs.*]:
     [steps.defs.lint-fix]
     type  = "ai_agent"
     agent = "lint-fixer"
+    dir   = "team/agents"
 
     [steps.defs.lint-check]
     type = "script"
@@ -107,8 +109,12 @@ class ApprovalGateStep(_BaseStep):
 
 class AiAgentStep(_BaseStep):
     type: Literal["ai_agent"] = "ai_agent"
-    # Resolves to .orchestrator/agents/<agent>.md (the system prompt).
+    # The system prompt is <dir>/<agent>.md, relative to the project root.
+    # `dir` is required and per-step — each ai_agent points at wherever its
+    # prompt lives, so agents can be stored anywhere (there is no global
+    # agents_dir). `agent` is the file stem (also used in logs / errors).
     agent: str
+    dir: str
     model: str = "claude-sonnet-4-6"
     # When true, pause AFTER the agent runs (before the workflow continues) so a
     # human can inspect what it produced. Same reply contract as approval_gate: an
@@ -220,10 +226,8 @@ class WorkflowManifest(BaseModel):
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
-def _agent_file(
-    project_root: Path, agent: str, agents_dir: str = ".orchestrator/agents"
-) -> Path:
-    return project_root / agents_dir / f"{agent}.md"
+def _agent_file(project_root: Path, step: AiAgentStep) -> Path:
+    return project_root / step.dir / f"{step.agent}.md"
 
 
 def _validate_retry_block(step: RetryBlockStep, defs: dict[str, StepDef]) -> None:
@@ -280,11 +284,6 @@ def load_manifest(
     with config_path.open("rb") as f:
         data = tomllib.load(f)
 
-    # Phase 40: agent prompts may live in a configurable dir (config.agents_dir).
-    # Read it from the same TOML so load-time validation and runtime loading
-    # (steps._load_agent_prompt) resolve agent files identically.
-    agents_dir = data.get("agents_dir", ".orchestrator/agents")
-
     raw = data.get("steps", {})
     if not raw:
         return WorkflowManifest()
@@ -333,10 +332,10 @@ def load_manifest(
                         f"{definition.path!r}."
                     )
             elif isinstance(definition, AiAgentStep):
-                if not _agent_file(project_root, definition.agent, agents_dir).exists():
+                if not _agent_file(project_root, definition).exists():
                     raise ManifestError(
                         f"step def {def_id!r}: agent file not found at "
-                        f"{agents_dir}/{definition.agent}.md."
+                        f"{definition.dir}/{definition.agent}.md."
                     )
             defs[def_id] = definition
 
@@ -374,10 +373,10 @@ def load_manifest(
                         f"step {step.id!r}: script not found at {step.path!r}."
                     )
             elif isinstance(step, AiAgentStep):
-                if not _agent_file(project_root, step.agent, agents_dir).exists():
+                if not _agent_file(project_root, step).exists():
                     raise ManifestError(
                         f"step {step.id!r}: agent file not found at "
-                        f"{agents_dir}/{step.agent}.md."
+                        f"{step.dir}/{step.agent}.md."
                     )
             elif isinstance(step, RetryBlockStep):
                 _validate_retry_block(step, defs)

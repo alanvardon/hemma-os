@@ -68,6 +68,7 @@ on_exhausted = "abort"
 [steps.defs.lint-fix]
 type  = "ai_agent"
 agent = "lint-fixer"
+dir   = ".orchestrator/agents"
 
 [steps.defs.lint-check]
 type = "script"
@@ -101,6 +102,7 @@ gate    = ["does-not-exist"]
 [steps.defs.lint-fix]
 type  = "ai_agent"
 agent = "lint-fixer"
+dir   = ".orchestrator/agents"
 """
     with pytest.raises(ManifestError, match="unknown step def 'does-not-exist'"):
         _load(tmp_path, toml, agents=["lint-fixer"])
@@ -149,6 +151,7 @@ gate    = []
 [steps.defs.lint-fix]
 type  = "ai_agent"
 agent = "lint-fixer"
+dir   = ".orchestrator/agents"
 """
     with pytest.raises(ManifestError, match="`gate` must list at least one"):
         _load(tmp_path, toml, agents=["lint-fixer"])
@@ -257,7 +260,7 @@ def test_missing_def_agent_raises(tmp_path):
 
 def test_hash_changes_when_referenced_def_changes():
     defs = {
-        "fix": AiAgentStep(id="fix", agent="a"),
+        "fix": AiAgentStep(id="fix", agent="a", dir="d"),
         "check": ScriptStep(id="check", path="x.sh"),
     }
     block = RetryBlockStep(id="b", produce=["fix"], gate=["check"])
@@ -273,7 +276,7 @@ def test_hash_changes_when_referenced_def_changes():
 
 def test_hash_ignores_unreferenced_def():
     defs = {
-        "fix": AiAgentStep(id="fix", agent="a"),
+        "fix": AiAgentStep(id="fix", agent="a", dir="d"),
         "check": ScriptStep(id="check", path="x.sh"),
     }
     block = RetryBlockStep(id="b", produce=["fix"], gate=["check"])
@@ -445,7 +448,7 @@ def _hil_block_manifest(on_exhausted="abort", max_retries=3) -> WorkflowManifest
             ]
         },
         defs={
-            "fix": AiAgentStep(id="fix", agent="fixer", human_in_loop=True),
+            "fix": AiAgentStep(id="fix", agent="fixer", dir=".orchestrator/agents", human_in_loop=True),
             "check": ScriptStep(id="check", path="check.sh"),
         },
     )

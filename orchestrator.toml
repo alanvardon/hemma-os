@@ -13,9 +13,6 @@ default_model = "claude-sonnet-4-6"
 # SQLite checkpoint database path (relative to cwd / project root).
 db_path = ".orchestrator/checkpoints.db"
 
-# Directory (relative to project root) where pluggable-step agent prompts live.
-agents_dir = ".orchestrator/agents"
-
 [pre_hooks]
 # Pre-flight scripts run after the clean-tree check, before any LLM spend.
 # A non-zero exit aborts the run.
@@ -115,8 +112,9 @@ include_content = false   # if true, also log prompt/result content (verbose)
 #                 (must be chmod +x with a shebang — see NOTES.md)
 #   approval_gate  — pause for a decision: reply 'abort' (or 'no'/'stop') to stop
 #                 the run, any other reply to proceed
-#   ai_agent   — run a markdown agent at <agents_dir>/<agent>.md. Set
-#                 human_in_loop = true to pause for review AFTER it runs
+#   ai_agent   — run a markdown agent at <dir>/<agent>.md, where `dir` is a
+#                 required per-step directory (store agents wherever you like).
+#                 Set human_in_loop = true to pause for review AFTER it runs
 #                 (same abort/proceed reply as approval_gate).
 #   retry       — re-run producer step(s) until gate step(s) pass, injecting the
 #                 failing gate's feedback into the next attempt (Phase 42). The
@@ -140,7 +138,8 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # [[steps.after_qa]]
 # id            = "docs"
 # type          = "ai_agent"
-# agent         = "docs"             # → .orchestrator/agents/docs.md
+# agent         = "docs"             # file stem
+# dir           = ".orchestrator/agents"  # → .orchestrator/agents/docs.md (required)
 # model         = "claude-sonnet-4-6"
 # human_in_loop = false              # true = pause to review the agent's output
 #

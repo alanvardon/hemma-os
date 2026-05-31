@@ -229,6 +229,7 @@ def _make_ai_agent_task(step_id: str, *, as_gate: bool = False):
     async def run_ai_agent_step(
         step_id: str,
         agent: str,
+        dir: str,
         model: str,
         repo_root: str,
         plan_text: str,
@@ -236,7 +237,7 @@ def _make_ai_agent_task(step_id: str, *, as_gate: bool = False):
         feedback: str | None = None,
     ) -> StepResult:
         return await execute_ai_agent(
-            AiAgentStep(id=step_id, agent=agent, model=model),
+            AiAgentStep(id=step_id, agent=agent, dir=dir, model=model),
             Path(repo_root),
             plan_text,
             feedback=feedback,
@@ -314,7 +315,7 @@ async def run_seam(
         elif isinstance(step, AiAgentStep):
             step_task = _make_ai_agent_task(step.id)
             result = await step_task(
-                step.id, step.agent, step.model, repo_root, plan_text, attempt
+                step.id, step.agent, step.dir, step.model, repo_root, plan_text, attempt
             )
             if result.usage:
                 usage_by_task.setdefault(step.id, []).append(result.usage)
@@ -378,7 +379,7 @@ async def _run_declared_retry_block(
         else:  # AiAgentStep — feedback is injected into its user message
             step_task = _make_ai_agent_task(d.id)
             result = await step_task(
-                d.id, d.agent, d.model, repo_root, plan_text, 0, feedback
+                d.id, d.agent, d.dir, d.model, repo_root, plan_text, 0, feedback
             )
         if result.usage:
             usage_by_task.setdefault(d.id, []).append(result.usage)
@@ -392,7 +393,7 @@ async def _run_declared_retry_block(
             result = await step_task(d.id, d.path, d.timeout, repo_root)
         else:  # AiAgentStep gate — emits a `passed` verdict, runs read-only
             step_task = _make_ai_agent_task(d.id, as_gate=True)
-            result = await step_task(d.id, d.agent, d.model, repo_root, plan_text)
+            result = await step_task(d.id, d.agent, d.dir, d.model, repo_root, plan_text)
         if result.usage:
             usage_by_task.setdefault(d.id, []).append(result.usage)
         return result
