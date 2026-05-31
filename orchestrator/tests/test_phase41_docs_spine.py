@@ -1,7 +1,8 @@
 """Phase 41 — docs agent as a permanent spine task.
 
 Covers:
-- _load_docs_prompt() returns the package-shipped prompt with frontmatter stripped.
+- the docs prompt loads from orchestrator/prompts/ via load_prompt (Phase 42:
+  moved out of the package agents/ dir to sit with the other built-in prompts).
 - the docs agent is strictly documentation-only — never instructed to edit source
   (including the workflow that orchestrates it).
 - docs_task runs exactly once on a happy-path workflow, with its model resolved
@@ -22,16 +23,19 @@ from orchestrator.agents.planning import PlanResult
 from orchestrator.agents.qa import QaResult
 from orchestrator.config import OrchestratorConfig
 from orchestrator.manifest import StepResult
+from orchestrator.prompt_loader import load_prompt
 from orchestrator.usage import TaskUsage
 
 
 # --------------------------- prompt loader (unit) ---------------------------
 
 
-def test_load_docs_prompt_strips_frontmatter():
-    prompt = wf._load_docs_prompt()
+def test_docs_prompt_loads_from_prompts_dir():
+    # The docs prompt now lives in orchestrator/prompts/ and loads via the same
+    # load_prompt() loader as planning/implementation/qa (frontmatter-free).
+    prompt = load_prompt("docs")
     assert prompt  # non-empty
-    assert not prompt.lstrip().startswith("---")  # YAML frontmatter stripped
+    assert not prompt.lstrip().startswith("---")  # no YAML frontmatter
     assert "documentation agent" in prompt.lower()
 
 
@@ -39,7 +43,7 @@ def test_docs_prompt_is_documentation_only():
     # The docs agent must never be instructed to edit source — not even the
     # workflow that orchestrates it. Its prompt is strictly documentation-only,
     # and the version-bump addendum (which would have edited workflow.py) is gone.
-    prompt = wf._load_docs_prompt()
+    prompt = load_prompt("docs")
     assert "only documentation" in prompt.lower()
     assert "WORKFLOW_VERSION" not in prompt
     assert not hasattr(wf, "_WORKFLOW_VERSION_ADDENDUM")

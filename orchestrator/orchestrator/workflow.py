@@ -114,12 +114,7 @@ from orchestrator.manifest import (
     WorkflowManifest,
     load_manifest,
 )
-from orchestrator.steps import (
-    StepError,
-    execute_llm_agent,
-    execute_script,
-    _strip_frontmatter,
-)
+from orchestrator.steps import StepError, execute_llm_agent, execute_script
 from orchestrator.usage import TaskUsage, aggregate_usage
 from orchestrator.git_ops import (
     commit,
@@ -531,20 +526,11 @@ async def summarize_task(
 # Phase 41: documentation agent, now a permanent spine task (was a pluggable
 # before_commit step). Runs once after the before_commit seam, before commit —
 # on the final, QA-passed code — so any doc edits land in the same commit. The
-# prompt ships in the package (orchestrator/agents/docs.md, tracked by git)
-# rather than .orchestrator/agents/ (gitignored), so a spine step never depends
-# on a local-only file. Built directly on Phase 39's run_structured_agent.
-_DOCS_PROMPT_PATH = Path(__file__).parent / "agents" / "docs.md"
-
-
-def _load_docs_prompt() -> str:
-    """Read the package-shipped docs agent prompt, stripping YAML frontmatter.
-
-    Loaded by path relative to this module — works for source / editable
-    installs, which is how the orchestrator runs."""
-    return _strip_frontmatter(_DOCS_PROMPT_PATH.read_text(encoding="utf-8"))
-
-
+# prompt ships in the package (orchestrator/prompts/docs.md, tracked by git)
+# and is loaded via load_prompt — the same loader as planning/implementation/qa,
+# so it inherits the .orchestrator/prompts/ override path — rather than from
+# .orchestrator/agents/ (gitignored), so a spine step never depends on a
+# local-only file. Built directly on Phase 39's run_structured_agent.
 @task
 async def docs_task(
     plan_text: str, model: str = "claude-haiku-4-5-20251001"
@@ -558,7 +544,7 @@ async def docs_task(
     source, including the workflow that orchestrates it. Returns a StepResult
     (already on the serde allowlist)."""
     return await run_structured_agent(
-        system_prompt=_load_docs_prompt(),
+        system_prompt=load_prompt("docs"),
         user_message="\n".join(["## Plan", "", plan_text]),
         model=model,
         allowed_tools=["Read", "Edit", "Write", "Bash", "Grep"],
