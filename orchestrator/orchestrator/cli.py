@@ -374,6 +374,17 @@ async def run() -> None:
                 print("Nothing was committed (gates run before the commit line).")
                 _print_usage_banner(result)
                 sys.exit(1)
+            elif status == "no_changes":
+                # Phase 46d: QA passed but the build produced no diff — nothing
+                # to commit, so no PR was opened. Not a failure; exit 0.
+                print()
+                print(_RULE)
+                print("Build passed QA but produced no changes — nothing to commit")
+                print(_RULE)
+                print(f"  Branch:    {result.get('branch')}")
+                print(f"  thread_id: {thread_id}")
+                print("No commit and no PR were created (the working tree was clean).")
+                _print_usage_banner(result)
             else:
                 # Unknown shape — dump raw so we at least see something.
                 print("\n--- Result ---")

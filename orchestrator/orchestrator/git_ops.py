@@ -135,6 +135,31 @@ def verify_clean_tree() -> None:
         )
 
 
+def working_tree_has_changes(base_branch: str | None = None) -> bool:
+    """True if the run has anything to ship, False if the build produced no diff.
+
+    Phase 46d: checked after the build (impl ⇄ qa) passes, before summarize /
+    docs / commit / push / pr. "Anything to ship" means either an uncommitted
+    change in the working tree (the fresh build's edits) OR the branch is already
+    ahead of base (the resume-after-commit case, where a prior attempt committed
+    but failed before push). A False return — a clean tree with no commits ahead
+    of base — means the producer made no changes, so the workflow returns
+    status="no_changes" instead of committing an empty branch and opening a PR.
+
+    Mirrors commit()'s own dirty/ahead logic so the two never disagree about
+    whether there is something to commit.
+    """
+    base_branch = _resolve_base(base_branch)
+    dirty = bool(_run(["git", "status", "--porcelain"]).stdout.strip())
+    ahead = int(
+        _run(
+            ["git", "rev-list", f"{base_branch}..HEAD", "--count"]
+        ).stdout.strip()
+        or "0"
+    )
+    return dirty or ahead > 0
+
+
 def _strip_thread_prefix(thread_id: str) -> str:
     """Strip a leading word- prefix (e.g. 'run-', 'test-') from a thread id."""
     return re.sub(r"^[a-z]+-", "", thread_id)

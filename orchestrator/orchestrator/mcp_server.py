@@ -475,6 +475,8 @@ async def approve_plan(
         branch creation, implementation (5+ min), QA, and PR. On success
         returns {"status": "succeeded", "pr_url": ..., ...}. On QA failure
         after 3 attempts, returns {"status": "failed", "qa_failures": ...}.
+        If QA passes but the build made no changes, returns
+        {"status": "no_changes", "branch": ...} — no commit, no PR.
       - Anything else → treated as feedback. The planner regenerates the
         plan incorporating the feedback, and returns ANOTHER
         "awaiting_approval" response. Loop until the user says "yes".
@@ -494,6 +496,7 @@ async def approve_plan(
         On revision: same awaiting_approval shape (loop again).
         On success: {"status": "succeeded", "branch": str, "pr_url": str, ...}
         On QA exhaustion: {"status": "failed", "qa_failures": str, ...}
+        On an empty build: {"status": "no_changes", "branch": str, ...}
     """
     config = {"configurable": {"thread_id": thread_id}}
     # Phase 19: stream via run_with_progress. "yes" on approval kicks

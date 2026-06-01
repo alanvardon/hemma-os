@@ -131,6 +131,7 @@ from orchestrator.git_ops import (
     pr_create,
     push,
     verify_clean_tree,
+    working_tree_has_changes,
     PreHookError,
 )
 from orchestrator.paths import find_project_root
@@ -1056,6 +1057,27 @@ async def build_workflow(
                 # build, or any build gated on "qa"). None for an ungated build or
                 # one gated only on a non-qa gate.
                 qa_result = _qa_holder.get("qa")
+
+                # Phase 46d: empty-diff resilience. If the build produced no diff
+                # (the producer made no edits and nothing is ahead of base), there
+                # is nothing to ship — committing would create an empty commit and
+                # a no-op PR. Return a clean status="no_changes" instead, skipping
+                # summarize / docs / commit / push / pr. Checked before the
+                # pr_approval gate so we never ask "open a PR?" for an empty diff.
+                # All of this is pre-commit, so cancel/return is safe.
+                _check_cancel()
+                if not await asyncio.to_thread(
+                    working_tree_has_changes, config.pr.base_branch
+                ):
+                    _usage = aggregate_usage(usage_by_task)
+                    write_usage(thread_id, _usage)
+                    return {
+                        "status": "no_changes",
+                        "plan": plan_result.model_dump(),
+                        "branch": branch_name,
+                        "qa": qa_result.model_dump() if qa_result else None,
+                        "usage": _usage,
+                    }
 
                 # Phase 13: optional gate before committing and opening PR.
                 if config.workflow.commit.human_in_loop:
