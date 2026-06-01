@@ -12,22 +12,25 @@
 #   3. Run a feature as usual. Your steps run at the seam you named.
 #
 # The spine never changes:
-#   verify_clean_tree → plan → branch → impl ⇄ qa → summarize → docs → commit → push → pr
-# (impl ⇄ qa is the retry loop; summarize + docs are built-in spine agents.)
+#   verify_clean_tree → plan → branch → build(impl ⇄ qa) → summarize → docs → commit → push → pr
+# (the impl ⇄ qa retry loop is itself a `build` step at the after_branch seam,
+# synthesized by default — see section 6. summarize + docs are built-in agents.)
 #
 # Seams (insertion points), in workflow order — all run BEFORE the commit
 # line, so a step can never leave a half-shipped state on cancel:
 #
-#   before_plan    once   — before planning (good for pre-flight checks)
-#   after_plan     once   — after the plan is approved, before branching
-#   after_impl     EACH   — after every implementation attempt (code changed)
-#   after_qa       PASS   — once, after QA has passed (never on a failure)
-#   before_commit  once   — last step before the spine commits
+#   before_plan    — before planning (good for pre-flight checks)
+#   after_plan     — after the plan is approved, before branching
+#   after_branch   — after the branch exists; where the build (impl ⇄ qa) runs
+#   before_commit  — last step before the spine commits
 #
-# after_impl runs once PER retry attempt (the code changes each attempt).
-# after_qa runs ONCE, only on the passing attempt. before_plan / after_plan /
-# before_commit run exactly once. Put costly ai_agent steps at before_commit
-# (or after_qa) so they run only on the final, passing code.
+# Every seam runs its steps once, in declared order. The impl ⇄ qa retry loop is
+# the build step at after_branch; a step that should "run once after the build"
+# is just ordered after that build (at after_branch) or placed at before_commit.
+# Put costly ai_agent steps at before_commit so they run only on the final,
+# QA-passed code. (Phase 46 removed the old per-attempt `after_impl` and
+# pass-only `after_qa` seams — the loader raises a migration error pointing here
+# if your TOML still uses them.)
 #
 # Validation: the manifest is checked at the start of every run (before any
 # LLM spend) — unknown seam, duplicate id, missing script, unknown agent, and
@@ -92,17 +95,18 @@ ask  = "Plan approved. Confirm scope is right before we build?"
 
 
 # ---------------------------------------------------------------------------
-# 3) script @ after_impl — run the test suite on EVERY attempt.
-#    Because this is at after_impl, it fires after each implementation try,
-#    against that attempt's freshly changed code. A non-zero exit aborts the
-#    run (use it as a hard gate the agent's work must pass).
+# 3) script @ before_commit — run the test suite once on the QA-passed code.
+#    Fires once, after the build (impl ⇄ qa) has passed and before the spine
+#    commits. A non-zero exit aborts the run — a hard gate the final code must
+#    pass. To instead re-test on EVERY implementation attempt, make the script a
+#    gate of a build step (see section 5).
 #
 #    Create .orchestrator/scripts/run-tests.sh (chmod +x):
 #
 #      #!/bin/sh
 #      node --test calc.test.js
 # ---------------------------------------------------------------------------
-[[steps.after_impl]]
+[[steps.before_commit]]
 id      = "unit-tests"
 type    = "script"
 path    = ".orchestrator/scripts/run-tests.sh"
@@ -147,13 +151,17 @@ human_in_loop = false               # true = pause to review the agent's output
 
 
 # ---------------------------------------------------------------------------
-# 5) build @ after_impl — a self-correcting loop (Phase 46, formerly `retry`).
+# 5) build @ before_commit — a self-correcting loop (Phase 46, formerly `retry`).
 #    A build step re-runs its PRODUCER step(s) until its GATE step(s) pass, or
 #    the retry budget runs out. On each gate failure the gate's output is
 #    injected into the next producer attempt as feedback (under a
 #    "## Previous attempt feedback" heading), so an ai_agent producer can
 #    target its fixes — the very same engine the built-in implementation↔QA
-#    loop runs on.
+#    loop runs on (that loop IS the default build at after_branch — section 6).
+#
+#    Placed at before_commit, this lint-loop runs ONCE the spine's impl⇄qa build
+#    has passed. (A build at after_branch instead REPLACES that default loop —
+#    use after_branch only when you mean to swap the whole producer⇄gate step.)
 #
 #    `produce` and `gate` are lists of ids defined under [steps.defs.*] (below).
 #    Gates run in declared order; the FIRST to fail short-circuits the rest and
@@ -197,7 +205,7 @@ human_in_loop = false               # true = pause to review the agent's output
 #      else. Edit only the offending source files. When done, call
 #      emit_step_result with a one-line summary.
 # ---------------------------------------------------------------------------
-[[steps.after_impl]]
+[[steps.before_commit]]
 id      = "lint-loop"
 type    = "build"
 produce = ["lint-fix"]              # producer id(s), defined in [steps.defs.*]
@@ -220,13 +228,34 @@ timeout = 60
 
 
 # ---------------------------------------------------------------------------
-# The fifth seam, after_qa, isn't used above. It fires ONCE, only after QA has
-# passed — useful for a final action that should run exactly once on the
-# green code, e.g. a script that records a pass metric or notifies a channel:
+# 6) The default build @ after_branch — and how to swap it (Phase 46).
+#    The spine's impl ⇄ qa loop is itself a build step at the after_branch seam.
+#    You don't have to write it: with no [[steps.after_branch]] build declared,
+#    the workflow synthesizes this exact step —
 #
-#   [[steps.after_qa]]
-#   id      = "qa-metrics"
-#   type    = "script"
-#   path    = ".orchestrator/scripts/record-qa.sh"
-#   timeout = 30
+#       [[steps.after_branch]]
+#       id      = "build"
+#       type    = "build"
+#       produce = ["implementation"]    # built-in producer (the spine's agent)
+#       gate    = ["qa"]                # built-in gate (the spine's QA agent)
+#       retry   = { max = <[workflow.qa].max_retries>, on_exhausted = "abort" }
+#
+#    `implementation` and `qa` are BUILT-IN ids: a build may reference them with
+#    no [steps.defs.*] entry, and they resolve to the spine's own agents. To swap
+#    either, declare your own def under that id (overrides the built-in) OR
+#    declare your own [[steps.after_branch]] build with different ids — e.g. to
+#    drive a non-Claude coder, or to replace QA with your own gate:
+#
+#       [[steps.after_branch]]
+#       id      = "build"
+#       type    = "build"
+#       produce = ["my-coder"]          # your ai_agent / script def
+#       gate    = ["my-qa"]             # your gate def; or keep the built-in "qa"
+#       retry   = { max = 3, on_exhausted = "abort" }
+#       # ungated = true                # opt out of gating entirely (e.g. dbt)
+#
+#    Declaring ANY build at after_branch suppresses the default — yours runs
+#    instead. A user-declared build runs on the pure engine (Phase-44 producer
+#    review + on_exhausted); the default build additionally honours
+#    [workflow.implementation].human_in_loop and [workflow.qa].human_in_loop.
 # ---------------------------------------------------------------------------

@@ -96,16 +96,19 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # ---------------------------------------------------------------------------
 # Pluggable steps (Phase 33)
 # Inject extra steps into the workflow at fixed "seams" — no edits to
-# workflow.py. The spine (verify_clean_tree → plan → branch → impl ⇄ qa →
-# summarize → docs → commit → push → pr) stays fixed; your steps run at the
+# workflow.py. The spine (verify_clean_tree → plan → branch → build(impl ⇄ qa)
+# → summarize → docs → commit → push → pr) stays fixed; your steps run at the
 # seam you name.
 #
 # Seams (all run before the commit line, so cancel stays safe):
-#   before_plan · after_plan · after_impl · after_qa · before_commit
-# before_plan / after_plan / before_commit run once. after_impl fires on
-# EVERY impl attempt (the code changes each attempt). after_qa fires ONCE,
-# only after QA has PASSED (never on a failed attempt). Put costly ai_agent
-# steps at before_commit (or after_qa) so they run on the final, passing code.
+#   before_plan · after_plan · after_branch · before_commit
+# Each seam runs its steps once, in declared order. after_branch is where the
+# impl ⇄ qa loop runs as a `build` step — synthesized by default (produce=
+# ["implementation"], gate=["qa"]), overridable per orchestrator.example.toml
+# section 6. Put costly ai_agent steps at before_commit so they run on the
+# final, QA-passed code. (Phase 46 removed the old per-attempt `after_impl` and
+# pass-only `after_qa` seams; the loader raises a migration error if a TOML
+# still uses them.)
 #
 # Step types:
 #   script      — run an executable; non-zero exit aborts the workflow
@@ -138,7 +141,7 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # path    = ".orchestrator/scripts/lint.sh"
 # timeout = 60
 #
-# [[steps.after_qa]]
+# [[steps.before_commit]]
 # id            = "docs"
 # type          = "ai_agent"
 # agent         = "docs.md"          # full filename (with extension)
@@ -146,7 +149,7 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # model         = "claude-sonnet-4-6"
 # human_in_loop = false              # true = pause to review the agent's output
 #
-# [[steps.after_qa]]
+# [[steps.before_commit]]
 # id   = "security_gate"
 # type = "approval_gate"
 # ask  = "QA passed. Approve security posture before commit?"

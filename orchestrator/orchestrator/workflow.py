@@ -35,7 +35,14 @@ logger = logging.getLogger(__name__)
 # New/removed task names and changed control flow = a body change, so the bump
 # refuses resume of any run created before Phase 42 rather than resuming into a
 # shifted task graph.
-WORKFLOW_VERSION = "1.3.0"
+# 1.3.0 → 1.4.0 (Phase 46): the impl↔QA loop is no longer inline in the body —
+# it now runs through run_seam("after_branch") as a declarative `build` step
+# (synthesized by default; overridable in orchestrator.toml). The per-attempt
+# `after_impl` and pass-only `after_qa` seams are removed (→ after_branch /
+# before_commit), and a build that exhausts its budget raises BuildFailed instead
+# of returning the failed dict inline. The control-flow reshape is a body change,
+# so the bump refuses resume of any run created before Phase 46.
+WORKFLOW_VERSION = "1.4.0"
 
 
 from orchestrator.errors import FatalError
@@ -109,6 +116,7 @@ from orchestrator.manifest import (
     ApprovalGateStep,
     AiAgentStep,
     BuildStep,
+    RetryConfig,
     ScriptStep,
     StepResult,
     WorkflowManifest,
@@ -261,6 +269,25 @@ class StepGateAborted(RuntimeError):
         super().__init__(f"workflow aborted at step {step_id!r}")
 
 
+class BuildFailed(RuntimeError):
+    """Phase 46: a `build` step ran its full retry budget without a passing gate
+    under on_exhausted="abort" (or a human declined to keep retrying). Carries
+    the failing gate's last feedback so the entrypoint body can return the clean
+    status="failed" dict (preserving the pre-46 contract: a QA-exhausted run ends
+    `failed` with `qa_failures`, never a raw exception). Build steps are
+    pre-commit, so nothing is half-shipped.
+    """
+
+    def __init__(self, step_id: str, attempts: int, last_feedback: str | None) -> None:
+        self.step_id = step_id
+        self.attempts = attempts
+        self.last_feedback = last_feedback
+        super().__init__(
+            f"build step {step_id!r} did not pass its gate(s) after "
+            f"{attempts} attempt(s)"
+        )
+
+
 # Resume values (case-insensitive) that mean "stop the run" at an approval_gate.
 # Anything else proceeds — replying to a gate is how you resume past it.
 _GATE_ABORT_WORDS = frozenset({"abort", "no", "stop"})
@@ -273,6 +300,11 @@ async def run_seam(
     check_cancel,
     usage_by_task: dict,
     attempt: int = 0,
+    *,
+    builtin_producers: dict | None = None,
+    builtin_gates: dict | None = None,
+    on_producers_done=None,
+    on_gate_failed=None,
 ) -> None:
     """Run every injected step at `seam`, in declared order.
 
@@ -281,13 +313,15 @@ async def run_seam(
     the entrypoint body. Script and ai_agent steps dispatch to their @tasks
     (checkpointed); an ai_agent's review pause fires after its @task returns, so
     resume replays the cached result rather than re-running the agent. Cancel is
-    checked before
-    each step (between-step semantics, inherited from the spine). Each
-    ai_agent step's usage is accumulated under its own `id`.
+    checked before each step (between-step semantics, inherited from the spine).
+    Each ai_agent step's usage is accumulated under its own `id`.
 
-    `attempt` distinguishes per-attempt checkpoint entries for seams that run
-    inside the impl/QA retry loop (after_impl, after_qa); it is 0 for seams
-    that run once outside the loop.
+    Phase 46: a `build` step at this seam dispatches to _run_build_step.
+    `builtin_producers`/`builtin_gates` are the spine's own implementation/QA
+    callables, injected so a build can reference the built-in `implementation`
+    producer / `qa` gate without a [steps.defs.*] entry; `on_producers_done`/
+    `on_gate_failed` carry the default build's implementation_approval / qa_failure
+    interrupt gates. All four are forwarded to the build engine.
     """
     steps = manifest.for_seam(seam)
     if not steps:
@@ -334,9 +368,13 @@ async def run_seam(
         elif isinstance(step, BuildStep):
             # Phase 46: a declarative build step. Runs on the SAME generic engine
             # the built-in spine uses, with producers and gates resolved from
-            # manifest.defs.
+            # manifest.defs (or the injected built-ins).
             await _run_build_step(
-                step, manifest, plan_text, check_cancel, usage_by_task
+                step, manifest, plan_text, check_cancel, usage_by_task,
+                builtin_producers=builtin_producers,
+                builtin_gates=builtin_gates,
+                on_producers_done=on_producers_done,
+                on_gate_failed=on_gate_failed,
             )
 
 
@@ -346,32 +384,52 @@ async def _run_build_step(
     plan_text: str,
     check_cancel,
     usage_by_task: dict,
+    *,
+    builtin_producers: dict | None = None,
+    builtin_gates: dict | None = None,
+    on_producers_done=None,
+    on_gate_failed=None,
 ) -> None:
     """Execute a declarative [[steps.*]] type="build" step (Phase 46).
 
-    Wraps the generic engine (retry_block.run_retry_block). Producers and gates
-    are resolved from manifest.defs and run via the SAME @task factories
-    run_seam uses, so they inherit checkpoint/replay and per-attempt distinctness
-    by call position. A gate's verdict is its StepResult.passed (script: exit
-    code; ai_agent: the emitted `passed`); on a retry, the failing gate's
-    feedback is injected into producer ai_agents.
+    Wraps the generic engine (retry_block.run_retry_block). Producer/gate ids
+    resolve in order: a [steps.defs.*] entry (run via the SAME @task factories
+    run_seam uses, so they inherit checkpoint/replay) → else an injected built-in
+    callable (`builtin_producers`/`builtin_gates`: the spine's own implementation
+    producer / QA gate) → else an unknown-reference error. A gate's verdict is its
+    StepResult.passed (script: exit code; ai_agent: the emitted `passed`); on a
+    retry, the failing gate's feedback is injected into producer ai_agents.
 
-    A non-proceed outcome (gate never passed under on_exhausted="abort", or a
-    human aborted under "approval_gate") raises StepError, aborting the run — seams
-    are pre-commit, so nothing is half-shipped. Phase 44: if the block succeeds
-    and a producer ai_agent set human_in_loop, pause once for review of its
-    final output. interrupt() (for on_exhausted="approval_gate" and the success
-    review) is reachable because this helper, like run_seam, runs in the
+    `on_producers_done`/`on_gate_failed` are forwarded to the engine — the default
+    build wires its implementation_approval / qa_failure interrupt gates through
+    them. A non-proceed outcome (gate never passed under on_exhausted="abort", or
+    a human aborted under "approval_gate"/on_gate_failed) raises BuildFailed, which
+    the entrypoint body turns into the clean status="failed" return — seams are
+    pre-commit, so nothing is half-shipped. Phase 44: if the block succeeds and a
+    producer ai_agent set human_in_loop, pause once for review of its final
+    output. interrupt() (for on_exhausted="approval_gate", on_gate_failed, and the
+    success review) is reachable because this helper, like run_seam, runs in the
     entrypoint body.
     """
     repo_root = str(find_project_root())
     defs = manifest.defs
+    builtin_producers = builtin_producers or {}
+    builtin_gates = builtin_gates or {}
     # Final result of each producer, so a human_in_loop producer's gate-passing
     # output can be surfaced for review once the block succeeds (Phase 44). On
     # resume the producer @tasks replay from checkpoint and repopulate this.
     last_producer_result: dict[str, StepResult] = {}
 
     async def run_producer(pid: str, feedback: str | None) -> StepResult:
+        if pid not in defs:
+            if pid in builtin_producers:
+                result = await builtin_producers[pid](pid, feedback)
+                last_producer_result[pid] = result
+                return result
+            raise StepError(
+                f"build step {block_step.id!r}: producer {pid!r} has no "
+                f"[steps.defs.*] entry and is not a built-in producer."
+            )
         d = defs[pid]
         if isinstance(d, ScriptStep):
             step_task = _make_script_task(d.id)
@@ -387,6 +445,13 @@ async def _run_build_step(
         return result
 
     async def run_gate(gid: str) -> StepResult:
+        if gid not in defs:
+            if gid in builtin_gates:
+                return await builtin_gates[gid](gid)
+            raise StepError(
+                f"build step {block_step.id!r}: gate {gid!r} has no "
+                f"[steps.defs.*] entry and is not a built-in gate."
+            )
         d = defs[gid]
         if isinstance(d, ScriptStep):
             step_task = _make_script_task(d.id, as_gate=True)
@@ -409,15 +474,12 @@ async def _run_build_step(
         run_producer=run_producer,
         run_gate=run_gate,
         check_cancel=check_cancel,
+        on_producers_done=on_producers_done,
+        on_gate_failed=on_gate_failed,
         interrupt_fn=interrupt,  # used only when on_exhausted="approval_gate"
     )
     if not result.proceed:
-        raise StepError(
-            f"build step {block_step.id!r} did not pass its gate(s) after "
-            f"{result.attempts} attempt(s) "
-            f"(on_exhausted={block_step.retry.on_exhausted!r}); last feedback:\n"
-            f"{result.last_feedback or '(none)'}"
-        )
+        raise BuildFailed(block_step.id, result.attempts, result.last_feedback)
 
     # Phase 44: pause ONCE after the block SUCCEEDS (result.ok — a real gate
     # pass, whether first try or after retries) if any producer ai_agent opted
@@ -430,7 +492,9 @@ async def _run_build_step(
         reviewed = [
             pid
             for pid in block_step.produce
-            if isinstance(defs[pid], AiAgentStep) and defs[pid].human_in_loop
+            if pid in defs
+            and isinstance(defs[pid], AiAgentStep)
+            and defs[pid].human_in_loop
         ]
         if reviewed:
             detail = "\n\n".join(
@@ -447,6 +511,42 @@ async def _run_build_step(
             })
             if isinstance(decision, str) and decision.strip().lower() in _GATE_ABORT_WORDS:
                 raise StepGateAborted(block_step.id)
+
+
+# Phase 46: the default build step — the spine's impl⇄QA loop, expressed
+# declaratively. The id "build" matches the worked example in orchestrator.toml.
+_DEFAULT_BUILD_ID = "build"
+
+
+def _ensure_default_build(
+    manifest: WorkflowManifest, max_retries: int
+) -> tuple[WorkflowManifest, bool]:
+    """Synthesize the default after_branch build step when none is declared.
+
+    Returns (manifest, default_injected). If the project already declares a
+    `build` step at after_branch, the manifest is returned unchanged and
+    default_injected is False — the user's build replaces the spine loop, and it
+    runs on the pure engine (no implementation_approval / qa_failure interrupt
+    gates). Otherwise a default `produce=["implementation"], gate=["qa"]` build is
+    prepended at after_branch (ahead of any non-build after_branch steps), with
+    its retry budget taken from [workflow.qa].max_retries so ORCHESTRATOR_MAX_RETRIES
+    keeps working.
+
+    Injection happens AFTER the manifest-hash gate (the hash covers only
+    user-declared steps), so the synthesized default — a deterministic function of
+    "no user build" + config — never affects resume identity.
+    """
+    existing = manifest.for_seam("after_branch")
+    if any(isinstance(s, BuildStep) for s in existing):
+        return manifest, False
+    default = BuildStep(
+        id=_DEFAULT_BUILD_ID,
+        produce=["implementation"],
+        gate=["qa"],
+        retry=RetryConfig(max=max_retries, on_exhausted="abort"),
+    )
+    new_steps = {**manifest.steps, "after_branch": [default, *existing]}
+    return manifest.model_copy(update={"steps": new_steps}), True
 
 
 @task
@@ -736,6 +836,11 @@ async def build_workflow(
                 "summarize": [],
                 "docs": [],
             }
+            # Pre-declared so the BuildFailed handler can reference them even if a
+            # user-declared build fails at a pre-branch seam (the default build,
+            # the common case, always has both set by the time it runs).
+            plan_result: PlanResult | None = None
+            branch_name: str | None = None
 
             try:
                 # Phase 20: workflow-version gate. Runs first on every
@@ -836,22 +941,31 @@ async def build_workflow(
                     )
                 rename_with_branch(thread_id, branch_name)
 
-                # Phase 42: the impl→QA retry loop is now the first consumer of
-                # the generic retry engine (retry_block.run_retry_block). The
-                # implementation step is a *generic* producer; QA stays
-                # HARD-BAKED — _run_gate calls the existing qa() and adapts its
-                # QaResult into the gate verdict, so QaResult / write_qa / the
-                # "qa" output key are untouched. The producer/gate callables and
-                # the per-attempt approval gates are injected here (not baked into
-                # the engine) because they call interrupt(), which must run in
-                # the entrypoint body.
-                #
-                # The gate verdict is replayed from the checkpointed QaResult on
-                # resume (qa_task is a @task); _qa_holder stashes the passing
-                # verdict for the success result dict.
+                # Phase 46: the impl⇄QA loop is a declarative `build` step at the
+                # after_branch seam. With no [[steps.after_branch]] build declared,
+                # synthesize the default (produce=["implementation"], gate=["qa"],
+                # retry.max=[workflow.qa].max_retries) so zero-config runs exactly
+                # the old hard-baked loop. The built-in ids resolve to the spine's
+                # own agents via the closures below; declaring [steps.defs.implementation]
+                # / [steps.defs.qa] (or your own [[steps.after_branch]] build) swaps
+                # them out. The hash gate already ran above, so this synthesis never
+                # affects resume identity.
+                manifest, default_build = _ensure_default_build(
+                    manifest, config.workflow.qa.max_retries
+                )
+
+                # The spine's own implementation producer + QA gate, exposed to the
+                # generic build engine as built-in callables. QA stays HARD-BAKED:
+                # qa_task / QaResult / write_qa / the "qa" output key are untouched;
+                # _qa_holder stashes the passing verdict for the success dict. The
+                # gate verdict replays from the checkpointed QaResult on resume
+                # (qa_task is a @task). These call interrupt() only indirectly (via
+                # the hooks below), so they're safe inside a @task-dispatching closure.
                 _qa_holder: dict[str, QaResult] = {}
 
-                async def _run_producer(step_id: str, feedback: str | None) -> StepResult:
+                async def _builtin_implementation(
+                    step_id: str, feedback: str | None
+                ) -> StepResult:
                     async with audited(_audit, thread_id, "implementation"):
                         result = await implementation_task(
                             plan_result.plan_text,
@@ -862,7 +976,7 @@ async def build_workflow(
                         usage_by_task["implementation"].append(result.usage)
                     return result
 
-                async def _run_gate(step_id: str) -> StepResult:
+                async def _builtin_qa(step_id: str) -> StepResult:
                     async with audited(_audit, thread_id, "qa"):
                         qa_result = await qa_task(
                             plan_result, config.resolved_model(config.workflow.qa)
@@ -883,13 +997,9 @@ async def build_workflow(
                     )
 
                 async def _on_producers_done(attempt: int) -> None:
-                    # Phase 33 seam: after_impl — fires on EVERY attempt (each
-                    # produces freshly changed code); `attempt` keeps each run a
-                    # distinct checkpoint entry. Then the optional impl→QA gate.
-                    await run_seam(
-                        "after_impl", manifest, plan_result.plan_text,
-                        _check_cancel, usage_by_task, attempt,
-                    )
+                    # Phase 13: optional pause after the producer, before QA
+                    # (the default build only), driven by
+                    # [workflow.implementation].human_in_loop.
                     if config.workflow.implementation.human_in_loop:
                         emit_event(_audit, thread_id, "interrupt", payload={"kind": "implementation_approval"})
                         interrupt({
@@ -922,47 +1032,30 @@ async def build_workflow(
                             return False  # stop now; don't spend another attempt
                     return True
 
-                # on_exhausted is hard-locked to "abort" for the built-in block:
-                # committing code that FAILED QA must never be reachable from
-                # config (the engine's "proceed" policy is for user-declared
-                # blocks only). Exhausting the budget = a failed run, exactly as
-                # before Phase 42. The per-failure approval gate is _on_gate_failed.
-                _block = RetryBlock(
-                    producers=["implementation"],
-                    gates=["qa"],
-                    max_retries=config.workflow.qa.max_retries,
-                    on_exhausted="abort",
+                # The default build keeps the spine's two interrupt gates
+                # (implementation_approval before QA, qa_failure on a failing QA
+                # attempt). A user-declared after_branch build runs on the pure
+                # engine instead (Phase-44 producer review + on_exhausted), so it
+                # does not inherit those QA-specific pauses. Exhausting the budget
+                # under on_exhausted="abort" raises BuildFailed → the clean
+                # status="failed" return below (no commit, no PR).
+                _hooks = (
+                    {"on_producers_done": _on_producers_done, "on_gate_failed": _on_gate_failed}
+                    if default_build
+                    else {}
                 )
-                block_result = await run_retry_block(
-                    block=_block,
-                    run_producer=_run_producer,
-                    run_gate=_run_gate,
-                    check_cancel=_check_cancel,
-                    on_producers_done=_on_producers_done,
-                    on_gate_failed=_on_gate_failed,
-                )
-
-                if not block_result.proceed:
-                    # QA never passed (human abort or exhausted budget). No
-                    # commit, no PR — a broken PR is worse than no PR.
-                    _usage = aggregate_usage(usage_by_task)
-                    write_usage(thread_id, _usage)
-                    return {
-                        "status": "failed",
-                        "plan": plan_result.model_dump(),
-                        "branch": branch_name,
-                        "qa_failures": block_result.last_feedback,
-                        "usage": _usage,
-                    }
-
-                qa_result = _qa_holder["qa"]  # the passing verdict
-
-                # Phase 33 seam: after_qa — fires ONCE, only after QA has passed.
-                # block_result.attempts is the passing attempt number.
                 await run_seam(
-                    "after_qa", manifest, plan_result.plan_text,
-                    _check_cancel, usage_by_task, block_result.attempts,
+                    "after_branch", manifest, plan_result.plan_text,
+                    _check_cancel, usage_by_task,
+                    builtin_producers={"implementation": _builtin_implementation},
+                    builtin_gates={"qa": _builtin_qa},
+                    **_hooks,
                 )
+
+                # The passing QA verdict, when the built-in QA gate ran (the default
+                # build, or any build gated on "qa"). None for an ungated build or
+                # one gated only on a non-qa gate.
+                qa_result = _qa_holder.get("qa")
 
                 # Phase 13: optional gate before committing and opening PR.
                 if config.workflow.commit.human_in_loop:
@@ -1049,8 +1142,28 @@ async def build_workflow(
                         "summary": summary_result.summary,
                         "test_plan": summary_result.test_plan,
                     },
-                    "qa": qa_result.model_dump(),
+                    # None when the build was ungated or gated only on a non-qa
+                    # gate (no built-in QA verdict to report).
+                    "qa": qa_result.model_dump() if qa_result else None,
                     "pr_url": pr_url,
+                    "usage": _usage,
+                }
+
+            except BuildFailed as exc:
+                # Phase 46: a build step ran its full budget without a passing
+                # gate under on_exhausted="abort" (or a human declined to keep
+                # retrying). For the default build this is the old QA-exhausted
+                # path: a clean status="failed" with the last gate feedback under
+                # `qa_failures`, no commit, no PR. Build steps are pre-commit, so
+                # nothing is half-shipped. branch_name/plan_result are set by the
+                # time the default build runs; guarded for a pre-branch user build.
+                _usage = aggregate_usage(usage_by_task)
+                write_usage(thread_id, _usage)
+                return {
+                    "status": "failed",
+                    "plan": plan_result.model_dump() if plan_result else None,
+                    "branch": branch_name,
+                    "qa_failures": exc.last_feedback,
                     "usage": _usage,
                 }
 

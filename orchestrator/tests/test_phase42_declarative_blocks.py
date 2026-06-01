@@ -30,9 +30,6 @@ from orchestrator.manifest import (
     WorkflowManifest,
     load_manifest,
 )
-from orchestrator.steps import StepError
-
-
 # --------------------------- parsing / validation ---------------------------
 
 
@@ -58,7 +55,7 @@ def _load(tmp_path: Path, toml_body: str, **files) -> WorkflowManifest:
 
 
 _VALID = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id           = "lint-loop"
 type         = "build"
 produce      = ["lint-fix"]
@@ -78,7 +75,7 @@ path = ".orchestrator/scripts/lint.sh"
 
 def test_valid_retry_block_round_trips(tmp_path):
     m = _load(tmp_path, _VALID, scripts=["lint.sh"], agents=["lint-fixer"])
-    block = m.for_seam("after_impl")[0]
+    block = m.for_seam("after_branch")[0]
     assert isinstance(block, BuildStep)
     assert block.id == "lint-loop"
     assert block.produce == ["lint-fix"]
@@ -93,7 +90,7 @@ def test_valid_retry_block_round_trips(tmp_path):
 
 def test_unknown_referenced_def_raises(tmp_path):
     toml = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id      = "loop"
 type    = "build"
 produce = ["lint-fix"]
@@ -104,13 +101,13 @@ type  = "ai_agent"
 agent = "lint-fixer.md"
 dir   = ".orchestrator/agents"
 """
-    with pytest.raises(ManifestError, match="unknown step def 'does-not-exist'"):
+    with pytest.raises(ManifestError, match="unknown gate 'does-not-exist'"):
         _load(tmp_path, toml, agents=["lint-fixer"])
 
 
 def test_producer_and_gate_overlap_raises(tmp_path):
     toml = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id      = "loop"
 type    = "build"
 produce = ["both"]
@@ -126,7 +123,7 @@ path = ".orchestrator/scripts/lint.sh"
 
 def test_empty_produce_raises(tmp_path):
     toml = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id      = "loop"
 type    = "build"
 produce = []
@@ -142,7 +139,7 @@ path = ".orchestrator/scripts/lint.sh"
 
 def test_empty_gate_raises(tmp_path):
     toml = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id      = "loop"
 type    = "build"
 produce = ["lint-fix"]
@@ -160,7 +157,7 @@ dir   = ".orchestrator/agents"
 def test_approval_gate_def_rejected(tmp_path):
     # A approval_gate is a pause, not a producer/gate — it can't be a def.
     toml = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id      = "loop"
 type    = "build"
 produce = ["x"]
@@ -180,7 +177,7 @@ ask  = "ok?"
 
 def test_max_retries_zero_rejected(tmp_path):
     toml = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id          = "loop"
 type        = "build"
 produce     = ["x"]
@@ -200,7 +197,7 @@ path = ".orchestrator/scripts/lint.sh"
 
 def test_bad_on_exhausted_rejected(tmp_path):
     toml = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id           = "loop"
 type         = "build"
 produce      = ["x"]
@@ -226,7 +223,7 @@ id   = "shared"
 type = "script"
 path = ".orchestrator/scripts/lint.sh"
 
-[[steps.after_impl]]
+[[steps.after_branch]]
 id      = "loop"
 type    = "build"
 produce = ["shared"]
@@ -264,11 +261,11 @@ def test_hash_changes_when_referenced_def_changes():
         "check": ScriptStep(id="check", path="x.sh"),
     }
     block = BuildStep(id="b", produce=["fix"], gate=["check"])
-    m1 = WorkflowManifest(steps={"after_impl": [block]}, defs=defs)
+    m1 = WorkflowManifest(steps={"after_branch": [block]}, defs=defs)
     # Edit a referenced def's BODY (not the block) → hash must change so a
     # mid-run edit refuses the resume.
     m2 = WorkflowManifest(
-        steps={"after_impl": [block]},
+        steps={"after_branch": [block]},
         defs={**defs, "check": ScriptStep(id="check", path="DIFFERENT.sh")},
     )
     assert m1.manifest_hash() != m2.manifest_hash()
@@ -280,10 +277,10 @@ def test_hash_ignores_unreferenced_def():
         "check": ScriptStep(id="check", path="x.sh"),
     }
     block = BuildStep(id="b", produce=["fix"], gate=["check"])
-    m1 = WorkflowManifest(steps={"after_impl": [block]}, defs=defs)
+    m1 = WorkflowManifest(steps={"after_branch": [block]}, defs=defs)
     # Adding a def the block does NOT reference changes nothing it depends on.
     m3 = WorkflowManifest(
-        steps={"after_impl": [block]},
+        steps={"after_branch": [block]},
         defs={**defs, "unused": ScriptStep(id="unused", path="z.sh")},
     )
     assert m1.manifest_hash() == m3.manifest_hash()
@@ -406,11 +403,16 @@ async def test_declared_block_retries_until_gate_passes(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_declared_block_abort_when_gate_never_passes(monkeypatch, tmp_path):
     fake, calls = _fake_execute_script_factory(gate_passes_on_attempt=None)
-    # on_exhausted="abort" → the block fails the whole run via StepError.
-    with pytest.raises(StepError, match="did not pass its gate"):
-        await _drive(
-            monkeypatch, tmp_path, _block_manifest(on_exhausted="abort", max_retries=2), fake
-        )
+    # Phase 46: on_exhausted="abort" → the build raises BuildFailed, which the
+    # entrypoint turns into a clean status="failed" (no commit/PR), with the
+    # failing gate's last feedback under qa_failures — the same contract the
+    # default QA-gated build uses.
+    result = await _drive(
+        monkeypatch, tmp_path, _block_manifest(on_exhausted="abort", max_retries=2), fake
+    )
+    assert result["status"] == "failed"
+    assert result["qa_failures"] == "lint failed"
+    assert "pr_url" not in result
     # Producer + gate each ran the full budget (2 attempts).
     assert sum(1 for c in calls if c == ("fix", False)) == 2
     assert sum(1 for c in calls if c == ("check", True)) == 2
@@ -599,7 +601,7 @@ async def test_producer_human_in_loop_no_review_when_exhausted_proceed(monkeypat
 
 def test_retry_inline_table_roundtrips(tmp_path):
     toml = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id      = "loop"
 type    = "build"
 produce = ["fix"]
@@ -615,7 +617,7 @@ type = "script"
 path = ".orchestrator/scripts/lint.sh"
 """
     m = _load(tmp_path, toml, scripts=["lint.sh"], agents=["lint-fixer"])
-    block = m.for_seam("after_impl")[0]
+    block = m.for_seam("after_branch")[0]
     assert isinstance(block, BuildStep)
     assert block.retry.max == 5
     assert block.retry.on_exhausted == "proceed"
@@ -624,7 +626,7 @@ path = ".orchestrator/scripts/lint.sh"
 def test_ungated_build_step_allowed(tmp_path):
     # ungated=true permits an empty gate list (producer runs once, no gate).
     toml = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id      = "make"
 type    = "build"
 produce = ["fix"]
@@ -635,7 +637,7 @@ type = "script"
 path = ".orchestrator/scripts/lint.sh"
 """
     m = _load(tmp_path, toml, scripts=["lint.sh"])
-    block = m.for_seam("after_impl")[0]
+    block = m.for_seam("after_branch")[0]
     assert isinstance(block, BuildStep)
     assert block.ungated is True
     assert block.gate == []
@@ -644,7 +646,7 @@ path = ".orchestrator/scripts/lint.sh"
 def test_retry_unknown_key_rejected(tmp_path):
     # RetryConfig is extra="forbid" — a typo'd key fails loud at load.
     toml = """
-[[steps.after_impl]]
+[[steps.after_branch]]
 id      = "loop"
 type    = "build"
 produce = ["x"]

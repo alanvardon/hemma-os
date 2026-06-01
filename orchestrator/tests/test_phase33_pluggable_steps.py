@@ -50,13 +50,13 @@ id = "lint"
 type = "script"
 path = ".orchestrator/scripts/lint.sh"
 
-[[steps.after_qa]]
+[[steps.before_commit]]
 id = "docs"
 type = "ai_agent"
 agent = "docs.md"
 dir = ".orchestrator/agents"
 
-[[steps.after_qa]]
+[[steps.before_commit]]
 id = "gate"
 type = "approval_gate"
 ask = "ok?"
@@ -64,7 +64,7 @@ ask = "ok?"
     )
     m = load_manifest(project_root=tmp_path)
     assert isinstance(m.for_seam("before_plan")[0], ScriptStep)
-    after = m.for_seam("after_qa")
+    after = m.for_seam("before_commit")
     assert isinstance(after[0], AiAgentStep)
     assert isinstance(after[1], ApprovalGateStep)
     assert after[1].ask == "ok?"
@@ -93,7 +93,7 @@ def test_duplicate_id_raises(tmp_path):
 id = "dup"
 type = "approval_gate"
 
-[[steps.after_qa]]
+[[steps.before_commit]]
 id = "dup"
 type = "approval_gate"
 """,
@@ -114,21 +114,21 @@ def test_missing_script_raises(tmp_path):
 def test_unknown_agent_raises(tmp_path):
     _write(
         tmp_path / "orchestrator.toml",
-        '[[steps.after_qa]]\nid="docs"\ntype="ai_agent"\nagent="ghost.md"\ndir=".orchestrator/agents"\n',
+        '[[steps.before_commit]]\nid="docs"\ntype="ai_agent"\nagent="ghost.md"\ndir=".orchestrator/agents"\n',
     )
     with pytest.raises(ManifestError, match="agent file not found"):
         load_manifest(project_root=tmp_path)
 
 
 def test_manifest_hash_changes_with_steps():
-    a = WorkflowManifest(steps={"after_qa": [ApprovalGateStep(id="g", ask="a")]})
-    b = WorkflowManifest(steps={"after_qa": [ApprovalGateStep(id="g", ask="b")]})
+    a = WorkflowManifest(steps={"before_commit": [ApprovalGateStep(id="g", ask="a")]})
+    b = WorkflowManifest(steps={"before_commit": [ApprovalGateStep(id="g", ask="b")]})
     empty = WorkflowManifest()
     assert a.manifest_hash() != b.manifest_hash()
     assert a.manifest_hash() != empty.manifest_hash()
     # Stable across instances.
     assert a.manifest_hash() == WorkflowManifest(
-        steps={"after_qa": [ApprovalGateStep(id="g", ask="a")]}
+        steps={"before_commit": [ApprovalGateStep(id="g", ask="a")]}
     ).manifest_hash()
 
 
@@ -221,7 +221,7 @@ def _patch(stubs, monkeypatch):
 async def test_approval_gate_seam_fires_and_completes(monkeypatch, tmp_path):
     _patch(_Stubs(), monkeypatch)
     manifest = WorkflowManifest(
-        steps={"after_qa": [ApprovalGateStep(id="security_gate", ask="approve?")]}
+        steps={"before_commit": [ApprovalGateStep(id="security_gate", ask="approve?")]}
     )
     monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: manifest)
 
@@ -245,57 +245,16 @@ async def test_approval_gate_seam_fires_and_completes(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_after_impl_fires_on_every_attempt(monkeypatch, tmp_path):
-    # QA fails once then passes → 2 implement attempts → an after_impl step
-    # must fire on BOTH, against each attempt's changed code, tagged with the
-    # attempt number each time.
+async def test_before_commit_step_fires_once_before_commit_passes(monkeypatch, tmp_path):
+    # Phase 46: the per-attempt `after_impl` and pass-only `before_commit` seams were
+    # removed (the impl⇄QA loop is now a build step at after_branch). The
+    # "run once after QA passes" use case is now a step at before_commit: even
+    # when QA fails once then passes (2 build attempts), a before_commit step
+    # fires EXACTLY ONCE, on the QA-passed tree, with attempt=0 (seams no longer
+    # carry a loop-attempt number).
     calls: list[tuple[str, int]] = []
 
-    def fake_make_script_task(step_id):
-        async def run(step_id, path, timeout, repo_root, attempt=0):
-            calls.append((step_id, attempt))
-            return StepResult(step_id=step_id, kind="script", ok=True)
-
-        return run
-
-    monkeypatch.setattr(
-        "orchestrator.workflow._make_script_task", fake_make_script_task
-    )
-
-    verdicts = iter([QaResult(result="FAIL", failures="x"), QaResult(result="PASS")])
-
-    stubs = _Stubs()
-
-    async def qa_seq(plan, model="claude-sonnet-4-6"):
-        return next(verdicts)
-
-    stubs.qa = qa_seq
-    _patch(stubs, monkeypatch)
-
-    manifest = WorkflowManifest(
-        steps={"after_impl": [ScriptStep(id="probe", path="x.sh")]}
-    )
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: manifest)
-
-    from orchestrator.workflow import build_workflow
-
-    config = {"configurable": {"thread_id": f"test-{uuid.uuid4().hex[:8]}"}}
-    async with build_workflow(db_path=str(tmp_path / "ckpt.db")) as workflow:
-        result = await workflow.ainvoke("req", config=config)
-        result = await workflow.ainvoke(Command(resume="yes"), config=config)
-
-    assert result["status"] == "succeeded"
-    # Fired once per implement attempt, with the attempt number.
-    assert calls == [("probe", 1), ("probe", 2)]
-
-
-@pytest.mark.asyncio
-async def test_after_qa_fires_once_only_on_pass(monkeypatch, tmp_path):
-    # QA fails once then passes. An after_qa step must fire EXACTLY ONCE —
-    # after QA has passed (attempt 2) — never on the failed attempt.
-    calls: list[tuple[str, int]] = []
-
-    def fake_make_script_task(step_id):
+    def fake_make_script_task(step_id, *, as_gate=False):
         async def run(step_id, path, timeout, repo_root, attempt=0):
             calls.append((step_id, attempt))
             return StepResult(step_id=step_id, kind="script", ok=True)
@@ -316,7 +275,7 @@ async def test_after_qa_fires_once_only_on_pass(monkeypatch, tmp_path):
     _patch(stubs, monkeypatch)
 
     manifest = WorkflowManifest(
-        steps={"after_qa": [ScriptStep(id="qa_probe", path="x.sh")]}
+        steps={"before_commit": [ScriptStep(id="probe", path="x.sh")]}
     )
     monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: manifest)
 
@@ -328,8 +287,8 @@ async def test_after_qa_fires_once_only_on_pass(monkeypatch, tmp_path):
         result = await workflow.ainvoke(Command(resume="yes"), config=config)
 
     assert result["status"] == "succeeded"
-    # Fired once, on the passing (2nd) attempt — not on the failed 1st.
-    assert calls == [("qa_probe", 2)]
+    # Fired once, after QA passed (the 2nd build attempt) — not per attempt.
+    assert calls == [("probe", 0)]
 
 
 @pytest.mark.asyncio
@@ -347,7 +306,7 @@ async def test_approval_gate_abort_stops_run(monkeypatch, tmp_path):
     _patch(stubs, monkeypatch)
 
     manifest = WorkflowManifest(
-        steps={"after_qa": [ApprovalGateStep(id="signoff", ask="proceed?")]}
+        steps={"before_commit": [ApprovalGateStep(id="signoff", ask="proceed?")]}
     )
     monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: manifest)
 
@@ -401,7 +360,7 @@ async def test_ai_agent_human_in_loop_pauses_then_proceeds(monkeypatch, tmp_path
 
     manifest = WorkflowManifest(
         steps={
-            "after_qa": [
+            "before_commit": [
                 AiAgentStep(id="review", agent="reviewer.md", dir=".orchestrator/agents", human_in_loop=True)
             ]
         }
@@ -419,14 +378,15 @@ async def test_ai_agent_human_in_loop_pauses_then_proceeds(monkeypatch, tmp_path
         assert intr["kind"] == "step_ai_agent_review"
         assert intr["step_id"] == "review"
         assert intr["detail"] == "ran agent"
-        # after_qa fires once, tagged with the attempt QA passed on (1-indexed).
-        assert calls == [("review", 1)]  # ran once, before the pause
+        # before_commit fires once on the QA-passed tree (attempt=0; seams no
+        # longer carry a loop-attempt number after Phase 46).
+        assert calls == [("review", 0)]  # ran once, before the pause
 
         # Proceed → workflow finishes; the agent is NOT re-run on resume.
         result = await workflow.ainvoke(Command(resume="yes"), config=config)
 
     assert result["status"] == "succeeded"
-    assert calls == [("review", 1)]
+    assert calls == [("review", 0)]
 
 
 @pytest.mark.asyncio
@@ -449,7 +409,7 @@ async def test_ai_agent_human_in_loop_abort_stops_run(monkeypatch, tmp_path):
 
     manifest = WorkflowManifest(
         steps={
-            "after_qa": [
+            "before_commit": [
                 AiAgentStep(id="review", agent="reviewer.md", dir=".orchestrator/agents", human_in_loop=True)
             ]
         }
@@ -476,10 +436,10 @@ async def test_manifest_change_mid_run_refuses_resume(monkeypatch, tmp_path):
     _patch(_Stubs(), monkeypatch)
 
     manifest_a = WorkflowManifest(
-        steps={"after_qa": [ApprovalGateStep(id="g", ask="v1")]}
+        steps={"before_commit": [ApprovalGateStep(id="g", ask="v1")]}
     )
     manifest_b = WorkflowManifest(
-        steps={"after_qa": [ApprovalGateStep(id="g", ask="v2-changed")]}
+        steps={"before_commit": [ApprovalGateStep(id="g", ask="v2-changed")]}
     )
     state = {"current": manifest_a}
     monkeypatch.setattr(

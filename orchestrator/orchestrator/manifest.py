@@ -2,9 +2,16 @@
 
 Lets operators inject steps into the workflow by editing orchestrator.toml,
 without touching workflow.py. The core spine
-(verify_clean_tree → plan → branch → impl → qa → commit → push → pr) stays
-hard-coded; users add steps only at fixed *seams* that all sit before the
-commit line (so cancel semantics stay safe).
+(verify_clean_tree → plan → branch → build(impl ⇄ qa) → summarize → docs →
+commit → push → pr) stays hard-coded; users add steps only at fixed *seams*
+that all sit before the commit line (so cancel semantics stay safe).
+
+Phase 46: the impl ⇄ qa loop is itself a `build` step at the `after_branch`
+seam. With no [[steps.after_branch]] build declared, the workflow synthesizes
+the default one (`produce=["implementation"]`, `gate=["qa"]`) so zero-config
+runs the loop exactly as before. The built-in ids `implementation` (producer)
+and `qa` (gate) resolve to the spine's own agents when not redefined under
+[steps.defs.*]; declare them there to swap in your own.
 
 This is the constrained, lower-risk first increment of the vision in
 PLUGGABLE_WORKFLOW.md — fixed seams, not a free-form DAG.
@@ -17,14 +24,14 @@ TOML shape (everything optional; no [steps] table = no injected steps):
     path = ".orchestrator/scripts/lint.sh"
     timeout = 60
 
-    [[steps.after_qa]]
+    [[steps.before_commit]]
     id    = "docs"
     type  = "ai_agent"
     agent = "docs.md"         # full filename (with extension)
     dir   = "team/agents"     # → team/agents/docs.md (per-step, required)
     model = "claude-sonnet-4-6"
 
-    [[steps.after_qa]]
+    [[steps.before_commit]]
     id   = "security_gate"
     type = "approval_gate"
     ask  = "QA passed. Approve security posture before commit?"
@@ -34,7 +41,7 @@ gate(s), re-running the producers with the failing gate's feedback until a gate
 passes or the retry budget is exhausted. produce/gate reference definitions
 under [steps.defs.*]:
 
-    [[steps.after_impl]]
+    [[steps.after_branch]]
     id      = "lint-loop"
     type    = "build"
     produce = ["lint-fix"]           # ids defined in [steps.defs.*]
@@ -55,9 +62,9 @@ The gating guarantee: a build step must list at least one `gate` unless it sets
 
 The loader validates at load time (before any LLM spend): unknown seam
 names, duplicate ids, missing script paths, unknown agent references, and —
-for build steps — that produce/gate reference defined ids, that no id is both
-a producer and a gate, and that `produce` (and `gate`, unless `ungated`) is
-non-empty. A problem raises
+for build steps — that produce/gate reference a [steps.defs.*] id or a built-in
+(`implementation` / `qa`), that no id is both a producer and a gate, and that
+`produce` (and `gate`, unless `ungated`) is non-empty. A problem raises
 ManifestError with a clear message.
 """
 
@@ -79,13 +86,40 @@ from orchestrator.usage import TaskUsage
 # The only valid insertion points. All sit BEFORE the commit line so an
 # injected step can never create a half-shipped state on cancel. Adding
 # after-commit seams is intentionally refused (see phase_33 landmine).
+# Phase 46: the per-attempt `after_impl` and pass-only `after_qa` seams were
+# removed — the impl⇄QA loop is now a `build` step at `after_branch`, so a step
+# that should "run once after the build" is just ordered after that build step
+# (at after_branch) or placed at before_commit. See _REMOVED_SEAMS for the
+# migration error.
 SEAMS: tuple[str, ...] = (
     "before_plan",
     "after_plan",
-    "after_impl",
-    "after_qa",
+    "after_branch",
     "before_commit",
 )
+
+# Phase 46: seams that existed through Phase 45 but no longer have a home now
+# that the impl⇄QA loop is a declarative build step. Kept as a lookup so the
+# loader can raise a migration-guiding error instead of a bare "unknown seam".
+_REMOVED_SEAMS: dict[str, str] = {
+    "after_impl": (
+        "it fired once per implementation attempt, inside the impl⇄QA loop; "
+        "that loop is now a 'build' step at 'after_branch'. To check each "
+        "attempt, add a gate to the build step instead."
+    ),
+    "after_qa": (
+        "it fired once after QA passed; place the step at 'after_branch' "
+        "(ordered after the build step) or at 'before_commit' to run once on "
+        "the QA-passed tree."
+    ),
+}
+
+# Phase 46: built-in producer/gate ids a build step may reference WITHOUT a
+# matching [steps.defs.*] entry. They resolve to the spine's own implementation
+# producer / QA gate at runtime (workflow._run_build_step). Redefining either id
+# under [steps.defs.*] overrides the built-in.
+_BUILTIN_PRODUCER_IDS: frozenset[str] = frozenset({"implementation"})
+_BUILTIN_GATE_IDS: frozenset[str] = frozenset({"qa"})
 
 
 class ManifestError(FatalError):
@@ -281,11 +315,23 @@ def _validate_build_step(step: BuildStep, defs: dict[str, StepDef]) -> None:
             f"build step {step.id!r}: {both} listed as both producer and gate; "
             f"a step is one or the other."
         )
-    for rid in step.produce + step.gate:
-        if rid not in defs:
+    # Producer/gate ids must resolve to a [steps.defs.*] entry OR a built-in
+    # (Phase 46): `implementation` as a producer, `qa` as a gate. The built-ins
+    # let the synthesized default build — and any user build that wants the
+    # spine's own agents — reference them without a redundant def.
+    for rid in step.produce:
+        if rid not in defs and rid not in _BUILTIN_PRODUCER_IDS:
             raise ManifestError(
-                f"build step {step.id!r}: references unknown step def {rid!r}. "
-                f"Define it under [steps.defs.{rid}]."
+                f"build step {step.id!r}: references unknown producer {rid!r}. "
+                f"Define it under [steps.defs.{rid}] (or use the built-in "
+                f"{sorted(_BUILTIN_PRODUCER_IDS)})."
+            )
+    for rid in step.gate:
+        if rid not in defs and rid not in _BUILTIN_GATE_IDS:
+            raise ManifestError(
+                f"build step {step.id!r}: references unknown gate {rid!r}. "
+                f"Define it under [steps.defs.{rid}] (or use the built-in "
+                f"{sorted(_BUILTIN_GATE_IDS)})."
             )
     # Gate-capability: defs are restricted to script | ai_agent (StepDef
     # excludes approval_gate), and both are gate-capable — a script gate's verdict
@@ -318,7 +364,7 @@ def load_manifest(
         return WorkflowManifest()
     if not isinstance(raw, dict):
         raise ManifestError(
-            "[steps] must be a table of seam arrays, e.g. [[steps.after_qa]]"
+            "[steps] must be a table of seam arrays, e.g. [[steps.after_branch]]"
         )
 
     # All step ids (seam steps AND [steps.defs.*]) share one namespace so a
@@ -372,6 +418,11 @@ def load_manifest(
 
     for seam, items in raw.items():
         if seam not in SEAMS:
+            if seam in _REMOVED_SEAMS:
+                raise ManifestError(
+                    f"seam {seam!r} was removed in Phase 46: "
+                    f"{_REMOVED_SEAMS[seam]} Valid seams: {', '.join(SEAMS)}."
+                )
             raise ManifestError(
                 f"unknown seam {seam!r}. Valid seams: {', '.join(SEAMS)}."
             )
