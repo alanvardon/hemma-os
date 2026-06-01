@@ -52,7 +52,11 @@ disallowed_tools = []
 human_in_loop    = false  # pause on QA FAIL — lets you abort instead of retrying
 allowed_tools    = ["Read", "Grep", "Bash"]
 disallowed_tools = []
-max_retries      = 3      # implementation+QA loop attempts before giving up
+# Phase 47: the impl⇄QA retry budget now lives on the build step's `retry.max`
+# (see [[steps.after_branch]] below) — the single, visible source of truth. This
+# field (and ORCHESTRATOR_MAX_RETRIES) is retained for back-compat but no longer
+# drives the loop; set the budget on the build step instead.
+max_retries      = 3
 
 [workflow.docs]
 # Baked-in docs agent (Phase 41). Haiku by default — a read-diff / edit-md task.
@@ -103,12 +107,12 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # Seams (all run before the commit line, so cancel stays safe):
 #   before_plan · after_plan · after_branch · before_commit
 # Each seam runs its steps once, in declared order. after_branch is where the
-# impl ⇄ qa loop runs as a `build` step — synthesized by default (produce=
-# ["implementation"], gate=["qa"]), overridable per orchestrator.example.toml
-# section 6. Put costly ai_agent steps at before_commit so they run on the
-# final, QA-passed code. (Phase 46 removed the old per-attempt `after_impl` and
-# pass-only `after_qa` seams; the loader raises a migration error if a TOML
-# still uses them.)
+# impl ⇄ qa loop runs as a `build` step — declared EXPLICITLY below (Phase 47;
+# there is no hidden default — what runs is exactly what's in this file). Put
+# costly ai_agent steps at before_commit so they run on the final, QA-passed
+# code. (Phase 46 removed the old per-attempt `after_impl` and pass-only
+# `after_qa` seams; the loader raises a migration error if a TOML still uses
+# them.)
 #
 # Step types:
 #   script      — run an executable; non-zero exit aborts the workflow
@@ -154,6 +158,28 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # type = "approval_gate"
 # ask  = "QA passed. Approve security posture before commit?"
 # ---------------------------------------------------------------------------
+
+# --- The build step: the impl ⇄ qa loop (Phase 47) ----------------------------
+# This is the spine's core producer⇄gate loop, declared explicitly so it is
+# visible and editable here rather than synthesized behind the scenes. The
+# producer writes code; the gate (QA) judges it; on a FAIL the gate's feedback
+# is injected into the next attempt, looping until QA passes or `retry.max`
+# runs out (then on_exhausted="abort" ends the run as failed — no commit/PR).
+#
+# `implementation` and `qa` are BUILT-IN ids: they resolve to the spine's own
+# implementation agent and QA agent (configured under [workflow.implementation]
+# and [workflow.qa] above) without needing a [steps.defs.*] entry. To swap
+# either, declare your own def under that id — e.g. [steps.defs.qa] with a
+# script or ai_agent — or change `produce` / `gate` to your own ids. Remove
+# this block entirely and a run will pass through with status="no_changes"
+# (nothing produces a diff). The interrupt gates fire only if you opt in via
+# [workflow.implementation].human_in_loop / [workflow.qa].human_in_loop.
+[[steps.after_branch]]
+id      = "build"
+type    = "build"
+produce = ["implementation"]                  # built-in producer (the coder agent)
+gate    = ["qa"]                              # built-in gate (the QA agent)
+retry   = { max = 3, on_exhausted = "abort" }  # attempts before giving up
 
 # --- Built-in spine agents: docs (Phase 41) + summarizer (Phase 42) -----------
 # The docs agent used to be a live [[steps.before_commit]] step here. It is now

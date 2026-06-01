@@ -7,20 +7,48 @@ Two autouse fixtures keep the workflow tests hermetic:
   Without it, tests that drive build_workflow would leak `test-<uuid>/`
   folders alongside the real `run-<uuid>-<slug>/` ones.
 
-- _isolate_manifest makes load_manifest() return an EMPTY manifest by
-  default, so the suite never depends on whatever pluggable steps happen
-  to be configured in the real orchestrator.toml. Without it, enabling a
-  live ai_agent step in orchestrator.toml would make full-workflow tests
-  spawn a real Claude agent at the before_commit seam (slow, flaky, and a
-  network dependency). Tests that exercise specific steps (Phase 20/33)
-  override this with their own monkeypatch inside the test, which runs
-  after this fixture and wins.
+- _isolate_manifest makes load_manifest() return a manifest with ONLY the
+  spine's impl⇄QA build (no pluggable seam steps), so the suite never depends
+  on whatever pluggable steps happen to be configured in the real
+  orchestrator.toml. Without it, enabling a live ai_agent step in
+  orchestrator.toml would make full-workflow tests spawn a real Claude agent
+  (slow, flaky, a network dependency). Phase 47: the build is no longer
+  synthesized, so this fixture supplies it explicitly — that's what makes the
+  implementation⇄QA loop run in full-workflow tests. Tests that exercise
+  specific steps override this with their own monkeypatch (which runs after
+  this fixture and wins); use with_standard_build() to keep the build present.
 """
 
 import pytest
 
-from orchestrator.manifest import WorkflowManifest
+from orchestrator.manifest import BuildStep, RetryConfig, WorkflowManifest
 from orchestrator.paths import find_project_root
+
+
+def standard_build() -> BuildStep:
+    """The spine's impl⇄QA build step (Phase 47: declared, not synthesized).
+
+    The real orchestrator.toml declares this exact block at after_branch. Tests
+    run with no orchestrator.toml, so the manifest fixtures inject it."""
+    return BuildStep(
+        id="build",
+        produce=["implementation"],
+        gate=["qa"],
+        retry=RetryConfig(max=3, on_exhausted="abort"),
+    )
+
+
+def with_standard_build(manifest: WorkflowManifest | None = None) -> WorkflowManifest:
+    """Return `manifest` with the standard impl⇄QA build prepended at after_branch.
+
+    For tests that override load_manifest with their own seam steps but still
+    need the spine's build to run (pre-47 they relied on the synthesized default;
+    now the build is explicit, so it must be present in the manifest)."""
+    if manifest is None:
+        return WorkflowManifest(steps={"after_branch": [standard_build()]})
+    steps = {k: list(v) for k, v in manifest.steps.items()}
+    steps["after_branch"] = [standard_build(), *steps.get("after_branch", [])]
+    return WorkflowManifest(steps=steps, defs=manifest.defs)
 
 
 @pytest.fixture(autouse=True)
@@ -36,7 +64,7 @@ def _isolate_runs_dir(monkeypatch):
 def _isolate_manifest(monkeypatch):
     monkeypatch.setattr(
         "orchestrator.workflow.load_manifest",
-        lambda *a, **k: WorkflowManifest(),
+        lambda *a, **k: with_standard_build(),
     )
 
 

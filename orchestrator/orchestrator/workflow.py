@@ -42,7 +42,12 @@ logger = logging.getLogger(__name__)
 # before_commit), and a build that exhausts its budget raises BuildFailed instead
 # of returning the failed dict inline. The control-flow reshape is a body change,
 # so the bump refuses resume of any run created before Phase 46.
-WORKFLOW_VERSION = "1.4.0"
+# 1.4.0 → 1.5.0 (Phase 47): the after_branch build is no longer synthesized — it
+# is declared explicitly in orchestrator.toml (no _ensure_default_build). A run
+# with no after_branch build now reaches the empty-diff guard and returns
+# status="no_changes" rather than running an invisible default loop. Removing the
+# synthesis step is a body change; the bump refuses resume of any pre-47 run.
+WORKFLOW_VERSION = "1.5.0"
 
 
 from orchestrator.errors import FatalError
@@ -116,7 +121,6 @@ from orchestrator.manifest import (
     ApprovalGateStep,
     AiAgentStep,
     BuildStep,
-    RetryConfig,
     ScriptStep,
     StepResult,
     WorkflowManifest,
@@ -514,42 +518,6 @@ async def _run_build_step(
                 raise StepGateAborted(block_step.id)
 
 
-# Phase 46: the default build step — the spine's impl⇄QA loop, expressed
-# declaratively. The id "build" matches the worked example in orchestrator.toml.
-_DEFAULT_BUILD_ID = "build"
-
-
-def _ensure_default_build(
-    manifest: WorkflowManifest, max_retries: int
-) -> tuple[WorkflowManifest, bool]:
-    """Synthesize the default after_branch build step when none is declared.
-
-    Returns (manifest, default_injected). If the project already declares a
-    `build` step at after_branch, the manifest is returned unchanged and
-    default_injected is False — the user's build replaces the spine loop, and it
-    runs on the pure engine (no implementation_approval / qa_failure interrupt
-    gates). Otherwise a default `produce=["implementation"], gate=["qa"]` build is
-    prepended at after_branch (ahead of any non-build after_branch steps), with
-    its retry budget taken from [workflow.qa].max_retries so ORCHESTRATOR_MAX_RETRIES
-    keeps working.
-
-    Injection happens AFTER the manifest-hash gate (the hash covers only
-    user-declared steps), so the synthesized default — a deterministic function of
-    "no user build" + config — never affects resume identity.
-    """
-    existing = manifest.for_seam("after_branch")
-    if any(isinstance(s, BuildStep) for s in existing):
-        return manifest, False
-    default = BuildStep(
-        id=_DEFAULT_BUILD_ID,
-        produce=["implementation"],
-        gate=["qa"],
-        retry=RetryConfig(max=max_retries, on_exhausted="abort"),
-    )
-    new_steps = {**manifest.steps, "after_branch": [default, *existing]}
-    return manifest.model_copy(update={"steps": new_steps}), True
-
-
 @task
 async def planning_task(request: str, model: str = "claude-sonnet-4-6") -> PlanResult:
     return await plan(request, model=model)
@@ -942,18 +910,15 @@ async def build_workflow(
                     )
                 rename_with_branch(thread_id, branch_name)
 
-                # Phase 46: the impl⇄QA loop is a declarative `build` step at the
-                # after_branch seam. With no [[steps.after_branch]] build declared,
-                # synthesize the default (produce=["implementation"], gate=["qa"],
-                # retry.max=[workflow.qa].max_retries) so zero-config runs exactly
-                # the old hard-baked loop. The built-in ids resolve to the spine's
-                # own agents via the closures below; declaring [steps.defs.implementation]
-                # / [steps.defs.qa] (or your own [[steps.after_branch]] build) swaps
-                # them out. The hash gate already ran above, so this synthesis never
-                # affects resume identity.
-                manifest, default_build = _ensure_default_build(
-                    manifest, config.workflow.qa.max_retries
-                )
+                # Phase 46/47: the impl⇄QA loop is a declarative `build` step at
+                # the after_branch seam, declared explicitly in orchestrator.toml
+                # (Phase 47 dropped the synthesized default — the build is visible
+                # config, not invisible magic). The built-in ids `implementation` /
+                # `qa` resolve to the spine's own agents via the closures below;
+                # declaring [steps.defs.implementation] / [steps.defs.qa] (or a
+                # different produce/gate) swaps them out. If no after_branch build
+                # is declared, run_seam below is a no-op and the empty-diff guard
+                # returns status="no_changes".
 
                 # The spine's own implementation producer + QA gate, exposed to the
                 # generic build engine as built-in callables. QA stays HARD-BAKED:
@@ -1011,10 +976,13 @@ async def build_workflow(
                 async def _on_gate_failed(attempt: int, feedback: str) -> bool:
                     # Log QA failure at ERROR level so scripted-gate failures
                     # (Phase 28) and LLM failures are both visible in the log.
+                    # Phase 47: the retry budget now lives on the build step's
+                    # `retry.max` (orchestrator.toml), not [workflow.qa].max_retries,
+                    # so the message reports the attempt number without a total
+                    # (the engine owns the budget).
                     logger.error(
-                        "QA FAIL (attempt %d/%d):\n%s",
+                        "QA FAIL (attempt %d):\n%s",
                         attempt,
-                        config.workflow.qa.max_retries,
                         feedback or "(no failure details)",
                     )
                     # Phase 13: optional gate on QA failure — user can abort
@@ -1025,7 +993,7 @@ async def build_workflow(
                             "kind": "qa_failure",
                             "failures": feedback,
                             "ask": (
-                                f"QA FAIL (attempt {attempt}/{config.workflow.qa.max_retries}). "
+                                f"QA FAIL (attempt {attempt}). "
                                 "Retry? Reply 'yes' or 'abort'."
                             ),
                         })
@@ -1033,24 +1001,22 @@ async def build_workflow(
                             return False  # stop now; don't spend another attempt
                     return True
 
-                # The default build keeps the spine's two interrupt gates
-                # (implementation_approval before QA, qa_failure on a failing QA
-                # attempt). A user-declared after_branch build runs on the pure
-                # engine instead (Phase-44 producer review + on_exhausted), so it
-                # does not inherit those QA-specific pauses. Exhausting the budget
-                # under on_exhausted="abort" raises BuildFailed → the clean
-                # status="failed" return below (no commit, no PR).
-                _hooks = (
-                    {"on_producers_done": _on_producers_done, "on_gate_failed": _on_gate_failed}
-                    if default_build
-                    else {}
-                )
+                # The after_branch build's two interrupt gates: implementation_approval
+                # (before QA) and qa_failure (on a failing QA attempt), gated by
+                # [workflow.implementation].human_in_loop / [workflow.qa].human_in_loop
+                # (both default off). They only do anything when the build actually
+                # uses the built-in implementation producer / qa gate AND the human
+                # opted in, so wiring them unconditionally is harmless for a build
+                # that swaps in its own producer/gate. Exhausting the budget under
+                # on_exhausted="abort" raises BuildFailed → the clean status="failed"
+                # return below (no commit, no PR).
                 await run_seam(
                     "after_branch", manifest, plan_result.plan_text,
                     _check_cancel, usage_by_task,
                     builtin_producers={"implementation": _builtin_implementation},
                     builtin_gates={"qa": _builtin_qa},
-                    **_hooks,
+                    on_producers_done=_on_producers_done,
+                    on_gate_failed=_on_gate_failed,
                 )
 
                 # The passing QA verdict, when the built-in QA gate ran (the default

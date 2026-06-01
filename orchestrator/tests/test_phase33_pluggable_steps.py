@@ -30,6 +30,8 @@ from orchestrator.manifest import (
 from orchestrator.steps import StepError, _strip_frontmatter, execute_script
 from orchestrator.workflow import IncompatibleManifestError
 
+from tests.conftest import with_standard_build
+
 
 # --------------------------- manifest loader ---------------------------
 
@@ -223,7 +225,7 @@ async def test_approval_gate_seam_fires_and_completes(monkeypatch, tmp_path):
     manifest = WorkflowManifest(
         steps={"before_commit": [ApprovalGateStep(id="security_gate", ask="approve?")]}
     )
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: manifest)
+    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: with_standard_build(manifest))
 
     from orchestrator.workflow import build_workflow
 
@@ -277,7 +279,7 @@ async def test_before_commit_step_fires_once_before_commit_passes(monkeypatch, t
     manifest = WorkflowManifest(
         steps={"before_commit": [ScriptStep(id="probe", path="x.sh")]}
     )
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: manifest)
+    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: with_standard_build(manifest))
 
     from orchestrator.workflow import build_workflow
 
@@ -308,7 +310,7 @@ async def test_approval_gate_abort_stops_run(monkeypatch, tmp_path):
     manifest = WorkflowManifest(
         steps={"before_commit": [ApprovalGateStep(id="signoff", ask="proceed?")]}
     )
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: manifest)
+    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: with_standard_build(manifest))
 
     from orchestrator.workflow import build_workflow
 
@@ -365,7 +367,7 @@ async def test_ai_agent_human_in_loop_pauses_then_proceeds(monkeypatch, tmp_path
             ]
         }
     )
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: manifest)
+    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: with_standard_build(manifest))
 
     from orchestrator.workflow import build_workflow
 
@@ -414,7 +416,7 @@ async def test_ai_agent_human_in_loop_abort_stops_run(monkeypatch, tmp_path):
             ]
         }
     )
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: manifest)
+    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: with_standard_build(manifest))
 
     from orchestrator.workflow import build_workflow
 
@@ -435,11 +437,11 @@ async def test_ai_agent_human_in_loop_abort_stops_run(monkeypatch, tmp_path):
 async def test_manifest_change_mid_run_refuses_resume(monkeypatch, tmp_path):
     _patch(_Stubs(), monkeypatch)
 
-    manifest_a = WorkflowManifest(
-        steps={"before_commit": [ApprovalGateStep(id="g", ask="v1")]}
+    manifest_a = with_standard_build(
+        WorkflowManifest(steps={"before_commit": [ApprovalGateStep(id="g", ask="v1")]})
     )
-    manifest_b = WorkflowManifest(
-        steps={"before_commit": [ApprovalGateStep(id="g", ask="v2-changed")]}
+    manifest_b = with_standard_build(
+        WorkflowManifest(steps={"before_commit": [ApprovalGateStep(id="g", ask="v2-changed")]})
     )
     state = {"current": manifest_a}
     monkeypatch.setattr(
