@@ -81,7 +81,7 @@ The `orchestrator/` subdirectory is a separate Python package (`bostadskalkyl-or
 **Runtime:** Python 3.12, pyenv virtualenv `bk-orchestrator-env`. The MCP server must always be invoked via the full path `/Users/avardon/.pyenv/versions/bk-orchestrator-env/bin/python` — pyenv auto-activation does not apply to MCP subprocess spawns.
 
 **Key modules:**
-- `orchestrator/workflow.py` — LangGraph `@entrypoint` with three `@task` units: planning → implementation → QA, with an impl/QA retry loop (up to `max_retries`, default 3). Phase 15 split commit/push/PR into three separate `@task`s for idempotent resumability.
+- `orchestrator/workflow.py` — LangGraph `@entrypoint` spine: `verify_clean_tree → plan → branch → [work] → summarize → docs → commit → push → pr`. The `work` region is a single ordered `[[steps.work]]` list (Phase 49) declared in `orchestrator.toml`; the impl⇄QA loop is itself a declarative `build` step in that list (producer ⇄ gate, retrying with the gate's feedback up to `retry.max`). Phase 15 split commit/push/PR into three separate `@task`s for idempotent resumability.
 - `orchestrator/agents/planning.py` — calls Claude via Anthropic SDK with structured output (forced tool use) to produce a `PlanResult`
 - `orchestrator/agents/implementation.py` — spawns a Claude agent (claude-agent-sdk) to edit files per the plan; supports `implement` and `fix` modes
 - `orchestrator/agents/qa.py` — read-only Claude agent that checks the uncommitted diff against the plan; emits PASS or FAIL
@@ -92,7 +92,7 @@ The `orchestrator/` subdirectory is a separate Python package (`bostadskalkyl-or
 
 **Checkpointing:** `AsyncSqliteSaver` writes to `.orchestrator/checkpoints.db`. On mid-run crash, re-run with the same `thread_id` to resume. Completed `@task`s are skipped (their outputs are replayed from the checkpoint).
 
-**Config file:** `orchestrator.toml` at the project root. Controls `max_retries`, model IDs per agent, `human_in_loop` gates (plan approval, branch, impl, QA failure, PR), branch slug length, and PR settings.
+**Config file:** `orchestrator.toml` at the project root. Tunes the fixed spine via `[workflow.*]` / `[pre_hooks]` / `[pr]` tables (model IDs per agent, `human_in_loop` gates for plan/branch/impl/QA-failure/PR, branch slug length, PR settings) and declares the variable steps in the one `[[steps.work]]` list. The impl⇄QA build's retry budget lives on its `retry.max` (the legacy `[workflow.qa].max_retries` / `ORCHESTRATOR_MAX_RETRIES` are retained for back-compat but no longer drive the loop). `[[steps.work]]` step types: `script`, `approval_gate`, `ai_agent`, `build`; `build` produce/gate reference `[steps.defs.*]` definitions.
 
 **MCP tool flow:**
 1. `implement_feature(request)` — starts a workflow, always pauses at plan approval, returns `{status: "awaiting_approval", thread_id, plan}`

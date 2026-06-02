@@ -83,8 +83,8 @@ Two layers of review ([qa_scripts.py](orchestrator/qa_scripts.py),
 2. A read-only Claude agent then reviews the diff against the approved plan
    and gives a PASS or FAIL verdict.
 
-On FAIL, the workflow retries implementation (up to `max_retries` times),
-passing the failure notes so the agent knows exactly what to fix.
+On FAIL, the workflow retries implementation (up to the build step's
+`retry.max`), passing the failure notes so the agent knows exactly what to fix.
 
 ### 5. Audit trails — what happened and why
 
@@ -177,8 +177,8 @@ Four MCP tools are available in Claude Code:
 - Something you can run on your own repos or borrow patterns from.
 
 **This isn't:**
-- A general-purpose framework. The workflow shape is fixed; what changes
-  per project is the prompts, scripts, and config.
+- A general-purpose framework. The spine is fixed; what changes per project is
+  the prompts, scripts, config, and the `[[steps.work]]` list.
 - Enterprise-ready. No multi-tenancy, no governance dashboard.
 - A product.
 
@@ -187,8 +187,11 @@ Four MCP tools are available in Claude Code:
   they can share blind spots. The scripted gates run first and are the
   stronger check.
 - One plan per request — no fan-out to multiple agents working in parallel.
-- The workflow shape is hard-coded in Python; a config-driven design is
-  planned but not built ([PLUGGABLE_WORKFLOW.md](PLUGGABLE_WORKFLOW.md)).
+- The spine (clean-tree → plan → branch → … → commit → push → PR) is
+  hard-coded in Python. The one project-specific region between branch and
+  summarize is config-driven: an ordered `[[steps.work]]` list in
+  `orchestrator.toml` (the impl⇄QA loop is itself a declarative `build` step in
+  it). See `orchestrator.example.toml` for the worked example.
 
 ---
 
