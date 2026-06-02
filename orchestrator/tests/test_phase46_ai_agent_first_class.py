@@ -36,7 +36,7 @@ async def test_custom_tools_and_timeout_threaded(monkeypatch, tmp_path):
     _write_agent(tmp_path)
     captured = _capture_runner(monkeypatch)
     step = AiAgentStep(
-        id="x", agent="impl.md", dir=".orchestrator/agents",
+        id="x", agent=".orchestrator/agents/impl.md",
         allowed_tools=["Read", "Bash"], disallowed_tools=["Write"], timeout=42,
     )
     await execute_ai_agent(step, tmp_path, "plan")
@@ -49,7 +49,7 @@ async def test_custom_tools_and_timeout_threaded(monkeypatch, tmp_path):
 async def test_producer_default_tools_when_unset(monkeypatch, tmp_path):
     _write_agent(tmp_path)
     captured = _capture_runner(monkeypatch)
-    step = AiAgentStep(id="x", agent="impl.md", dir=".orchestrator/agents")
+    step = AiAgentStep(id="x", agent=".orchestrator/agents/impl.md")
     await execute_ai_agent(step, tmp_path, "plan")
     # Producer role default: write tools, no denylist, no timeout.
     assert captured["allowed_tools"] == ["Read", "Edit", "Write", "Bash", "Grep"]
@@ -61,7 +61,7 @@ async def test_producer_default_tools_when_unset(monkeypatch, tmp_path):
 async def test_gate_default_tools_are_read_only(monkeypatch, tmp_path):
     _write_agent(tmp_path)
     captured = _capture_runner(monkeypatch)
-    step = AiAgentStep(id="x", agent="impl.md", dir=".orchestrator/agents")
+    step = AiAgentStep(id="x", agent=".orchestrator/agents/impl.md")
     await execute_ai_agent(step, tmp_path, "plan", as_gate=True)
     # Gate role default stays read-only.
     assert captured["allowed_tools"] == ["Read", "Bash", "Grep"]
@@ -75,8 +75,7 @@ def test_manifest_roundtrips_tool_config(tmp_path):
 [[steps.before_commit]]
 id = "x"
 type = "ai_agent"
-agent = "impl.md"
-dir = ".orchestrator/agents"
+agent = ".orchestrator/agents/impl.md"
 allowed_tools = ["Read", "Edit"]
 disallowed_tools = ["Bash"]
 timeout = 99
@@ -92,7 +91,7 @@ timeout = 99
 
 
 def test_tool_config_defaults_unset():
-    step = AiAgentStep(id="x", agent="a.md", dir="d")
+    step = AiAgentStep(id="x", agent="d/a.md")
     assert step.allowed_tools is None
     assert step.disallowed_tools == []
     assert step.timeout is None

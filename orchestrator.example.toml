@@ -115,10 +115,10 @@ timeout = 300
 
 # ---------------------------------------------------------------------------
 # 4) ai_agent @ before_commit — generate a changelog entry, ONCE.
-#    ai_agent steps run a markdown-defined agent loaded from <dir>/<agent>,
-#    where `agent` is the full filename (with extension). `dir` is required and
-#    per-step — point each agent at wherever its prompt lives (there is no
-#    global agents directory). Place costly LLM steps at
+#    ai_agent steps run a markdown-defined agent loaded from `agent`, a single
+#    project-root-relative path with the full filename — point each agent at
+#    wherever its prompt lives (there is no global agents directory). Place
+#    costly LLM steps at
 #    before_commit so they run a single time on the final, passing code (not
 #    once per retry attempt). The agent is given the plan and runs `git diff`
 #    itself; it edits files in the working tree, which the spine then commits.
@@ -144,8 +144,7 @@ timeout = 300
 [[steps.before_commit]]
 id            = "changelog"
 type          = "ai_agent"
-agent         = "changelog.md"      # full filename (with extension)
-dir           = ".orchestrator/agents"  # → .orchestrator/agents/changelog.md (required)
+agent         = ".orchestrator/agents/changelog.md"  # project-root-relative path
 model         = "claude-sonnet-4-6"
 human_in_loop = false               # true = pause to review the agent's output
 
@@ -216,8 +215,7 @@ retry   = { max = 3, on_exhausted = "abort" }   # abort | approval_gate | procee
 # are NOT seam steps themselves; they only run when a block references them.
 [steps.defs.lint-fix]
 type          = "ai_agent"
-agent         = "lint-fixer.md"     # full filename (with extension)
-dir           = ".orchestrator/agents"  # → .orchestrator/agents/lint-fixer.md (required)
+agent         = ".orchestrator/agents/lint-fixer.md"  # project-root-relative path
 model         = "claude-haiku-4-5-20251001"
 human_in_loop = false               # true = review the fix once lint-check passes
 
