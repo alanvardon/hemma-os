@@ -232,7 +232,19 @@ def load_config(path: Path | None = None) -> OrchestratorConfig:
     # guard the config keys without rejecting the manifest table that shares
     # this file.
     data.pop("steps", None)
-    return OrchestratorConfig.model_validate(data)
+    config = OrchestratorConfig.model_validate(data)
+    # Phase 51: the build's human pauses moved onto the build step's own
+    # human_in_loop = { after_producer, on_gate_fail }. The global
+    # [workflow.implementation]/[workflow.qa] human_in_loop flags no longer drive
+    # anything — fail loud rather than silently ignoring a stale `true`.
+    if config.workflow.implementation.human_in_loop or config.workflow.qa.human_in_loop:
+        raise ValueError(
+            "[workflow.implementation].human_in_loop and [workflow.qa].human_in_loop "
+            "no longer control the build's pauses (Phase 51). Configure them on the "
+            "build step instead, e.g. in its [[steps.work]] entry:\n"
+            "    human_in_loop = { after_producer = true, on_gate_fail = true }"
+        )
+    return config
 
 
 def apply_overrides(

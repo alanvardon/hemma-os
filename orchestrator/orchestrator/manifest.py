@@ -198,6 +198,24 @@ class RetryConfig(BaseModel):
     on_exhausted: Literal["abort", "approval_gate", "proceed"] = "abort"
 
 
+class HumanInLoopConfig(BaseModel):
+    """Per-build human pauses (Phase 51). Replaces the global
+    [workflow.implementation]/[workflow.qa] human_in_loop flags, so the pauses
+    work for ANY producer/gate (not only the built-in implementation/qa) and are
+    configured where the build is declared.
+
+    - `after_producer`: pause after the producer(s) run, before the gate(s), on
+      every attempt (the generic replacement for the old implementation_approval).
+    - `on_gate_fail`: pause when a gate fails; reply with an abort word
+      ('abort'/'no'/'stop') to stop the run, anything else to retry (the generic
+      replacement for the old qa_failure). Both default off.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    after_producer: bool = False
+    on_gate_fail: bool = False
+
+
 class BuildStep(_BaseStep):
     """Phase 46: a declarative build step injected at a seam (formerly the
     `retry` block).
@@ -215,6 +233,7 @@ class BuildStep(_BaseStep):
     gate: list[str] = Field(default_factory=list)
     ungated: bool = False
     retry: RetryConfig = Field(default_factory=RetryConfig)
+    human_in_loop: HumanInLoopConfig = Field(default_factory=HumanInLoopConfig)
 
 
 # Steps that can be INJECTED at a seam (a build step is one of them).

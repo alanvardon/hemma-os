@@ -59,7 +59,14 @@ logger = logging.getLogger(__name__)
 # to work; before_commit steps now run before summarize (so they're in its diff).
 # That control-flow reshape is a body change — the bump refuses resume of any
 # pre-49 run.
-WORKFLOW_VERSION = "1.7.0"
+# 1.7.0 → 1.8.0 (Phase 51): the build's two human pauses move off the global
+# [workflow.implementation]/[workflow.qa] human_in_loop flags onto the build
+# step's own human_in_loop = { after_producer, on_gate_fail }, handled inside
+# _run_build_step; the interrupt kinds rename implementation_approval →
+# build_producer_pause and qa_failure → build_gate_failed. The build step's
+# hashed form gains a human_in_loop key and the body's interrupt wiring changes,
+# so the bump refuses resume of any pre-51 run.
+WORKFLOW_VERSION = "1.8.0"
 
 
 from orchestrator.errors import FatalError
@@ -319,8 +326,8 @@ async def run_seam(
     *,
     builtin_producers: dict | None = None,
     builtin_gates: dict | None = None,
-    on_producers_done=None,
-    on_gate_failed=None,
+    thread_id: str | None = None,
+    audit=None,
 ) -> None:
     """Run every injected step at `seam`, in declared order.
 
@@ -335,9 +342,9 @@ async def run_seam(
     Phase 46: a `build` step at this seam dispatches to _run_build_step.
     `builtin_producers`/`builtin_gates` are the spine's own implementation/QA
     callables, injected so a build can reference the built-in `implementation`
-    producer / `qa` gate without a [steps.defs.*] entry; `on_producers_done`/
-    `on_gate_failed` carry the default build's implementation_approval / qa_failure
-    interrupt gates. All four are forwarded to the build engine.
+    producer / `qa` gate without a [steps.defs.*] entry. `thread_id`/`audit` are
+    forwarded so a build's per-step human_in_loop pauses (Phase 51) can emit
+    interrupt audit events.
     """
     steps = manifest.for_seam(seam)
     if not steps:
@@ -389,8 +396,8 @@ async def run_seam(
                 step, manifest, plan_text, check_cancel, usage_by_task,
                 builtin_producers=builtin_producers,
                 builtin_gates=builtin_gates,
-                on_producers_done=on_producers_done,
-                on_gate_failed=on_gate_failed,
+                thread_id=thread_id,
+                audit=audit,
             )
 
 
@@ -403,8 +410,8 @@ async def _run_build_step(
     *,
     builtin_producers: dict | None = None,
     builtin_gates: dict | None = None,
-    on_producers_done=None,
-    on_gate_failed=None,
+    thread_id: str | None = None,
+    audit=None,
 ) -> None:
     """Execute a declarative [[steps.*]] type="build" step (Phase 46).
 
@@ -416,21 +423,68 @@ async def _run_build_step(
     StepResult.passed (script: exit code; ai_agent: the emitted `passed`); on a
     retry, the failing gate's feedback is injected into producer ai_agents.
 
-    `on_producers_done`/`on_gate_failed` are forwarded to the engine — the default
-    build wires its implementation_approval / qa_failure interrupt gates through
-    them. A non-proceed outcome (gate never passed under on_exhausted="abort", or
-    a human aborted under "approval_gate"/on_gate_failed) raises BuildFailed, which
-    the entrypoint body turns into the clean status="failed" return — seams are
-    pre-commit, so nothing is half-shipped. Phase 44: if the block succeeds and a
-    producer ai_agent set human_in_loop, pause once for review of its final
-    output. interrupt() (for on_exhausted="approval_gate", on_gate_failed, and the
-    success review) is reachable because this helper, like run_seam, runs in the
-    entrypoint body.
+    Phase 51: the two human pauses are driven by THIS build step's
+    `human_in_loop` config (not global flags), so they work for any producer/gate:
+    `after_producer` pauses after the producers, before the gates, every attempt
+    (kind `build_producer_pause`); `on_gate_fail` pauses on a failing gate (kind
+    `build_gate_failed`) where an abort word stops the run and anything else
+    retries. A non-proceed outcome (gate never passed under on_exhausted="abort",
+    or a human aborted) raises BuildFailed, which the entrypoint body turns into
+    the clean status="failed" return — seams are pre-commit, so nothing is
+    half-shipped. Phase 44: if the block succeeds and a producer ai_agent set
+    human_in_loop, pause once for review of its final output. interrupt() (for
+    on_exhausted="approval_gate", the gate-fail pause, and the success review) is
+    reachable because this helper, like run_seam, runs in the entrypoint body.
     """
     repo_root = str(find_project_root())
     defs = manifest.defs
     builtin_producers = builtin_producers or {}
     builtin_gates = builtin_gates or {}
+    hil = block_step.human_in_loop
+
+    async def on_producers_done(attempt: int) -> None:
+        # Phase 51: optional pause after the producer(s), before the gate(s),
+        # every attempt — driven by this build's human_in_loop.after_producer
+        # (the generic replacement for the old implementation_approval).
+        if hil.after_producer:
+            if audit is not None and thread_id is not None:
+                emit_event(audit, thread_id, "interrupt",
+                           payload={"kind": "build_producer_pause", "step_id": block_step.id})
+            interrupt({
+                "kind": "build_producer_pause",
+                "step_id": block_step.id,
+                "ask": "Producer complete. Proceed to the gate?",
+                "attempt": attempt,
+            })
+
+    async def on_gate_failed(attempt: int, feedback: str) -> bool:
+        # Always log a gate failure (scripted gates and LLM gates alike) so it's
+        # visible in the log; the retry budget lives on the build's retry.max, so
+        # the message reports the attempt number without a total.
+        logger.error(
+            "gate FAIL (attempt %d):\n%s",
+            attempt,
+            feedback or "(no failure details)",
+        )
+        # Phase 51: optional pause on a gate failure — driven by this build's
+        # human_in_loop.on_gate_fail (the generic replacement for the old
+        # qa_failure). An abort word stops the run; anything else retries.
+        if hil.on_gate_fail:
+            if audit is not None and thread_id is not None:
+                emit_event(audit, thread_id, "interrupt",
+                           payload={"kind": "build_gate_failed", "step_id": block_step.id})
+            decision = interrupt({
+                "kind": "build_gate_failed",
+                "step_id": block_step.id,
+                "failures": feedback,
+                "ask": (
+                    f"Gate FAIL (attempt {attempt}). "
+                    "Retry? Reply 'yes' or 'abort'."
+                ),
+            })
+            if isinstance(decision, str) and decision.strip().lower() in _GATE_ABORT_WORDS:
+                return False  # stop now; don't spend another attempt
+        return True
     # Final result of each producer, so a human_in_loop producer's gate-passing
     # output can be surfaced for review once the block succeeds (Phase 44). On
     # resume the producer @tasks replay from checkpoint and repopulate this.
@@ -966,61 +1020,21 @@ async def build_workflow(
                         detail=qa_result.failures or "",
                     )
 
-                async def _on_producers_done(attempt: int) -> None:
-                    # Phase 13: optional pause after the producer, before QA
-                    # (the default build only), driven by
-                    # [workflow.implementation].human_in_loop.
-                    if config.workflow.implementation.human_in_loop:
-                        emit_event(_audit, thread_id, "interrupt", payload={"kind": "implementation_approval"})
-                        interrupt({
-                            "kind": "implementation_approval",
-                            "ask": "Implementation complete. Proceed to QA?",
-                        })
-
-                async def _on_gate_failed(attempt: int, feedback: str) -> bool:
-                    # Log QA failure at ERROR level so scripted-gate failures
-                    # (Phase 28) and LLM failures are both visible in the log.
-                    # Phase 47: the retry budget now lives on the build step's
-                    # `retry.max` (orchestrator.toml), not [workflow.qa].max_retries,
-                    # so the message reports the attempt number without a total
-                    # (the engine owns the budget).
-                    logger.error(
-                        "QA FAIL (attempt %d):\n%s",
-                        attempt,
-                        feedback or "(no failure details)",
-                    )
-                    # Phase 13: optional gate on QA failure — user can abort
-                    # rather than burning another retry attempt.
-                    if config.workflow.qa.human_in_loop:
-                        emit_event(_audit, thread_id, "interrupt", payload={"kind": "qa_failure"})
-                        decision = interrupt({
-                            "kind": "qa_failure",
-                            "failures": feedback,
-                            "ask": (
-                                f"QA FAIL (attempt {attempt}). "
-                                "Retry? Reply 'yes' or 'abort'."
-                            ),
-                        })
-                        if decision == "abort":
-                            return False  # stop now; don't spend another attempt
-                    return True
-
-                # The work build's two interrupt gates: implementation_approval
-                # (before QA) and qa_failure (on a failing QA attempt), gated by
-                # [workflow.implementation].human_in_loop / [workflow.qa].human_in_loop
-                # (both default off). They only do anything when a build actually
-                # uses the built-in implementation producer / qa gate AND the human
-                # opted in, so wiring them unconditionally is harmless for a build
-                # that swaps in its own producer/gate. Exhausting the budget under
-                # on_exhausted="abort" raises BuildFailed → the clean status="failed"
-                # return below (no commit, no PR).
+                # The work build's two human pauses are configured PER BUILD via
+                # its human_in_loop = { after_producer, on_gate_fail } (Phase 51),
+                # handled inside _run_build_step — no body-level closures and no
+                # global [workflow.implementation]/[workflow.qa] flags (load_config
+                # errors if those are still set). thread_id/_audit are forwarded so
+                # those pauses can emit interrupt audit events. Exhausting the
+                # budget under on_exhausted="abort" raises BuildFailed → the clean
+                # status="failed" return below (no commit, no PR).
                 await run_seam(
                     "work", manifest, plan_result.plan_text,
                     _check_cancel, usage_by_task,
                     builtin_producers={"implementation": _builtin_implementation},
                     builtin_gates={"qa": _builtin_qa},
-                    on_producers_done=_on_producers_done,
-                    on_gate_failed=_on_gate_failed,
+                    thread_id=thread_id,
+                    audit=_audit,
                 )
 
                 # The passing QA verdict, when the built-in QA gate ran (the default

@@ -25,30 +25,38 @@ from orchestrator.manifest import BuildStep, RetryConfig, WorkflowManifest
 from orchestrator.paths import find_project_root
 
 
-def standard_build() -> BuildStep:
+def standard_build(human_in_loop: dict | None = None) -> BuildStep:
     """The spine's impl⇄QA build step (Phase 47: declared, not synthesized).
 
     The real orchestrator.toml declares this exact block as the first
     [[steps.work]] entry. Tests run with no orchestrator.toml, so the manifest
-    fixtures inject it."""
+    fixtures inject it. Pass `human_in_loop` (Phase 51), e.g.
+    {"on_gate_fail": True}, to turn on the build's per-step pauses."""
+    kwargs: dict = {}
+    if human_in_loop is not None:
+        kwargs["human_in_loop"] = human_in_loop
     return BuildStep(
         id="build",
         produce=["implementation"],
         gate=["qa"],
         retry=RetryConfig(max=3, on_exhausted="abort"),
+        **kwargs,
     )
 
 
-def with_standard_build(manifest: WorkflowManifest | None = None) -> WorkflowManifest:
+def with_standard_build(
+    manifest: WorkflowManifest | None = None, human_in_loop: dict | None = None
+) -> WorkflowManifest:
     """Return `manifest` with the standard impl⇄QA build prepended to the `work` list.
 
     For tests that override load_manifest with their own work steps but still
     need the spine's build to run (pre-47 they relied on the synthesized default;
-    now the build is explicit, so it must be present in the manifest)."""
+    now the build is explicit, so it must be present in the manifest). Pass
+    `human_in_loop` to enable the build's per-step pauses (Phase 51)."""
     if manifest is None:
-        return WorkflowManifest(steps={"work": [standard_build()]})
+        return WorkflowManifest(steps={"work": [standard_build(human_in_loop)]})
     steps = {k: list(v) for k, v in manifest.steps.items()}
-    steps["work"] = [standard_build(), *steps.get("work", [])]
+    steps["work"] = [standard_build(human_in_loop), *steps.get("work", [])]
     return WorkflowManifest(steps=steps, defs=manifest.defs)
 
 

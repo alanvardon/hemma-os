@@ -26,13 +26,15 @@ def test_workflow_implementation_roundtrip(tmp_path):
     p.write_text(
         "[workflow.implementation]\n"
         'model = "claude-opus-4-7"\n'
-        "human_in_loop = true\n"
+        # human_in_loop on implementation/qa is rejected at load (Phase 51) —
+        # the build's pauses live on the build step. Other fields still round-trip.
+        "human_in_loop = false\n"
         'allowed_tools = ["Read", "Bash"]\n'
         'disallowed_tools = ["Write"]\n'
     )
     impl = load_config(p).workflow.implementation
     assert impl.model == "claude-opus-4-7"
-    assert impl.human_in_loop is True
+    assert impl.human_in_loop is False
     assert impl.allowed_tools == ["Read", "Bash"]
     assert impl.disallowed_tools == ["Write"]
 

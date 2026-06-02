@@ -30,6 +30,8 @@ scripts_timeout = 60
 # Built-in workflow steps. One [workflow.<step>] table per spine step:
 #   model            — omit to inherit default_model
 #   human_in_loop    — pause with an interrupt() at that stage boundary
+#                      (planning / branch / commit only; the build's pauses live
+#                      on the build step — see [[steps.work]])
 #   allowed_tools    — agent tool allowlist (implementation / qa)
 #   disallowed_tools — agent tool denylist
 #   timeout          — wall-clock seconds for the agent loop (omit = no limit)
@@ -44,12 +46,16 @@ max_slug_length = 50     # kebab-case slug length in the branch name (slug part 
 human_in_loop   = false  # pause before the feature branch is created
 
 [workflow.implementation]
-human_in_loop    = false  # pause after each implementation attempt, before QA
+# Phase 51: the "pause after the producer, before the gate" pause moved onto the
+# build step's human_in_loop = { after_producer = true } (see [[steps.work]]).
+# Setting human_in_loop here is now an error at load time.
 allowed_tools    = ["Read", "Edit", "Write", "Bash"]
 disallowed_tools = []
 
 [workflow.qa]
-human_in_loop    = false  # pause on QA FAIL — lets you abort instead of retrying
+# Phase 51: the "pause on a QA FAIL" pause moved onto the build step's
+# human_in_loop = { on_gate_fail = true } (see [[steps.work]]). Setting
+# human_in_loop here is now an error at load time.
 allowed_tools    = ["Read", "Grep", "Bash"]
 disallowed_tools = []
 # Phase 47: the impl⇄QA retry budget now lives on the build step's `retry.max`
@@ -168,8 +174,13 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # either, declare your own def under that id — e.g. [steps.defs.qa] with a
 # script or ai_agent — or change `produce` / `gate` to your own ids. Remove
 # this block entirely and a run will pass through with status="no_changes"
-# (nothing produces a diff). The interrupt gates fire only if you opt in via
-# [workflow.implementation].human_in_loop / [workflow.qa].human_in_loop.
+# (nothing produces a diff).
+#
+# Phase 51: opt into the two human pauses on the build step itself via
+# human_in_loop = { after_producer, on_gate_fail } (both default off):
+#   after_producer — pause after the producer, before the gate, every attempt
+#   on_gate_fail   — pause on a gate FAIL; reply 'abort' to stop, else retry
+# These work for ANY producer/gate, not just the built-in implementation/qa.
 #
 # This is the first entry in the work list; any [[steps.work]] you add runs
 # after it, in declared order.
@@ -179,6 +190,7 @@ type    = "build"
 produce = ["implementation"]                  # built-in producer (the coder agent)
 gate    = ["qa"]                              # built-in gate (the QA agent)
 retry   = { max = 3, on_exhausted = "abort" }  # attempts before giving up
+# human_in_loop = { after_producer = false, on_gate_fail = false }  # opt-in pauses
 
 # --- Built-in spine agents: docs (Phase 41) + summarizer (Phase 42) -----------
 # The docs agent used to be a live pluggable step here. It is now

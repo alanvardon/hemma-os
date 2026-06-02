@@ -96,9 +96,13 @@ timeout = 30
 #    either, declare your own def under that id, or change produce/gate to your
 #    own ids — e.g. produce=["my-coder"], gate=["my-qa"] — to drive a non-Claude
 #    coder or replace QA. `ungated = true` opts out of gating entirely (e.g. dbt:
-#    the producer runs once, no gate). The built-in build honours
-#    [workflow.implementation].human_in_loop / [workflow.qa].human_in_loop; a
-#    swapped-in ai_agent producer can use its own human_in_loop review instead.
+#    the producer runs once, no gate).
+#
+#    Human pauses are per-build (Phase 51) via
+#    human_in_loop = { after_producer, on_gate_fail } (both default off):
+#      after_producer — pause after the producer, before the gate, every attempt
+#      on_gate_fail   — pause on a gate FAIL; reply 'abort' to stop, else retry
+#    They work for any producer/gate, not just the built-in implementation/qa.
 #
 #    Remove this block and a run passes through producing nothing →
 #    status="no_changes" (no commit, no PR).
