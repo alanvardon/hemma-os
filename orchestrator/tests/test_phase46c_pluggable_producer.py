@@ -1,18 +1,16 @@
-"""Phase 46c — pluggable producer + the after_branch build seam.
+"""Phase 46c / 47 — pluggable producer + the after_branch build seam.
 
 The impl⇄QA loop is no longer inline in the workflow body: it runs through
-run_seam("after_branch") as a declarative `build` step. With no
-[[steps.after_branch]] build declared, the spine synthesizes the default one
-(produce=["implementation"], gate=["qa"]) so zero-config reproduces the old
-loop exactly (covered by test_phase7 / test_phase42_spine_gates, which run with
-no orchestrator.toml). These tests cover the new degrees of freedom:
+run_seam("after_branch") as a declarative `build` step, declared explicitly in
+orchestrator.toml (Phase 47 dropped the synthesized default). The standard
+impl/qa build running with no extra config is covered by test_phase7 /
+test_phase42_spine_gates (the conftest fixture supplies it). These tests cover
+the new degrees of freedom:
 
-1. _ensure_default_build synthesizes the default build only when the project
-   declares none.
-2. A user-declared after_branch build with SWAPPED producer + gate ids runs
+1. A user-declared after_branch build with SWAPPED producer + gate ids runs
    end-to-end on the generic engine — the built-in implementation/QA agents are
    never touched.
-3. Declaring a [steps.defs.*] entry whose id IS a built-in (`qa`) overrides the
+2. Declaring a [steps.defs.*] entry whose id IS a built-in (`qa`) overrides the
    built-in: the build runs the user's def, not the spine's QA agent.
 """
 
@@ -30,51 +28,6 @@ from orchestrator.manifest import (
     StepResult,
     WorkflowManifest,
 )
-from orchestrator.workflow import _DEFAULT_BUILD_ID, _ensure_default_build
-
-
-# --------------------------- _ensure_default_build ---------------------------
-
-
-def test_default_build_synthesized_when_absent():
-    m = WorkflowManifest()
-    m2, injected = _ensure_default_build(m, max_retries=5)
-    assert injected is True
-    builds = [s for s in m2.for_seam("after_branch") if isinstance(s, BuildStep)]
-    assert len(builds) == 1
-    assert builds[0].id == _DEFAULT_BUILD_ID
-    assert builds[0].produce == ["implementation"]
-    assert builds[0].gate == ["qa"]
-    assert builds[0].retry.max == 5  # taken from [workflow.qa].max_retries
-    assert builds[0].retry.on_exhausted == "abort"
-    # The original manifest is not mutated.
-    assert m.for_seam("after_branch") == []
-
-
-def test_default_build_not_synthesized_when_user_declares_one():
-    user = BuildStep(id="mybuild", produce=["coder"], gate=["check"])
-    m = WorkflowManifest(steps={"after_branch": [user]})
-    m2, injected = _ensure_default_build(m, max_retries=3)
-    assert injected is False
-    assert m2 is m  # returned unchanged
-    builds = [s for s in m2.for_seam("after_branch") if isinstance(s, BuildStep)]
-    assert [b.id for b in builds] == ["mybuild"]
-
-
-def test_default_build_prepended_before_other_after_branch_steps():
-    # A non-build step at after_branch (e.g. a approval_gate) coexists with the
-    # synthesized default build, which is ordered FIRST.
-    from orchestrator.manifest import ApprovalGateStep
-
-    gate = ApprovalGateStep(id="signoff", ask="ok?")
-    m = WorkflowManifest(steps={"after_branch": [gate]})
-    m2, injected = _ensure_default_build(m, max_retries=3)
-    assert injected is True
-    seam = m2.for_seam("after_branch")
-    assert isinstance(seam[0], BuildStep)
-    assert seam[1] is gate
-
-
 # --------------------------- end-to-end: swapped ids -------------------------
 
 

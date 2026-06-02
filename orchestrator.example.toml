@@ -228,23 +228,23 @@ timeout = 60
 
 
 # ---------------------------------------------------------------------------
-# 6) The default build @ after_branch — and how to swap it (Phase 46).
-#    The spine's impl ⇄ qa loop is itself a build step at the after_branch seam.
-#    You don't have to write it: with no [[steps.after_branch]] build declared,
-#    the workflow synthesizes this exact step —
+# 6) The build @ after_branch — the impl ⇄ qa loop, declared explicitly (Phase 47).
+#    The spine's core "write code, then check it" loop is a build step at the
+#    after_branch seam. It is NOT synthesized for you — you declare it, so what
+#    runs is exactly what's in the file (see the live block in orchestrator.toml):
 #
 #       [[steps.after_branch]]
 #       id      = "build"
 #       type    = "build"
-#       produce = ["implementation"]    # built-in producer (the spine's agent)
-#       gate    = ["qa"]                # built-in gate (the spine's QA agent)
-#       retry   = { max = <[workflow.qa].max_retries>, on_exhausted = "abort" }
+#       produce = ["implementation"]    # built-in producer (the coder agent)
+#       gate    = ["qa"]                # built-in gate (the QA agent)
+#       retry   = { max = 3, on_exhausted = "abort" }
 #
 #    `implementation` and `qa` are BUILT-IN ids: a build may reference them with
-#    no [steps.defs.*] entry, and they resolve to the spine's own agents. To swap
-#    either, declare your own def under that id (overrides the built-in) OR
-#    declare your own [[steps.after_branch]] build with different ids — e.g. to
-#    drive a non-Claude coder, or to replace QA with your own gate:
+#    no [steps.defs.*] entry, and they resolve to the spine's own agents
+#    (configured under [workflow.implementation] / [workflow.qa]). To swap
+#    either, declare your own def under that id, or change produce/gate to your
+#    own ids — e.g. to drive a non-Claude coder or replace QA with your own gate:
 #
 #       [[steps.after_branch]]
 #       id      = "build"
@@ -254,8 +254,10 @@ timeout = 60
 #       retry   = { max = 3, on_exhausted = "abort" }
 #       # ungated = true                # opt out of gating entirely (e.g. dbt)
 #
-#    Declaring ANY build at after_branch suppresses the default — yours runs
-#    instead. A user-declared build runs on the pure engine (Phase-44 producer
-#    review + on_exhausted); the default build additionally honours
-#    [workflow.implementation].human_in_loop and [workflow.qa].human_in_loop.
+#    There is exactly one build at after_branch — replace its produce/gate to
+#    customise. The built-in `implementation`/`qa` build honours
+#    [workflow.implementation].human_in_loop and [workflow.qa].human_in_loop;
+#    a swapped-in ai_agent producer can use its own human_in_loop review instead.
+#    Omit the after_branch build entirely and a run passes through producing
+#    nothing → status="no_changes" (no commit, no PR).
 # ---------------------------------------------------------------------------

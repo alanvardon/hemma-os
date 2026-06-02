@@ -30,6 +30,8 @@ from orchestrator.manifest import (
     WorkflowManifest,
     load_manifest,
 )
+
+from tests.conftest import with_standard_build
 # --------------------------- parsing / validation ---------------------------
 
 
@@ -377,7 +379,7 @@ def _fake_execute_script_factory(gate_passes_on_attempt: int | None):
 async def _drive(monkeypatch, tmp_path, manifest, fake_execute_script):
     stubs = _Stubs()
     _patch_spine(stubs, monkeypatch)
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda *a, **k: manifest)
+    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda *a, **k: with_standard_build(manifest))
     monkeypatch.setattr("orchestrator.workflow.execute_script", fake_execute_script)
 
     from orchestrator.workflow import build_workflow
@@ -479,7 +481,7 @@ async def test_producer_human_in_loop_reviews_after_block_succeeds(monkeypatch, 
 
     stubs = _Stubs()
     _patch_spine(stubs, monkeypatch)
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda *a, **k: _hil_block_manifest())
+    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda *a, **k: with_standard_build(_hil_block_manifest()))
     monkeypatch.setattr("orchestrator.workflow.execute_script", fake_script)
     monkeypatch.setattr("orchestrator.workflow.execute_ai_agent", fake_agent)
 
@@ -516,7 +518,7 @@ async def test_producer_human_in_loop_no_pause_on_first_try(monkeypatch, tmp_pat
 
     stubs = _Stubs()
     _patch_spine(stubs, monkeypatch)
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda *a, **k: _hil_block_manifest())
+    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda *a, **k: with_standard_build(_hil_block_manifest()))
     monkeypatch.setattr("orchestrator.workflow.execute_script", fake_script)
     monkeypatch.setattr("orchestrator.workflow.execute_ai_agent", fake_agent)
 
@@ -549,7 +551,7 @@ async def test_producer_human_in_loop_abort_stops_run(monkeypatch, tmp_path):
 
     stubs.commit = track_commit
     _patch_spine(stubs, monkeypatch)
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda *a, **k: _hil_block_manifest())
+    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda *a, **k: with_standard_build(_hil_block_manifest()))
     monkeypatch.setattr("orchestrator.workflow.execute_script", fake_script)
     monkeypatch.setattr("orchestrator.workflow.execute_ai_agent", fake_agent)
 
@@ -579,7 +581,7 @@ async def test_producer_human_in_loop_no_review_when_exhausted_proceed(monkeypat
     _patch_spine(stubs, monkeypatch)
     monkeypatch.setattr(
         "orchestrator.workflow.load_manifest",
-        lambda *a, **k: _hil_block_manifest(on_exhausted="proceed", max_retries=2),
+        lambda *a, **k: with_standard_build(_hil_block_manifest(on_exhausted="proceed", max_retries=2)),
     )
     monkeypatch.setattr("orchestrator.workflow.execute_script", fake_script)
     monkeypatch.setattr("orchestrator.workflow.execute_ai_agent", fake_agent)
