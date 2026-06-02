@@ -47,7 +47,12 @@ logger = logging.getLogger(__name__)
 # with no after_branch build now reaches the empty-diff guard and returns
 # status="no_changes" rather than running an invisible default loop. Removing the
 # synthesis step is a body change; the bump refuses resume of any pre-47 run.
-WORKFLOW_VERSION = "1.5.0"
+# 1.5.0 → 1.6.0 (Phase 48): AiAgentStep's `dir` + `agent` split is merged into a
+# single project-root-relative `agent` path. The ai_agent @task signature drops
+# its `dir` positional and the step's hashed form changes (no `dir` key), so a
+# pre-48 checkpoint would replay a @task with the wrong arity — the bump refuses
+# resume of any pre-48 run. (Config-shape change only; no control-flow reshape.)
+WORKFLOW_VERSION = "1.6.0"
 
 
 from orchestrator.errors import FatalError
@@ -242,7 +247,6 @@ def _make_ai_agent_task(step_id: str, *, as_gate: bool = False):
     async def run_ai_agent_step(
         step_id: str,
         agent: str,
-        dir: str,
         model: str,
         repo_root: str,
         plan_text: str,
@@ -250,7 +254,7 @@ def _make_ai_agent_task(step_id: str, *, as_gate: bool = False):
         feedback: str | None = None,
     ) -> StepResult:
         return await execute_ai_agent(
-            AiAgentStep(id=step_id, agent=agent, dir=dir, model=model),
+            AiAgentStep(id=step_id, agent=agent, model=model),
             Path(repo_root),
             plan_text,
             feedback=feedback,
@@ -354,7 +358,7 @@ async def run_seam(
         elif isinstance(step, AiAgentStep):
             step_task = _make_ai_agent_task(step.id)
             result = await step_task(
-                step.id, step.agent, step.dir, step.model, repo_root, plan_text, attempt
+                step.id, step.agent, step.model, repo_root, plan_text, attempt
             )
             if result.usage:
                 usage_by_task.setdefault(step.id, []).append(result.usage)
@@ -442,7 +446,7 @@ async def _run_build_step(
         else:  # AiAgentStep — feedback is injected into its user message
             step_task = _make_ai_agent_task(d.id)
             result = await step_task(
-                d.id, d.agent, d.dir, d.model, repo_root, plan_text, 0, feedback
+                d.id, d.agent, d.model, repo_root, plan_text, 0, feedback
             )
         if result.usage:
             usage_by_task.setdefault(d.id, []).append(result.usage)
@@ -463,7 +467,7 @@ async def _run_build_step(
             result = await step_task(d.id, d.path, d.timeout, repo_root)
         else:  # AiAgentStep gate — emits a `passed` verdict, runs read-only
             step_task = _make_ai_agent_task(d.id, as_gate=True)
-            result = await step_task(d.id, d.agent, d.dir, d.model, repo_root, plan_text)
+            result = await step_task(d.id, d.agent, d.model, repo_root, plan_text)
         if result.usage:
             usage_by_task.setdefault(d.id, []).append(result.usage)
         return result

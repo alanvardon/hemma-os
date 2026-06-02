@@ -27,8 +27,7 @@ TOML shape (everything optional; no [steps] table = no injected steps):
     [[steps.before_commit]]
     id    = "docs"
     type  = "ai_agent"
-    agent = "docs.md"         # full filename (with extension)
-    dir   = "team/agents"     # → team/agents/docs.md (per-step, required)
+    agent = "team/agents/docs.md"   # project-root-relative path (full filename)
     model = "claude-sonnet-4-6"
 
     [[steps.before_commit]]
@@ -50,8 +49,7 @@ under [steps.defs.*]:
 
     [steps.defs.lint-fix]
     type  = "ai_agent"
-    agent = "lint-fixer.md"
-    dir   = "team/agents"
+    agent = "team/agents/lint-fixer.md"
 
     [steps.defs.lint-check]
     type = "script"
@@ -146,14 +144,18 @@ class ApprovalGateStep(_BaseStep):
 
 
 class AiAgentStep(_BaseStep):
+    # Phase 48: forbid unknown keys so the merged-away `dir` (and any typo) fails
+    # at load time with a clear "extra inputs are not permitted" error, rather
+    # than being silently ignored and surfacing later as a confusing
+    # "agent file not found".
+    model_config = ConfigDict(extra="forbid")
     type: Literal["ai_agent"] = "ai_agent"
-    # The system prompt is <dir>/<agent>, relative to the project root. `agent`
-    # is the full filename INCLUDING the extension (e.g. "docs.md") — no .md is
-    # appended for you. `dir` is required and per-step — each ai_agent points at
-    # wherever its prompt lives, so agents can be stored anywhere (there is no
-    # global agents_dir).
+    # `agent` is the system prompt's path relative to the project root, full
+    # filename INCLUDING the extension (e.g. "team/agents/docs.md") — no .md is
+    # appended for you. It's a single per-step path, so agents can live anywhere
+    # (there is no global agents_dir). Phase 48: the old `dir` + `agent` split
+    # was merged into this one field.
     agent: str
-    dir: str
     model: str = "claude-sonnet-4-6"
     # Optional tool/timeout config (Phase 46a) so an ai_agent def is a first-class
     # producer/gate. When `allowed_tools` is None, the role default applies:
@@ -289,7 +291,7 @@ class WorkflowManifest(BaseModel):
 
 
 def _agent_file(project_root: Path, step: AiAgentStep) -> Path:
-    return project_root / step.dir / step.agent
+    return project_root / step.agent
 
 
 def _validate_build_step(step: BuildStep, defs: dict[str, StepDef]) -> None:
@@ -410,7 +412,7 @@ def load_manifest(
                 if not _agent_file(project_root, definition).exists():
                     raise ManifestError(
                         f"step def {def_id!r}: agent file not found at "
-                        f"{definition.dir}/{definition.agent}."
+                        f"{definition.agent}."
                     )
             defs[def_id] = definition
 
@@ -456,7 +458,7 @@ def load_manifest(
                 if not _agent_file(project_root, step).exists():
                     raise ManifestError(
                         f"step {step.id!r}: agent file not found at "
-                        f"{step.dir}/{step.agent}."
+                        f"{step.agent}."
                     )
             elif isinstance(step, BuildStep):
                 _validate_build_step(step, defs)

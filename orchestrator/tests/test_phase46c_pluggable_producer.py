@@ -112,8 +112,8 @@ async def test_swapped_producer_and_gate_run_end_to_end(monkeypatch, tmp_path):
             ]
         },
         defs={
-            "my-coder": AiAgentStep(id="my-coder", agent="coder.md", dir=".orchestrator/agents"),
-            "my-qa": AiAgentStep(id="my-qa", agent="qa.md", dir=".orchestrator/agents"),
+            "my-coder": AiAgentStep(id="my-coder", agent=".orchestrator/agents/coder.md"),
+            "my-qa": AiAgentStep(id="my-qa", agent=".orchestrator/agents/qa.md"),
         },
     )
 

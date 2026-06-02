@@ -119,11 +119,11 @@ include_content = false   # if true, also log prompt/result content (verbose)
 #                 (must be chmod +x with a shebang — see NOTES.md)
 #   approval_gate  — pause for a decision: reply 'abort' (or 'no'/'stop') to stop
 #                 the run, any other reply to proceed
-#   ai_agent   — run a markdown agent at <dir>/<agent>, where `agent` is the
-#                 full filename (with extension) and `dir` is a required
-#                 per-step directory (store agents wherever you like).
-#                 Set human_in_loop = true to pause for review AFTER it runs
-#                 (same abort/proceed reply as approval_gate).
+#   ai_agent   — run a markdown agent whose prompt is at `agent`, a single
+#                 project-root-relative path with the full filename (store
+#                 agents wherever you like). Set human_in_loop = true to pause
+#                 for review AFTER it runs (same abort/proceed reply as
+#                 approval_gate).
 #   build       — run producer step(s), then gate step(s), re-running the
 #                 producers with the failing gate's feedback until a gate passes
 #                 or retry.max is exhausted (Phase 46). produce/gate reference
@@ -148,8 +148,7 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # [[steps.before_commit]]
 # id            = "docs"
 # type          = "ai_agent"
-# agent         = "docs.md"          # full filename (with extension)
-# dir           = ".orchestrator/agents"  # → .orchestrator/agents/docs.md (required)
+# agent         = ".orchestrator/agents/docs.md"  # project-root-relative path
 # model         = "claude-sonnet-4-6"
 # human_in_loop = false              # true = pause to review the agent's output
 #
