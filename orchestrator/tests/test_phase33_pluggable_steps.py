@@ -47,28 +47,28 @@ def test_load_valid_manifest(tmp_path):
     _write(
         tmp_path / "orchestrator.toml",
         """
-[[steps.before_plan]]
+[[steps.work]]
 id = "lint"
 type = "script"
 path = ".orchestrator/scripts/lint.sh"
 
-[[steps.before_commit]]
+[[steps.work]]
 id = "docs"
 type = "ai_agent"
 agent = ".orchestrator/agents/docs.md"
 
-[[steps.before_commit]]
+[[steps.work]]
 id = "gate"
 type = "approval_gate"
 ask = "ok?"
 """,
     )
     m = load_manifest(project_root=tmp_path)
-    assert isinstance(m.for_seam("before_plan")[0], ScriptStep)
-    after = m.for_seam("before_commit")
-    assert isinstance(after[0], AiAgentStep)
-    assert isinstance(after[1], ApprovalGateStep)
-    assert after[1].ask == "ok?"
+    work = m.for_seam("work")
+    assert isinstance(work[0], ScriptStep)
+    assert isinstance(work[1], AiAgentStep)
+    assert isinstance(work[2], ApprovalGateStep)
+    assert work[2].ask == "ok?"
 
 
 def test_no_steps_table_is_empty(tmp_path):
@@ -90,11 +90,11 @@ def test_duplicate_id_raises(tmp_path):
     _write(
         tmp_path / "orchestrator.toml",
         """
-[[steps.before_plan]]
+[[steps.work]]
 id = "dup"
 type = "approval_gate"
 
-[[steps.before_commit]]
+[[steps.work]]
 id = "dup"
 type = "approval_gate"
 """,
@@ -106,7 +106,7 @@ type = "approval_gate"
 def test_missing_script_raises(tmp_path):
     _write(
         tmp_path / "orchestrator.toml",
-        '[[steps.before_plan]]\nid="lint"\ntype="script"\npath=".orchestrator/scripts/nope.sh"\n',
+        '[[steps.work]]\nid="lint"\ntype="script"\npath=".orchestrator/scripts/nope.sh"\n',
     )
     with pytest.raises(ManifestError, match="script not found"):
         load_manifest(project_root=tmp_path)
@@ -115,21 +115,21 @@ def test_missing_script_raises(tmp_path):
 def test_unknown_agent_raises(tmp_path):
     _write(
         tmp_path / "orchestrator.toml",
-        '[[steps.before_commit]]\nid="docs"\ntype="ai_agent"\nagent=".orchestrator/agents/ghost.md"\n',
+        '[[steps.work]]\nid="docs"\ntype="ai_agent"\nagent=".orchestrator/agents/ghost.md"\n',
     )
     with pytest.raises(ManifestError, match="agent file not found"):
         load_manifest(project_root=tmp_path)
 
 
 def test_manifest_hash_changes_with_steps():
-    a = WorkflowManifest(steps={"before_commit": [ApprovalGateStep(id="g", ask="a")]})
-    b = WorkflowManifest(steps={"before_commit": [ApprovalGateStep(id="g", ask="b")]})
+    a = WorkflowManifest(steps={"work": [ApprovalGateStep(id="g", ask="a")]})
+    b = WorkflowManifest(steps={"work": [ApprovalGateStep(id="g", ask="b")]})
     empty = WorkflowManifest()
     assert a.manifest_hash() != b.manifest_hash()
     assert a.manifest_hash() != empty.manifest_hash()
     # Stable across instances.
     assert a.manifest_hash() == WorkflowManifest(
-        steps={"before_commit": [ApprovalGateStep(id="g", ask="a")]}
+        steps={"work": [ApprovalGateStep(id="g", ask="a")]}
     ).manifest_hash()
 
 
@@ -222,7 +222,7 @@ def _patch(stubs, monkeypatch):
 async def test_approval_gate_seam_fires_and_completes(monkeypatch, tmp_path):
     _patch(_Stubs(), monkeypatch)
     manifest = WorkflowManifest(
-        steps={"before_commit": [ApprovalGateStep(id="security_gate", ask="approve?")]}
+        steps={"work": [ApprovalGateStep(id="security_gate", ask="approve?")]}
     )
     monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: with_standard_build(manifest))
 
@@ -246,13 +246,12 @@ async def test_approval_gate_seam_fires_and_completes(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_before_commit_step_fires_once_before_commit_passes(monkeypatch, tmp_path):
-    # Phase 46: the per-attempt `after_impl` and pass-only `before_commit` seams were
-    # removed (the impl⇄QA loop is now a build step at after_branch). The
-    # "run once after QA passes" use case is now a step at before_commit: even
-    # when QA fails once then passes (2 build attempts), a before_commit step
-    # fires EXACTLY ONCE, on the QA-passed tree, with attempt=0 (seams no longer
-    # carry a loop-attempt number).
+async def test_work_step_fires_once_after_build_passes(monkeypatch, tmp_path):
+    # Phase 49: the four seams collapsed into one `work` list; the impl⇄QA loop is
+    # a build step at its head, and a "run once after QA passes" step is just an
+    # entry ordered after it. Even when QA fails once then passes (2 build
+    # attempts), a following work step fires EXACTLY ONCE, on the QA-passed tree,
+    # with attempt=0 (the work list doesn't carry a loop-attempt number).
     calls: list[tuple[str, int]] = []
 
     def fake_make_script_task(step_id, *, as_gate=False):
@@ -276,7 +275,7 @@ async def test_before_commit_step_fires_once_before_commit_passes(monkeypatch, t
     _patch(stubs, monkeypatch)
 
     manifest = WorkflowManifest(
-        steps={"before_commit": [ScriptStep(id="probe", path="x.sh")]}
+        steps={"work": [ScriptStep(id="probe", path="x.sh")]}
     )
     monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: with_standard_build(manifest))
 
@@ -307,7 +306,7 @@ async def test_approval_gate_abort_stops_run(monkeypatch, tmp_path):
     _patch(stubs, monkeypatch)
 
     manifest = WorkflowManifest(
-        steps={"before_commit": [ApprovalGateStep(id="signoff", ask="proceed?")]}
+        steps={"work": [ApprovalGateStep(id="signoff", ask="proceed?")]}
     )
     monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: with_standard_build(manifest))
 
@@ -361,7 +360,7 @@ async def test_ai_agent_human_in_loop_pauses_then_proceeds(monkeypatch, tmp_path
 
     manifest = WorkflowManifest(
         steps={
-            "before_commit": [
+            "work": [
                 AiAgentStep(id="review", agent=".orchestrator/agents/reviewer.md", human_in_loop=True)
             ]
         }
@@ -379,8 +378,8 @@ async def test_ai_agent_human_in_loop_pauses_then_proceeds(monkeypatch, tmp_path
         assert intr["kind"] == "step_ai_agent_review"
         assert intr["step_id"] == "review"
         assert intr["detail"] == "ran agent"
-        # before_commit fires once on the QA-passed tree (attempt=0; seams no
-        # longer carry a loop-attempt number after Phase 46).
+        # The work step fires once on the QA-passed tree (attempt=0; the work
+        # list doesn't carry a loop-attempt number).
         assert calls == [("review", 0)]  # ran once, before the pause
 
         # Proceed → workflow finishes; the agent is NOT re-run on resume.
@@ -410,7 +409,7 @@ async def test_ai_agent_human_in_loop_abort_stops_run(monkeypatch, tmp_path):
 
     manifest = WorkflowManifest(
         steps={
-            "before_commit": [
+            "work": [
                 AiAgentStep(id="review", agent=".orchestrator/agents/reviewer.md", human_in_loop=True)
             ]
         }
@@ -437,10 +436,10 @@ async def test_manifest_change_mid_run_refuses_resume(monkeypatch, tmp_path):
     _patch(_Stubs(), monkeypatch)
 
     manifest_a = with_standard_build(
-        WorkflowManifest(steps={"before_commit": [ApprovalGateStep(id="g", ask="v1")]})
+        WorkflowManifest(steps={"work": [ApprovalGateStep(id="g", ask="v1")]})
     )
     manifest_b = with_standard_build(
-        WorkflowManifest(steps={"before_commit": [ApprovalGateStep(id="g", ask="v2-changed")]})
+        WorkflowManifest(steps={"work": [ApprovalGateStep(id="g", ask="v2-changed")]})
     )
     state = {"current": manifest_a}
     monkeypatch.setattr(

@@ -105,7 +105,7 @@ def test_steps_table_does_not_break_config(tmp_path):
     p = tmp_path / "orchestrator.toml"
     p.write_text(
         'default_model = "claude-sonnet-4-6"\n'
-        "[[steps.before_plan]]\n"
+        "[[steps.work]]\n"
         'id = "x"\n'
         'type = "approval_gate"\n'
     )

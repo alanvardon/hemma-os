@@ -1,13 +1,13 @@
-"""Phase 46c / 47 — pluggable producer + the after_branch build seam.
+"""Phase 46c / 47 / 49 — pluggable producer + the build step in the work list.
 
 The impl⇄QA loop is no longer inline in the workflow body: it runs through
-run_seam("after_branch") as a declarative `build` step, declared explicitly in
-orchestrator.toml (Phase 47 dropped the synthesized default). The standard
-impl/qa build running with no extra config is covered by test_phase7 /
-test_phase42_spine_gates (the conftest fixture supplies it). These tests cover
-the new degrees of freedom:
+run_seam("work") as a declarative `build` step, declared explicitly in
+orchestrator.toml (Phase 47 dropped the synthesized default; Phase 49 collapsed
+the seams into the one `work` list). The standard impl/qa build running with no
+extra config is covered by test_phase7 / test_phase42_spine_gates (the conftest
+fixture supplies it). These tests cover the new degrees of freedom:
 
-1. A user-declared after_branch build with SWAPPED producer + gate ids runs
+1. A user-declared work build with SWAPPED producer + gate ids runs
    end-to-end on the generic engine — the built-in implementation/QA agents are
    never touched.
 2. Declaring a [steps.defs.*] entry whose id IS a built-in (`qa`) overrides the
@@ -101,13 +101,13 @@ async def _run(monkeypatch, tmp_path, manifest, *, fake_ai=None, fake_script=Non
 
 @pytest.mark.asyncio
 async def test_swapped_producer_and_gate_run_end_to_end(monkeypatch, tmp_path):
-    # A user after_branch build swaps BOTH ids: produce=["my-coder"],
+    # A user work build swaps BOTH ids: produce=["my-coder"],
     # gate=["my-qa"], each an ai_agent def. The build runs them on the generic
     # engine; the built-in implementation/QA agents are never called, and the
     # success dict carries qa=None (no built-in QA verdict was produced).
     manifest = WorkflowManifest(
         steps={
-            "after_branch": [
+            "work": [
                 BuildStep(id="build", produce=["my-coder"], gate=["my-qa"])
             ]
         },
@@ -142,7 +142,7 @@ async def test_steps_defs_qa_overrides_builtin_gate(monkeypatch, tmp_path):
     # not run. The producer stays the built-in implementation.
     manifest = WorkflowManifest(
         steps={
-            "after_branch": [
+            "work": [
                 BuildStep(id="build", produce=["implementation"], gate=["qa"])
             ]
         },

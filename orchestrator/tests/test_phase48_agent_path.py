@@ -28,13 +28,13 @@ def test_agent_file_resolves_single_path(tmp_path):
 def test_nested_agent_path_loads(tmp_path):
     _write(tmp_path / "team/agents/docs.md")
     (tmp_path / "orchestrator.toml").write_text(
-        '[[steps.before_commit]]\n'
+        '[[steps.work]]\n'
         'id = "docs"\n'
         'type = "ai_agent"\n'
         'agent = "team/agents/docs.md"\n',
         encoding="utf-8",
     )
-    step = load_manifest(project_root=tmp_path).for_seam("before_commit")[0]
+    step = load_manifest(project_root=tmp_path).for_seam("work")[0]
     assert isinstance(step, AiAgentStep)
     assert step.agent == "team/agents/docs.md"
 
@@ -43,7 +43,7 @@ def test_stale_dir_key_rejected(tmp_path):
     # The merged-away `dir` must fail loud, not be silently ignored.
     _write(tmp_path / ".orchestrator/agents/docs.md")
     (tmp_path / "orchestrator.toml").write_text(
-        '[[steps.before_commit]]\n'
+        '[[steps.work]]\n'
         'id = "docs"\n'
         'type = "ai_agent"\n'
         'agent = "docs.md"\n'
@@ -56,7 +56,7 @@ def test_stale_dir_key_rejected(tmp_path):
 
 def test_missing_agent_file_fails_loud(tmp_path):
     (tmp_path / "orchestrator.toml").write_text(
-        '[[steps.before_commit]]\n'
+        '[[steps.work]]\n'
         'id = "docs"\n'
         'type = "ai_agent"\n'
         'agent = "team/agents/ghost.md"\n',
