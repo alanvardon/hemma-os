@@ -1,47 +1,49 @@
 # =============================================================================
-# orchestrator.example.toml — Pluggable steps (Phase 33) worked example
+# orchestrator.example.toml — the `work` list (Phase 33; reshaped Phase 49)
 # =============================================================================
 #
-# This is a COMPLETE, annotated example showing how to inject your own steps
-# into the workflow without editing any Python. To use it:
+# A COMPLETE, annotated example showing how to declare your own steps in the
+# workflow without editing any Python. To use it:
 #
-#   1. Copy the [[steps.*]] blocks below into your real orchestrator.toml
-#      (at the project root — the same dir you run the CLI from).
+#   1. Copy the blocks below into your real orchestrator.toml (at the project
+#      root — the same directory you run the CLI from).
 #   2. Create the support files this example references (their contents are
 #      shown inline in comments below each step).
-#   3. Run a feature as usual. Your steps run at the seam you named.
+#   3. Run a feature as usual. Your steps run in the order you list them.
 #
 # The spine never changes:
-#   verify_clean_tree → plan → branch → build(impl ⇄ qa) → summarize → docs → commit → push → pr
-# (the impl ⇄ qa retry loop is itself a `build` step at the after_branch seam,
-# synthesized by default — see section 6. summarize + docs are built-in agents.)
+#   verify_clean_tree → plan → branch → [work] → summarize → docs → commit → push → pr
 #
-# Seams (insertion points), in workflow order — all run BEFORE the commit
-# line, so a step can never leave a half-shipped state on cancel:
+# Setup (verify → plan → branch) and shipping (summarize → docs → commit → push
+# → pr) are fixed spine — you TUNE them via the [workflow.*] / [pre_hooks] / [pr]
+# tables, you don't list them. The one project-specific region is the `work`
+# list: an ordered `[[steps.work]]` array that runs AFTER the branch is made and
+# BEFORE summarize. The impl ⇄ qa retry loop is itself a `build` step in this
+# list (section 1). summarize + docs are built-in agents.
 #
-#   before_plan    — before planning (good for pre-flight checks)
-#   after_plan     — after the plan is approved, before branching
-#   after_branch   — after the branch exists; where the build (impl ⇄ qa) runs
-#   before_commit  — last step before the spine commits
+# Steps run in declared (list) order. The whole work region is pre-commit, so a
+# step can never leave a half-shipped state on cancel. Because work runs before
+# summarize, every step's output is included in the commit/PR summary's diff.
 #
-# Every seam runs its steps once, in declared order. The impl ⇄ qa retry loop is
-# the build step at after_branch; a step that should "run once after the build"
-# is just ordered after that build (at after_branch) or placed at before_commit.
-# Put costly ai_agent steps at before_commit so they run only on the final,
-# QA-passed code. (Phase 46 removed the old per-attempt `after_impl` and
-# pass-only `after_qa` seams — the loader raises a migration error pointing here
-# if your TOML still uses them.)
+# Phase 49 collapsed the four old positional seams into this one list:
+#   before_plan   → use [pre_hooks] (scripts run after the clean-tree check,
+#                   before planning — see "Pre-flight" below)
+#   after_plan    → plan sign-off is [workflow.planning].human_in_loop
+#   after_branch  → this is now [[steps.work]] (same place in the spine)
+#   before_commit → put the step in [[steps.work]] (it runs before summarize)
+# The loader raises a migration error pointing here if your TOML still names an
+# old seam (or the pre-46 `after_impl` / `after_qa`).
 #
-# Validation: the manifest is checked at the start of every run (before any
-# LLM spend) — unknown seam, duplicate id, missing script, unknown agent, and
-# (for build steps) unresolved produce/gate references all fail loudly. The
-# resolved manifest is snapshotted per run, so editing
-# it while a run is paused refuses the resume rather than silently changing
-# the graph. `id` is a step's resume identity — don't rename it mid-run.
+# Validation: the manifest is checked at the start of every run (before any LLM
+# spend) — unknown seam, duplicate id, missing script, unknown agent, and (for
+# build steps) unresolved produce/gate references all fail loudly. The resolved
+# manifest is snapshotted per run, so editing it while a run is paused refuses
+# the resume rather than silently changing the graph. `id` is a step's resume
+# identity — don't rename it mid-run.
 # =============================================================================
 
 
-# --- Standard config (unchanged by Phase 33; shown for a complete file) ------
+# --- Standard config (shown for a complete file) -----------------------------
 # Phase 40: per-agent settings live under [workflow.<step>] — one table per
 # spine step. `default_model` is inherited by any step that omits its `model`.
 
@@ -49,146 +51,89 @@ default_model = "claude-sonnet-4-6"
 
 [workflow.planning]
 human_in_loop = true   # pause for plan review before any code is written
+                       # (this is the old `after_plan` sign-off)
 
 [workflow.qa]
-max_retries = 3        # implementation+QA loop attempts before giving up
+max_retries = 3        # superseded by the build step's retry.max (section 1);
+                       # kept for back-compat
 
 
-# =============================================================================
-# Pluggable steps
-# =============================================================================
-
-# ---------------------------------------------------------------------------
-# 1) script @ before_plan — a fast pre-flight gate.
-#    Runs once, before planning. A non-zero exit aborts the run immediately,
-#    so you never pay for a plan when the repo isn't in a fit state.
+# --- Pre-flight (the old `before_plan` use case) -----------------------------
+# [pre_hooks] runs every executable in `dir` (sorted) after the clean-tree check
+# and BEFORE planning — so you never pay for a plan when the repo isn't in a fit
+# state. A non-zero exit aborts the run immediately.
 #
-#    Create .orchestrator/scripts/preflight.sh (chmod +x):
+#   Create .orchestrator/pre-hooks/preflight.sh (chmod +x):
 #
-#      #!/bin/sh
-#      # Refuse to start if there are merge-conflict markers lying around.
-#      if git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- ':!orchestrator.toml'; then
-#        echo "merge-conflict markers present; resolve before running"
-#        exit 1
-#      fi
-#      exit 0
-# ---------------------------------------------------------------------------
-[[steps.before_plan]]
-id      = "preflight"
-type    = "script"
-path    = ".orchestrator/scripts/preflight.sh"
+#     #!/bin/sh
+#     # Refuse to start if there are merge-conflict markers lying around.
+#     if git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- ':!orchestrator.toml'; then
+#       echo "merge-conflict markers present; resolve before running"
+#       exit 1
+#     fi
+#     exit 0
+[pre_hooks]
+dir     = ".orchestrator/pre-hooks"
 timeout = 30
 
 
-# ---------------------------------------------------------------------------
-# 2) approval_gate @ after_plan — a sign-off on the approved plan, ONCE.
-#    Pauses the workflow right after the plan is approved, before any code is
-#    written. Resume it — via approve_plan(thread_id, "<reply>") over MCP, or
-#    by replying at the CLI prompt. Reply 'abort' (or 'no'/'stop') to stop the
-#    run cleanly (nothing is committed — gates run before the commit line);
-#    any other reply proceeds. (No support file needed.)
-# ---------------------------------------------------------------------------
-[[steps.after_plan]]
-id   = "scope-signoff"
-type = "approval_gate"
-ask  = "Plan approved. Confirm scope is right before we build?"
-
+# =============================================================================
+# The work list — runs after branch, before summarize, in declared order
+# =============================================================================
 
 # ---------------------------------------------------------------------------
-# 3) script @ before_commit — run the test suite once on the QA-passed code.
-#    Fires once, after the build (impl ⇄ qa) has passed and before the spine
-#    commits. A non-zero exit aborts the run — a hard gate the final code must
-#    pass. To instead re-test on EVERY implementation attempt, make the script a
-#    gate of a build step (see section 5).
-#
-#    Create .orchestrator/scripts/run-tests.sh (chmod +x):
-#
-#      #!/bin/sh
-#      node --test calc.test.js
-# ---------------------------------------------------------------------------
-[[steps.before_commit]]
-id      = "unit-tests"
-type    = "script"
-path    = ".orchestrator/scripts/run-tests.sh"
-timeout = 300
-
-
-# ---------------------------------------------------------------------------
-# 4) ai_agent @ before_commit — generate a changelog entry, ONCE.
-#    ai_agent steps run a markdown-defined agent loaded from `agent`, a single
-#    project-root-relative path with the full filename — point each agent at
-#    wherever its prompt lives (there is no global agents directory). Place
-#    costly LLM steps at
-#    before_commit so they run a single time on the final, passing code (not
-#    once per retry attempt). The agent is given the plan and runs `git diff`
-#    itself; it edits files in the working tree, which the spine then commits.
-#
-#    Set human_in_loop = true on any seam-placed ai_agent to pause for review
-#    AFTER it runs (the agent's output is surfaced; reply with an abort word —
-#    'abort'/'no'/'stop' — to stop, anything else to proceed). Omitted = false.
-#    (On a retry-block PRODUCER the same flag pauses once after the block
-#    succeeds — see section 5.)
-#
-#    Create .orchestrator/agents/changelog.md:
-#
-#      ---
-#      name: changelog
-#      model: claude-sonnet-4-6
-#      ---
-#      You maintain CHANGELOG.md for this project. Read CLAUDE.md, run
-#      `git diff HEAD` to see what changed, and add a single concise entry
-#      under an "Unreleased" heading describing the change in user terms.
-#      Edit only CHANGELOG.md. When done, call emit_step_result with a
-#      one-line summary.
-# ---------------------------------------------------------------------------
-[[steps.before_commit]]
-id            = "changelog"
-type          = "ai_agent"
-agent         = ".orchestrator/agents/changelog.md"  # project-root-relative path
-model         = "claude-sonnet-4-6"
-human_in_loop = false               # true = pause to review the agent's output
-
-
-# ---------------------------------------------------------------------------
-# 5) build @ before_commit — a self-correcting loop (Phase 46, formerly `retry`).
-#    A build step re-runs its PRODUCER step(s) until its GATE step(s) pass, or
-#    the retry budget runs out. On each gate failure the gate's output is
+# 1) build — the impl ⇄ qa loop, declared explicitly (Phase 47).
+#    The spine's core "write code, then check it" loop is a build step. It is
+#    NOT synthesized for you — you declare it, so what runs is exactly what's in
+#    the file. A build re-runs its PRODUCER step(s) until its GATE step(s) pass,
+#    or the retry budget runs out; on each gate failure the gate's output is
 #    injected into the next producer attempt as feedback (under a
-#    "## Previous attempt feedback" heading), so an ai_agent producer can
-#    target its fixes — the very same engine the built-in implementation↔QA
-#    loop runs on (that loop IS the default build at after_branch — section 6).
+#    "## Previous attempt feedback" heading).
 #
-#    Placed at before_commit, this lint-loop runs ONCE the spine's impl⇄qa build
-#    has passed. (A build at after_branch instead REPLACES that default loop —
-#    use after_branch only when you mean to swap the whole producer⇄gate step.)
+#    `implementation` and `qa` are BUILT-IN ids: a build may reference them with
+#    no [steps.defs.*] entry, and they resolve to the spine's own agents
+#    (configured under [workflow.implementation] / [workflow.qa]). To swap
+#    either, declare your own def under that id, or change produce/gate to your
+#    own ids — e.g. produce=["my-coder"], gate=["my-qa"] — to drive a non-Claude
+#    coder or replace QA. `ungated = true` opts out of gating entirely (e.g. dbt:
+#    the producer runs once, no gate). The built-in build honours
+#    [workflow.implementation].human_in_loop / [workflow.qa].human_in_loop; a
+#    swapped-in ai_agent producer can use its own human_in_loop review instead.
 #
-#    `produce` and `gate` are lists of ids defined under [steps.defs.*] (below).
-#    Gates run in declared order; the FIRST to fail short-circuits the rest and
-#    triggers a retry.
+#    Remove this block and a run passes through producing nothing →
+#    status="no_changes" (no commit, no PR).
+[[steps.work]]
+id      = "build"
+type    = "build"
+produce = ["implementation"]        # built-in producer (the coder agent)
+gate    = ["qa"]                    # built-in gate (the QA agent)
+retry   = { max = 3, on_exhausted = "abort" }   # abort | approval_gate | proceed
+
+
+# ---------------------------------------------------------------------------
+# 2) build — a second self-correcting loop, runs ONCE the impl ⇄ qa build above
+#    has passed (list order). Here lint-fix (an agent) tries to satisfy
+#    lint-check (a script), up to 3×. Same engine as section 1.
 #
 #    Gate contract — a gate must be one of:
 #      - a `script`: exit 0 = pass; non-zero = fail, and its output becomes the
 #        feedback (it does NOT abort the run the way a plain script step does);
-#      - an `ai_agent`: run READ-ONLY with an emit tool that requires a
-#        `passed` boolean (the verdict) and a `detail` string (the feedback).
-#    A producer mutates the tree; a gate only judges it. No id may be both a
-#    producer and a gate.
+#      - an `ai_agent`: run READ-ONLY with an emit tool that requires a `passed`
+#        boolean (the verdict) and a `detail` string (the feedback).
+#    A producer mutates the tree; a gate only judges it. No id may be both.
+#    Gates run in declared order; the FIRST to fail short-circuits and retries.
 #
-#    retry = { max, on_exhausted } tunes the loop. on_exhausted (when the budget
-#    runs out without a pass):
-#      "abort"      — fail the run (default; nothing is committed — pre-commit)
+#    retry = { max, on_exhausted }; on_exhausted when the budget runs out:
+#      "abort"         — fail the run (default; nothing committed — pre-commit)
 #      "approval_gate" — ask whether to proceed or abort
-#      "proceed"    — continue anyway (use with care)
+#      "proceed"       — continue anyway (use with care)
 #    retry.max must be >= 1. Omit `gate` and set `ungated = true` to run the
 #    producer once with no gate.
 #
 #    A producer ai_agent may set human_in_loop = true: when the block SUCCEEDS
-#    (the gate passes — first try or after retries), the workflow pauses once to
-#    review that producer's final output (abort word stops, anything else
-#    proceeds). It never pauses on a failed attempt, and an exhausted block is
-#    governed by on_exhausted, not this flag. Ignored on a gate def.
-#
-#    Here: lint-fix (an agent) tries to satisfy lint-check (a script), up to 3×.
+#    the workflow pauses once to review that producer's final output (abort word
+#    stops, anything else proceeds). It never pauses on a failed attempt; an
+#    exhausted block is governed by on_exhausted. Ignored on a gate def.
 #
 #    Create .orchestrator/scripts/lint.sh (chmod +x):
 #      #!/bin/sh
@@ -203,16 +148,76 @@ human_in_loop = false               # true = pause to review the agent's output
 #      present it holds the lint output — fix exactly those errors and nothing
 #      else. Edit only the offending source files. When done, call
 #      emit_step_result with a one-line summary.
-# ---------------------------------------------------------------------------
-[[steps.before_commit]]
+[[steps.work]]
 id      = "lint-loop"
 type    = "build"
 produce = ["lint-fix"]              # producer id(s), defined in [steps.defs.*]
 gate    = ["lint-check"]            # gate id(s); first to fail triggers a retry
-retry   = { max = 3, on_exhausted = "abort" }   # abort | approval_gate | proceed
+retry   = { max = 3, on_exhausted = "abort" }
 
+
+# ---------------------------------------------------------------------------
+# 3) ai_agent — generate a changelog entry, ONCE, on the final code.
+#    ai_agent steps run a markdown-defined agent loaded from `agent`, a single
+#    project-root-relative path with the full filename. The agent is given the
+#    plan and runs `git diff` itself; it edits files in the working tree, which
+#    the spine then commits. Because it sits in the work list (before summarize),
+#    its edits are included in the commit/PR diff.
+#
+#    Set human_in_loop = true on a work ai_agent to pause for review AFTER it
+#    runs (the agent's output is surfaced; reply with an abort word —
+#    'abort'/'no'/'stop' — to stop, anything else to proceed). Omitted = false.
+#
+#    Create .orchestrator/agents/changelog.md:
+#      ---
+#      name: changelog
+#      model: claude-sonnet-4-6
+#      ---
+#      You maintain CHANGELOG.md for this project. Read CLAUDE.md, run
+#      `git diff HEAD` to see what changed, and add a single concise entry
+#      under an "Unreleased" heading describing the change in user terms.
+#      Edit only CHANGELOG.md. When done, call emit_step_result with a
+#      one-line summary.
+[[steps.work]]
+id            = "changelog"
+type          = "ai_agent"
+agent         = ".orchestrator/agents/changelog.md"  # project-root-relative path
+model         = "claude-sonnet-4-6"
+human_in_loop = false               # true = pause to review the agent's output
+
+
+# ---------------------------------------------------------------------------
+# 4) script — run the test suite once on the final code, as a hard gate.
+#    A non-zero exit aborts the run — the final code must pass. (To re-test on
+#    EVERY implementation attempt instead, make this script a gate of a build
+#    step, like lint-check in section 2.)
+#
+#    Create .orchestrator/scripts/run-tests.sh (chmod +x):
+#      #!/bin/sh
+#      node --test calc.test.js
+[[steps.work]]
+id      = "unit-tests"
+type    = "script"
+path    = ".orchestrator/scripts/run-tests.sh"
+timeout = 300
+
+
+# ---------------------------------------------------------------------------
+# 5) approval_gate — a final human sign-off on the built code, ONCE.
+#    Pauses the workflow here (after the build + checks, before summarize/commit).
+#    Resume it — via approve_plan(thread_id, "<reply>") over MCP, or by replying
+#    at the CLI prompt. Reply 'abort' (or 'no'/'stop') to stop the run cleanly
+#    (nothing is committed — the whole work list is pre-commit); any other reply
+#    proceeds. (No support file needed.)
+[[steps.work]]
+id   = "ship-signoff"
+type = "approval_gate"
+ask  = "Build + checks passed. Ship it?"
+
+
+# ---------------------------------------------------------------------------
 # [steps.defs.*] — definitions referenced by build steps' produce/gate. These
-# are NOT seam steps themselves; they only run when a block references them.
+# are NOT work steps themselves; they run only when a build references them.
 [steps.defs.lint-fix]
 type          = "ai_agent"
 agent         = ".orchestrator/agents/lint-fixer.md"  # project-root-relative path
@@ -223,39 +228,3 @@ human_in_loop = false               # true = review the fix once lint-check pass
 type    = "script"
 path    = ".orchestrator/scripts/lint.sh"
 timeout = 60
-
-
-# ---------------------------------------------------------------------------
-# 6) The build @ after_branch — the impl ⇄ qa loop, declared explicitly (Phase 47).
-#    The spine's core "write code, then check it" loop is a build step at the
-#    after_branch seam. It is NOT synthesized for you — you declare it, so what
-#    runs is exactly what's in the file (see the live block in orchestrator.toml):
-#
-#       [[steps.after_branch]]
-#       id      = "build"
-#       type    = "build"
-#       produce = ["implementation"]    # built-in producer (the coder agent)
-#       gate    = ["qa"]                # built-in gate (the QA agent)
-#       retry   = { max = 3, on_exhausted = "abort" }
-#
-#    `implementation` and `qa` are BUILT-IN ids: a build may reference them with
-#    no [steps.defs.*] entry, and they resolve to the spine's own agents
-#    (configured under [workflow.implementation] / [workflow.qa]). To swap
-#    either, declare your own def under that id, or change produce/gate to your
-#    own ids — e.g. to drive a non-Claude coder or replace QA with your own gate:
-#
-#       [[steps.after_branch]]
-#       id      = "build"
-#       type    = "build"
-#       produce = ["my-coder"]          # your ai_agent / script def
-#       gate    = ["my-qa"]             # your gate def; or keep the built-in "qa"
-#       retry   = { max = 3, on_exhausted = "abort" }
-#       # ungated = true                # opt out of gating entirely (e.g. dbt)
-#
-#    There is exactly one build at after_branch — replace its produce/gate to
-#    customise. The built-in `implementation`/`qa` build honours
-#    [workflow.implementation].human_in_loop and [workflow.qa].human_in_loop;
-#    a swapped-in ai_agent producer can use its own human_in_loop review instead.
-#    Omit the after_branch build entirely and a run passes through producing
-#    nothing → status="no_changes" (no commit, no PR).
-# ---------------------------------------------------------------------------

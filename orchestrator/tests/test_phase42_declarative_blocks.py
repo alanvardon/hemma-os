@@ -57,7 +57,7 @@ def _load(tmp_path: Path, toml_body: str, **files) -> WorkflowManifest:
 
 
 _VALID = """
-[[steps.after_branch]]
+[[steps.work]]
 id           = "lint-loop"
 type         = "build"
 produce      = ["lint-fix"]
@@ -76,7 +76,7 @@ path = ".orchestrator/scripts/lint.sh"
 
 def test_valid_retry_block_round_trips(tmp_path):
     m = _load(tmp_path, _VALID, scripts=["lint.sh"], agents=["lint-fixer"])
-    block = m.for_seam("after_branch")[0]
+    block = m.for_seam("work")[0]
     assert isinstance(block, BuildStep)
     assert block.id == "lint-loop"
     assert block.produce == ["lint-fix"]
@@ -91,7 +91,7 @@ def test_valid_retry_block_round_trips(tmp_path):
 
 def test_unknown_referenced_def_raises(tmp_path):
     toml = """
-[[steps.after_branch]]
+[[steps.work]]
 id      = "loop"
 type    = "build"
 produce = ["lint-fix"]
@@ -107,7 +107,7 @@ agent = ".orchestrator/agents/lint-fixer.md"
 
 def test_producer_and_gate_overlap_raises(tmp_path):
     toml = """
-[[steps.after_branch]]
+[[steps.work]]
 id      = "loop"
 type    = "build"
 produce = ["both"]
@@ -123,7 +123,7 @@ path = ".orchestrator/scripts/lint.sh"
 
 def test_empty_produce_raises(tmp_path):
     toml = """
-[[steps.after_branch]]
+[[steps.work]]
 id      = "loop"
 type    = "build"
 produce = []
@@ -139,7 +139,7 @@ path = ".orchestrator/scripts/lint.sh"
 
 def test_empty_gate_raises(tmp_path):
     toml = """
-[[steps.after_branch]]
+[[steps.work]]
 id      = "loop"
 type    = "build"
 produce = ["lint-fix"]
@@ -156,7 +156,7 @@ agent = ".orchestrator/agents/lint-fixer.md"
 def test_approval_gate_def_rejected(tmp_path):
     # A approval_gate is a pause, not a producer/gate — it can't be a def.
     toml = """
-[[steps.after_branch]]
+[[steps.work]]
 id      = "loop"
 type    = "build"
 produce = ["x"]
@@ -176,7 +176,7 @@ ask  = "ok?"
 
 def test_max_retries_zero_rejected(tmp_path):
     toml = """
-[[steps.after_branch]]
+[[steps.work]]
 id          = "loop"
 type        = "build"
 produce     = ["x"]
@@ -196,7 +196,7 @@ path = ".orchestrator/scripts/lint.sh"
 
 def test_bad_on_exhausted_rejected(tmp_path):
     toml = """
-[[steps.after_branch]]
+[[steps.work]]
 id           = "loop"
 type         = "build"
 produce      = ["x"]
@@ -217,12 +217,12 @@ path = ".orchestrator/scripts/lint.sh"
 def test_def_id_collides_with_seam_step_id(tmp_path):
     # A def and a seam step share an id — one global namespace, so this is a dup.
     toml = """
-[[steps.before_plan]]
+[[steps.work]]
 id   = "shared"
 type = "script"
 path = ".orchestrator/scripts/lint.sh"
 
-[[steps.after_branch]]
+[[steps.work]]
 id      = "loop"
 type    = "build"
 produce = ["shared"]
@@ -260,11 +260,11 @@ def test_hash_changes_when_referenced_def_changes():
         "check": ScriptStep(id="check", path="x.sh"),
     }
     block = BuildStep(id="b", produce=["fix"], gate=["check"])
-    m1 = WorkflowManifest(steps={"after_branch": [block]}, defs=defs)
+    m1 = WorkflowManifest(steps={"work": [block]}, defs=defs)
     # Edit a referenced def's BODY (not the block) → hash must change so a
     # mid-run edit refuses the resume.
     m2 = WorkflowManifest(
-        steps={"after_branch": [block]},
+        steps={"work": [block]},
         defs={**defs, "check": ScriptStep(id="check", path="DIFFERENT.sh")},
     )
     assert m1.manifest_hash() != m2.manifest_hash()
@@ -276,10 +276,10 @@ def test_hash_ignores_unreferenced_def():
         "check": ScriptStep(id="check", path="x.sh"),
     }
     block = BuildStep(id="b", produce=["fix"], gate=["check"])
-    m1 = WorkflowManifest(steps={"after_branch": [block]}, defs=defs)
+    m1 = WorkflowManifest(steps={"work": [block]}, defs=defs)
     # Adding a def the block does NOT reference changes nothing it depends on.
     m3 = WorkflowManifest(
-        steps={"after_branch": [block]},
+        steps={"work": [block]},
         defs={**defs, "unused": ScriptStep(id="unused", path="z.sh")},
     )
     assert m1.manifest_hash() == m3.manifest_hash()
@@ -333,10 +333,10 @@ def _patch_spine(stubs, monkeypatch):
 
 
 def _block_manifest(on_exhausted="abort", max_retries=3) -> WorkflowManifest:
-    """A retry block at after_plan: a script producer + a script gate."""
+    """A retry block at work: a script producer + a script gate."""
     return WorkflowManifest(
         steps={
-            "after_plan": [
+            "work": [
                 BuildStep(
                     id="loop",
                     produce=["fix"],
@@ -437,7 +437,7 @@ def _hil_block_manifest(on_exhausted="abort", max_retries=3) -> WorkflowManifest
     reviewed once."""
     return WorkflowManifest(
         steps={
-            "after_plan": [
+            "work": [
                 BuildStep(
                     id="loop",
                     produce=["fix"],
@@ -600,7 +600,7 @@ async def test_producer_human_in_loop_no_review_when_exhausted_proceed(monkeypat
 
 def test_retry_inline_table_roundtrips(tmp_path):
     toml = """
-[[steps.after_branch]]
+[[steps.work]]
 id      = "loop"
 type    = "build"
 produce = ["fix"]
@@ -615,7 +615,7 @@ type = "script"
 path = ".orchestrator/scripts/lint.sh"
 """
     m = _load(tmp_path, toml, scripts=["lint.sh"], agents=["lint-fixer"])
-    block = m.for_seam("after_branch")[0]
+    block = m.for_seam("work")[0]
     assert isinstance(block, BuildStep)
     assert block.retry.max == 5
     assert block.retry.on_exhausted == "proceed"
@@ -624,7 +624,7 @@ path = ".orchestrator/scripts/lint.sh"
 def test_ungated_build_step_allowed(tmp_path):
     # ungated=true permits an empty gate list (producer runs once, no gate).
     toml = """
-[[steps.after_branch]]
+[[steps.work]]
 id      = "make"
 type    = "build"
 produce = ["fix"]
@@ -635,7 +635,7 @@ type = "script"
 path = ".orchestrator/scripts/lint.sh"
 """
     m = _load(tmp_path, toml, scripts=["lint.sh"])
-    block = m.for_seam("after_branch")[0]
+    block = m.for_seam("work")[0]
     assert isinstance(block, BuildStep)
     assert block.ungated is True
     assert block.gate == []
@@ -644,7 +644,7 @@ path = ".orchestrator/scripts/lint.sh"
 def test_retry_unknown_key_rejected(tmp_path):
     # RetryConfig is extra="forbid" — a typo'd key fails loud at load.
     toml = """
-[[steps.after_branch]]
+[[steps.work]]
 id      = "loop"
 type    = "build"
 produce = ["x"]
@@ -665,7 +665,7 @@ path = ".orchestrator/scripts/lint.sh"
 def _ungated_manifest() -> WorkflowManifest:
     return WorkflowManifest(
         steps={
-            "after_plan": [BuildStep(id="loop", produce=["fix"], gate=[], ungated=True)]
+            "work": [BuildStep(id="loop", produce=["fix"], gate=[], ungated=True)]
         },
         defs={"fix": ScriptStep(id="fix", path="fix.sh")},
     )

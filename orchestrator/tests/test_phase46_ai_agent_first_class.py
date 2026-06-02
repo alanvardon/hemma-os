@@ -72,7 +72,7 @@ def test_manifest_roundtrips_tool_config(tmp_path):
     _write_agent(tmp_path)
     (tmp_path / "orchestrator.toml").write_text(
         """
-[[steps.before_commit]]
+[[steps.work]]
 id = "x"
 type = "ai_agent"
 agent = ".orchestrator/agents/impl.md"
@@ -83,7 +83,7 @@ timeout = 99
         encoding="utf-8",
     )
     m = load_manifest(project_root=tmp_path)
-    step = m.for_seam("before_commit")[0]
+    step = m.for_seam("work")[0]
     assert isinstance(step, AiAgentStep)
     assert step.allowed_tools == ["Read", "Edit"]
     assert step.disallowed_tools == ["Bash"]

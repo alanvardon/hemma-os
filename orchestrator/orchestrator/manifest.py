@@ -1,46 +1,45 @@
-"""Pluggable-step manifest (Phase 33).
+"""Pluggable-step manifest (Phase 33; reshaped in Phase 49).
 
-Lets operators inject steps into the workflow by editing orchestrator.toml,
+Lets operators declare steps in the workflow by editing orchestrator.toml,
 without touching workflow.py. The core spine
-(verify_clean_tree → plan → branch → build(impl ⇄ qa) → summarize → docs →
-commit → push → pr) stays hard-coded; users add steps only at fixed *seams*
-that all sit before the commit line (so cancel semantics stay safe).
+(verify_clean_tree → plan → branch → [work] → summarize → docs →
+commit → push → pr) stays hard-coded. The one project-specific region is
+*work*: an ordered list, `[[steps.work]]`, that runs AFTER the branch is made
+and BEFORE summarize. The whole region is pre-commit, so cancel/abort never
+leaves a half-shipped state. Steps run in list order — there is no seam
+vocabulary and no order inference.
 
-Phase 46: the impl ⇄ qa loop is itself a `build` step at the `after_branch`
-seam. With no [[steps.after_branch]] build declared, the workflow synthesizes
-the default one (`produce=["implementation"]`, `gate=["qa"]`) so zero-config
-runs the loop exactly as before. The built-in ids `implementation` (producer)
+Phase 49 collapsed the four positional seams (before_plan / after_plan /
+after_branch / before_commit) into this single `work` list: setup (verify →
+plan → branch) and shipping (summarize → docs → commit → push → pr) are fixed
+spine, tuned via [workflow.*] / [pre_hooks] / [pr] tables, never listed. The
+pre-plan use case is covered by [pre_hooks]; plan sign-off by
+[workflow.planning].human_in_loop. See _REMOVED_SEAMS for the migration errors.
+
+The impl ⇄ qa loop is itself a `build` step in the work list, declared
+explicitly in orchestrator.toml. The built-in ids `implementation` (producer)
 and `qa` (gate) resolve to the spine's own agents when not redefined under
 [steps.defs.*]; declare them there to swap in your own.
 
-This is the constrained, lower-risk first increment of the vision in
-PLUGGABLE_WORKFLOW.md — fixed seams, not a free-form DAG.
+TOML shape (everything optional; no [steps.work] = no declared steps):
 
-TOML shape (everything optional; no [steps] table = no injected steps):
-
-    [[steps.before_plan]]
-    id   = "lint"
-    type = "script"
-    path = ".orchestrator/scripts/lint.sh"
-    timeout = 60
-
-    [[steps.before_commit]]
+    [[steps.work]]
     id    = "docs"
     type  = "ai_agent"
     agent = "team/agents/docs.md"   # project-root-relative path (full filename)
     model = "claude-sonnet-4-6"
 
-    [[steps.before_commit]]
+    [[steps.work]]
     id   = "security_gate"
     type = "approval_gate"
     ask  = "QA passed. Approve security posture before commit?"
 
-Phase 46 — a `build` step (formerly the `retry` block): run producer(s), then
-gate(s), re-running the producers with the failing gate's feedback until a gate
-passes or the retry budget is exhausted. produce/gate reference definitions
-under [steps.defs.*]:
+A `build` step (formerly the `retry` block): run producer(s), then gate(s),
+re-running the producers with the failing gate's feedback until a gate passes
+or the retry budget is exhausted. produce/gate reference definitions under
+[steps.defs.*]:
 
-    [[steps.after_branch]]
+    [[steps.work]]
     id      = "lint-loop"
     type    = "build"
     produce = ["lint-fix"]           # ids defined in [steps.defs.*]
@@ -81,34 +80,43 @@ from orchestrator.paths import find_project_root
 from orchestrator.usage import TaskUsage
 
 
-# The only valid insertion points. All sit BEFORE the commit line so an
-# injected step can never create a half-shipped state on cancel. Adding
-# after-commit seams is intentionally refused (see phase_33 landmine).
-# Phase 46: the per-attempt `after_impl` and pass-only `after_qa` seams were
-# removed — the impl⇄QA loop is now a `build` step at `after_branch`, so a step
-# that should "run once after the build" is just ordered after that build step
-# (at after_branch) or placed at before_commit. See _REMOVED_SEAMS for the
-# migration error.
-SEAMS: tuple[str, ...] = (
-    "before_plan",
-    "after_plan",
-    "after_branch",
-    "before_commit",
-)
+# The only region where steps are declared. `work` runs after the branch is
+# made and before summarize — entirely BEFORE the commit line, so a declared
+# step can never create a half-shipped state on cancel. Steps run in list order.
+# Phase 49 collapsed the four positional seams into this one list (see
+# _REMOVED_SEAMS); setup and shipping are fixed spine, not declared here.
+SEAMS: tuple[str, ...] = ("work",)
 
-# Phase 46: seams that existed through Phase 45 but no longer have a home now
-# that the impl⇄QA loop is a declarative build step. Kept as a lookup so the
-# loader can raise a migration-guiding error instead of a bare "unknown seam".
+# Seams that existed before Phase 49 but no longer have a home now that the one
+# variable region is the `work` list. Kept as a lookup so the loader raises a
+# migration-guiding error instead of a bare "unknown seam".
 _REMOVED_SEAMS: dict[str, str] = {
+    "before_plan": (
+        "it ran before planning; use [pre_hooks] (scripts run after the "
+        "clean-tree check, before planning) instead."
+    ),
+    "after_plan": (
+        "it ran after plan approval; plan sign-off is now "
+        "[workflow.planning].human_in_loop. For work on the code, use "
+        "[[steps.work]] (which runs after the branch is made)."
+    ),
+    "after_branch": (
+        "it was the build's region; declare your steps in [[steps.work]] "
+        "(which runs in the same place — after the branch, before summarize)."
+    ),
+    "before_commit": (
+        "it ran after summarize; place the step in [[steps.work]] instead — "
+        "the whole work list runs before summarize, so its output is now "
+        "included in the commit/PR summary's diff."
+    ),
     "after_impl": (
         "it fired once per implementation attempt, inside the impl⇄QA loop; "
-        "that loop is now a 'build' step at 'after_branch'. To check each "
+        "that loop is now a 'build' step in [[steps.work]]. To check each "
         "attempt, add a gate to the build step instead."
     ),
     "after_qa": (
-        "it fired once after QA passed; place the step at 'after_branch' "
-        "(ordered after the build step) or at 'before_commit' to run once on "
-        "the QA-passed tree."
+        "it fired once after QA passed; add the step to [[steps.work]] "
+        "(ordered after the build step) to run once on the QA-passed tree."
     ),
 }
 
@@ -366,7 +374,7 @@ def load_manifest(
         return WorkflowManifest()
     if not isinstance(raw, dict):
         raise ManifestError(
-            "[steps] must be a table of seam arrays, e.g. [[steps.after_branch]]"
+            "[steps] must be a table of seam arrays, e.g. [[steps.work]]"
         )
 
     # All step ids (seam steps AND [steps.defs.*]) share one namespace so a

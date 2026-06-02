@@ -28,8 +28,9 @@ from orchestrator.paths import find_project_root
 def standard_build() -> BuildStep:
     """The spine's impl⇄QA build step (Phase 47: declared, not synthesized).
 
-    The real orchestrator.toml declares this exact block at after_branch. Tests
-    run with no orchestrator.toml, so the manifest fixtures inject it."""
+    The real orchestrator.toml declares this exact block as the first
+    [[steps.work]] entry. Tests run with no orchestrator.toml, so the manifest
+    fixtures inject it."""
     return BuildStep(
         id="build",
         produce=["implementation"],
@@ -39,15 +40,15 @@ def standard_build() -> BuildStep:
 
 
 def with_standard_build(manifest: WorkflowManifest | None = None) -> WorkflowManifest:
-    """Return `manifest` with the standard impl⇄QA build prepended at after_branch.
+    """Return `manifest` with the standard impl⇄QA build prepended to the `work` list.
 
-    For tests that override load_manifest with their own seam steps but still
+    For tests that override load_manifest with their own work steps but still
     need the spine's build to run (pre-47 they relied on the synthesized default;
     now the build is explicit, so it must be present in the manifest)."""
     if manifest is None:
-        return WorkflowManifest(steps={"after_branch": [standard_build()]})
+        return WorkflowManifest(steps={"work": [standard_build()]})
     steps = {k: list(v) for k, v in manifest.steps.items()}
-    steps["after_branch"] = [standard_build(), *steps.get("after_branch", [])]
+    steps["work"] = [standard_build(), *steps.get("work", [])]
     return WorkflowManifest(steps=steps, defs=manifest.defs)
 
 

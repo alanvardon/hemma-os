@@ -52,7 +52,14 @@ logger = logging.getLogger(__name__)
 # its `dir` positional and the step's hashed form changes (no `dir` key), so a
 # pre-48 checkpoint would replay a @task with the wrong arity — the bump refuses
 # resume of any pre-48 run. (Config-shape change only; no control-flow reshape.)
-WORKFLOW_VERSION = "1.6.0"
+# 1.6.0 → 1.7.0 (Phase 49): the four positional seams (before_plan / after_plan /
+# after_branch / before_commit) collapse into one `[[steps.work]]` list that runs
+# between branch and summarize. The before_plan / after_plan / before_commit
+# run_seam dispatch points are removed from the body and after_branch is renamed
+# to work; before_commit steps now run before summarize (so they're in its diff).
+# That control-flow reshape is a body change — the bump refuses resume of any
+# pre-49 run.
+WORKFLOW_VERSION = "1.7.0"
 
 
 from orchestrator.errors import FatalError
@@ -649,9 +656,10 @@ async def summarize_task(
     return await summarize(plan_text, model)
 
 
-# Phase 41: documentation agent, now a permanent spine task (was a pluggable
-# before_commit step). Runs once after the before_commit seam, before commit —
-# on the final, QA-passed code — so any doc edits land in the same commit. The
+# Phase 41: documentation agent, a permanent spine task. Runs once after
+# summarize, before commit — on the final, QA-passed code — so any doc edits
+# land in the same commit. (Phase 49: pre-commit work is now the tail of the
+# `work` list, which runs before summarize.) The
 # prompt ships in the package (orchestrator/prompts/docs.md, tracked by git)
 # and is loaded via load_prompt — the same loader as planning/implementation/qa,
 # so it inherits the .orchestrator/prompts/ override path — rather than from
@@ -809,9 +817,10 @@ async def build_workflow(
                 "summarize": [],
                 "docs": [],
             }
-            # Pre-declared so the BuildFailed handler can reference them even if a
-            # user-declared build fails at a pre-branch seam (the default build,
-            # the common case, always has both set by the time it runs).
+            # Pre-declared so the BuildFailed handler can reference them in scope.
+            # A build only runs inside the `work` list (after branch), so by the
+            # time BuildFailed can be raised both are set; these defaults just keep
+            # the names bound for the except clause.
             plan_result: PlanResult | None = None
             branch_name: str | None = None
 
@@ -844,11 +853,6 @@ async def build_workflow(
                 _check_cancel()
                 async with audited(_audit, thread_id, "preflight"):
                     await verify_clean_tree_task()
-
-                # Phase 33 seam: before_plan (no plan context yet).
-                await run_seam(
-                    "before_plan", manifest, "", _check_cancel, usage_by_task
-                )
 
                 _check_cancel()
                 async with audited(_audit, thread_id, "planning"):
@@ -893,12 +897,6 @@ async def build_workflow(
                         usage_by_task["planning"].append(plan_result.usage)
                     write_plan(thread_id, plan_result)
 
-                # Phase 33 seam: after_plan (plan is finalised/approved).
-                await run_seam(
-                    "after_plan", manifest, plan_result.plan_text,
-                    _check_cancel, usage_by_task,
-                )
-
                 # Phase 13: optional branch-creation approval gate.
                 if config.workflow.branch.human_in_loop:
                     emit_event(_audit, thread_id, "interrupt", payload={"kind": "branch_approval"})
@@ -914,15 +912,17 @@ async def build_workflow(
                     )
                 rename_with_branch(thread_id, branch_name)
 
-                # Phase 46/47: the impl⇄QA loop is a declarative `build` step at
-                # the after_branch seam, declared explicitly in orchestrator.toml
-                # (Phase 47 dropped the synthesized default — the build is visible
-                # config, not invisible magic). The built-in ids `implementation` /
-                # `qa` resolve to the spine's own agents via the closures below;
-                # declaring [steps.defs.implementation] / [steps.defs.qa] (or a
-                # different produce/gate) swaps them out. If no after_branch build
-                # is declared, run_seam below is a no-op and the empty-diff guard
-                # returns status="no_changes".
+                # Phase 46/47/49: the impl⇄QA loop is a declarative `build` step in
+                # the `work` list, declared explicitly in orchestrator.toml (Phase 47
+                # dropped the synthesized default — the build is visible config, not
+                # invisible magic; Phase 49 collapsed the seams into this one list).
+                # The built-in ids `implementation` / `qa` resolve to the spine's own
+                # agents via the closures below; declaring [steps.defs.implementation]
+                # / [steps.defs.qa] (or a different produce/gate) swaps them out. The
+                # whole work list runs HERE — after the branch, before summarize — so
+                # any step in it (build or otherwise) lands in the commit/PR diff. If
+                # no work steps are declared, run_seam below is a no-op and the
+                # empty-diff guard returns status="no_changes".
 
                 # The spine's own implementation producer + QA gate, exposed to the
                 # generic build engine as built-in callables. QA stays HARD-BAKED:
@@ -1005,17 +1005,17 @@ async def build_workflow(
                             return False  # stop now; don't spend another attempt
                     return True
 
-                # The after_branch build's two interrupt gates: implementation_approval
+                # The work build's two interrupt gates: implementation_approval
                 # (before QA) and qa_failure (on a failing QA attempt), gated by
                 # [workflow.implementation].human_in_loop / [workflow.qa].human_in_loop
-                # (both default off). They only do anything when the build actually
+                # (both default off). They only do anything when a build actually
                 # uses the built-in implementation producer / qa gate AND the human
                 # opted in, so wiring them unconditionally is harmless for a build
                 # that swaps in its own producer/gate. Exhausting the budget under
                 # on_exhausted="abort" raises BuildFailed → the clean status="failed"
                 # return below (no commit, no PR).
                 await run_seam(
-                    "after_branch", manifest, plan_result.plan_text,
+                    "work", manifest, plan_result.plan_text,
                     _check_cancel, usage_by_task,
                     builtin_producers={"implementation": _builtin_implementation},
                     builtin_gates={"qa": _builtin_qa},
@@ -1071,18 +1071,12 @@ async def build_workflow(
                     usage_by_task["summarize"].append(summary_result.usage)
                 write_summary(thread_id, summary_result)
 
-                # Phase 33 seam: before_commit (last chance before the spine
-                # commits — still before the commit line, so cancel-safe).
-                await run_seam(
-                    "before_commit", manifest, plan_result.plan_text,
-                    _check_cancel, usage_by_task,
-                )
-
                 # Phase 41: documentation agent — permanent spine task. Runs
-                # once on the final, QA-passed code, after any before_commit
-                # pluggable steps and before the commit, so doc edits land in
-                # the same commit. cwd is the target repo; cancel is still safe
-                # here (nothing committed yet).
+                # once on the final, QA-passed code, before the commit, so doc
+                # edits land in the same commit. cwd is the target repo; cancel
+                # is still safe here (nothing committed yet). (Phase 49: the
+                # before_commit seam is gone — pre-commit work is the tail of the
+                # `work` list, which runs before summarize.)
                 _check_cancel()
                 async with audited(_audit, thread_id, "docs"):
                     docs_result = await docs_task(
