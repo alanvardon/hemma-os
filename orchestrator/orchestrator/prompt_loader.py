@@ -15,6 +15,7 @@ and the orchestrator handles the structured-output wiring automatically.
 
 from pathlib import Path
 
+from orchestrator.agent_frontmatter import split_frontmatter
 from orchestrator.paths import find_project_root
 
 # Bundled defaults live next to this file in orchestrator/prompts/.
@@ -76,7 +77,9 @@ def load_prompt(name: str) -> str:
     """
     override = find_project_root() / ".orchestrator" / "prompts" / f"{name}.md"
     if override.exists():
-        body = override.read_text(encoding="utf-8")
+        # A prompt override may be a file downloaded from anywhere; strip any
+        # leading `---` frontmatter so its metadata never leaks into the prompt.
+        body = split_frontmatter(override.read_text(encoding="utf-8"))[1]
     else:
         bundled = _BUNDLED_DIR / f"{name}.md"
         body = bundled.read_text(encoding="utf-8")
