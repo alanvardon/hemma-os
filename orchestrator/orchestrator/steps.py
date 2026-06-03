@@ -21,6 +21,7 @@ import logging
 import subprocess
 from pathlib import Path
 
+from orchestrator.agent_frontmatter import split_frontmatter
 from orchestrator.agents.runner import run_structured_agent
 from orchestrator.errors import FatalError
 from orchestrator.manifest import AiAgentStep, ScriptStep, StepResult
@@ -107,12 +108,12 @@ async def execute_script(
 
 
 def _load_agent_prompt(project_root: Path, agent: str) -> str:
-    """Read the agent's markdown file, stripping any YAML frontmatter.
+    """Read the agent's markdown file, returning the prompt body.
 
-    The body is the system prompt. Frontmatter (a leading `---` block) is
-    optional and ignored for v1 — the step config already carries the model,
-    and the agent reads the diff itself via Bash, so reads/writes injection
-    isn't needed yet.
+    The body is the system prompt; a leading `---` YAML block is the agent's
+    frontmatter, parsed for config (model/tools) at manifest load time (see
+    manifest._resolve_agent_frontmatter) and stripped here so it never leaks
+    into the prompt.
 
     `agent` (AiAgentStep.agent) is the prompt file's path relative to the
     project root, full filename included, so the prompt file is <agent>.
@@ -122,18 +123,12 @@ def _load_agent_prompt(project_root: Path, agent: str) -> str:
     path = project_root / agent
     if not path.exists():
         raise StepError(f"agent file not found at {agent}")
-    text = path.read_text(encoding="utf-8")
-    return _strip_frontmatter(text)
+    return _strip_frontmatter(path.read_text(encoding="utf-8"))
 
 
 def _strip_frontmatter(text: str) -> str:
-    if text.startswith("---"):
-        # Split on the closing fence: lines[0] == "---", find the next "---".
-        parts = text.split("\n")
-        for i in range(1, len(parts)):
-            if parts[i].strip() == "---":
-                return "\n".join(parts[i + 1 :]).lstrip("\n")
-    return text
+    """Return the prompt body with any leading `---` frontmatter removed."""
+    return split_frontmatter(text)[1]
 
 
 def _coerce_passed(raw: object) -> bool:

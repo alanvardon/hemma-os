@@ -12,6 +12,7 @@ dependencies = [
     "aiosqlite",
     "mcp",
     "claude-agent-sdk",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]

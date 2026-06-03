@@ -27,7 +27,14 @@ TOML shape (everything optional; no [steps.work] = no declared steps):
     id    = "docs"
     type  = "ai_agent"
     agent = "team/agents/docs.md"   # project-root-relative path (full filename)
-    model = "claude-sonnet-4-6"
+    model = "claude-sonnet-4-6"     # optional — overrides the agent's frontmatter
+
+The agent `.md` is the definition: its YAML frontmatter (a leading `---` block)
+supplies the agent's defaults — `model` and `tools` — so a file downloaded from
+anywhere (e.g. a Claude Code subagent) plugs straight in without editing.
+Frontmatter we don't recognise (`name`, `description`, …) is ignored, the body
+is the prompt, and an operational key set on the TOML entry above overrides the
+frontmatter for that repo. See agent_frontmatter.parse_agent_frontmatter.
 
     [[steps.work]]
     id   = "security_gate"
@@ -77,6 +84,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from orchestrator.agent_frontmatter import parse_agent_frontmatter
 from orchestrator.errors import FatalError
 from orchestrator.paths import find_project_root
 from orchestrator.usage import TaskUsage
@@ -168,7 +176,9 @@ class AiAgentStep(_BaseStep):
     agent: str
     model: str = "claude-sonnet-4-6"
     # Optional tool/timeout config (Phase 46a) so an ai_agent def is a first-class
-    # producer/gate. When `allowed_tools` is None, the role default applies:
+    # producer/gate. Phase 53: these may instead be set in the agent file's
+    # frontmatter (model/tools), which load_manifest folds in as defaults — a TOML
+    # value here overrides it. When `allowed_tools` is None, the role default applies:
     # ["Read", "Bash", "Grep"] as a gate (Bash lets it run `git diff HEAD` etc.),
     # or ["Read", "Edit", "Write", "Bash", "Grep"] as a producer. `timeout` is the
     # agent-loop wall-clock in seconds (None = no limit). NOTE: the gate default
@@ -329,6 +339,28 @@ def _agent_file(project_root: Path, step: AiAgentStep) -> Path:
     return project_root / step.agent
 
 
+def _resolve_agent_frontmatter(project_root: Path, step: AiAgentStep) -> AiAgentStep:
+    """Fold the agent file's frontmatter into the step as defaults.
+
+    The agent `.md` is the definition: its frontmatter supplies model/tools so a
+    downloaded file plugs in without restating them in TOML. An operational key
+    set explicitly on the TOML entry still wins (per-project override); a key the
+    TOML omitted takes the frontmatter value. Resolving HERE, at load time, means
+    `manifest_hash` (which dumps the resolved step) folds the frontmatter in, so
+    editing either source correctly refuses a mid-run resume."""
+    fm, _body = parse_agent_frontmatter(
+        _agent_file(project_root, step).read_text(encoding="utf-8")
+    )
+    updates = {}
+    for field in ("model", "allowed_tools", "disallowed_tools", "timeout", "human_in_loop"):
+        if field in step.model_fields_set:
+            continue  # an explicit TOML value overrides the frontmatter default
+        value = getattr(fm, field)
+        if value is not None:
+            updates[field] = value
+    return step.model_copy(update=updates) if updates else step
+
+
 def _validate_build_step(step: BuildStep, defs: dict[str, StepDef]) -> None:
     """Validate a build step's references against [steps.defs.*] (Phase 46).
 
@@ -449,6 +481,7 @@ def load_manifest(
                         f"step def {def_id!r}: agent file not found at "
                         f"{definition.agent}."
                     )
+                definition = _resolve_agent_frontmatter(project_root, definition)
             defs[def_id] = definition
 
     steps: dict[str, list[Step]] = {}
@@ -495,6 +528,7 @@ def load_manifest(
                         f"step {step.id!r}: agent file not found at "
                         f"{step.agent}."
                     )
+                step = _resolve_agent_frontmatter(project_root, step)
             elif isinstance(step, BuildStep):
                 _validate_build_step(step, defs)
 

@@ -146,6 +146,36 @@ prompts in `.orchestrator/prompts/` and they take over:
 The orchestrator finds your project root by walking up to the nearest `.git`
 directory — no path configuration needed.
 
+### Dropping in an agent from anywhere
+
+A custom agent (declared under `[steps.defs.*]` or placed at a seam) is defined
+by its `.md` file. Point a step at one you downloaded — a Claude Code subagent, a
+shared team prompt — and it works as-is: its YAML frontmatter supplies the
+agent's `model` and `tools`, the body is the prompt, and metadata it carries that
+the orchestrator doesn't use (`name`, `description`, `color`, …) is ignored
+rather than rejected. No need to strip the frontmatter.
+
+```markdown
+---
+name: code-reviewer            # ignored
+description: Reviews diffs      # ignored
+tools: Read, Grep, Bash        # → allowed_tools
+model: opus                    # → claude-opus-4-8
+---
+You are a meticulous reviewer…  ← the prompt
+```
+
+```toml
+[steps.defs.review]
+agent = ".orchestrator/agents/code-reviewer.md"   # the definition
+# model / allowed_tools / disallowed_tools / timeout may be set here to OVERRIDE
+# the frontmatter for this repo; omit them to use the frontmatter's values.
+```
+
+The rule is a simple merge: **frontmatter is the default; a key set on the TOML
+entry wins.** So the shared `.md` stays canonical while a repo can swap the model
+or tighten tools in one line, without forking the prompt.
+
 ---
 
 ## Run it
