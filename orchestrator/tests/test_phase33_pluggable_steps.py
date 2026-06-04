@@ -274,10 +274,14 @@ async def test_work_step_fires_once_after_build_passes(monkeypatch, tmp_path):
     stubs.qa = qa_seq
     _patch(stubs, monkeypatch)
 
+    # Phase 56: the impl⇄QA loop is the per-task station (runs before the work
+    # list), not a work-list build — so the manifest carries ONLY the probe step,
+    # which fires once after the station's per-task build passes (FAIL→PASS = 2
+    # attempts, but the work step still fires exactly once, attempt=0).
     manifest = WorkflowManifest(
         steps={"work": [ScriptStep(id="probe", path="x.sh")]}
     )
-    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: with_standard_build(manifest))
+    monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda: manifest)
 
     from orchestrator.workflow import build_workflow
 

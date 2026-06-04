@@ -114,11 +114,16 @@ async def _run(stubs: _Stubs, monkeypatch, tmp_path: Path) -> dict:
 
     from orchestrator.workflow import build_workflow
     from langgraph.types import Command
+    from tests.conftest import task_build_config
 
     # Fresh thread_id per test so the checkpointer doesn't replay a
     # prior run's state. Fresh DB per test (tmp_path) for the same reason.
+    # Phase 56: the impl⇄QA loop is the per-task station; pin its exhaustion to
+    # "abort" so these retry-mechanics tests keep the pre-56 fail-on-exhaustion
+    # behaviour (the new default is pause-and-ask, covered by test_phase52/56).
     config = {"configurable": {"thread_id": f"test-{uuid.uuid4().hex[:8]}"}}
-    async with build_workflow(db_path=str(tmp_path / "ckpt.db")) as workflow:
+    oc = task_build_config(on_exhausted="abort")
+    async with build_workflow(db_path=str(tmp_path / "ckpt.db"), config=oc) as workflow:
         # Phase 8 added a plan-approval interrupt before the retry loop.
         # Auto-approve it so Phase 7 tests stay focused on retry-loop logic.
         result = await workflow.ainvoke("test request", config=config)

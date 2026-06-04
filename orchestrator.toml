@@ -44,10 +44,28 @@ human_in_loop = true     # pause for plan review before any code is written
 [workflow.decompose]
 # Phase 55: turns the approved plan into an ordered task list, shown alongside
 # the plan at the approval gate. Model inherits default_model unless set here or
-# in the prompt frontmatter (.orchestrator/prompts/decompose.md). EXECUTION-INERT
-# in Phase 55 — the list is reviewed + checkpointed but nothing runs off it yet
-# (Phase 56 adds the per-task loop).
+# in the prompt frontmatter (.orchestrator/prompts/decompose.md).
 max_tasks = 0            # 0 = uncapped; >0 = advisory cap (soft guidance, not a hard error)
+
+[workflow.task_build]
+# Phase 56: the recipe the per-task station runs for EACH decomposed task — the
+# outer per-task loop wrapping the inner produce⇄gate retry. The plan owns *what*
+# the tasks are; this owns *how* each is built and checked. produce/gate reference
+# [steps.defs.*] ids or the built-in `implementation` producer / `qa` gate.
+# Defaults preserve pre-56 behaviour: QA gates EACH task (the implement⇄QA
+# auto-fix retry runs per task), exhaustion pauses-and-asks (Phase 52). For the
+# cost-shaped pattern, point `gate` at a cheap script and lean on [workflow.final_qa].
+produce = ["implementation"]
+gate    = ["qa"]
+retry   = { max = 3, on_exhausted = "approval_gate" }   # pause-and-ask on exhaustion
+# human_in_loop = { after_producer = false, on_gate_fail = false }  # per-task pauses
+
+[workflow.final_qa]
+# Phase 56: an OPTIONAL single whole-diff acceptance check after all tasks pass.
+# Empty by default (QA already runs per-task above). Set gate = ["qa"] (or your
+# own script/agent ids) to also run one whole-diff pass that catches cross-task
+# interactions the per-task gates can't see. A final-gate FAIL aborts (no PR).
+gate = []
 
 [workflow.branch]
 max_slug_length = 50     # kebab-case slug length in the branch name (slug part only)
@@ -66,10 +84,10 @@ disallowed_tools = []
 # human_in_loop here is now an error at load time.
 allowed_tools    = ["Read", "Grep", "Bash"]
 disallowed_tools = []
-# Phase 47: the impl⇄QA retry budget now lives on the build step's `retry.max`
-# (see [[steps.work]] below) — the single, visible source of truth. This
-# field (and ORCHESTRATOR_MAX_RETRIES) is retained for back-compat but no longer
-# drives the loop; set the budget on the build step instead.
+# Phase 56: the impl⇄QA retry budget now lives on the per-task station's
+# [workflow.task_build].retry.max above — the single, visible source of truth.
+# This field (and ORCHESTRATOR_MAX_RETRIES) is retained for back-compat but no
+# longer drives the loop; set the budget on [workflow.task_build].retry instead.
 max_retries      = 3
 
 [workflow.docs]
@@ -169,36 +187,15 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # ask  = "QA passed. Approve security posture before commit?"
 # ---------------------------------------------------------------------------
 
-# --- The build step: the impl ⇄ qa loop (Phase 47) ----------------------------
-# This is the spine's core producer⇄gate loop, declared explicitly so it is
-# visible and editable here rather than synthesized behind the scenes. The
-# producer writes code; the gate (QA) judges it; on a FAIL the gate's feedback
-# is injected into the next attempt, looping until QA passes or `retry.max`
-# runs out (then on_exhausted="abort" ends the run as failed — no commit/PR).
-#
-# `implementation` and `qa` are BUILT-IN ids: they resolve to the spine's own
-# implementation agent and QA agent (configured under [workflow.implementation]
-# and [workflow.qa] above) without needing a [steps.defs.*] entry. To swap
-# either, declare your own def under that id — e.g. [steps.defs.qa] with a
-# script or ai_agent — or change `produce` / `gate` to your own ids. Remove
-# this block entirely and a run will pass through with status="no_changes"
-# (nothing produces a diff).
-#
-# Phase 51: opt into the two human pauses on the build step itself via
-# human_in_loop = { after_producer, on_gate_fail } (both default off):
-#   after_producer — pause after the producer, before the gate, every attempt
-#   on_gate_fail   — pause on a gate FAIL; reply 'abort' to stop, else retry
-# These work for ANY producer/gate, not just the built-in implementation/qa.
-#
-# This is the first entry in the work list; any [[steps.work]] you add runs
-# after it, in declared order.
-[[steps.work]]
-id      = "build"
-type    = "build"
-produce = ["implementation"]                  # built-in producer (the coder agent)
-gate    = ["qa"]                              # built-in gate (the QA agent)
-retry   = { max = 3, on_exhausted = "abort" }  # attempts before giving up
-# human_in_loop = { after_producer = false, on_gate_fail = false }  # opt-in pauses
+# --- The impl⇄QA loop moved to the per-task station (Phase 56) -----------------
+# Before Phase 56 the spine's core impl⇄QA producer⇄gate loop was declared HERE as
+# the first `[[steps.work]]` build entry. It is gone: the loop is now run ONCE PER
+# DECOMPOSED TASK by the built-in per-task station (the outer loop over the plan's
+# task list), configured under [workflow.task_build] / [workflow.final_qa] above —
+# not as a work-list step. So `[[steps.work]]` is EMPTY by default and is reserved
+# for ADDITIONAL user steps (scripts, approval gates, your own build loops) that
+# run AFTER the per-task station, in declared order. A single-task plan runs exactly
+# one build → the pre-56 behaviour.
 
 # --- Built-in spine agents: docs (Phase 41) + summarizer (Phase 42) -----------
 # The docs agent used to be a live pluggable step here. It is now

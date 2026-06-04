@@ -28,6 +28,8 @@ from orchestrator.manifest import (
     StepResult,
     WorkflowManifest,
 )
+
+from tests.conftest import task_build_config
 # --------------------------- end-to-end: swapped ids -------------------------
 
 
@@ -81,7 +83,7 @@ def _patch_spine(stubs, monkeypatch):
     monkeypatch.setattr("orchestrator.workflow.ensure_on_main", stubs.ensure_on_main)
 
 
-async def _run(monkeypatch, tmp_path, manifest, *, fake_ai=None, fake_script=None):
+async def _run(monkeypatch, tmp_path, manifest, *, oc, fake_ai=None, fake_script=None):
     stubs = _SpineStubs()
     _patch_spine(stubs, monkeypatch)
     monkeypatch.setattr("orchestrator.workflow.load_manifest", lambda *a, **k: manifest)
@@ -93,7 +95,7 @@ async def _run(monkeypatch, tmp_path, manifest, *, fake_ai=None, fake_script=Non
     from orchestrator.workflow import build_workflow
 
     config = {"configurable": {"thread_id": f"test-{uuid.uuid4().hex[:8]}"}}
-    async with build_workflow(db_path=str(tmp_path / "ckpt.db")) as workflow:
+    async with build_workflow(db_path=str(tmp_path / "ckpt.db"), config=oc) as workflow:
         result = await workflow.ainvoke("req", config=config)  # plan approval
         result = await workflow.ainvoke(Command(resume="yes"), config=config)
     return result, stubs
@@ -101,16 +103,11 @@ async def _run(monkeypatch, tmp_path, manifest, *, fake_ai=None, fake_script=Non
 
 @pytest.mark.asyncio
 async def test_swapped_producer_and_gate_run_end_to_end(monkeypatch, tmp_path):
-    # A user work build swaps BOTH ids: produce=["my-coder"],
-    # gate=["my-qa"], each an ai_agent def. The build runs them on the generic
-    # engine; the built-in implementation/QA agents are never called, and the
-    # success dict carries qa=None (no built-in QA verdict was produced).
+    # Phase 56: the per-task station swaps BOTH ids via [workflow.task_build]:
+    # produce=["my-coder"], gate=["my-qa"], each an ai_agent def. The station runs
+    # them on the generic engine; the built-in implementation/QA agents are never
+    # called, and the success dict carries qa=None (no built-in QA verdict).
     manifest = WorkflowManifest(
-        steps={
-            "work": [
-                BuildStep(id="build", produce=["my-coder"], gate=["my-qa"])
-            ]
-        },
         defs={
             "my-coder": AiAgentStep(id="my-coder", agent=".orchestrator/agents/coder.md"),
             "my-qa": AiAgentStep(id="my-qa", agent=".orchestrator/agents/qa.md"),
@@ -125,7 +122,10 @@ async def test_swapped_producer_and_gate_run_end_to_end(monkeypatch, tmp_path):
             return StepResult(step_id=step.id, kind="ai_agent", ok=True, passed=True, detail="")
         return StepResult(step_id=step.id, kind="ai_agent", ok=True, detail="coded")
 
-    result, stubs = await _run(monkeypatch, tmp_path, manifest, fake_ai=fake_ai)
+    result, stubs = await _run(
+        monkeypatch, tmp_path, manifest, fake_ai=fake_ai,
+        oc=task_build_config(produce=["my-coder"], gate=["my-qa"]),
+    )
 
     assert result["status"] == "succeeded"
     assert ("my-coder", False) in agent_calls  # producer ran
@@ -137,15 +137,10 @@ async def test_swapped_producer_and_gate_run_end_to_end(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_steps_defs_qa_overrides_builtin_gate(monkeypatch, tmp_path):
-    # A build with gate=["qa"] AND a [steps.defs.qa] entry resolves "qa" to the
-    # user's def (in defs wins over the built-in), so the built-in QA agent does
-    # not run. The producer stays the built-in implementation.
+    # Phase 56: the station's gate=["qa"] AND a [steps.defs.qa] entry resolves "qa"
+    # to the user's def (in defs wins over the built-in), so the built-in QA agent
+    # does not run. The producer stays the built-in implementation.
     manifest = WorkflowManifest(
-        steps={
-            "work": [
-                BuildStep(id="build", produce=["implementation"], gate=["qa"])
-            ]
-        },
         defs={"qa": ScriptStep(id="qa", path="qa.sh")},
     )
 
@@ -158,7 +153,10 @@ async def test_steps_defs_qa_overrides_builtin_gate(monkeypatch, tmp_path):
             return StepResult(step_id=step.id, kind="script", ok=True, passed=True, detail="")
         return StepResult(step_id=step.id, kind="script", ok=True)
 
-    result, stubs = await _run(monkeypatch, tmp_path, manifest, fake_script=fake_script)
+    result, stubs = await _run(
+        monkeypatch, tmp_path, manifest, fake_script=fake_script,
+        oc=task_build_config(produce=["implementation"], gate=["qa"]),
+    )
 
     assert result["status"] == "succeeded"
     assert script_gate_calls == 1  # the user's qa.sh gate ran

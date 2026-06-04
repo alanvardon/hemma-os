@@ -26,7 +26,7 @@ from orchestrator.agents.planning import PlanResult
 from orchestrator.agents.qa import QaResult
 from orchestrator.manifest import StepResult
 
-from tests.conftest import with_standard_build
+from tests.conftest import task_build_config
 
 
 class _Stubs:
@@ -91,12 +91,12 @@ def _config_dict() -> dict:
     return {"configurable": {"thread_id": f"test-{uuid.uuid4().hex[:8]}"}}
 
 
-def _patch_manifest(monkeypatch, human_in_loop: dict) -> None:
-    """Make the standard impl⇄QA build carry the given per-step human_in_loop."""
-    monkeypatch.setattr(
-        "orchestrator.workflow.load_manifest",
-        lambda *a, **k: with_standard_build(human_in_loop=human_in_loop),
-    )
+def _hil_config(human_in_loop: dict):
+    """Phase 56: the impl⇄QA loop is the per-task station, so its per-step pauses
+    come from [workflow.task_build].human_in_loop (config), not a work-list build.
+    on_exhausted="abort" matches these tests' assumption that a never-passing run
+    ends `failed`."""
+    return task_build_config(human_in_loop=human_in_loop, on_exhausted="abort")
 
 
 @pytest.mark.asyncio
@@ -105,12 +105,12 @@ async def test_gate_fail_pause_abort_fails_run(monkeypatch, tmp_path):
     run as failed — no commit, no PR."""
     stubs = _Stubs([QaResult(result="FAIL", failures="boom")])
     _patch(stubs, monkeypatch)
-    _patch_manifest(monkeypatch, {"on_gate_fail": True})
 
     from orchestrator.workflow import build_workflow
 
     config = _config_dict()
-    async with build_workflow(db_path=str(tmp_path / "ckpt.db")) as workflow:
+    oc = _hil_config({"on_gate_fail": True})
+    async with build_workflow(db_path=str(tmp_path / "ckpt.db"), config=oc) as workflow:
         result = await workflow.ainvoke("req", config=config)
         assert result["__interrupt__"][0].value["kind"] == "plan_approval"
 
@@ -136,12 +136,12 @@ async def test_gate_fail_pause_retry_then_pass(monkeypatch, tmp_path):
     failing feedback is injected into the retry; the second attempt passes."""
     stubs = _Stubs([QaResult(result="FAIL", failures="boom"), QaResult(result="PASS")])
     _patch(stubs, monkeypatch)
-    _patch_manifest(monkeypatch, {"on_gate_fail": True})
 
     from orchestrator.workflow import build_workflow
 
     config = _config_dict()
-    async with build_workflow(db_path=str(tmp_path / "ckpt.db")) as workflow:
+    oc = _hil_config({"on_gate_fail": True})
+    async with build_workflow(db_path=str(tmp_path / "ckpt.db"), config=oc) as workflow:
         result = await workflow.ainvoke("req", config=config)  # plan_approval
         result = await workflow.ainvoke(Command(resume="yes"), config=config)
         assert result["__interrupt__"][0].value["kind"] == "build_gate_failed"
@@ -162,12 +162,12 @@ async def test_after_producer_pause_then_pass(monkeypatch, tmp_path):
     before QA; resuming proceeds to QA and on to success."""
     stubs = _Stubs([QaResult(result="PASS")])
     _patch(stubs, monkeypatch)
-    _patch_manifest(monkeypatch, {"after_producer": True})
 
     from orchestrator.workflow import build_workflow
 
     config = _config_dict()
-    async with build_workflow(db_path=str(tmp_path / "ckpt.db")) as workflow:
+    oc = _hil_config({"after_producer": True})
+    async with build_workflow(db_path=str(tmp_path / "ckpt.db"), config=oc) as workflow:
         result = await workflow.ainvoke("req", config=config)  # plan_approval
         result = await workflow.ainvoke(Command(resume="yes"), config=config)
         assert result["__interrupt__"][0].value["kind"] == "build_producer_pause"

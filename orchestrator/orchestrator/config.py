@@ -67,6 +67,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from orchestrator.manifest import HumanInLoopConfig, RetryConfig
 from orchestrator.paths import find_project_root
 
 
@@ -146,6 +147,41 @@ class WorkflowDecomposeConfig(WorkflowStepConfig):
     max_tasks: int = 0
 
 
+class WorkflowTaskBuildConfig(BaseModel):
+    """Phase 56: the recipe applied to EACH decomposed task by the per-task station.
+
+    The plan owns *what* the tasks are (the decomposer's list); this owns *how*
+    each task is built and checked. `produce`/`gate` reference [steps.defs.*] ids
+    or the built-in `implementation` producer / `qa` gate. Mirrors a BuildStep's
+    fields so the station can reuse the existing build engine per task.
+
+    Defaults preserve today's behaviour: implementation produces, QA gates *each*
+    task (so the implement⇄QA auto-fix retry loop runs per task), and gate
+    exhaustion pauses-and-asks (Phase 52) rather than hard-aborting. Point `gate`
+    at a cheap script for the cost-shaped pattern (cheap per-task check + one
+    final whole-diff QA — see [workflow.final_qa])."""
+
+    model_config = ConfigDict(extra="forbid")
+    produce: list[str] = Field(default_factory=lambda: ["implementation"])
+    gate: list[str] = Field(default_factory=lambda: ["qa"])
+    retry: RetryConfig = Field(
+        default_factory=lambda: RetryConfig(max=3, on_exhausted="approval_gate")
+    )
+    human_in_loop: HumanInLoopConfig = Field(default_factory=HumanInLoopConfig)
+
+
+class WorkflowFinalQaConfig(BaseModel):
+    """Phase 56: an optional single whole-diff acceptance check after ALL tasks pass.
+
+    Default empty — QA runs per-task (see [workflow.task_build].gate), so a final
+    pass is off by default. Set gate = ["qa"] (or your own script/agent ids) to
+    also run one whole-diff check that catches cross-task interactions the
+    per-task gates can't see. A final-gate FAIL aborts the run (no PR)."""
+
+    model_config = ConfigDict(extra="forbid")
+    gate: list[str] = Field(default_factory=list)
+
+
 class WorkflowConfig(BaseModel):
     """The built-in spine, one table per step. Counterpart to [steps.*] —
     user-injected pluggable steps owned by manifest.py."""
@@ -159,6 +195,11 @@ class WorkflowConfig(BaseModel):
     # frontmatter or [workflow.decompose] sets one. Execution-inert in Phase 55 —
     # the list is reviewed + checkpointed but nothing consumes it yet (Phase 56).
     decompose: WorkflowDecomposeConfig = Field(default_factory=WorkflowDecomposeConfig)
+    # Phase 56: the per-task execution loop. task_build is the recipe run for each
+    # decomposed task (the station that replaced the single impl⇄QA build);
+    # final_qa is an optional once-after-the-loop whole-diff check.
+    task_build: WorkflowTaskBuildConfig = Field(default_factory=WorkflowTaskBuildConfig)
+    final_qa: WorkflowFinalQaConfig = Field(default_factory=WorkflowFinalQaConfig)
     branch: WorkflowBranchConfig = Field(default_factory=WorkflowBranchConfig)
     implementation: WorkflowStepConfig = Field(
         default_factory=lambda: WorkflowStepConfig(

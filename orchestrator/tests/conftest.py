@@ -60,6 +60,45 @@ def with_standard_build(
     return WorkflowManifest(steps=steps, defs=manifest.defs)
 
 
+def task_build_config(
+    *,
+    human_in_loop: dict | None = None,
+    on_exhausted: str | None = None,
+    max_retries: int | None = None,
+    produce: list[str] | None = None,
+    gate: list[str] | None = None,
+):
+    """Phase 56: an OrchestratorConfig whose per-task station ([workflow.task_build])
+    carries the given overrides — pass it to build_workflow(config=...).
+
+    This is the replacement for the pre-56 with_standard_build(human_in_loop=...):
+    the impl⇄QA loop is no longer a work-list build, it's the per-task station, so
+    its retry/pauses/producer/gate are configured here. `on_exhausted="abort"`
+    restores the pre-56 hard-abort-on-exhaustion for tests that assert that path
+    (the new default is the Phase 52 pause-and-ask)."""
+    from orchestrator.config import OrchestratorConfig
+    from orchestrator.manifest import HumanInLoopConfig
+
+    cfg = OrchestratorConfig()
+    tb = cfg.workflow.task_build
+    retry_updates = {
+        k: v
+        for k, v in (("on_exhausted", on_exhausted), ("max", max_retries))
+        if v is not None
+    }
+    tb_updates: dict = {"retry": tb.retry.model_copy(update=retry_updates)}
+    if human_in_loop is not None:
+        tb_updates["human_in_loop"] = HumanInLoopConfig(**human_in_loop)
+    if produce is not None:
+        tb_updates["produce"] = produce
+    if gate is not None:
+        tb_updates["gate"] = gate
+    new_tb = tb.model_copy(update=tb_updates)
+    return cfg.model_copy(
+        update={"workflow": cfg.workflow.model_copy(update={"task_build": new_tb})}
+    )
+
+
 @pytest.fixture(autouse=True)
 def _isolate_runs_dir(monkeypatch):
     runs = find_project_root() / ".orchestrator" / "runs" / "developer_tests"
@@ -71,9 +110,15 @@ def _isolate_runs_dir(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolate_manifest(monkeypatch):
+    # Phase 56: the impl⇄QA loop is no longer a [[steps.work]] build — it's run
+    # per-task by the built-in station (driven by [workflow.task_build] + the
+    # stubbed decomposer's task list). So the default test manifest is EMPTY: the
+    # station provides the implementation; the work list is only for extra user
+    # steps. Tests that exercise user work steps override this with their own
+    # monkeypatch (which runs after this fixture and wins).
     monkeypatch.setattr(
         "orchestrator.workflow.load_manifest",
-        lambda *a, **k: with_standard_build(),
+        lambda *a, **k: WorkflowManifest(),
     )
 
 

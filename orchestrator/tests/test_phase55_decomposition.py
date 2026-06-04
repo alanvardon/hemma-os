@@ -188,23 +188,7 @@ async def test_feedback_redecomposes_the_revised_plan(monkeypatch, tmp_path):
     # Decomposed once per plan version (initial + after feedback).
     assert stubs.decompose_calls == ["plan-1", "plan-2"]
 
-
-@pytest.mark.asyncio
-async def test_decomposition_is_execution_inert(monkeypatch, tmp_path):
-    """Approving the plan runs the monolithic build exactly once — the task list
-    does NOT drive any per-task execution in Phase 55."""
-    stubs = _Stubs()
-    _patch(stubs, monkeypatch)
-    from orchestrator.workflow import build_workflow
-
-    config = _fresh_config()
-    async with build_workflow(db_path=str(tmp_path / "ckpt.db")) as workflow:
-        await workflow.ainvoke("add a tooltip", config=config)
-        result = await workflow.ainvoke(Command(resume="yes"), config=config)
-
-    assert result["status"] == "succeeded"
-    assert result["pr_url"] == "https://github.com/test/pr/1"
-    # One build, no per-task fan-out: implementation ran once with no feedback.
-    assert stubs.impl_calls == [None]
-    # The result dict shape is unchanged (no new top-level key leaks in).
-    assert "tasks" not in result
+# NOTE: Phase 55's "execution-inert" guarantee was intentionally superseded by
+# Phase 56 — the decomposed list now drives the per-task execution station. That
+# behaviour (a plan's tasks each running a build) is covered by
+# test_phase56_per_task_loop.py.

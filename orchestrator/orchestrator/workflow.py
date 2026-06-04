@@ -77,7 +77,15 @@ logger = logging.getLogger(__name__)
 # a changed interrupt payload shape is a body change, so the bump refuses resume of
 # any pre-55 run. The step is execution-inert (nothing consumes the list yet —
 # Phase 56), but the task graph still changed, hence the bump.
-WORKFLOW_VERSION = "1.10.0"
+# 1.10.0 → 1.11.0 (Phase 56): the single impl⇄QA build is replaced by a per-task
+# execution station (_run_task_loop) that runs one produce⇄gate build per decomposed
+# task, followed by an optional whole-diff final_qa. The work region's task-graph
+# shape changes (N per-task builds instead of one, driven by the checkpointed
+# decompose result; a new final_qa), so the bump refuses resume of any pre-56 run.
+# The task list itself needs no separate hash gate — it's a checkpointed decompose
+# result that replays deterministically, and each task's build @tasks replay
+# positionally (same "rely on existing guards" reasoning as Phase 42's no-new-hash).
+WORKFLOW_VERSION = "1.11.0"
 
 
 from orchestrator.errors import FatalError
@@ -603,6 +611,170 @@ async def _run_build_step(
                 raise StepGateAborted(block_step.id)
 
 
+# ---------------------------------------------------------------------------
+# Phase 56: the per-task execution station (Option B).
+# Loops the FROZEN task list from the decomposer (Phase 55) and runs each task as
+# a produce⇄gate build via the SAME engine the spine used before — _run_build_step
+# / run_retry_block — with the [workflow.task_build] recipe. This REPLACES the
+# single hard-baked impl⇄QA build as the spine's implementation mechanism.
+#
+# Two nested loops: the OUTER per-task loop here (new), wrapping the INNER
+# per-attempt retry inside each task's build (unchanged engine). The task list is
+# a checkpointed decompose_task result, so it replays deterministically on resume;
+# each task's build @tasks replay positionally — no separate task-list hash gate is
+# needed (same "rely on existing guards" reasoning as Phase 42's no-new-hash note).
+# ---------------------------------------------------------------------------
+
+
+def _compose_task_plan(plan_text: str, task) -> str:
+    """The producer's plan text for one task: the overall plan + THIS task's slice.
+    The agent reads the working tree itself for cumulative state, so the diff is
+    implicit; only the task focus is injected here."""
+    parts = [plan_text, "", f"## Current task: {task.title}", "", task.description]
+    if task.acceptance_criteria:
+        parts += ["", f"Acceptance criteria: {task.acceptance_criteria}"]
+    return "\n".join(parts)
+
+
+def _compose_task_qa(plan_text: str, task) -> str:
+    """The QA gate's plan text for one task: judge ONLY this task. The diff may
+    include earlier completed tasks, so the note tells QA not to fail the review
+    for unrelated prior changes (the whole-diff acceptance is the optional
+    final_qa pass)."""
+    parts = [plan_text, "", f"## Evaluate ONLY this task: {task.title}", "", task.description]
+    if task.acceptance_criteria:
+        parts += ["", f"Acceptance criteria: {task.acceptance_criteria}"]
+    parts += [
+        "",
+        "Note: the diff may also include earlier, already-completed tasks. Judge "
+        "ONLY whether the task above is correctly implemented; do not fail the "
+        "review for unrelated changes from earlier tasks.",
+    ]
+    return "\n".join(parts)
+
+
+async def _run_task_loop(
+    decomposition,
+    manifest,
+    plan_result,
+    config,
+    check_cancel,
+    usage_by_task: dict,
+    qa_holder: dict,
+    *,
+    thread_id: str,
+    audit,
+) -> None:
+    """Run the decomposed task list, one produce⇄gate build per task (Phase 56).
+
+    Each task reuses _run_build_step with a synthetic BuildStep built from
+    [workflow.task_build], so per-task retry/feedback (Phase 42), human pauses
+    (Phase 51), and the growable budget (Phase 52) all come for free. The built-in
+    `implementation` producer / `qa` gate are made task-aware by composing this
+    task's context into the plan text. A task that exhausts its budget raises
+    BuildFailed(step_id="task:<id>") → the entrypoint's clean status="failed".
+    Runs in the entrypoint body so its interrupt()s are reachable."""
+    tb = config.workflow.task_build
+    for task in decomposition.tasks:
+        impl_plan = _compose_task_plan(plan_result.plan_text, task)
+        qa_plan = PlanResult(
+            title=plan_result.title,
+            type=plan_result.type,
+            plan_text=_compose_task_qa(plan_result.plan_text, task),
+        )
+
+        async def _impl(step_id: str, feedback: str | None, _p: str = impl_plan) -> StepResult:
+            async with audited(audit, thread_id, "implementation"):
+                result = await implementation_task(
+                    _p, feedback, config.resolved_model(config.workflow.implementation)
+                )
+            if result.usage:
+                usage_by_task["implementation"].append(result.usage)
+            return result
+
+        async def _qa(step_id: str, _qp: PlanResult = qa_plan) -> StepResult:
+            async with audited(audit, thread_id, "qa"):
+                qa_result = await qa_task(_qp, config.resolved_model(config.workflow.qa))
+            if qa_result.usage:
+                usage_by_task["qa"].append(qa_result.usage)
+            write_qa(thread_id, qa_result)
+            qa_holder["qa"] = qa_result
+            return StepResult(
+                step_id="qa",
+                kind="ai_agent",
+                ok=True,
+                passed=(qa_result.result == "PASS"),
+                detail=qa_result.failures or "",
+            )
+
+        synthetic = BuildStep(
+            id=f"task:{task.id}",
+            produce=tb.produce,
+            gate=tb.gate,
+            ungated=not tb.gate,  # gate=[] → producer runs once (rely on final_qa)
+            retry=tb.retry,
+            human_in_loop=tb.human_in_loop,
+        )
+        await _run_build_step(
+            synthetic, manifest, impl_plan, check_cancel, usage_by_task,
+            builtin_producers={"implementation": _impl},
+            builtin_gates={"qa": _qa},
+            thread_id=thread_id,
+            audit=audit,
+        )
+
+
+async def _run_final_qa(
+    config,
+    manifest,
+    plan_result,
+    check_cancel,
+    usage_by_task: dict,
+    qa_holder: dict,
+    *,
+    thread_id: str,
+    audit,
+) -> None:
+    """Phase 56: optional single whole-diff acceptance check after all tasks pass.
+
+    Default no-op ([workflow.final_qa].gate is empty — QA runs per-task). When
+    configured, runs each gate over the WHOLE diff: the built-in `qa` (judged
+    against the overall plan) or a [steps.defs.*] script/agent gate. A FAIL raises
+    BuildFailed(step_id="final_qa") → the clean status="failed" return (no PR)."""
+    gates = config.workflow.final_qa.gate
+    if not gates:
+        return
+    repo_root = str(find_project_root())
+    for gid in gates:
+        check_cancel()
+        if gid == "qa" and gid not in manifest.defs:
+            async with audited(audit, thread_id, "qa"):
+                qa_result = await qa_task(plan_result, config.resolved_model(config.workflow.qa))
+            if qa_result.usage:
+                usage_by_task["qa"].append(qa_result.usage)
+            write_qa(thread_id, qa_result)
+            qa_holder["qa"] = qa_result
+            passed, detail = (qa_result.result == "PASS"), (qa_result.failures or "")
+        else:
+            d = manifest.defs.get(gid)
+            if d is None:
+                raise StepError(
+                    f"final_qa gate {gid!r} has no [steps.defs.*] entry and is "
+                    f"not the built-in 'qa'"
+                )
+            if isinstance(d, ScriptStep):
+                res = await _make_script_task(d.id, as_gate=True)(d.id, d.path, d.timeout, repo_root)
+            else:
+                res = await _make_ai_agent_task(d.id, as_gate=True)(
+                    d.id, d.agent, d.model, repo_root, plan_result.plan_text
+                )
+            if res.usage:
+                usage_by_task.setdefault(d.id, []).append(res.usage)
+            passed, detail = (res.passed is True), res.detail
+        if not passed:
+            raise BuildFailed("final_qa", 1, detail)
+
+
 @task
 async def planning_task(request: str, model: str = "claude-sonnet-4-6") -> PlanResult:
     return await plan(request, model=model)
@@ -1028,27 +1200,30 @@ async def build_workflow(
                     )
                 rename_with_branch(thread_id, branch_name)
 
-                # Phase 46/47/49: the impl⇄QA loop is a declarative `build` step in
-                # the `work` list, declared explicitly in orchestrator.toml (Phase 47
-                # dropped the synthesized default — the build is visible config, not
-                # invisible magic; Phase 49 collapsed the seams into this one list).
-                # The built-in ids `implementation` / `qa` resolve to the spine's own
-                # agents via the closures below; declaring [steps.defs.implementation]
-                # / [steps.defs.qa] (or a different produce/gate) swaps them out. The
-                # whole work list runs HERE — after the branch, before summarize — so
-                # any step in it (build or otherwise) lands in the commit/PR diff. If
-                # no work steps are declared, run_seam below is a no-op and the
-                # empty-diff guard returns status="no_changes".
-
-                # The spine's own implementation producer + QA gate, exposed to the
-                # generic build engine as built-in callables. QA stays HARD-BAKED:
-                # qa_task / QaResult / write_qa / the "qa" output key are untouched;
-                # _qa_holder stashes the passing verdict for the success dict. The
-                # gate verdict replays from the checkpointed QaResult on resume
-                # (qa_task is a @task). These call interrupt() only indirectly (via
-                # the hooks below), so they're safe inside a @task-dispatching closure.
+                # Phase 56: the per-task execution station (Option B). The frozen
+                # task list (Phase 55) is run one produce⇄gate build per task via the
+                # SAME engine the spine used before (_run_build_step / run_retry_block)
+                # with the [workflow.task_build] recipe — REPLACING the single
+                # hard-baked impl⇄QA build as the implementation mechanism. n=1 (a
+                # single-task plan) runs exactly one build → today's behaviour. A task
+                # that exhausts its budget raises BuildFailed → the clean
+                # status="failed" return below (no commit, no PR), tagging the task.
+                # _qa_holder stashes the latest QA verdict for the result dict; the
+                # "qa"/write_qa contract is unchanged. Runs in the entrypoint body so
+                # the build's interrupt()s (Phase 51/52) are reachable.
                 _qa_holder: dict[str, QaResult] = {}
+                await _run_task_loop(
+                    decomposition, manifest, plan_result, config,
+                    _check_cancel, usage_by_task, _qa_holder,
+                    thread_id=thread_id, audit=_audit,
+                )
 
+                # Any remaining [[steps.work]] entries (user scripts / gates / builds)
+                # still run after the task loop — the seam is no longer the home of the
+                # core impl loop, but it stays for additional user steps. The built-in
+                # implementation/qa are still exposed so a user-declared work build can
+                # reference them. The default orchestrator.toml has no work steps, so
+                # this is a no-op there.
                 async def _builtin_implementation(
                     step_id: str, feedback: str | None
                 ) -> StepResult:
@@ -1071,9 +1246,6 @@ async def build_workflow(
                         usage_by_task["qa"].append(qa_result.usage)
                     write_qa(thread_id, qa_result)
                     _qa_holder["qa"] = qa_result
-                    # Adapt the hard-baked QA verdict into the generic gate
-                    # contract: PASS → passed=True; FAIL → passed=False + the
-                    # failure report becomes the feedback the engine injects.
                     return StepResult(
                         step_id="qa",
                         kind="ai_agent",
@@ -1082,14 +1254,6 @@ async def build_workflow(
                         detail=qa_result.failures or "",
                     )
 
-                # The work build's two human pauses are configured PER BUILD via
-                # its human_in_loop = { after_producer, on_gate_fail } (Phase 51),
-                # handled inside _run_build_step — no body-level closures and no
-                # global [workflow.implementation]/[workflow.qa] flags (load_config
-                # errors if those are still set). thread_id/_audit are forwarded so
-                # those pauses can emit interrupt audit events. Exhausting the
-                # budget under on_exhausted="abort" raises BuildFailed → the clean
-                # status="failed" return below (no commit, no PR).
                 await run_seam(
                     "work", manifest, plan_result.plan_text,
                     _check_cancel, usage_by_task,
@@ -1099,9 +1263,15 @@ async def build_workflow(
                     audit=_audit,
                 )
 
-                # The passing QA verdict, when the built-in QA gate ran (the default
-                # build, or any build gated on "qa"). None for an ungated build or
-                # one gated only on a non-qa gate.
+                # Phase 56: optional final whole-diff QA after all tasks pass
+                # (default no-op — QA runs per-task). A FAIL raises BuildFailed.
+                await _run_final_qa(
+                    config, manifest, plan_result, _check_cancel,
+                    usage_by_task, _qa_holder, thread_id=thread_id, audit=_audit,
+                )
+
+                # The latest QA verdict (last task's per-task QA, or final_qa).
+                # None only if the task build was ungated AND no final_qa ran.
                 qa_result = _qa_holder.get("qa")
 
                 # Phase 46d: empty-diff resilience. If the build produced no diff
@@ -1225,6 +1395,10 @@ async def build_workflow(
                     "status": "failed",
                     "plan": plan_result.model_dump() if plan_result else None,
                     "branch": branch_name,
+                    # Phase 56: which build/task exhausted its budget. For the per-task
+                    # station this is "task:<id>"; "final_qa" for the post-loop check;
+                    # a user build id for a [[steps.work]] build.
+                    "failed_task_id": exc.step_id,
                     "qa_failures": exc.last_feedback,
                     "usage": _usage,
                 }
