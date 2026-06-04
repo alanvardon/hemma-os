@@ -1,4 +1,4 @@
-"""Pluggable-step manifest (Phase 33; reshaped in Phase 49).
+"""Pluggable-step manifest.
 
 Lets operators declare steps in the workflow by editing orchestrator.toml,
 without touching workflow.py. The core spine
@@ -9,11 +9,9 @@ and BEFORE summarize. The whole region is pre-commit, so cancel/abort never
 leaves a half-shipped state. Steps run in list order — there is no seam
 vocabulary and no order inference.
 
-Phase 49 collapsed the four positional seams (before_plan / after_plan /
-after_branch / before_commit) into this single `work` list: setup (verify →
-plan → branch) and shipping (summarize → docs → commit → push → pr) are fixed
-spine, tuned via [workflow.*] / [pre_hooks] / [pr] tables, never listed. The
-pre-plan use case is covered by [pre_hooks]; plan sign-off by
+Setup (verify → plan → branch) and shipping (summarize → docs → commit → push →
+pr) are fixed spine, tuned via [workflow.*] / [pre_hooks] / [pr] tables, never
+listed. The pre-plan use case is covered by [pre_hooks]; plan sign-off by
 [workflow.planning].human_in_loop. See _REMOVED_SEAMS for the migration errors.
 
 The impl ⇄ qa loop is itself a `build` step in the work list, declared
@@ -93,13 +91,12 @@ from orchestrator.usage import TaskUsage
 # The only region where steps are declared. `work` runs after the branch is
 # made and before summarize — entirely BEFORE the commit line, so a declared
 # step can never create a half-shipped state on cancel. Steps run in list order.
-# Phase 49 collapsed the four positional seams into this one list (see
-# _REMOVED_SEAMS); setup and shipping are fixed spine, not declared here.
+# Setup and shipping are fixed spine, not declared here (see _REMOVED_SEAMS).
 SEAMS: tuple[str, ...] = ("work",)
 
-# Seams that existed before Phase 49 but no longer have a home now that the one
-# variable region is the `work` list. Kept as a lookup so the loader raises a
-# migration-guiding error instead of a bare "unknown seam".
+# Seam names that no longer have a home now that the one variable region is the
+# `work` list. Kept as a lookup so the loader raises a migration-guiding error
+# instead of a bare "unknown seam".
 _REMOVED_SEAMS: dict[str, str] = {
     "before_plan": (
         "it ran before planning; use [pre_hooks] (scripts run after the "
@@ -130,10 +127,10 @@ _REMOVED_SEAMS: dict[str, str] = {
     ),
 }
 
-# Phase 46: built-in producer/gate ids a build step may reference WITHOUT a
-# matching [steps.defs.*] entry. They resolve to the spine's own implementation
-# producer / QA gate at runtime (workflow._run_build_step). Redefining either id
-# under [steps.defs.*] overrides the built-in.
+# Built-in producer/gate ids a build step may reference WITHOUT a matching
+# [steps.defs.*] entry. They resolve to the spine's own implementation producer /
+# QA gate at runtime (workflow._run_build_step). Redefining either id under
+# [steps.defs.*] overrides the built-in.
 _BUILTIN_PRODUCER_IDS: frozenset[str] = frozenset({"implementation"})
 _BUILTIN_GATE_IDS: frozenset[str] = frozenset({"qa"})
 
@@ -162,29 +159,27 @@ class ApprovalGateStep(_BaseStep):
 
 
 class AiAgentStep(_BaseStep):
-    # Phase 48: forbid unknown keys so the merged-away `dir` (and any typo) fails
-    # at load time with a clear "extra inputs are not permitted" error, rather
-    # than being silently ignored and surfacing later as a confusing
-    # "agent file not found".
+    # Forbid unknown keys so a typo'd key fails at load time with a clear "extra
+    # inputs are not permitted" error, rather than being silently ignored and
+    # surfacing later as a confusing "agent file not found".
     model_config = ConfigDict(extra="forbid")
     type: Literal["ai_agent"] = "ai_agent"
     # `agent` is the system prompt's path relative to the project root, full
     # filename INCLUDING the extension (e.g. "team/agents/docs.md") — no .md is
     # appended for you. It's a single per-step path, so agents can live anywhere
-    # (there is no global agents_dir). Phase 48: the old `dir` + `agent` split
-    # was merged into this one field.
+    # (there is no global agents_dir).
     agent: str
-    # Phase 59: a user-declared ai_agent step resolves its model as TOML `model` →
-    # agent-file frontmatter (Phase 53) → this last-resort default. It intentionally
-    # does NOT fall back to OrchestratorConfig.default_model: load_manifest() parses
-    # the TOML independently of the config, so wiring default_model in would couple
-    # the two loaders. A user who wants the run-wide default sets it here or in
-    # frontmatter. This is the one model literal that stays outside config.py.
+    # A user-declared ai_agent step resolves its model as TOML `model` → agent-file
+    # frontmatter → this last-resort default. It intentionally does NOT fall back to
+    # OrchestratorConfig.default_model: load_manifest() parses the TOML independently
+    # of the config, so wiring default_model in would couple the two loaders. A user
+    # who wants the run-wide default sets it here or in frontmatter. This is the one
+    # model literal that stays outside config.py.
     model: str = "claude-sonnet-4-6"
-    # Optional tool/timeout config (Phase 46a) so an ai_agent def is a first-class
-    # producer/gate. Phase 53: these may instead be set in the agent file's
-    # frontmatter (model/tools), which load_manifest folds in as defaults — a TOML
-    # value here overrides it. When `allowed_tools` is None, the role default applies:
+    # Optional tool/timeout config so an ai_agent def is a first-class producer/gate.
+    # These may instead be set in the agent file's frontmatter (model/tools), which
+    # load_manifest folds in as defaults — a TOML value here overrides it. When
+    # `allowed_tools` is None, the role default applies:
     # ["Read", "Bash", "Grep"] as a gate (Bash lets it run `git diff HEAD` etc.),
     # or ["Read", "Edit", "Write", "Bash", "Grep"] as a producer. `timeout` is the
     # agent-loop wall-clock in seconds (None = no limit). NOTE: the gate default
@@ -205,13 +200,13 @@ class AiAgentStep(_BaseStep):
 
 
 class RetryConfig(BaseModel):
-    """Retry behaviour for a build step's producer⇄gate loop (Phase 46).
+    """Retry behaviour for a build step's producer⇄gate loop.
 
     `max` is the attempt budget (>= 1); `on_exhausted` decides what happens when
     it runs out: abort the run, ask a human, or proceed anyway.
 
-    Phase 52: under on_exhausted="approval_gate" a human may reply with a count
-    at the exhaustion prompt to grant more attempts. `max_total_attempts` is an
+    Under on_exhausted="approval_gate" a human may reply with a count at the
+    exhaustion prompt to grant more attempts. `max_total_attempts` is an
     optional hard ceiling on the TOTAL attempts a run may reach that way
     (None = unbounded); an over-large grant is clamped to it.
     """
@@ -223,16 +218,14 @@ class RetryConfig(BaseModel):
 
 
 class HumanInLoopConfig(BaseModel):
-    """Per-build human pauses (Phase 51). Replaces the global
-    [workflow.implementation]/[workflow.qa] human_in_loop flags, so the pauses
-    work for ANY producer/gate (not only the built-in implementation/qa) and are
-    configured where the build is declared.
+    """Per-build human pauses, configured where the build is declared, so the
+    pauses work for ANY producer/gate (not only the built-in implementation/qa).
 
     - `after_producer`: pause after the producer(s) run, before the gate(s), on
-      every attempt (the generic replacement for the old implementation_approval).
+      every attempt.
     - `on_gate_fail`: pause when a gate fails; reply with an abort word
-      ('abort'/'no'/'stop') to stop the run, anything else to retry (the generic
-      replacement for the old qa_failure). Both default off.
+      ('abort'/'no'/'stop') to stop the run, anything else to retry. Both default
+      off.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -241,8 +234,7 @@ class HumanInLoopConfig(BaseModel):
 
 
 class BuildStep(_BaseStep):
-    """Phase 46: a declarative build step injected at a seam (formerly the
-    `retry` block).
+    """A declarative build step injected at a seam.
 
     Run producer(s), then gate(s), re-running the producers — with the failing
     gate's feedback injected — until a gate passes or `retry.max` is exhausted.
@@ -292,8 +284,8 @@ class StepResult(BaseModel):
     kind: str
     ok: bool = True
     detail: str = ""
-    # Phase 42: gate verdict. None = this step is not a gate; True/False = a
-    # gate's pass/fail. The retry engine fails closed on a None in a gate slot.
+    # Gate verdict. None = this step is not a gate; True/False = a gate's
+    # pass/fail. The retry engine fails closed on a None in a gate slot.
     passed: bool | None = None
     usage: TaskUsage | None = None
 
@@ -301,7 +293,7 @@ class StepResult(BaseModel):
 class WorkflowManifest(BaseModel):
     # seam name → ordered steps injected at that seam.
     steps: dict[str, list[Step]] = Field(default_factory=dict)
-    # Phase 42: id → step definition, referenced by retry blocks' produce/gate.
+    # id → step definition, referenced by retry blocks' produce/gate.
     defs: dict[str, StepDef] = Field(default_factory=dict)
 
     def for_seam(self, seam: str) -> list[Step]:
@@ -314,8 +306,8 @@ class WorkflowManifest(BaseModel):
     def _hashable_step(self, step: Step) -> dict:
         d = step.model_dump()
         if isinstance(step, BuildStep):
-            # Phase 42 resume safety: fold the referenced defs into the block's
-            # hashed form so editing a def *body* (not just the block) also
+            # Resume safety: fold the referenced defs into the block's hashed form
+            # so editing a def *body* (not just the block) also
             # refuses the resume. The block dump alone only names def ids, so
             # without this a changed lint.sh / agent would resume silently.
             d["_resolved_defs"] = {
@@ -329,8 +321,8 @@ class WorkflowManifest(BaseModel):
         """Stable hash of the resolved manifest.
 
         Snapshotted into the run's first checkpoint; compared on resume so a
-        mid-run orchestrator.toml edit refuses the resume (Phase 33 resume
-        safety) the same way an incompatible WORKFLOW_VERSION does (Phase 20).
+        mid-run orchestrator.toml edit refuses the resume, the same way an
+        incompatible WORKFLOW_VERSION does.
         """
         canonical = {
             seam: [self._hashable_step(s) for s in self.steps.get(seam, [])]
@@ -368,7 +360,7 @@ def _resolve_agent_frontmatter(project_root: Path, step: AiAgentStep) -> AiAgent
 
 
 def _validate_build_step(step: BuildStep, defs: dict[str, StepDef]) -> None:
-    """Validate a build step's references against [steps.defs.*] (Phase 46).
+    """Validate a build step's references against [steps.defs.*].
 
     retry.max (>= 1) and retry.on_exhausted are already enforced by the Pydantic
     model; this covers the cross-references and the gating guarantee.
@@ -390,10 +382,10 @@ def _validate_build_step(step: BuildStep, defs: dict[str, StepDef]) -> None:
             f"build step {step.id!r}: {both} listed as both producer and gate; "
             f"a step is one or the other."
         )
-    # Producer/gate ids must resolve to a [steps.defs.*] entry OR a built-in
-    # (Phase 46): `implementation` as a producer, `qa` as a gate. The built-ins
-    # let the synthesized default build — and any user build that wants the
-    # spine's own agents — reference them without a redundant def.
+    # Producer/gate ids must resolve to a [steps.defs.*] entry OR a built-in:
+    # `implementation` as a producer, `qa` as a gate. The built-ins let a user
+    # build that wants the spine's own agents reference them without a redundant
+    # def.
     for rid in step.produce:
         if rid not in defs and rid not in _BUILTIN_PRODUCER_IDS:
             raise ManifestError(
@@ -446,8 +438,8 @@ def load_manifest(
     # retry block can reference a def unambiguously by id.
     seen_ids: dict[str, str] = {}
 
-    # Phase 42: [steps.defs.*] — the producer/gate step definitions referenced
-    # by retry blocks. A table keyed by id (NOT a seam array), so pull it out
+    # [steps.defs.*] — the producer/gate step definitions referenced by retry
+    # blocks. A table keyed by id (NOT a seam array), so pull it out
     # before the seam loop and parse it first, so retry blocks can be validated
     # against it.
     defs_raw = raw.pop("defs", {})

@@ -14,12 +14,12 @@ Schema (one JSON object per line):
         "request": "add a tooltip showing what LTV means",
         "started_at": "2026-05-26T10:32:15.123456+00:00",
         "source": "cli" | "mcp",
-        "idempotency_key": "ci-job-789"        # Phase 18, optional
+        "idempotency_key": "ci-job-789"        # optional
     }
 
 The `idempotency_key` field is omitted entirely when the caller didn't
-supply one — older log entries (written before Phase 18) won't have
-it either. Consumers should treat its absence as "no key."
+supply one, and older log entries won't have it either. Consumers should
+treat its absence as "no key."
 
 Querying:
     tail .orchestrator/runs.jsonl                       # recent runs

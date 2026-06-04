@@ -1,21 +1,17 @@
-"""Summarizer agent (Phase 42) — the linchpin of the spine migration.
+"""Summarizer agent — produces the commit/PR metadata.
 
-Before Phase 42, `implementation.py` did two jobs: it edited files AND emitted a
-structured `ImplementationResult{summary, test_plan}` that fed the commit/PR.
-Those two fields were the only reason implementation needed a special result
-type, which blocked it from becoming a *generic* retry-block producer.
+The summarizer is a read-only agent that runs ONCE after the impl→QA retry block
+passes: it reads the plan + `git diff HEAD` and emits {summary, test_plan}. A
+diff-derived summary is more accurate than an agent's self-report (which drifts
+from what it actually changed), and being read-only it carries no risk to the
+tree. Keeping this concern out of the implementation producer is what lets that
+producer be a *generic* retry-block producer.
 
-This module relocates that concern. The summarizer is a read-only agent that
-runs ONCE after the impl→QA retry block passes: it reads the plan + `git diff
-HEAD` and emits both fields. A diff-derived summary is more accurate than an
-agent's self-report (which drifts from what it actually changed), and being
-read-only it carries no risk to the tree.
-
-It is the sibling of the docs agent (Phase 41): both are post-block, pre-commit,
+It is the sibling of the docs agent: both are post-block, pre-commit,
 read-the-diff agents. They stay separate — the summarizer *produces commit/PR
 metadata* (read-only); the docs agent *edits `.md` files*.
 
-Built on Phase 39's `run_structured_agent`, like every other agent.
+Built on `run_structured_agent`, like every other agent.
 """
 
 from __future__ import annotations
@@ -30,8 +26,8 @@ from orchestrator.usage import TaskUsage
 
 
 class SummaryResult(BaseModel):
-    # Phase 20: bump on incompatible shape changes (renamed/removed fields);
-    # pure additions of optional fields don't need a bump.
+    # Bump on incompatible shape changes (renamed/removed fields); pure additions
+    # of optional fields don't need a bump.
     schema_version: int = 1
     summary: str       # commit body + PR body
     test_plan: str     # PR "test plan" section
@@ -44,8 +40,8 @@ async def summarize(
     """Run the read-only summarizer agent and return its structured result.
 
     Reads the plan (in the user message) and the working-tree diff (via Bash),
-    then emits {summary, test_plan}. Tools/timeout come from [workflow.summarize]
-    (Phase 40); the tool set is read-only — no Edit/Write.
+    then emits {summary, test_plan}. Tools/timeout come from [workflow.summarize];
+    the tool set is read-only — no Edit/Write.
     """
     _cfg = load_config().workflow.summarize
     return await run_structured_agent(

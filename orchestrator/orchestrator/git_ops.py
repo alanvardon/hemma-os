@@ -5,11 +5,9 @@ The orchestrator has a hard split:
   - control  (branch creation, commit, PR)   → subprocess, deterministic
 
 This module owns the deterministic side. No prompts, no models, no
-structured output — just shell commands wrapped in Python. Ports of
-.claude/skills/create-feature-branch.md (Phase 6a) and
-.claude/skills/commit-and-open-pr.md (Phase 6d), with Phase 15 splitting
-the PR-creation pipeline into three idempotent steps (commit, push,
-pr_create) so a failure at any step is recoverable via @task caching.
+structured output — just shell commands wrapped in Python. The PR-creation
+pipeline is three idempotent steps (commit, push, pr_create) so a failure at
+any step is recoverable via @task caching.
 """
 
 import json
@@ -138,8 +136,8 @@ def verify_clean_tree() -> None:
 def working_tree_has_changes(base_branch: str | None = None) -> bool:
     """True if the run has anything to ship, False if the build produced no diff.
 
-    Phase 46d: checked after the build (impl ⇄ qa) passes, before summarize /
-    docs / commit / push / pr. "Anything to ship" means either an uncommitted
+    Checked after the build (impl ⇄ qa) passes, before summarize / docs /
+    commit / push / pr. "Anything to ship" means either an uncommitted
     change in the working tree (the fresh build's edits) OR the branch is already
     ahead of base (the resume-after-commit case, where a prior attempt committed
     but failed before push). A False return — a clean tree with no commits ahead
@@ -218,10 +216,9 @@ def create_branch(plan: PlanResult, max_slug_length: int = 50, thread_id: str = 
 class CommitAndPrError(UserActionError):
     """Raised when any of commit/push/pr_create can't safely complete.
 
-    Phase 15 split the monolithic commit_and_pr into three idempotent
-    steps, but they share one error type because callers treat them
-    uniformly: log, surface the thread_id, await a `resume_run` from
-    the user once the underlying issue is fixed.
+    commit/push/pr_create are three idempotent steps but share one error type
+    because callers treat them uniformly: log, surface the thread_id, await a
+    `resume_run` from the user once the underlying issue is fixed.
     """
 
     def __init__(self, message: str) -> None:
@@ -296,8 +293,8 @@ def _assert_on_branch(branch: str) -> None:
 
     The single most important check we make at this layer — accidentally
     committing to main is the failure mode that takes the longest to
-    recover from. Phase 15 calls this from each split task so the check
-    isn't lost when the monolithic function is.
+    recover from. Each of commit/push/pr_create calls this so the check is
+    never skipped.
     """
     current = _current_branch()
     if current != branch:
@@ -378,7 +375,7 @@ def push(branch: str, base_branch: str | None = None, auto_rebase: bool = True) 
     already up to date ("Everything up-to-date"), and `-u` re-asserting
     upstream tracking is a no-op if already set.
 
-    **Conflict handling (Phase 22).** Fetches origin first, then checks
+    **Conflict handling.** Fetches origin first, then checks
     whether `origin/<base_branch>` has advanced since branch creation.
     If so:
       - `auto_rebase=True` (default): runs `git rebase origin/<base_branch>`.
@@ -434,9 +431,8 @@ def push(branch: str, base_branch: str | None = None, auto_rebase: bool = True) 
         ) from e
 
 
-# Phase 40: the PR label is auto-derived from the plan's type — no more operator
-# `labels` config. Plan type "fix" maps to GitHub's conventional "bug" label;
-# an unknown type yields no label.
+# The PR label is auto-derived from the plan's type. Plan type "fix" maps to
+# GitHub's conventional "bug" label; an unknown type yields no label.
 _PLAN_TYPE_LABELS = {
     "feature": "feature",
     "fix": "bug",

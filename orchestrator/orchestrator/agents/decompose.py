@@ -17,12 +17,12 @@ from orchestrator.prompt_loader import load_prompt
 _DECOMPOSE_SYSTEM_PROMPT = load_prompt("decompose")
 
 
-# Phase 55: the unit of a decomposed plan. This model is the contract Phase 56's
-# per-task loop depends on, so its fields are deliberately limited to (a) what a
-# fresh-context producer / a gate / a human reviewer actually need, and (b) what a
-# plan-only decomposer can produce reliably. That rules out `files` (a guess
-# without repo access — misleading if wrong) and any `depends_on`/DAG (order is
-# list order; later tasks see earlier tasks' edits via the working tree).
+# The unit of a decomposed plan. This model is the contract the per-task loop
+# depends on, so its fields are deliberately limited to (a) what a fresh-context
+# producer / a gate / a human reviewer actually need, and (b) what a plan-only
+# decomposer can produce reliably. That rules out `files` (a guess without repo
+# access — misleading if wrong) and any `depends_on`/DAG (order is list order;
+# later tasks see earlier tasks' edits via the working tree).
 class Task(BaseModel):
     id: str = Field(
         description="stable, unique kebab-case slug for this task, e.g. 'add-toggle-markup'"
@@ -50,8 +50,8 @@ class _DecompositionSchema(BaseModel):
 
 
 class DecompositionResult(_DecompositionSchema):
-    # Phase 20-style schema version. Bump on incompatible shape changes; pure
-    # additions of optional fields don't need a bump. Not part of the tool schema.
+    # Schema version. Bump on incompatible shape changes; pure additions of
+    # optional fields don't need a bump. Not part of the tool schema.
     schema_version: int = 1
     # Populated after the API call returns; not part of the LLM tool schema.
     usage: TaskUsage | None = None
@@ -62,8 +62,8 @@ def _build_user_message(plan_text: str, max_tasks: int) -> str:
 
     Pure (no I/O) so the cap behaviour is unit-testable without the SDK. The
     prompt already asks for the fewest tasks; this is the soft cap. There is no
-    hard validation error — Phase 55 is execution-inert, so an over-split run
-    should surface for review, not abort."""
+    hard validation error — an over-split run should surface for review, not
+    abort."""
     guidance = (
         f"\n\nProduce at most {max_tasks} task(s); prefer the fewest tasks that "
         "are each independently checkable."
@@ -76,11 +76,11 @@ def _build_user_message(plan_text: str, max_tasks: int) -> str:
 async def decompose(
     plan_text: str, model: str, max_tasks: int = 0
 ) -> DecompositionResult:
-    """Turn an approved plan into an ordered task list (Phase 55).
+    """Turn an approved plan into an ordered task list.
 
     Same forced-tool-use structured-output path as planning.plan(), via the shared
-    run_structured_completion (Phase 60). Reads ONLY `plan_text` — no repo access
-    (repo-aware decomposition is a later phase).
+    run_structured_completion. Reads ONLY `plan_text` — no repo access (repo-aware
+    decomposition is a later phase).
     """
     return await run_structured_completion(
         system_prompt=_DECOMPOSE_SYSTEM_PROMPT,

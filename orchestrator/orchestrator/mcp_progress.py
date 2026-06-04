@@ -1,4 +1,4 @@
-"""Workflow → MCP progress streaming (Phase 19).
+"""Workflow → MCP progress streaming.
 
 Wraps `workflow.astream(stream_mode="updates")` and routes per-task
 completion events (and heartbeat ticks during long-running tasks) to

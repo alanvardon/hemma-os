@@ -1,4 +1,4 @@
-"""Generic gate-retry engine (Phase 42, Part A).
+"""Generic gate-retry engine.
 
 A *retry block* is a guarded loop: one or more PRODUCER steps that mutate the
 working tree, plus one or more GATE steps that judge it and return pass/fail +
@@ -7,14 +7,14 @@ injected — until a gate passes or the retry budget is exhausted.
 
 This module is the engine ONLY. It knows nothing about implementation, QA, or
 the manifest: producers and gates are supplied as injected async callables, so
-the same driver serves both the built-in spine (Part B) and user-declared
-blocks in orchestrator.toml (Part C).
+the same driver serves both the built-in spine and user-declared blocks in
+orchestrator.toml.
 
 `run_retry_block` is a plain async function (not a @task) and is meant to run in
 the entrypoint body, because its optional approval gates call interrupt(), which
 must run there — the same constraint as steps.run_seam.
 
-Invariant carried from Phase 39: **gates fail closed.** A gate must report
+Invariant: **gates fail closed.** A gate must report
 `passed` True or False; a gate slot yielding `passed=None` is a configuration
 error and raises (it never defaults to a pass).
 """
@@ -33,8 +33,8 @@ from orchestrator.manifest import StepResult
 # Resume/abort vocabulary, shared with run_seam's approval gates.
 _ABORT_WORDS = frozenset({"abort", "no", "stop"})
 
-# Phase 52: at the on_exhausted="approval_gate" prompt a human may grant MORE
-# attempts by replying with a positive integer. Accepted forms: a bare int
+# At the on_exhausted="approval_gate" prompt a human may grant MORE attempts by
+# replying with a positive integer. Accepted forms: a bare int
 # ("2"), "+N" ("+2"), "retry N", or "more N". An optional "attempt(s)" suffix is
 # tolerated. Parsed strictly so a plan/feedback reply that isn't clearly a count
 # falls through to "proceed".
@@ -59,8 +59,8 @@ class RetryBlock(BaseModel):
     gates: list[str]
     max_retries: int = Field(default=3, ge=1)
     on_exhausted: Literal["abort", "approval_gate", "proceed"] = "abort"
-    # Phase 52: optional hard ceiling on the TOTAL number of attempts a run may
-    # reach via extensions. None = unbounded (a human must keep typing numbers).
+    # Optional hard ceiling on the TOTAL number of attempts a run may reach via
+    # extensions. None = unbounded (a human must keep typing numbers).
     # A grant that would push past it is clamped; a grant at the cap can't extend.
     max_total_attempts: int | None = Field(default=None, ge=1)
 
@@ -80,7 +80,7 @@ def feedback_section(detail: str) -> str:
 
 
 def _parse_extend(reply: object) -> int | None:
-    """Parse an exhaustion reply as a request for N more attempts (Phase 52).
+    """Parse an exhaustion reply as a request for N more attempts.
 
     Returns a positive int N if the reply is *clearly* a count ("2", "+2",
     "retry 2", "more 2"), else None (let the caller treat it as abort/proceed).
@@ -120,11 +120,11 @@ async def run_retry_block(
 
     `interrupt_fn` is used only for on_exhausted="approval_gate".
 
-    Phase 52: under on_exhausted="approval_gate" a human may reply with a count
-    (e.g. "2") to GRANT more attempts and keep looping, instead of only choosing
-    abort vs proceed-as-is. The budget grows dynamically; `attempt` keeps counting
-    across extensions. To avoid a double prompt on the last budgeted attempt (the
-    Phase 51 on_gate_failed pause AND then this exhaustion gate), the per-attempt
+    Under on_exhausted="approval_gate" a human may reply with a count (e.g. "2")
+    to GRANT more attempts and keep looping, instead of only choosing abort vs
+    proceed-as-is. The budget grows dynamically; `attempt` keeps counting across
+    extensions. To avoid a double prompt on the last budgeted attempt (the
+    on_gate_failed pause AND then this exhaustion gate), the per-attempt
     on_gate_failed pause is suppressed on the final budgeted attempt when
     on_exhausted="approval_gate" — the richer exhaustion prompt owns that moment.
 
@@ -132,8 +132,8 @@ async def run_retry_block(
     past the block (e.g. commit) or treat it as a failure.
     """
     feedback: str | None = None
-    # Phase 37: in fully-autonomous mode the loop never exhausts — it re-produces
-    # with the failing gate's feedback until a gate passes (or check_cancel stops
+    # In fully-autonomous mode the loop never exhausts — it re-produces with the
+    # failing gate's feedback until a gate passes (or check_cancel stops
     # it, e.g. a safety ceiling). An unbounded budget makes the inner loop's
     # `attempt < budget` always true, so the exhaustion branch / on_exhausted are
     # never reached.
@@ -246,7 +246,7 @@ def _handle_exhausted(
 
 def _exhausted_ask(attempts: int, remaining: int | None) -> str:
     """The exhaustion prompt text — advertises the number option when there is
-    headroom for more attempts (Phase 52)."""
+    headroom for more attempts."""
     if remaining is None:
         extend_clause = "reply a number N to grant N more attempts, "
     elif remaining > 0:

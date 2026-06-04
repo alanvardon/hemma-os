@@ -18,10 +18,10 @@ What differs from implementation.py:
     travel together as one typed object.
 
 The agent loop itself (in-process emit tool, the `query()` loop, the
-fail-closed guard, and usage extraction) lives in
-`run_structured_agent` (Phase 39). This module supplies only the
-QA-specific prompt, tools, emit-tool schema, and the QaResult factory —
-plus the scripted gate, which runs before any LLM call.
+fail-closed guard, and usage extraction) lives in `run_structured_agent`.
+This module supplies only the QA-specific prompt, tools, emit-tool schema,
+and the QaResult factory — plus the scripted gate, which runs before any
+LLM call.
 """
 
 from dotenv import load_dotenv
@@ -48,8 +48,8 @@ _QA_SYSTEM_PROMPT = load_prompt("qa")
 
 
 class QaResult(BaseModel):
-    # Phase 20: bump on incompatible shape changes (renamed/removed fields);
-    # pure additions of optional fields don't need a bump.
+    # Bump on incompatible shape changes (renamed/removed fields); pure additions
+    # of optional fields don't need a bump.
     schema_version: int = 1
     result: Literal["PASS", "FAIL"]
     failures: str | None = None
@@ -77,7 +77,7 @@ async def qa(plan: PlanResult, model: str) -> QaResult:
     Edit or Write. The orchestrator (not the agent) decides what
     happens after a FAIL.
     """
-    # --- Scripted QA gate (Phase 28) ------------------------------------
+    # --- Scripted QA gate -----------------------------------------------
     # Run before the LLM. Any non-zero exit from a script short-circuits
     # the whole QA phase: no prompt is built, no model is called.
     _config = load_config()
@@ -95,9 +95,9 @@ async def qa(plan: PlanResult, model: str) -> QaResult:
 
     # Scripts passed → run the read-only QA agent. The agent loop, the
     # in-process emit tool, the fail-closed guard, and usage extraction all
-    # live in run_structured_agent now (Phase 39). The pinned MCP tool
-    # (emit_qa_result) is appended to allowed_tools by the runner.
-    _qa = _config.workflow.qa  # Phase 40: tools/timeout from [workflow.qa]
+    # live in run_structured_agent. The pinned MCP tool (emit_qa_result) is
+    # appended to allowed_tools by the runner.
+    _qa = _config.workflow.qa  # tools/timeout from [workflow.qa]
     return await run_structured_agent(
         system_prompt=_QA_SYSTEM_PROMPT,
         user_message=_build_user_message(plan),

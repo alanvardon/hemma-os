@@ -1,4 +1,4 @@
-"""Runtime execution of injected steps (Phase 33).
+"""Runtime execution of injected steps.
 
 Plain async functions, one per executable step type. workflow.py wraps each
 in a @task so they inherit checkpointing, tracing, and cancel/usage handling
@@ -72,9 +72,9 @@ def _run_script_sync(
     if proc.returncode != 0:
         report = err or out or "(no output)"
         if as_gate:
-            # Phase 42: as a retry-block gate, a non-zero exit is a FAIL verdict
-            # (not an abort). Its output becomes the feedback the engine injects
-            # into the next producer attempt.
+            # As a retry-block gate, a non-zero exit is a FAIL verdict (not an
+            # abort). Its output becomes the feedback the engine injects into the
+            # next producer attempt.
             return StepResult(
                 step_id=step.id, kind="script", ok=True, passed=False, detail=report
             )
@@ -101,8 +101,8 @@ async def execute_script(
 ) -> StepResult:
     """Run a script step off the event loop (subprocess.run is blocking).
 
-    `as_gate` (Phase 42): when True the step is a retry-block gate — a non-zero
-    exit returns `passed=False` with the output as feedback instead of raising.
+    `as_gate`: when True the step is a retry-block gate — a non-zero exit returns
+    `passed=False` with the output as feedback instead of raising.
     """
     return await asyncio.to_thread(_run_script_sync, step, repo_root, as_gate=as_gate)
 
@@ -112,7 +112,7 @@ def _coerce_passed(raw: object) -> bool:
 
     The SDK normally delivers a JSON boolean as a Python bool; coerce common
     string spellings defensively (anything else is treated as a FAIL — the
-    fail-closed posture carried from Phase 39)."""
+    fail-closed posture)."""
     if isinstance(raw, bool):
         return raw
     return str(raw).strip().lower() in ("true", "1", "yes")
@@ -128,12 +128,12 @@ async def execute_ai_agent(
 ) -> StepResult:
     """Run a markdown-defined agent against the current working tree.
 
-    The agent loop lives in run_structured_agent (Phase 39); this function
-    resolves the agent's markdown prompt, runs the loop, and shapes the result
-    into a StepResult. The agent gets the plan in the user message and runs
+    The agent loop lives in run_structured_agent; this function resolves the
+    agent's markdown prompt, runs the loop, and shapes the result into a
+    StepResult. The agent gets the plan in the user message and runs
     `git diff HEAD` itself to see the changes (like the qa agent).
 
-    Phase 42 (retry-block roles):
+    Retry-block roles:
     - `feedback` (producer): on a retry, the failing gate's detail is appended
       to the user message under a standard heading, so the producer can target
       its fixes — the same feedback-injection the built-in implementation
@@ -194,7 +194,7 @@ async def execute_ai_agent(
             usage=usage,
         )
 
-    # Phase 46a: a step may override the role-default tools; None inherits it.
+    # A step may override the role-default tools; None inherits it.
     allowed_tools = step.allowed_tools if step.allowed_tools is not None else default_tools
 
     log.info(

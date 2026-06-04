@@ -1,6 +1,6 @@
-"""Debug CLI for the orchestrator (Phase 10).
+"""Debug CLI for the orchestrator.
 
-Not the production interface — that's the MCP server (Phase 11). This
+Not the production interface — that's the MCP server. This
 exists so you can run the workflow end-to-end from a single shell command
 and confirm "is the orchestrator itself broken?" without Claude Code +
 MCP indirection layers in the picture.
@@ -223,7 +223,7 @@ def _print_usage_banner(result: dict) -> None:
 def _report_failure(thread_id: str, exc: Exception) -> None:
     """Print a human-readable error and exit non-zero.
 
-    Banner style diverges per error class (Phase 21):
+    Banner style diverges per error class:
       UserActionError  — tells the user exactly what to do, then how to resume
       RetriableError   — transient; resume_run can be called immediately
       FatalError       — non-retriable; start a fresh run
@@ -330,8 +330,8 @@ async def run() -> None:
         async with build_workflow(config=effective_config) as workflow:
             result = await _run_with_progress(workflow, request, config)
 
-            # Phase 8: plan-approval interrupt loop. Each user reply
-            # either approves ("yes") or triggers a re-plan with feedback.
+            # Plan-approval interrupt loop. Each user reply either approves
+            # ("yes") or triggers a re-plan with feedback.
             while "__interrupt__" in result:
                 interrupt_val = result["__interrupt__"][0].value
                 plan = interrupt_val.get("plan")
@@ -340,7 +340,7 @@ async def run() -> None:
                     print(f"\n--- Plan for approval (thread_id: {thread_id}) ---")
                     print(plan["plan_text"])
                 else:
-                    # A non-plan gate (branch/impl/pr approval, or a Phase 33
+                    # A non-plan gate (branch/impl/pr approval, or an
                     # approval_gate step): just show the prompt.
                     kind = interrupt_val.get("kind", "approval")
                     print(f"\n--- {kind} (thread_id: {thread_id}) ---")
@@ -358,7 +358,7 @@ async def run() -> None:
                 _print_qa_failure(result, thread_id)
                 sys.exit(1)
             elif status == "aborted":
-                # Phase 33: an approval_gate step was resumed with an abort.
+                # An approval_gate step was resumed with an abort.
                 print()
                 print(_RULE)
                 print(f"Workflow aborted at approval gate: {result.get('aborted_at')}")
@@ -368,8 +368,8 @@ async def run() -> None:
                 _print_usage_banner(result)
                 sys.exit(1)
             elif status == "no_changes":
-                # Phase 46d: QA passed but the build produced no diff — nothing
-                # to commit, so no PR was opened. Not a failure; exit 0.
+                # QA passed but the build produced no diff — nothing to commit, so
+                # no PR was opened. Not a failure; exit 0.
                 print()
                 print(_RULE)
                 print("Build passed QA but produced no changes — nothing to commit")

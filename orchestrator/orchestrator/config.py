@@ -1,4 +1,4 @@
-"""User-facing config file for the orchestrator (Phase 13).
+"""User-facing config file for the orchestrator.
 
 Reads orchestrator.toml from the working directory (project root) and
 exposes a typed OrchestratorConfig. Missing file → all defaults.
@@ -27,7 +27,7 @@ Sample orchestrator.toml (all fields optional, defaults shown):
     human_in_loop = true                  # pause for plan review before any code
 
     [workflow.decompose]
-    max_tasks = 0                         # 0 = uncapped; >0 = advisory task cap (Phase 55)
+    max_tasks = 0                         # 0 = uncapped; >0 = advisory task cap
 
     [workflow.branch]
     max_slug_length = 50
@@ -35,17 +35,17 @@ Sample orchestrator.toml (all fields optional, defaults shown):
     [workflow.implementation]
     allowed_tools = ["Read", "Edit", "Write", "Bash"]
     # A built-in's model/tools may instead come from its prompt frontmatter
-    # (.orchestrator/prompts/<step>.md); a key set here overrides it (Phase 54).
+    # (.orchestrator/prompts/<step>.md); a key set here overrides it.
 
     [workflow.qa]
     allowed_tools = ["Read", "Grep", "Bash"]
     # The impl↔QA retry budget lives on [workflow.task_build].retry.max
 
     [workflow.docs]
-    model = "claude-haiku-4-5-20251001"    # baked-in docs agent (Phase 41)
+    model = "claude-haiku-4-5-20251001"    # baked-in docs agent
 
     [workflow.summarize]
-    model = "claude-haiku-4-5-20251001"    # baked-in summarizer agent (Phase 42)
+    model = "claude-haiku-4-5-20251001"    # baked-in summarizer agent
 
     [git]
     auto_rebase = true   # rebase onto origin/<base_branch> if it moved before push
@@ -71,13 +71,13 @@ from orchestrator.manifest import HumanInLoopConfig, RetryConfig
 from orchestrator.paths import find_project_root
 
 
-# Env var names for the per-invocation overrides exposed in Phase 31.
-# Kept here (not in the override function) so they're easy to find and
+# Env var names for the per-invocation overrides. Kept here (not in the override
+# function) so they're easy to find and
 # document in one place — and so docs/tests can import the constants
 # instead of re-typing the strings.
 ENV_APPROVE_PLAN = "ORCHESTRATOR_APPROVE_PLAN"
 ENV_BASE_BRANCH = "ORCHESTRATOR_BASE_BRANCH"
-# Phase 37: fully-autonomous mode + its safety rails.
+# Fully-autonomous mode + its safety rails.
 ENV_FULLY_AUTONOMOUS = "ORCHESTRATOR_FULLY_AUTONOMOUS"
 ENV_AUTONOMOUS_MAX_SECONDS = "ORCHESTRATOR_AUTONOMOUS_MAX_SECONDS"
 ENV_AUTONOMOUS_MAX_COST_USD = "ORCHESTRATOR_AUTONOMOUS_MAX_COST_USD"
@@ -119,16 +119,16 @@ def _parse_float_env(name: str, value: str) -> float:
 
 # Default model used by any workflow step whose `model` is left unset.
 _DEFAULT_MODEL = "claude-sonnet-4-6"
-# The docs spine task (Phase 41) defaults to haiku — a read-diff / edit-md task,
-# not a reasoning task. Provisioned here so Phase 41 lands straight into it.
+# The docs spine task defaults to haiku — a read-diff / edit-md task, not a
+# reasoning task.
 _DEFAULT_DOCS_MODEL = "claude-haiku-4-5-20251001"
-# The summarizer (Phase 42) reads the plan + `git diff HEAD` and emits the
+# The summarizer reads the plan + `git diff HEAD` and emits the
 # commit/PR summary + test_plan. Like docs it's a cheap, read-only agent → haiku.
 _DEFAULT_SUMMARIZE_MODEL = "claude-haiku-4-5-20251001"
 
 
 class WorkflowStepConfig(BaseModel):
-    """Per-step config for one built-in spine step (Phase 40).
+    """Per-step config for one built-in spine step.
 
     One [workflow.<step>] table carries everything for that step: which model
     it uses, whether it pauses for a human, its tool permissions, and an
@@ -148,26 +148,24 @@ class WorkflowBranchConfig(WorkflowStepConfig):
 
 
 class WorkflowDecomposeConfig(WorkflowStepConfig):
-    # Phase 55: advisory cap on how many tasks the decomposer may emit. 0 =
-    # uncapped. > 0 is passed to the decomposer as soft guidance (not a hard
-    # validation error — this phase is execution-inert, so an over-split run
-    # should surface for review rather than abort).
+    # Advisory cap on how many tasks the decomposer may emit. 0 = uncapped. > 0 is
+    # passed to the decomposer as soft guidance, not a hard validation error — an
+    # over-split run should surface for review rather than abort.
     max_tasks: int = 0
 
 
 class WorkflowTaskBuildConfig(BaseModel):
-    """Phase 56: the recipe applied to EACH decomposed task by the per-task station.
+    """The recipe applied to EACH decomposed task by the per-task station.
 
     The plan owns *what* the tasks are (the decomposer's list); this owns *how*
     each task is built and checked. `produce`/`gate` reference [steps.defs.*] ids
     or the built-in `implementation` producer / `qa` gate. Mirrors a BuildStep's
     fields so the station can reuse the existing build engine per task.
 
-    Defaults preserve today's behaviour: implementation produces, QA gates *each*
-    task (so the implement⇄QA auto-fix retry loop runs per task), and gate
-    exhaustion pauses-and-asks (Phase 52) rather than hard-aborting. Point `gate`
-    at a cheap script for the cost-shaped pattern (cheap per-task check + one
-    final whole-diff QA — see [workflow.final_qa])."""
+    Defaults: implementation produces, QA gates *each* task (so the implement⇄QA
+    auto-fix retry loop runs per task), and gate exhaustion pauses-and-asks rather
+    than hard-aborting. Point `gate` at a cheap script for the cost-shaped pattern
+    (cheap per-task check + one final whole-diff QA — see [workflow.final_qa])."""
 
     model_config = ConfigDict(extra="forbid")
     produce: list[str] = Field(default_factory=lambda: ["implementation"])
@@ -179,7 +177,7 @@ class WorkflowTaskBuildConfig(BaseModel):
 
 
 class WorkflowFinalQaConfig(BaseModel):
-    """Phase 56: an optional single whole-diff acceptance check after ALL tasks pass.
+    """An optional single whole-diff acceptance check after ALL tasks pass.
 
     Default empty — QA runs per-task (see [workflow.task_build].gate), so a final
     pass is off by default. Set gate = ["qa"] (or your own script/agent ids) to
@@ -198,14 +196,12 @@ class WorkflowConfig(BaseModel):
     planning: WorkflowStepConfig = Field(
         default_factory=lambda: WorkflowStepConfig(human_in_loop=True)
     )
-    # Phase 55: turns the approved plan into an ordered task list. Runs after
-    # planning, before branch. Model inherits default_model unless its prompt
-    # frontmatter or [workflow.decompose] sets one. Execution-inert in Phase 55 —
-    # the list is reviewed + checkpointed but nothing consumes it yet (Phase 56).
+    # Turns the approved plan into an ordered task list. Runs after planning, before
+    # branch. Model inherits default_model unless its prompt frontmatter or
+    # [workflow.decompose] sets one.
     decompose: WorkflowDecomposeConfig = Field(default_factory=WorkflowDecomposeConfig)
-    # Phase 56: the per-task execution loop. task_build is the recipe run for each
-    # decomposed task (the station that replaced the single impl⇄QA build);
-    # final_qa is an optional once-after-the-loop whole-diff check.
+    # The per-task execution loop. task_build is the recipe run for each decomposed
+    # task; final_qa is an optional once-after-the-loop whole-diff check.
     task_build: WorkflowTaskBuildConfig = Field(default_factory=WorkflowTaskBuildConfig)
     final_qa: WorkflowFinalQaConfig = Field(default_factory=WorkflowFinalQaConfig)
     branch: WorkflowBranchConfig = Field(default_factory=WorkflowBranchConfig)
@@ -222,8 +218,8 @@ class WorkflowConfig(BaseModel):
             model=_DEFAULT_DOCS_MODEL, timeout=120
         )
     )
-    # Phase 42: derives the commit/PR summary + test_plan from the plan + diff,
-    # after the impl→QA retry block passes. Read-only tools (Bash for git diff).
+    # Derives the commit/PR summary + test_plan from the plan + diff, after the
+    # impl→QA retry block passes. Read-only tools (Bash for git diff).
     summarize: WorkflowStepConfig = Field(
         default_factory=lambda: WorkflowStepConfig(
             model=_DEFAULT_SUMMARIZE_MODEL,
@@ -241,8 +237,8 @@ class PreHooksConfig(BaseModel):
 
 
 class QaConfig(BaseModel):
-    """Scripted QA gate (Phase 28): the executable checks under scripts_dir that
-    run before the QA agent. Distinct from [workflow.qa] (the QA agent step)."""
+    """Scripted QA gate: the executable checks under scripts_dir that run before
+    the QA agent. Distinct from [workflow.qa] (the QA agent step)."""
 
     model_config = ConfigDict(extra="forbid")
     scripts_dir: str = ".orchestrator/qa"
@@ -259,8 +255,7 @@ class PrConfig(BaseModel):
     base_branch: str = "main"
     draft: bool = False
     reviewers: list[str] = Field(default_factory=list)
-    # `labels` removed in Phase 40 — the PR label is auto-derived from plan.type
-    # in git_ops.pr_create.
+    # The PR label is auto-derived from plan.type in git_ops.pr_create.
 
 
 class AuditConfig(BaseModel):
@@ -274,10 +269,10 @@ class OrchestratorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     default_model: str = _DEFAULT_MODEL
     db_path: str = ".orchestrator/checkpoints.db"
-    # Phase 37: never pause for a human. Suppresses every human_in_loop gate,
-    # auto-approves approval_gate steps, and makes build retries unbounded (the
-    # produce⇄gate loop runs until a gate passes — no exhaustion). For CI /
-    # unattended runs. Per-step gate settings are bypassed at runtime, not erased.
+    # Never pause for a human. Suppresses every human_in_loop gate, auto-approves
+    # approval_gate steps, and makes build retries unbounded (the produce⇄gate loop
+    # runs until a gate passes — no exhaustion). For CI / unattended runs. Per-step
+    # gate settings are bypassed at runtime, not erased.
     fully_autonomous: bool = False
     # Safety rails for the unbounded loop above; enforced ONLY when
     # fully_autonomous is true. Both <= 0 mean "no ceiling" (loop until solved).
@@ -297,15 +292,15 @@ class OrchestratorConfig(BaseModel):
         return step.model if step.model is not None else self.default_model
 
 
-# Phase 54: built-in spine steps whose model/tools may be driven by their prompt
-# file's frontmatter. branch/commit run no agent (deterministic git ops), so
-# they have no prompt and are absent here.
+# Built-in spine steps whose model/tools may be driven by their prompt file's
+# frontmatter. branch/commit run no agent (deterministic git ops), so they have no
+# prompt and are absent here.
 _BUILTIN_PROMPT_STEPS: tuple[str, ...] = (
     "planning", "decompose", "implementation", "qa", "docs", "summarize",
 )
 # Only the operational dials cross over from frontmatter. human_in_loop is
 # deliberately excluded: planning/branch/commit own that flag, and the build's
-# implementation/qa pauses moved to the build step in Phase 51 (guarded above).
+# implementation/qa pauses live on the build step (guarded above).
 _BUILTIN_FRONTMATTER_FIELDS: tuple[str, ...] = (
     "model", "allowed_tools", "disallowed_tools", "timeout",
 )
@@ -314,7 +309,7 @@ _BUILTIN_FRONTMATTER_FIELDS: tuple[str, ...] = (
 def _merge_builtin_frontmatter(
     config: OrchestratorConfig, raw_workflow: dict
 ) -> OrchestratorConfig:
-    """Let a built-in agent's prompt frontmatter supply its model/tools (Phase 54).
+    """Let a built-in agent's prompt frontmatter supply its model/tools.
 
     A prompt downloaded into .orchestrator/prompts/<step>.md drives that built-in
     the same way frontmatter drives a [steps.defs.*] agent: frontmatter is the
@@ -377,16 +372,14 @@ def load_config(path: Path | None = None) -> OrchestratorConfig:
         # extra="forbid" can guard the config keys without rejecting the manifest
         # table that shares this file.
         data.pop("steps", None)
-        # The old impl⇄QA retry budget (top-level `max_retries`, relocated to
-        # [workflow.qa].max_retries in Phase 40) was superseded by the build
-        # step's retry.max in Phase 47 and removed entirely here. Fail loud with
-        # a migration message rather than letting extra="forbid" emit a generic
-        # "unexpected key" — the single source of truth is now
-        # [workflow.task_build].retry.max.
+        # The old impl⇄QA retry budget (`max_retries`) was superseded by the build
+        # step's retry.max and removed. Fail loud with a migration message rather
+        # than letting extra="forbid" emit a generic "unexpected key" — the single
+        # source of truth is now [workflow.task_build].retry.max.
         _reject_removed_max_retries(data)
         config = OrchestratorConfig.model_validate(data)
         raw_workflow = data.get("workflow") or {}
-    # Phase 51: the build's human pauses moved onto the build step's own
+    # The build's human pauses live on the build step's own
     # human_in_loop = { after_producer, on_gate_fail }. The global
     # [workflow.implementation]/[workflow.qa] human_in_loop flags no longer drive
     # anything — fail loud rather than silently ignoring a stale `true`.
@@ -397,9 +390,9 @@ def load_config(path: Path | None = None) -> OrchestratorConfig:
             "build step instead, e.g. in its [[steps.work]] entry:\n"
             "    human_in_loop = { after_producer = true, on_gate_fail = true }"
         )
-    # Phase 54: a built-in agent's prompt frontmatter (model/tools) drives that
-    # step, with [workflow.<step>] overriding. No-op when prompts have no
-    # frontmatter (today's default).
+    # A built-in agent's prompt frontmatter (model/tools) drives that step, with
+    # [workflow.<step>] overriding. No-op when prompts have no frontmatter (the
+    # default).
     return _merge_builtin_frontmatter(config, raw_workflow)
 
 
@@ -412,7 +405,7 @@ def apply_overrides(
     autonomous_max_seconds: int | None = None,
     autonomous_max_cost_usd: float | None = None,
 ) -> OrchestratorConfig:
-    """Overlay per-invocation overrides on a loaded config (Phase 31).
+    """Overlay per-invocation overrides on a loaded config.
 
     Resolution order per knob: explicit kwarg → env var → unchanged.
     Returns a NEW OrchestratorConfig — never mutates the input.
@@ -447,8 +440,8 @@ def apply_overrides(
         updates["workflow"] = config.workflow.model_copy(update=workflow_updates)
     if base_branch is not None:
         updates["pr"] = config.pr.model_copy(update={"base_branch": base_branch})
-    # Phase 37: top-level autonomous knobs (no nested workflow rewrite — the flag
-    # is read at the interrupt sites, which apply_overrides can't reach anyway).
+    # Top-level autonomous knobs (no nested workflow rewrite — the flag is read at
+    # the interrupt sites, which apply_overrides can't reach anyway).
     if fully_autonomous is not None:
         updates["fully_autonomous"] = fully_autonomous
     if autonomous_max_seconds is not None:

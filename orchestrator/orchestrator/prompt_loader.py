@@ -1,4 +1,4 @@
-"""Prompt loader (Phase 26).
+"""Prompt loader.
 
 The single place that turns a prompt `.md` on disk into a system-prompt body.
 Two entry points share one kernel (read_prompt_body → frontmatter-stripped body):
@@ -120,7 +120,7 @@ def load_prompt(name: str) -> str:
 
 
 def load_agent_prompt(project_root: Path, agent: str) -> str:
-    """Return a generic ai_agent step's prompt body (Phase 33/48).
+    """Return a generic ai_agent step's prompt body.
 
     `agent` is the prompt file's path relative to `project_root`, full filename
     included, so the prompt file is <project_root>/<agent>. Mirrors

@@ -1,4 +1,4 @@
-"""Idempotency keys (Phase 18).
+"""Idempotency keys.
 
 Caller-supplied `idempotency_key` on `implement_feature`: a second
 call with the same key returns the existing thread's current state
@@ -23,7 +23,7 @@ When the orchestrator moves off a single dev machine onto infra, the
 backend ports to a `idempotency_keys` table in the same Postgres
 database that replaces `AsyncSqliteSaver`. The interface
 (`reserve` / `lookup` / `purge_older_than`) stays; the bodies change.
-See PLAN.md "Production port" note in Phase 16 — the same logic
+The same production-port note that applies to the cancellation store
 applies here.
 """
 

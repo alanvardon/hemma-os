@@ -1,4 +1,4 @@
-"""Shared agent-loop runner (Phase 39).
+"""Shared agent-loop runner.
 
 `implementation.py`, `qa.py`, and `steps.execute_ai_agent` all ran the SAME
 agent-loop body and differed only in their result schema:
@@ -177,8 +177,8 @@ async def run_structured_agent(
             if isinstance(msg, ResultMessage):
                 result_msg = msg
 
-    # Phase 40: optional wall-clock timeout over the whole agent loop. None =
-    # no limit (the original behaviour). On expiry asyncio cancels the query;
+    # Optional wall-clock timeout over the whole agent loop. None = no limit. On
+    # expiry asyncio cancels the query;
     # we surface a FatalError so the run aborts with a clear reason. This is a
     # wall-clock bound, NOT the SDK's max_turns (a turn count) — different knob.
     if timeout is not None:

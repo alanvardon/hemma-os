@@ -1,4 +1,4 @@
-"""Structured error hierarchy for the orchestrator (Phase 21).
+"""Structured error hierarchy for the orchestrator.
 
 Three classes cover every failure the orchestrator can produce:
 

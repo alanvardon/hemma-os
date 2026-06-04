@@ -1,4 +1,4 @@
-"""Per-run artifact folder (Phase 33).
+"""Per-run artifact folder.
 
 Writes each run's plan, implementation summary, test-plan, QA verdict,
 and token usage to disk under:
@@ -62,10 +62,9 @@ def write_plan(thread_id: str, plan: PlanResult) -> None:
 
 
 def write_decomposition(thread_id: str, decomposition: DecompositionResult) -> None:
-    """Write decomposition.md — the task list (Phase 55). Overwritten on re-plan.
-
-    Execution-inert in Phase 55: this artifact and the checkpointed DecompositionResult
-    are the only consumers of the task list — nothing drives work off it yet."""
+    """Write decomposition.md — the task list, for human review. Overwritten on
+    re-plan. The checkpointed DecompositionResult is what the per-task loop
+    actually executes; this artifact is the readable mirror of it."""
     try:
         d = _run_dir(thread_id)
         d.mkdir(parents=True, exist_ok=True)
@@ -86,8 +85,8 @@ def write_decomposition(thread_id: str, decomposition: DecompositionResult) -> N
 def write_summary(thread_id: str, summary: SummaryResult) -> None:
     """Write summary.md and test-plan.md.
 
-    Phase 42: these come from the summarizer (post-retry-block), not the
-    implementation producer — which is now generic and reports no summary.
+    These come from the summarizer (post-retry-block), not the implementation
+    producer — which is generic and reports no summary.
     """
     try:
         d = _run_dir(thread_id)

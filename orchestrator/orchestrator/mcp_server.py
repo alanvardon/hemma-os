@@ -1,12 +1,11 @@
-"""MCP server exposing the orchestrator to Claude Code (Phase 11).
+"""MCP server exposing the orchestrator to Claude Code.
 
 Two tools:
   - implement_feature: start a workflow; returns a plan for approval
   - approve_plan:      resume an awaiting workflow with the user's response
 
-The flow is conversational by design. The workflow pauses at plan approval
-(Phase 8's interrupt), the user reviews via Claude Code chat, then
-approves or revises. Each tool call:
+The flow is conversational by design. The workflow pauses at plan approval, the
+user reviews via Claude Code chat, then approves or revises. Each tool call:
   - opens the AsyncSqliteSaver
   - drives one ainvoke (or resume) call
   - closes the DB and returns to Claude Code
@@ -64,9 +63,9 @@ def _incompatible_checkpoint(
 ) -> dict:
     """Shape an IncompatibleCheckpointError into a structured response.
 
-    Phase 20: the workflow body refuses to resume a checkpoint created by a
-    different WORKFLOW_VERSION. Surface both versions so the chat can explain
-    why and offer "start a fresh implement_feature" as the next step.
+    The workflow body refuses to resume a checkpoint created by a different
+    WORKFLOW_VERSION. Surface both versions so the chat can explain why and
+    offer "start a fresh implement_feature" as the next step.
     """
     return {
         "status": "incompatible_checkpoint",
@@ -85,7 +84,7 @@ def _incompatible_checkpoint(
 def _incompatible_manifest(
     thread_id: str, exc: IncompatibleManifestError
 ) -> dict:
-    """Shape an IncompatibleManifestError into a structured response (Phase 33).
+    """Shape an IncompatibleManifestError into a structured response.
 
     The step manifest in orchestrator.toml changed since the run started.
     Surface both hashes so the chat can explain why a resume was refused.
@@ -105,7 +104,7 @@ def _incompatible_manifest(
 
 
 def _user_action_required(thread_id: str, exc: UserActionError) -> dict:
-    """Shape a UserActionError into a structured response (Phase 21).
+    """Shape a UserActionError into a structured response.
 
     The `action` field tells the user exactly what to do before calling
     resume_run. Specific subclasses (CommitAndPrError, DirtyTreeError, etc.)
@@ -120,7 +119,7 @@ def _user_action_required(thread_id: str, exc: UserActionError) -> dict:
 
 
 def _retriable_error(thread_id: str, exc: RetriableError) -> dict:
-    """Shape a RetriableError into a structured response (Phase 21).
+    """Shape a RetriableError into a structured response.
 
     Transient failures: call resume_run immediately without any manual
     intervention.
@@ -134,7 +133,7 @@ def _retriable_error(thread_id: str, exc: RetriableError) -> dict:
 
 
 def _fatal_error(thread_id: str, exc: FatalError) -> dict:
-    """Shape a FatalError into a structured response (Phase 21).
+    """Shape a FatalError into a structured response.
 
     Non-retriable. Fix the root cause and start a fresh implement_feature.
     The specific subclasses IncompatibleCheckpointError and
@@ -157,14 +156,14 @@ def _awaiting_approval(thread_id: str, result: dict, hint: str) -> dict:
 
     The interrupt's value dict is set by orchestrator/workflow.py at the
     interrupt() call site. Plan-approval interrupts carry "plan"; other
-    gates (branch/impl/pr approvals, Phase 33 approval_gate steps) carry only
+    gates (branch/impl/pr approvals, approval_gate steps) carry only
     "kind" and "ask", so `plan` is read defensively.
     """
     interrupt_val = result["__interrupt__"][0].value
     kind = interrupt_val.get("kind")
-    # Phase 33 approval_gate steps have their own resume contract: any reply
-    # proceeds, the abort words stop the run. Override the (plan-centric)
-    # caller hint so the chat surfaces that instead.
+    # approval_gate steps have their own resume contract: any reply proceeds, the
+    # abort words stop the run. Override the (plan-centric) caller hint so the chat
+    # surfaces that instead.
     if kind == "step_approval_gate":
         hint = (
             "A pluggable approval_gate step is asking for a decision (see `ask`). "
@@ -176,8 +175,8 @@ def _awaiting_approval(thread_id: str, result: dict, hint: str) -> dict:
         "status": "awaiting_approval",
         "thread_id": thread_id,
         "plan": interrupt_val.get("plan"),
-        # Phase 55: plan-approval interrupts also carry the decomposed task list so
-        # the chat can show plan + tasks together for review. None for other gates.
+        # plan-approval interrupts also carry the decomposed task list so the chat
+        # can show plan + tasks together for review. None for other gates.
         "tasks": interrupt_val.get("tasks"),
         "kind": kind,
         "ask": interrupt_val.get("ask"),
@@ -186,7 +185,7 @@ def _awaiting_approval(thread_id: str, result: dict, hint: str) -> dict:
 
 
 async def _fetch_existing_state(thread_id: str) -> dict:
-    """Return the current state of an existing thread (Phase 18).
+    """Return the current state of an existing thread.
 
     Used when an idempotency_key collides — instead of starting a new
     workflow, peek at the checkpointer for the run already claimed by
@@ -213,7 +212,7 @@ async def _fetch_existing_state(thread_id: str) -> dict:
             "status": "awaiting_approval",
             "thread_id": thread_id,
             "plan": interrupt_val.get("plan"),
-            "tasks": interrupt_val.get("tasks"),  # Phase 55: decomposed task list
+            "tasks": interrupt_val.get("tasks"),  # decomposed task list
             "next": (
                 "Replayed from idempotency key. Show the plan to the user "
                 "and call approve_plan with this thread_id."
@@ -273,9 +272,9 @@ async def implement_feature(
     with a new thread_id, losing the user's review context. To revise an
     in-flight plan, send feedback via `approve_plan` instead.
 
-    Phase 18 — idempotency: when `idempotency_key` is provided, the
-    first call with that key claims it and runs the workflow as
-    normal. A second call with the SAME key (e.g. double-click, retry,
+    Idempotency: when `idempotency_key` is provided, the first call with
+    that key claims it and runs the workflow as normal. A second call with
+    the SAME key (e.g. double-click, retry,
     CI re-run) returns the existing thread's current state — same
     `thread_id`, no new run, with `replayed: True` added so the caller
     can tell. Keys must match `[A-Za-z0-9._-]+` and are ≤128 chars.
@@ -295,9 +294,9 @@ async def implement_feature(
         False, the final succeeded/failed dict). When an idempotency
         key replays an existing run, the dict carries `replayed: True`.
     """
-    # Phase 18: idempotency claim happens BEFORE any other side effect
-    # (run_log entry, workflow build). If the key collides, return the
-    # original run's state without writing anything new.
+    # The idempotency claim happens BEFORE any other side effect (run_log entry,
+    # workflow build). If the key collides, return the original run's state without
+    # writing anything new.
     if idempotency_key is not None:
         candidate_thread_id = f"run-{uuid4().hex[:8]}"
         existing = idempotency_reserve(idempotency_key, candidate_thread_id)
@@ -314,8 +313,8 @@ async def implement_feature(
         approve_plan=approve_plan,
         base_branch=base_branch,
     )
-    # Phase 19: stream via run_with_progress so the MCP client sees
-    # per-task progress notifications during the 5+ min runs. ctx is
+    # Stream via run_with_progress so the MCP client sees per-task progress
+    # notifications during the 5+ min runs. ctx is
     # injected by FastMCP; None when called outside the MCP transport
     # (tests, ad-hoc invocations).
     try:
@@ -353,10 +352,9 @@ async def resume_run(
     """Resume a workflow that failed mid-task without restarting it.
 
     Use this when a previous `implement_feature` or `approve_plan` call
-    returned an error (e.g. push failed, gh pr create failed). Phase 15's
-    split of commit/push/PR into three independent @tasks means the
-    successful steps are cached in the checkpointer — only the failed
-    task (and anything downstream) re-runs.
+    returned an error (e.g. push failed, gh pr create failed). commit/push/PR
+    are three independent @tasks, so the successful steps are cached in the
+    checkpointer — only the failed task (and anything downstream) re-runs.
 
     Use AFTER fixing the underlying issue. Examples:
       - push failed → authenticate gh, restore network, then resume_run
@@ -368,9 +366,9 @@ async def resume_run(
     `approve_plan` is for. resume_run is specifically for recovering
     from a task failure.
 
-    Phase 16: if the thread has been marked cancelled via `cancel_run`,
-    resume_run refuses with {"status": "refused_cancelled", ...} unless
-    `force=True` is passed (which clears the cancel flag first).
+    If the thread has been marked cancelled via `cancel_run`, resume_run
+    refuses with {"status": "refused_cancelled", ...} unless `force=True`
+    is passed (which clears the cancel flag first).
 
     Args:
         thread_id: The thread_id from the prior failed response.
@@ -427,7 +425,7 @@ async def resume_run(
 
 @mcp.tool()
 async def cancel_run(thread_id: str) -> dict:
-    """Signal cancellation for a running or paused workflow (Phase 16).
+    """Signal cancellation for a running or paused workflow.
 
     The workflow checks the cancel flag between @task boundaries; the
     task currently executing (if any) completes before cancellation
@@ -500,10 +498,9 @@ async def approve_plan(
         On an empty build: {"status": "no_changes", "branch": str, ...}
     """
     config = {"configurable": {"thread_id": thread_id}}
-    # Phase 19: stream via run_with_progress. "yes" on approval kicks
-    # off the longest section of the workflow (planning → impl → QA
-    # → commit → push → PR), so this is the call that benefits most
-    # from progress notifications.
+    # Stream via run_with_progress. "yes" on approval kicks off the longest
+    # section of the workflow (planning → impl → QA → commit → push → PR), so this
+    # is the call that benefits most from progress notifications.
     try:
         async with build_workflow() as workflow:
             result = await run_with_progress(
@@ -528,8 +525,8 @@ async def approve_plan(
             "next response.",
         )
     # Pass the workflow's native status through ("succeeded" or "failed")
-    # rather than re-shaping. Phase 15: also inject thread_id so the
-    # user has it available in chat for recovery — without this, the id
+    # rather than re-shaping. Also inject thread_id so the user has it
+    # available in chat for recovery — without this, the id
     # disappears after the first approval cycle and the user can't
     # call resume_run if something fails downstream.
     result["thread_id"] = thread_id

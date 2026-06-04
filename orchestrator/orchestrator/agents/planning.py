@@ -37,10 +37,10 @@ class _PlanSchema(BaseModel):
 
 
 class PlanResult(_PlanSchema):
-    # Phase 20: schema version for this result model. Bump on incompatible
-    # shape changes (renamed/removed fields); pure additions of optional
-    # fields don't need a bump. Defined here, NOT on _PlanSchema, so it
-    # never leaks into the emit_plan tool's input_schema.
+    # Schema version for this result model. Bump on incompatible shape changes
+    # (renamed/removed fields); pure additions of optional fields don't need a
+    # bump. Defined here, NOT on _PlanSchema, so it never leaks into the emit_plan
+    # tool's input_schema.
     schema_version: int = 1
     # Populated after the API call returns; not part of the LLM tool schema.
     usage: TaskUsage | None = None
@@ -62,7 +62,7 @@ async def plan(request: str, model: str) -> PlanResult:
     which relied on the model emitting `PLAN COMPLETE: title=X, type=Y` as
     free text and hoping the regex matched.
 
-    Phase 60: the forced-tool-use plumbing + usage extraction lives in the shared
+    The forced-tool-use plumbing + usage extraction lives in the shared
     run_structured_completion (sibling of run_structured_agent). _PlanSchema is the
     emit tool's input_schema (no usage); PlanResult is the validated result.
     """

@@ -1,4 +1,4 @@
-"""Run cancellation (Phase 16).
+"""Run cancellation.
 
 A small directory — `.orchestrator/cancellations/` — holds one empty
 marker file per cancelled thread_id. Existence of the marker IS the

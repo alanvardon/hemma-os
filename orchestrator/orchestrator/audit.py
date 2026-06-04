@@ -1,4 +1,4 @@
-"""Phase 24: pluggable structured audit-event log.
+"""Pluggable structured audit-event log.
 
 Emits JSONL records at task boundaries for compliance/security audit trails,
 independent of LangSmith (which is for debugging, not audit).
