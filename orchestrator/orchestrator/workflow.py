@@ -347,6 +347,26 @@ class BuildFailed(RuntimeError):
 _GATE_ABORT_WORDS = frozenset({"abort", "no", "stop"})
 
 
+def _is_abort(decision) -> bool:
+    """True if a human's resume value at a gate/pause is an abort word.
+
+    Phase 60: the single home for the abort decision check that every interrupt
+    site (approval_gate, ai_agent review, build producer/gate pauses, retry review)
+    used to inline. A non-string decision (or any non-abort word) is not an abort —
+    the run proceeds."""
+    return isinstance(decision, str) and decision.strip().lower() in _GATE_ABORT_WORDS
+
+
+def _record_usage(usage_by_task: dict, key: str, result) -> None:
+    """Append `result`'s token usage under `key`, if it has any (Phase 60).
+
+    The single home for the `if result.usage: usage_by_task[...].append(...)` pair
+    that every agent step inlined. setdefault covers both the pre-seeded spine keys
+    (planning/qa/...) and dynamic step ids; a result with no usage is a no-op."""
+    if result.usage:
+        usage_by_task.setdefault(key, []).append(result.usage)
+
+
 class AutonomousCeilingExceeded(WorkflowCancelled):
     """Phase 37: a fully-autonomous run hit its time or cost safety ceiling.
 
@@ -417,7 +437,7 @@ async def run_seam(
                 "ask": step.ask,
                 "attempt": attempt,
             })
-            if isinstance(decision, str) and decision.strip().lower() in _GATE_ABORT_WORDS:
+            if _is_abort(decision):
                 raise StepGateAborted(step.id)
             continue
         if isinstance(step, ScriptStep):
@@ -428,8 +448,7 @@ async def run_seam(
             result = await step_task(
                 step.id, step.agent, step.model, repo_root, plan_text, attempt
             )
-            if result.usage:
-                usage_by_task.setdefault(step.id, []).append(result.usage)
+            _record_usage(usage_by_task, step.id, result)
             if step.human_in_loop and not autonomous:
                 # Pause AFTER the agent ran (its @task output is checkpointed, so
                 # resume replays it instead of re-running) to let a human review
@@ -441,7 +460,7 @@ async def run_seam(
                     "detail": result.detail,
                     "attempt": attempt,
                 })
-                if isinstance(decision, str) and decision.strip().lower() in _GATE_ABORT_WORDS:
+                if _is_abort(decision):
                     raise StepGateAborted(step.id)
         elif isinstance(step, BuildStep):
             # Phase 46: a declarative build step. Runs on the SAME generic engine
@@ -544,7 +563,7 @@ async def _run_build_step(
                     "Retry? Reply 'yes' or 'abort'."
                 ),
             })
-            if isinstance(decision, str) and decision.strip().lower() in _GATE_ABORT_WORDS:
+            if _is_abort(decision):
                 return False  # stop now; don't spend another attempt
         return True
     # Final result of each producer, so a human_in_loop producer's gate-passing
@@ -571,8 +590,7 @@ async def _run_build_step(
             result = await step_task(
                 d.id, d.agent, d.model, repo_root, plan_text, 0, feedback
             )
-        if result.usage:
-            usage_by_task.setdefault(d.id, []).append(result.usage)
+        _record_usage(usage_by_task, d.id, result)
         last_producer_result[pid] = result
         return result
 
@@ -591,8 +609,7 @@ async def _run_build_step(
         else:  # AiAgentStep gate — emits a `passed` verdict, runs read-only
             step_task = _make_ai_agent_task(d.id, as_gate=True)
             result = await step_task(d.id, d.agent, d.model, repo_root, plan_text)
-        if result.usage:
-            usage_by_task.setdefault(d.id, []).append(result.usage)
+        _record_usage(usage_by_task, d.id, result)
         return result
 
     block = RetryBlock(
@@ -643,7 +660,7 @@ async def _run_build_step(
                 "detail": detail,
                 "attempts": result.attempts,
             })
-            if isinstance(decision, str) and decision.strip().lower() in _GATE_ABORT_WORDS:
+            if _is_abort(decision):
                 raise StepGateAborted(block_step.id)
 
 
@@ -725,15 +742,13 @@ async def _run_task_loop(
                 result = await implementation_task(
                     _p, feedback, config.resolved_model(config.workflow.implementation)
                 )
-            if result.usage:
-                usage_by_task["implementation"].append(result.usage)
+            _record_usage(usage_by_task, "implementation", result)
             return result
 
         async def _qa(step_id: str, _qp: PlanResult = qa_plan) -> StepResult:
             async with audited(audit, thread_id, "qa"):
                 qa_result = await qa_task(_qp, config.resolved_model(config.workflow.qa))
-            if qa_result.usage:
-                usage_by_task["qa"].append(qa_result.usage)
+            _record_usage(usage_by_task, "qa", qa_result)
             write_qa(thread_id, qa_result)
             qa_holder["qa"] = qa_result
             return StepResult(
@@ -788,8 +803,7 @@ async def _run_final_qa(
         if gid == "qa" and gid not in manifest.defs:
             async with audited(audit, thread_id, "qa"):
                 qa_result = await qa_task(plan_result, config.resolved_model(config.workflow.qa))
-            if qa_result.usage:
-                usage_by_task["qa"].append(qa_result.usage)
+            _record_usage(usage_by_task, "qa", qa_result)
             write_qa(thread_id, qa_result)
             qa_holder["qa"] = qa_result
             passed, detail = (qa_result.result == "PASS"), (qa_result.failures or "")
@@ -806,8 +820,7 @@ async def _run_final_qa(
                 res = await _make_ai_agent_task(d.id, as_gate=True)(
                     d.id, d.agent, d.model, repo_root, plan_result.plan_text
                 )
-            if res.usage:
-                usage_by_task.setdefault(d.id, []).append(res.usage)
+            _record_usage(usage_by_task, d.id, res)
             passed, detail = (res.passed is True), res.detail
         if not passed:
             raise BuildFailed("final_qa", 1, detail)
@@ -1121,8 +1134,7 @@ async def _plan_and_approve(
         check_cancel()
         async with audited(audit, thread_id, "planning"):
             pr = await planning_task(req, config.resolved_model(config.workflow.planning))
-        if pr.usage:
-            usage_by_task["planning"].append(pr.usage)
+        _record_usage(usage_by_task, "planning", pr)
         write_plan(thread_id, pr)
         return pr
 
@@ -1134,8 +1146,7 @@ async def _plan_and_approve(
                 config.resolved_model(config.workflow.decompose),
                 config.workflow.decompose.max_tasks,
             )
-        if d.usage:
-            usage_by_task["decompose"].append(d.usage)
+        _record_usage(usage_by_task, "decompose", d)
         write_decomposition(thread_id, d)
         return d
 
@@ -1185,8 +1196,7 @@ async def _ship(
         summary_result = await summarize_task(
             plan_result.plan_text, config.resolved_model(config.workflow.summarize)
         )
-    if summary_result.usage:
-        usage_by_task["summarize"].append(summary_result.usage)
+    _record_usage(usage_by_task, "summarize", summary_result)
     write_summary(thread_id, summary_result)
 
     check_cancel()
@@ -1194,8 +1204,7 @@ async def _ship(
         docs_result = await docs_task(
             plan_result.plan_text, config.resolved_model(config.workflow.docs)
         )
-    if docs_result.usage:
-        usage_by_task["docs"].append(docs_result.usage)
+    _record_usage(usage_by_task, "docs", docs_result)
 
     check_cancel()
     async with audited(audit, thread_id, "commit"):
@@ -1394,8 +1403,7 @@ async def build_workflow(
                             feedback,
                             config.resolved_model(config.workflow.implementation),
                         )
-                    if result.usage:
-                        usage_by_task["implementation"].append(result.usage)
+                    _record_usage(usage_by_task, "implementation", result)
                     return result
 
                 async def _builtin_qa(step_id: str) -> StepResult:
@@ -1403,8 +1411,7 @@ async def build_workflow(
                         qa_result = await qa_task(
                             plan_result, config.resolved_model(config.workflow.qa)
                         )
-                    if qa_result.usage:
-                        usage_by_task["qa"].append(qa_result.usage)
+                    _record_usage(usage_by_task, "qa", qa_result)
                     write_qa(thread_id, qa_result)
                     _qa_holder["qa"] = qa_result
                     return StepResult(

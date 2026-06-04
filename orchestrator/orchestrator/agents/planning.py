@@ -1,18 +1,12 @@
 # load_dotenv reads the .env file in the current working directory and sets
-# environment variables. AsyncAnthropic() with no args picks up ANTHROPIC_API_KEY
-# from os.environ, so this is how the key reaches the SDK.
+# environment variables. AsyncAnthropic() (inside run_structured_completion) with
+# no args picks up ANTHROPIC_API_KEY from os.environ, so this is how the key
+# reaches the SDK. It must run before the first client is constructed.
 from dotenv import load_dotenv
 load_dotenv()
 
 import asyncio
 import sys
-
-# AsyncAnthropic is the async-IO variant of the Anthropic client. We use it
-# because LangGraph (later phases) runs tasks concurrently in an asyncio loop;
-# committing to async now means no rewrites when the framework arrives.
-from anthropic import AsyncAnthropic
-
-
 
 # Pydantic is a data-validation library. BaseModel gives us automatic
 # type coercion and a clean __repr__ — no need to write __init__ or validate
@@ -21,6 +15,7 @@ from anthropic import AsyncAnthropic
 from pydantic import BaseModel, Field
 
 from orchestrator.usage import TaskUsage
+from orchestrator.agents.runner import run_structured_completion
 from orchestrator.prompt_loader import load_prompt
 
 
@@ -66,35 +61,20 @@ async def plan(request: str, model: str) -> PlanResult:
     This is the single biggest robustness win over the old coordinator,
     which relied on the model emitting `PLAN COMPLETE: title=X, type=Y` as
     free text and hoping the regex matched.
+
+    Phase 60: the forced-tool-use plumbing + usage extraction lives in the shared
+    run_structured_completion (sibling of run_structured_agent). _PlanSchema is the
+    emit tool's input_schema (no usage); PlanResult is the validated result.
     """
-    client = AsyncAnthropic()
-    response = await client.messages.create(
+    return await run_structured_completion(
+        system_prompt=_PLANNING_SYSTEM_PROMPT,
+        user_message=request,
         model=model,
-        max_tokens=4096,
-        system=_PLANNING_SYSTEM_PROMPT,
-        tools=[
-            {
-                "name": "emit_plan",
-                "description": "Emit the structured implementation plan for the requested change.",
-                "input_schema": _PlanSchema.model_json_schema(),
-            }
-        ],
-        # tool_choice forces the model to call emit_plan rather than reply
-        # with free text. This guarantees the response shape.
-        tool_choice={"type": "tool", "name": "emit_plan"},
-        messages=[{"role": "user", "content": request}],
+        tool_name="emit_plan",
+        tool_description="Emit the structured implementation plan for the requested change.",
+        schema=_PlanSchema,
+        result_model=PlanResult,
     )
-    tool_use = next(block for block in response.content if block.type == "tool_use")
-    result = PlanResult.model_validate(tool_use.input)
-    u = response.usage
-    result.usage = TaskUsage(
-        model=model,
-        input_tokens=u.input_tokens,
-        output_tokens=u.output_tokens,
-        cache_read_tokens=getattr(u, "cache_read_input_tokens", 0) or 0,
-        cache_creation_tokens=getattr(u, "cache_creation_input_tokens", 0) or 0,
-    )
-    return result
 
 
 # Allow `python -m orchestrator.agents.planning "add dark mode"` to run the

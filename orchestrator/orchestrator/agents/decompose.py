@@ -1,20 +1,16 @@
 # load_dotenv reads the .env file in the current working directory and sets
-# environment variables. AsyncAnthropic() with no args picks up ANTHROPIC_API_KEY
-# from os.environ, so this is how the key reaches the SDK.
+# environment variables. AsyncAnthropic() (inside run_structured_completion) with
+# no args picks up ANTHROPIC_API_KEY from os.environ; load it before the first call.
 from dotenv import load_dotenv
 load_dotenv()
 
 import asyncio
 import sys
 
-# AsyncAnthropic is the async-IO variant of the Anthropic client — same client
-# the planning agent uses. The decomposer is a sibling of planning: a single
-# structured-output call, no repo tools.
-from anthropic import AsyncAnthropic
-
 from pydantic import BaseModel, Field
 
 from orchestrator.usage import TaskUsage
+from orchestrator.agents.runner import run_structured_completion
 from orchestrator.prompt_loader import load_prompt
 
 
@@ -82,36 +78,19 @@ async def decompose(
 ) -> DecompositionResult:
     """Turn an approved plan into an ordered task list (Phase 55).
 
-    Same Anthropic tool-use-as-structured-output pattern as planning.plan():
-    a forced `emit_decomposition` tool guarantees the response shape. Reads ONLY
-    `plan_text` — no repo access (repo-aware decomposition is a later phase).
+    Same forced-tool-use structured-output path as planning.plan(), via the shared
+    run_structured_completion (Phase 60). Reads ONLY `plan_text` — no repo access
+    (repo-aware decomposition is a later phase).
     """
-    client = AsyncAnthropic()
-    response = await client.messages.create(
+    return await run_structured_completion(
+        system_prompt=_DECOMPOSE_SYSTEM_PROMPT,
+        user_message=_build_user_message(plan_text, max_tasks),
         model=model,
-        max_tokens=4096,
-        system=_DECOMPOSE_SYSTEM_PROMPT,
-        tools=[
-            {
-                "name": "emit_decomposition",
-                "description": "Emit the ordered task breakdown of the approved plan.",
-                "input_schema": _DecompositionSchema.model_json_schema(),
-            }
-        ],
-        tool_choice={"type": "tool", "name": "emit_decomposition"},
-        messages=[{"role": "user", "content": _build_user_message(plan_text, max_tasks)}],
+        tool_name="emit_decomposition",
+        tool_description="Emit the ordered task breakdown of the approved plan.",
+        schema=_DecompositionSchema,
+        result_model=DecompositionResult,
     )
-    tool_use = next(block for block in response.content if block.type == "tool_use")
-    result = DecompositionResult.model_validate(tool_use.input)
-    u = response.usage
-    result.usage = TaskUsage(
-        model=model,
-        input_tokens=u.input_tokens,
-        output_tokens=u.output_tokens,
-        cache_read_tokens=getattr(u, "cache_read_input_tokens", 0) or 0,
-        cache_creation_tokens=getattr(u, "cache_creation_input_tokens", 0) or 0,
-    )
-    return result
 
 
 # Allow `python -m orchestrator.agents.decompose "the plan text"` from the terminal.

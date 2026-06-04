@@ -26,6 +26,7 @@ import asyncio
 from pathlib import Path
 from typing import Callable, TypeVar
 
+from anthropic import AsyncAnthropic
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     ResultMessage,
@@ -33,11 +34,14 @@ from claude_agent_sdk import (
     query,
     tool,
 )
+from pydantic import BaseModel
 
 from orchestrator.errors import FatalError
 from orchestrator.usage import TaskUsage
 
 R = TypeVar("R")
+# Result models for run_structured_completion carry a settable `usage` field.
+M = TypeVar("M", bound=BaseModel)
 
 
 def _extract_usage(result_msg: ResultMessage | None, model: str) -> TaskUsage | None:
@@ -56,6 +60,69 @@ def _extract_usage(result_msg: ResultMessage | None, model: str) -> TaskUsage | 
         cache_creation_tokens=u.get("cache_creation_input_tokens", 0),
         reported_cost_usd=result_msg.total_cost_usd,
     )
+
+
+def _usage_from_completion(usage, model: str) -> TaskUsage:
+    """Build a TaskUsage from a raw Anthropic `response.usage` object.
+
+    The completion path's counterpart to `_extract_usage` (which reads the agent
+    SDK's dict-shaped ResultMessage.usage). Here `usage` is the SDK object whose
+    cache fields may be absent on older API shapes — hence the getattr guards.
+    """
+    return TaskUsage(
+        model=model,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        cache_creation_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+    )
+
+
+async def run_structured_completion(
+    *,
+    system_prompt: str,
+    user_message: str,
+    model: str,
+    tool_name: str,
+    tool_description: str,
+    schema: type[BaseModel],
+    result_model: type[M],
+    max_tokens: int = 4096,
+) -> M:
+    """Run one forced-tool-use Anthropic completion as structured output.
+
+    The raw-SDK sibling of `run_structured_agent`: instead of an agent loop with
+    file tools, this is a single `messages.create` that forces the model to call a
+    fake emit tool (`tool_choice`), so the response shape is guaranteed. The tool's
+    input is validated into `result_model`, and the call's token usage is attached
+    to the result's `.usage` field (every result model here carries one).
+
+    `schema` is the emit tool's input_schema — typically a sub-model that EXCLUDES
+    `usage`/`schema_version` (e.g. _PlanSchema), so the model is never asked to fill
+    those in; `result_model` is the full type returned (e.g. PlanResult).
+
+    This is NOT mergeable with run_structured_agent — different SDK, different usage
+    shape, no tools/cwd. They are deliberate siblings.
+    """
+    client = AsyncAnthropic()
+    response = await client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=system_prompt,
+        tools=[
+            {
+                "name": tool_name,
+                "description": tool_description,
+                "input_schema": schema.model_json_schema(),
+            }
+        ],
+        tool_choice={"type": "tool", "name": tool_name},
+        messages=[{"role": "user", "content": user_message}],
+    )
+    tool_use = next(block for block in response.content if block.type == "tool_use")
+    result = result_model.model_validate(tool_use.input)
+    result.usage = _usage_from_completion(response.usage, model)
+    return result
 
 
 async def run_structured_agent(
