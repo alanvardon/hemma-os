@@ -26,6 +26,9 @@ Sample orchestrator.toml (all fields optional, defaults shown):
     [workflow.planning]
     human_in_loop = true                  # pause for plan review before any code
 
+    [workflow.decompose]
+    max_tasks = 0                         # 0 = uncapped; >0 = advisory task cap (Phase 55)
+
     [workflow.branch]
     max_slug_length = 50
 
@@ -135,6 +138,14 @@ class WorkflowQaConfig(WorkflowStepConfig):
     max_retries: int = 3  # impl↔QA loop budget; moved from the old top-level key
 
 
+class WorkflowDecomposeConfig(WorkflowStepConfig):
+    # Phase 55: advisory cap on how many tasks the decomposer may emit. 0 =
+    # uncapped. > 0 is passed to the decomposer as soft guidance (not a hard
+    # validation error — this phase is execution-inert, so an over-split run
+    # should surface for review rather than abort).
+    max_tasks: int = 0
+
+
 class WorkflowConfig(BaseModel):
     """The built-in spine, one table per step. Counterpart to [steps.*] —
     user-injected pluggable steps owned by manifest.py."""
@@ -143,6 +154,11 @@ class WorkflowConfig(BaseModel):
     planning: WorkflowStepConfig = Field(
         default_factory=lambda: WorkflowStepConfig(human_in_loop=True)
     )
+    # Phase 55: turns the approved plan into an ordered task list. Runs after
+    # planning, before branch. Model inherits default_model unless its prompt
+    # frontmatter or [workflow.decompose] sets one. Execution-inert in Phase 55 —
+    # the list is reviewed + checkpointed but nothing consumes it yet (Phase 56).
+    decompose: WorkflowDecomposeConfig = Field(default_factory=WorkflowDecomposeConfig)
     branch: WorkflowBranchConfig = Field(default_factory=WorkflowBranchConfig)
     implementation: WorkflowStepConfig = Field(
         default_factory=lambda: WorkflowStepConfig(
@@ -225,7 +241,7 @@ class OrchestratorConfig(BaseModel):
 # file's frontmatter. branch/commit run no agent (deterministic git ops), so
 # they have no prompt and are absent here.
 _BUILTIN_PROMPT_STEPS: tuple[str, ...] = (
-    "planning", "implementation", "qa", "docs", "summarize",
+    "planning", "decompose", "implementation", "qa", "docs", "summarize",
 )
 # Only the operational dials cross over from frontmatter. human_in_loop is
 # deliberately excluded: planning/branch/commit own that flag, and the build's

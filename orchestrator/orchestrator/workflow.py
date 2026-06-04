@@ -71,7 +71,13 @@ logger = logging.getLogger(__name__)
 # prompt to grant more attempts (optionally capped by retry.max_total_attempts).
 # The loop structure changes (fixed range → dynamic while-loop), so the bump
 # refuses resume of any pre-52 run.
-WORKFLOW_VERSION = "1.9.0"
+# 1.9.0 → 1.10.0 (Phase 55): a new decompose_task runs after planning (and re-runs
+# on plan-feedback regeneration), turning the plan into an ordered task list; the
+# plan_approval interrupt payload gains a `tasks` key. A new required body task +
+# a changed interrupt payload shape is a body change, so the bump refuses resume of
+# any pre-55 run. The step is execution-inert (nothing consumes the list yet —
+# Phase 56), but the task graph still changed, hence the bump.
+WORKFLOW_VERSION = "1.10.0"
 
 
 from orchestrator.errors import FatalError
@@ -132,6 +138,7 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from langgraph.config import get_config
 
+from orchestrator.agents.decompose import decompose, DecompositionResult
 from orchestrator.agents.planning import plan, PlanResult
 from orchestrator.agents.qa import qa, QaResult
 from orchestrator.agents.summarize import summarize, SummaryResult
@@ -166,6 +173,7 @@ from orchestrator.paths import find_project_root
 from orchestrator.pre_hooks import run_pre_hooks
 from orchestrator.run_artifacts import (
     rename_with_branch,
+    write_decomposition,
     write_plan,
     write_qa,
     write_summary,
@@ -179,6 +187,9 @@ from orchestrator.run_artifacts import (
 # across upgrades. Each entry is (module_path, class_name).
 _ALLOWED_MSGPACK_MODULES = [
     ("orchestrator.agents.planning", "PlanResult"),
+    # Phase 55: the decomposer's task list. `Task` rides inside DecompositionResult,
+    # so only the container type needs registering.
+    ("orchestrator.agents.decompose", "DecompositionResult"),
     # Phase 42: ImplementationResult is gone — implementation is now a generic
     # producer returning StepResult; SummaryResult (the relocated commit/PR
     # summary + test_plan) takes its slot. QaResult stays (QA is hard-baked).
@@ -597,6 +608,19 @@ async def planning_task(request: str, model: str = "claude-sonnet-4-6") -> PlanR
     return await plan(request, model=model)
 
 
+# Phase 55: the decomposer. Runs after planning (and again after each plan-feedback
+# regeneration), turning the approved plan into an ordered task list. Its
+# DecompositionResult is checkpointed (on the serde allowlist), so a re-execution of
+# the entrypoint body after the plan-approval interrupt replays it for free. The
+# step is EXECUTION-INERT in Phase 55 — the list is surfaced for review and written
+# to the run folder, but nothing drives work off it yet (Phase 56 adds that loop).
+@task
+async def decompose_task(
+    plan_text: str, model: str = "claude-sonnet-4-6", max_tasks: int = 0
+) -> DecompositionResult:
+    return await decompose(plan_text, model, max_tasks)
+
+
 # Pre-flight check. Runs FIRST in the workflow — before planning — so a
 # dirty working tree fails fast with zero LLM cost and no wasted approval
 # round. Defence in depth: create_branch_task also calls verify_clean_tree
@@ -875,6 +899,7 @@ async def build_workflow(
             # tokens were spent before the cancel signal landed.
             usage_by_task: dict[str, list[TaskUsage]] = {
                 "planning": [],
+                "decompose": [],
                 "implementation": [],
                 "qa": [],
                 "summarize": [],
@@ -924,6 +949,28 @@ async def build_workflow(
                     usage_by_task["planning"].append(plan_result.usage)
                 write_plan(thread_id, plan_result)
 
+                # Phase 55: decompose the plan into an ordered task list. Closure so
+                # it can run both for the initial plan and again after each
+                # plan-feedback regeneration (so the list never drifts from the
+                # plan). Reads the CURRENT plan_result binding (late binding) — the
+                # loop reassigns plan_result on feedback. EXECUTION-INERT: the result
+                # is surfaced for review + checkpointed + written to the run folder,
+                # but nothing consumes it (Phase 56 adds the per-task loop).
+                async def _run_decompose() -> DecompositionResult:
+                    _check_cancel()
+                    async with audited(_audit, thread_id, "decompose"):
+                        d = await decompose_task(
+                            plan_result.plan_text,
+                            config.resolved_model(config.workflow.decompose),
+                            config.workflow.decompose.max_tasks,
+                        )
+                    if d.usage:
+                        usage_by_task["decompose"].append(d.usage)
+                    write_decomposition(thread_id, d)
+                    return d
+
+                decomposition = await _run_decompose()
+
                 # Phase 8: plan approval interrupt. The loop runs until the
                 # user replies "yes". Any other reply is treated as feedback:
                 # the plan is regenerated with the feedback appended to the
@@ -944,6 +991,9 @@ async def build_workflow(
                         approval = interrupt({
                             "kind": "plan_approval",
                             "plan": plan_result.model_dump(),
+                            # Phase 55: the decomposed task list, shown alongside the
+                            # plan for review. Inert in Phase 55 (nothing runs off it).
+                            "tasks": [t.model_dump() for t in decomposition.tasks],
                             "ask": "Approve this plan? Reply 'yes' or describe changes.",
                         })
                     else:
@@ -959,6 +1009,9 @@ async def build_workflow(
                     if plan_result.usage:
                         usage_by_task["planning"].append(plan_result.usage)
                     write_plan(thread_id, plan_result)
+                    # Phase 55: re-decompose the regenerated plan so the reviewed
+                    # task list always matches the plan the user is approving.
+                    decomposition = await _run_decompose()
 
                 # Phase 13: optional branch-creation approval gate.
                 if config.workflow.branch.human_in_loop:

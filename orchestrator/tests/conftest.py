@@ -111,3 +111,21 @@ def _stub_summarize_task(monkeypatch):
         )
 
     monkeypatch.setattr("orchestrator.workflow.summarize_task", _fake_summarize_task)
+
+
+@pytest.fixture(autouse=True)
+def _stub_decompose(monkeypatch):
+    """Phase 55: the decomposer runs after planning on every full-workflow run and
+    would spawn a real Claude call. Stub it suite-wide (at the function level, so
+    the real decompose_task wiring still exercises) returning a single-task list —
+    the n=1 case, which keeps existing full-workflow tests behaving as before.
+    Tests that exercise decomposition override this with their own monkeypatch."""
+    from orchestrator.agents.decompose import DecompositionResult, Task
+
+    async def _fake_decompose(plan_text, model="claude-sonnet-4-6", max_tasks=0):
+        return DecompositionResult(
+            tasks=[Task(id="task-1", title="The change", description=plan_text)],
+            usage=None,
+        )
+
+    monkeypatch.setattr("orchestrator.workflow.decompose", _fake_decompose)

@@ -20,6 +20,7 @@ Usage in workflow.py:
 import json
 from pathlib import Path
 
+from orchestrator.agents.decompose import DecompositionResult
 from orchestrator.agents.planning import PlanResult
 from orchestrator.agents.qa import QaResult
 from orchestrator.agents.summarize import SummaryResult
@@ -56,6 +57,28 @@ def write_plan(thread_id: str, plan: PlanResult) -> None:
         d.mkdir(parents=True, exist_ok=True)
         content = f"# {plan.title}\n\n**Type:** {plan.type}\n\n{plan.plan_text}\n"
         (d / "plan.md").write_text(content, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def write_decomposition(thread_id: str, decomposition: DecompositionResult) -> None:
+    """Write decomposition.md — the task list (Phase 55). Overwritten on re-plan.
+
+    Execution-inert in Phase 55: this artifact and the checkpointed DecompositionResult
+    are the only consumers of the task list — nothing drives work off it yet."""
+    try:
+        d = _run_dir(thread_id)
+        d.mkdir(parents=True, exist_ok=True)
+        lines = ["# Task decomposition", ""]
+        for i, t in enumerate(decomposition.tasks, 1):
+            lines.append(f"## {i}. {t.title}  (`{t.id}`)")
+            lines.append("")
+            lines.append(t.description)
+            if t.acceptance_criteria:
+                lines.append("")
+                lines.append(f"**Acceptance:** {t.acceptance_criteria}")
+            lines.append("")
+        (d / "decomposition.md").write_text("\n".join(lines), encoding="utf-8")
     except OSError:
         pass
 

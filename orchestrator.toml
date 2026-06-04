@@ -41,6 +41,14 @@ scripts_timeout = 60
 [workflow.planning]
 human_in_loop = true     # pause for plan review before any code is written
 
+[workflow.decompose]
+# Phase 55: turns the approved plan into an ordered task list, shown alongside
+# the plan at the approval gate. Model inherits default_model unless set here or
+# in the prompt frontmatter (.orchestrator/prompts/decompose.md). EXECUTION-INERT
+# in Phase 55 — the list is reviewed + checkpointed but nothing runs off it yet
+# (Phase 56 adds the per-task loop).
+max_tasks = 0            # 0 = uncapped; >0 = advisory cap (soft guidance, not a hard error)
+
 [workflow.branch]
 max_slug_length = 50     # kebab-case slug length in the branch name (slug part only)
 human_in_loop   = false  # pause before the feature branch is created
@@ -106,8 +114,8 @@ include_content = false   # if true, also log prompt/result content (verbose)
 # ---------------------------------------------------------------------------
 # The work list (Phase 33; reshaped Phase 49)
 # Declare extra steps in ONE ordered list — no edits to workflow.py. The spine
-# (verify_clean_tree → plan → branch → [work] → summarize → docs → commit →
-# push → pr) stays fixed; setup and shipping are tuned via the [workflow.*] /
+# (verify_clean_tree → plan → decompose → branch → [work] → summarize → docs →
+# commit → push → pr) stays fixed; setup and shipping are tuned via the [workflow.*] /
 # [pre_hooks] / [pr] tables, never listed. The one project-specific region is
 # `[[steps.work]]`: it runs AFTER the branch is made and BEFORE summarize.
 #

@@ -176,6 +176,9 @@ def _awaiting_approval(thread_id: str, result: dict, hint: str) -> dict:
         "status": "awaiting_approval",
         "thread_id": thread_id,
         "plan": interrupt_val.get("plan"),
+        # Phase 55: plan-approval interrupts also carry the decomposed task list so
+        # the chat can show plan + tasks together for review. None for other gates.
+        "tasks": interrupt_val.get("tasks"),
         "kind": kind,
         "ask": interrupt_val.get("ask"),
         "next": hint,
@@ -210,6 +213,7 @@ async def _fetch_existing_state(thread_id: str) -> dict:
             "status": "awaiting_approval",
             "thread_id": thread_id,
             "plan": interrupt_val.get("plan"),
+            "tasks": interrupt_val.get("tasks"),  # Phase 55: decomposed task list
             "next": (
                 "Replayed from idempotency key. Show the plan to the user "
                 "and call approve_plan with this thread_id."
