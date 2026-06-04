@@ -814,7 +814,9 @@ async def _run_final_qa(
 
 
 @task
-async def planning_task(request: str, model: str = "claude-sonnet-4-6") -> PlanResult:
+async def planning_task(request: str, model: str) -> PlanResult:
+    # Phase 59: `model` is required — every caller resolves it via
+    # config.resolved_model(...), so a default here would be dead and a drift trap.
     return await plan(request, model=model)
 
 
@@ -826,8 +828,9 @@ async def planning_task(request: str, model: str = "claude-sonnet-4-6") -> PlanR
 # to the run folder, but nothing drives work off it yet (Phase 56 adds that loop).
 @task
 async def decompose_task(
-    plan_text: str, model: str = "claude-sonnet-4-6", max_tasks: int = 0
+    plan_text: str, model: str, max_tasks: int = 0
 ) -> DecompositionResult:
+    # Phase 59: `model` required (resolved by the caller); see planning_task.
     return await decompose(plan_text, model, max_tasks)
 
 
@@ -921,9 +924,12 @@ async def _run_implementation_producer(
 @task
 async def implementation_task(
     plan_text: str,
-    feedback: str | None = None,
-    model: str = "claude-sonnet-4-6",
+    feedback: str | None,
+    model: str,
 ) -> StepResult:
+    # Phase 59: `model` required (resolved by the caller). `feedback` also loses its
+    # default — both call sites pass it positionally — so a required `model` can
+    # follow it without a "non-default arg after default arg" error.
     return await _run_implementation_producer(plan_text, feedback, model)
 
 
@@ -935,8 +941,9 @@ async def implementation_task(
 # retries yet) we just record the verdict in the workflow result.
 @task
 async def qa_task(
-    plan_result: PlanResult, model: str = "claude-sonnet-4-6"
+    plan_result: PlanResult, model: str
 ) -> QaResult:
+    # Phase 59: `model` required (resolved by the caller); see planning_task.
     return await qa(plan_result, model=model)
 
 
@@ -948,8 +955,9 @@ async def qa_task(
 # checkpointed (on the serde allowlist), so a crash before commit replays it.
 @task
 async def summarize_task(
-    plan_text: str, model: str = "claude-haiku-4-5-20251001"
+    plan_text: str, model: str
 ) -> SummaryResult:
+    # Phase 59: `model` required (resolved by the caller); see planning_task.
     return await summarize(plan_text, model)
 
 
@@ -964,8 +972,9 @@ async def summarize_task(
 # local-only file. Built directly on Phase 39's run_structured_agent.
 @task
 async def docs_task(
-    plan_text: str, model: str = "claude-haiku-4-5-20251001"
+    plan_text: str, model: str
 ) -> StepResult:
+    # Phase 59: `model` required (resolved by the caller); see planning_task.
     """Run the documentation agent against the QA-passed working tree.
 
     A @task like every other spine step: its StepResult is checkpointed, so a

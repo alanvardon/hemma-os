@@ -51,7 +51,7 @@ class PlanResult(_PlanSchema):
     usage: TaskUsage | None = None
 
 
-async def plan(request: str, model: str = "claude-sonnet-4-6") -> PlanResult:
+async def plan(request: str, model: str) -> PlanResult:
     """Ask Claude to produce a plan, return it as a validated PlanResult.
 
     Uses Anthropic's tool-use-as-structured-output pattern:
@@ -101,6 +101,8 @@ async def plan(request: str, model: str = "claude-sonnet-4-6") -> PlanResult:
 # function from the terminal. asyncio.run drives the async function from
 # synchronous entry-point code.
 if __name__ == "__main__":
+    from orchestrator.config import OrchestratorConfig
+
     user_request = " ".join(sys.argv[1:]) or "add a dark mode toggle"
-    result = asyncio.run(plan(user_request))
+    result = asyncio.run(plan(user_request, OrchestratorConfig().default_model))
     print(result.model_dump_json(indent=2))

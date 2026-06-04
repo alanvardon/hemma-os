@@ -66,7 +66,7 @@ def _build_user_message(plan: PlanResult) -> str:
     return "\n".join(["## Plan", "", plan.plan_text])
 
 
-async def qa(plan: PlanResult, model: str = "claude-sonnet-4-6") -> QaResult:
+async def qa(plan: PlanResult, model: str) -> QaResult:
     """Run the QA agent and return its structured verdict.
 
     Scripted gate runs first (before any LLM call). If any executable
@@ -136,6 +136,8 @@ async def qa(plan: PlanResult, model: str = "claude-sonnet-4-6") -> QaResult:
 # in the target repo right now, prints the verdict. Useful for
 # iterating on the QA prompt without going through the whole workflow.
 if __name__ == "__main__":
+    from orchestrator.config import OrchestratorConfig
+
     request = " ".join(sys.argv[1:]) or "review whatever's currently uncommitted"
 
     async def _main() -> None:
@@ -144,7 +146,7 @@ if __name__ == "__main__":
             type="feature",
             plan_text=request,
         )
-        result = await qa(fake_plan)
+        result = await qa(fake_plan, OrchestratorConfig().default_model)
         print(result.model_dump_json(indent=2))
 
     asyncio.run(_main())

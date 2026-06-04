@@ -163,7 +163,9 @@ async def test_qa_scripted_gate_short_circuits_before_runner(monkeypatch):
 
     monkeypatch.setattr(qa_mod, "run_structured_agent", boom)
 
-    result = await qa_mod.qa(PlanResult(title="t", type="feature", plan_text="p"))
+    result = await qa_mod.qa(
+        PlanResult(title="t", type="feature", plan_text="p"), "claude-sonnet-4-6"
+    )
     assert result.result == "FAIL"
     assert result.failures == "script X failed"
     assert called["runner"] is False

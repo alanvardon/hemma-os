@@ -78,7 +78,7 @@ def _build_user_message(plan_text: str, max_tasks: int) -> str:
 
 
 async def decompose(
-    plan_text: str, model: str = "claude-sonnet-4-6", max_tasks: int = 0
+    plan_text: str, model: str, max_tasks: int = 0
 ) -> DecompositionResult:
     """Turn an approved plan into an ordered task list (Phase 55).
 
@@ -116,8 +116,10 @@ async def decompose(
 
 # Allow `python -m orchestrator.agents.decompose "the plan text"` from the terminal.
 if __name__ == "__main__":
+    from orchestrator.config import OrchestratorConfig
+
     text = " ".join(sys.argv[1:]) or (
         "Add a dark mode toggle to the header and persist the choice in localStorage."
     )
-    result = asyncio.run(decompose(text))
+    result = asyncio.run(decompose(text, OrchestratorConfig().default_model))
     print(result.model_dump_json(indent=2))

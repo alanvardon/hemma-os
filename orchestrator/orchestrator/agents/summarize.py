@@ -39,7 +39,7 @@ class SummaryResult(BaseModel):
 
 
 async def summarize(
-    plan_text: str, model: str = "claude-haiku-4-5-20251001"
+    plan_text: str, model: str
 ) -> SummaryResult:
     """Run the read-only summarizer agent and return its structured result.
 

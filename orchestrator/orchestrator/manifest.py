@@ -174,6 +174,12 @@ class AiAgentStep(_BaseStep):
     # (there is no global agents_dir). Phase 48: the old `dir` + `agent` split
     # was merged into this one field.
     agent: str
+    # Phase 59: a user-declared ai_agent step resolves its model as TOML `model` →
+    # agent-file frontmatter (Phase 53) → this last-resort default. It intentionally
+    # does NOT fall back to OrchestratorConfig.default_model: load_manifest() parses
+    # the TOML independently of the config, so wiring default_model in would couple
+    # the two loaders. A user who wants the run-wide default sets it here or in
+    # frontmatter. This is the one model literal that stays outside config.py.
     model: str = "claude-sonnet-4-6"
     # Optional tool/timeout config (Phase 46a) so an ai_agent def is a first-class
     # producer/gate. Phase 53: these may instead be set in the agent file's
