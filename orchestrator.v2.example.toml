@@ -1,0 +1,180 @@
+# =============================================================================
+# orchestrator.toml — v2 DRAFT (header-namespaced structure). For co-editing.
+# =============================================================================
+# Two axes describe everything:
+#
+#   IN THE FLOW?              BUILT-IN?            TABLE
+#   ----------------------------------------------------------------------------
+#   yes (a pipeline stage)   built-in             [stage.builtin.<id>]
+#   yes (a pipeline stage)   yours                [stage.user.<id>]
+#   no  (a reusable part)    built-in             [builtin.<id>]
+#   no  (a reusable part)    yours                [defs.<id>]
+#
+#   - A STAGE is a node in the pipeline. Its id IS the last header segment —
+#     there is no `id` field. For a [stage.builtin.*] stage the key is also the
+#     built-in's name, so no `uses` is needed.
+#   - A REUSABLE PART (a producer or gate) is referenced from a stage's
+#     `produce` / `gate` by a prefixed id: `builtin:<id>` or `defs:<id>`.
+#
+#   - `type` is a VALIDATED label: the loader checks it matches the slot's known
+#     type and errors on a mismatch. It documents a slot; it never changes one.
+#   - `path` names a prompt/script file. On a built-in stage it is an OPTIONAL
+#     prompt override (omit = run the shipped default); your prompt must still
+#     honour the slot's output contract. On your own stages/defs it is REQUIRED.
+#
+# ORDER comes ONLY from the `flow` line (TOML tables are unordered). The git
+# rails (verify-clean-tree · branch · commit · push · open-pr) are implicit and
+# LOCKED — never listed, never reordered; your flow is auto-wrapped between them.
+# -----------------------------------------------------------------------------
+
+# Default model for any stage whose `model` is unset.
+default_model = "claude-sonnet-4-6"
+# SQLite checkpoint DB (relative to project root).
+db_path       = ".orchestrator/checkpoints.db"
+
+
+# =============================================================================
+# THE PIPELINE  —  one flow line orders the stages below
+# =============================================================================
+flow = "plan >> decompose >> task-build >> docs >> summarize >> gitleaks >> qa"
+
+
+# ── Built-in stages: header is stage.builtin.<id>; the key is the id. ─────────
+# `type` is an informational, validated label. Set `path` (commented on each) to
+# override that slot's prompt — but your prompt must still honour the slot's
+# OUTPUT CONTRACT (decompose still emits a task list, plan a valid plan, …):
+# you swap how the slot thinks, not its wiring.
+[stage.builtin.plan]
+type          = "ai_agent"           # validated label — informational only
+model         = "claude-opus-4-7"    # optional; omit to inherit default_model
+human_in_loop = true                 # human gate: review the plan + task list
+# path        = ".orchestrator/prompts/plan.md"        # optional prompt override
+
+[stage.builtin.decompose]
+type      = "ai_agent"
+max_tasks = 0                        # 0 = uncapped; >0 = advisory soft cap
+# path    = ".orchestrator/prompts/decompose.md"       # optional prompt override
+
+# The per-task STATION — not a single agent, so it has no `type`/`path` of its
+# own. produce/gate/retry ARE the per-task recipe, run once per decomposed task
+# (the implement<->gate auto-fix retry runs per task). To change the agents it
+# uses, edit its produce/gate ids — not a prompt path here.
+[stage.builtin.task-build]
+produce = ["builtin:implementation"]
+gate    = ["defs:lint", "defs:strict-review", "defs:tests"]  # first to fail → retry
+retry   = { max = 3, on_exhausted = "approval_gate" }        # or "abort"
+# Per-task human pauses (off by default):
+# human_in_loop = { after_producer = false, on_gate_fail = false }
+
+[stage.builtin.docs]
+type    = "ai_agent"
+model   = "claude-haiku-4-5-20251001"
+timeout = 120
+# path  = ".orchestrator/prompts/docs.md"              # optional prompt override
+
+[stage.builtin.summarize]
+type          = "ai_agent"
+model         = "claude-haiku-4-5-20251001"
+allowed_tools = ["Read", "Bash", "Grep"]
+timeout       = 120
+# path        = ".orchestrator/prompts/summarize.md"   # optional prompt override
+
+
+# ── Your stages in the flow: header is stage.user.<id>. `path` is REQUIRED. ──
+[stage.user.gitleaks]
+type = "script"
+path = ".orchestrator/checks/gitleaks.sh"
+
+# The final whole-diff QA stage (built-in). Runs once over the full diff after
+# the per-task gates; a FAIL aborts the run (no commit, no PR). This is the
+# thorough judge in the cost-shaped pattern — the per-task gates above stay cheap.
+[stage.builtin.qa]
+type          = "ai_agent"
+model         = "claude-haiku-4-5-20251001"
+allowed_tools = ["Read", "Bash", "Grep"]
+# path        = ".orchestrator/prompts/qa.md"          # optional prompt override
+
+
+# =============================================================================
+# REUSABLE PARTS  —  referenced from a stage's produce / gate (not in the flow)
+# =============================================================================
+
+# ── Built-in producers / gates: [builtin.<id>], referenced as `builtin:<id>`. ─
+[builtin.implementation]
+allowed_tools    = ["Read", "Edit", "Write", "Bash"]
+disallowed_tools = []
+# timeout        = 0                 # 0/unset = no wall-clock limit
+
+# ── Your producers / gates: [defs.<id>], referenced as `defs:<id>`. ──────────
+[defs.lint]
+type = "script"
+path = ".orchestrator/checks/lint.sh"
+
+[defs.strict-review]
+type  = "ai_agent"
+path  = ".orchestrator/agents/strict-review.md"   # project-root-relative
+model = "claude-sonnet-4-6"
+tools = ["Read", "Grep", "Bash"]                  # read-only gate
+
+
+[defs.tests]
+type = "script"
+path = ".orchestrator/checks/tests.sh"   # e.g. runs `node --test calc.test.js`
+
+
+# =============================================================================
+# LOCKED RAILS — config only (you can't reorder/remove them)
+# =============================================================================
+[branch]
+max_slug_length = 50               # kebab-case slug length in the branch name
+
+[git]
+auto_rebase = true                 # rebase onto origin/<base> before push if it moved
+
+[pr]
+base_branch = "main"
+draft       = false
+reviewers   = []                   # GitHub usernames; [] = none
+# PR label is auto-derived from the plan type (feature/bug/refactor/chore).
+
+
+# =============================================================================
+# INFRASTRUCTURE
+# =============================================================================
+[pre_hooks]
+dir     = ".orchestrator/pre-hooks" # DIRECTORY of scripts; run after clean-tree, before LLM spend
+timeout = 30
+
+[audit]
+enabled         = true
+path            = ".orchestrator/audit.log"
+include_content = false            # true = also log prompt/result bodies (verbose)
+
+
+# =============================================================================
+# OVERRIDE COOKBOOK  (copy-paste, all commented)
+# =============================================================================
+#
+# --- Run a security scan in PARALLEL with docs, then join --------------------
+# flow = "plan >> decompose >> task-build >> [docs, gitleaks] >> summarize >> final-qa"
+#
+# --- Point a built-in stage at your own prompt (must honour its contract) ----
+# [stage.builtin.plan]
+# type          = "ai_agent"
+# path          = ".orchestrator/prompts/my-plan.md"
+# human_in_loop = true
+#
+# --- Rename a built-in stage (drop to the user namespace + uses) -------------
+# # You can't rename under stage.builtin (the key must be the built-in's name),
+# # so place it yourself and point uses at the built-in:
+# [stage.user.build]
+# uses    = "builtin:task-build"
+# produce = ["builtin:implementation"]
+# gate    = ["builtin:qa"]
+#
+# --- Drop the per-task gate to a cheap script, do thorough QA once at the end -
+# [stage.builtin.task-build]
+# produce = ["builtin:implementation"]
+# gate    = ["defs:lint"]                  # cheap per-task check
+# retry   = { max = 3, on_exhausted = "abort" }
+# # ...and keep `final-qa` in the flow for the one whole-diff QA pass.
