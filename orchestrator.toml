@@ -1,226 +1,88 @@
-# orchestrator.toml — all config fields are optional; values shown are the defaults.
-# Place this file at the project root (same directory you run the CLI from).
+# orchestrator.toml — the v2 declarative pipeline (Phase 68).
 #
-# Phase 40: per-agent settings are consolidated under [workflow.<step>] — one
-# table per spine step carries its model, human-in-loop gate, tool permissions,
-# and optional timeout. Unknown keys are rejected at load time (fail-loud), so a
-# typo can't be silently ignored.
+# Two axes describe everything (see orchestrator.example.toml for the full guide):
+#   in the flow + built-in     -> [stage.builtin.<id>]
+#   in the flow + yours        -> [stage.user.<id>]
+#   a reusable part + built-in -> [builtin.<id>]   (referenced as builtin:<id>)
+#   a reusable part + yours    -> [defs.<id>]      (referenced as defs:<id>)
+#
+# ORDER comes ONLY from the `flow` line; the git rails (verify-clean-tree, branch,
+# commit, push, open-pr) are implicit and locked. This file mirrors the built-in
+# defaults — edit `flow` / the stages to change the pipeline.
 
-# Model used by any [workflow.*] step whose `model` is left unset.
-# Swap to "claude-opus-4-7" for higher quality, "claude-haiku-4-5-20251001" for speed/cost.
-default_model = "claude-sonnet-4-6"
+default_model           = "claude-sonnet-4-6"
+db_path                 = ".orchestrator/checkpoints.db"
+# Never pause for a human (CI / unattended). Suppresses every human_in_loop gate,
+# auto-approves approval gates, and makes build retries unbounded.
+fully_autonomous        = false
+# Safety rails for the unbounded loop above; enforced ONLY when fully_autonomous.
+# Both <= 0 = no ceiling. A trip → status="cancelled", reason="autonomous_ceiling".
+autonomous_max_seconds  = 0
+autonomous_max_cost_usd = 0.0
 
-# SQLite checkpoint database path (relative to cwd / project root).
-db_path = ".orchestrator/checkpoints.db"
+flow = "plan >> decompose >> task-build >> docs >> summarize"
 
-# Phase 37: never pause for a human. Suppresses every human_in_loop gate,
-# auto-approves approval_gate steps, and makes build retries unbounded (the
-# produce⇄gate loop runs until a gate passes; no exhaustion). For CI / unattended
-# runs. Per-step gate settings are bypassed, not erased — set back to false to
-# restore them. Env override: ORCHESTRATOR_FULLY_AUTONOMOUS.
-fully_autonomous = false
 
-# Safety rails for the unbounded loop above; enforced ONLY when fully_autonomous
-# is true. Both <= 0 mean "no ceiling" (loop until solved). A trip stops the run
-# via the same cancel path → status="cancelled", reason="autonomous_ceiling".
-# Stop a stuck run anytime with cancel_run. Env overrides:
-# ORCHESTRATOR_AUTONOMOUS_MAX_SECONDS / ORCHESTRATOR_AUTONOMOUS_MAX_COST_USD.
-autonomous_max_seconds  = 0      # wall-clock budget per invocation
-autonomous_max_cost_usd = 0.0    # USD spend budget for the run
+[stage.builtin.plan]
+type          = "ai_agent"
+human_in_loop = true                 # pause to review the plan + task list
 
-[pre_hooks]
-# Pre-flight scripts run after the clean-tree check, before any LLM spend.
-# A non-zero exit aborts the run.
-dir     = ".orchestrator/pre-hooks"
-timeout = 30
+[stage.builtin.decompose]
+type      = "ai_agent"
+max_tasks = 0                        # 0 = uncapped; >0 = advisory soft cap
 
-[qa]
-# Scripted QA gate: every executable file in scripts_dir runs (sorted) before
-# the LLM QA agent. A non-zero exit fails QA immediately. Distinct from
-# [workflow.qa] below, which configures the QA *agent*.
-scripts_dir     = ".orchestrator/qa"
-scripts_timeout = 60
+# The per-task station: run produce⇄gate once per decomposed task (the implement⇄QA
+# auto-fix retry runs per task). produce/gate reference parts by prefixed id.
+[stage.builtin.task-build]
+produce = ["builtin:implementation"]
+gate    = ["builtin:qa"]
+retry   = { max = 3, on_exhausted = "approval_gate" }   # or "abort" / "proceed"
 
-# ---------------------------------------------------------------------------
-# Built-in workflow steps. One [workflow.<step>] table per spine step:
-#   model            — omit to inherit default_model
-#   human_in_loop    — pause with an interrupt() at that stage boundary
-#                      (planning / branch / commit only; the build's pauses live
-#                      on the build step — see [[steps.work]])
-#   allowed_tools    — agent tool allowlist (implementation / qa)
-#   disallowed_tools — agent tool denylist
-#   timeout          — wall-clock seconds for the agent loop (omit = no limit)
-# Counterpart to [steps.*] below: [workflow.*] = built-in, [steps.*] = injected.
-# ---------------------------------------------------------------------------
-
-[workflow.planning]
-human_in_loop = true     # pause for plan review before any code is written
-
-[workflow.decompose]
-# Phase 55: turns the approved plan into an ordered task list, shown alongside
-# the plan at the approval gate. Model inherits default_model unless set here or
-# in the prompt frontmatter (.orchestrator/prompts/decompose.md).
-max_tasks = 0            # 0 = uncapped; >0 = advisory cap (soft guidance, not a hard error)
-
-[workflow.task_build]
-# Phase 56: the recipe the per-task station runs for EACH decomposed task — the
-# outer per-task loop wrapping the inner produce⇄gate retry. The plan owns *what*
-# the tasks are; this owns *how* each is built and checked. produce/gate reference
-# [steps.defs.*] ids or the built-in `implementation` producer / `qa` gate.
-# Defaults preserve pre-56 behaviour: QA gates EACH task (the implement⇄QA
-# auto-fix retry runs per task), exhaustion pauses-and-asks (Phase 52). For the
-# cost-shaped pattern, point `gate` at a cheap script and lean on [workflow.final_qa].
-produce = ["implementation"]
-gate    = ["qa"]
-retry   = { max = 3, on_exhausted = "approval_gate" }   # pause-and-ask on exhaustion
-# human_in_loop = { after_producer = false, on_gate_fail = false }  # per-task pauses
-
-[workflow.final_qa]
-# Phase 56: an OPTIONAL single whole-diff acceptance check after all tasks pass.
-# Empty by default (QA already runs per-task above). Set gate = ["qa"] (or your
-# own script/agent ids) to also run one whole-diff pass that catches cross-task
-# interactions the per-task gates can't see. A final-gate FAIL aborts (no PR).
-gate = []
-
-[workflow.branch]
-max_slug_length = 50     # kebab-case slug length in the branch name (slug part only)
-human_in_loop   = false  # pause before the feature branch is created
-
-[workflow.implementation]
-# Phase 51: the "pause after the producer, before the gate" pause moved onto the
-# build step's human_in_loop = { after_producer = true } (see [[steps.work]]).
-# Setting human_in_loop here is now an error at load time.
-allowed_tools    = ["Read", "Edit", "Write", "Bash"]
-disallowed_tools = []
-
-[workflow.qa]
-# Phase 51: the "pause on a QA FAIL" pause moved onto the build step's
-# human_in_loop = { on_gate_fail = true } (see [[steps.work]]). Setting
-# human_in_loop here is now an error at load time.
-allowed_tools    = ["Read", "Grep", "Bash"]
-disallowed_tools = []
-# The impl⇄QA retry budget lives on the per-task station's
-# [workflow.task_build].retry.max above — the single, visible source of truth.
-
-[workflow.docs]
-# Baked-in docs agent (Phase 41). Haiku by default — a read-diff / edit-md task.
+[stage.builtin.docs]
+type    = "ai_agent"
 model   = "claude-haiku-4-5-20251001"
 timeout = 120
 
-[workflow.summarize]
-# Baked-in summarizer (Phase 42). After QA passes, it reads the plan + `git diff
-# HEAD` and produces the commit/PR summary + test plan. Read-only (Bash for the
-# diff, no Edit/Write). Haiku by default — a cheap read-the-diff task.
+[stage.builtin.summarize]
+type          = "ai_agent"
 model         = "claude-haiku-4-5-20251001"
 allowed_tools = ["Read", "Bash", "Grep"]
 timeout       = 120
 
-[workflow.commit]
-human_in_loop = false    # pause after QA PASS, before commit + PR is opened
+
+# ── reusable parts: the spine's own producer / gate (referenced above) ──
+[builtin.implementation]
+allowed_tools = ["Read", "Edit", "Write", "Bash"]
+
+[builtin.qa]
+allowed_tools = ["Read", "Grep", "Bash"]
+
+
+# ── locked git rails (config only — you can't reorder/remove them) ──
+[branch]
+max_slug_length = 50
 
 [git]
-# Before pushing, rebase the feature branch onto origin/<base_branch> if it
-# moved since the branch was created (Phase 22). false = push without rebasing
-# (a rebase conflict otherwise surfaces as a user-action-required error).
 auto_rebase = true
 
 [pr]
-# Base branch the PR targets.
 base_branch = "main"
-# Open the PR as a draft (true) or ready-for-review (false).
-draft = false
-# GitHub usernames to request review from. Empty list = no reviewers requested.
-reviewers = []
-# Note: the PR label is auto-applied from the plan type (feature → "feature",
-# fix → "bug", refactor → "refactor", chore → "chore"). There is no `labels` key.
+draft       = false
+reviewers   = []
+
+
+# ── infrastructure ──
+[pre_hooks]
+dir     = ".orchestrator/pre-hooks"   # scripts run after clean-tree, before LLM spend
+timeout = 30
+
+[qa]
+# Scripted QA gate: every executable in scripts_dir runs (sorted) before the QA
+# agent; a non-zero exit fails QA immediately. Distinct from the qa stage/part.
+scripts_dir     = ".orchestrator/qa"
+scripts_timeout = 60
 
 [audit]
-# Append a JSONL audit event (stage start/end, interrupt, resume, cancel) to
-# log_path for each run. Set enabled = false to disable the audit log entirely.
 enabled         = true
 log_path        = ".orchestrator/audit.log"
-include_content = false   # if true, also log prompt/result content (verbose)
-
-# ---------------------------------------------------------------------------
-# The work list (Phase 33; reshaped Phase 49)
-# Declare extra steps in ONE ordered list — no edits to workflow.py. The spine
-# (verify_clean_tree → plan → decompose → branch → [work] → summarize → docs →
-# commit → push → pr) stays fixed; setup and shipping are tuned via the [workflow.*] /
-# [pre_hooks] / [pr] tables, never listed. The one project-specific region is
-# `[[steps.work]]`: it runs AFTER the branch is made and BEFORE summarize.
-#
-# Steps run in declared (list) order. The whole region is pre-commit, so a
-# cancel/abort never leaves a half-shipped state. The impl ⇄ qa loop is itself
-# a `build` step in this list, declared EXPLICITLY below (Phase 47; there is no
-# hidden default — what runs is exactly what's in this file). Because work runs
-# before summarize, every step's output is included in the commit/PR diff.
-#
-# (Phase 49 collapsed the old before_plan / after_plan / after_branch /
-# before_commit seams into this one list — the pre-plan use case is [pre_hooks];
-# plan sign-off is [workflow.planning].human_in_loop. The loader raises a
-# migration error if a TOML still names an old seam.)
-#
-# Step types:
-#   script      — run an executable; non-zero exit aborts the workflow
-#                 (must be chmod +x with a shebang — see NOTES.md)
-#   approval_gate  — pause for a decision: reply 'abort' (or 'no'/'stop') to stop
-#                 the run, any other reply to proceed
-#   ai_agent   — run a markdown agent whose prompt is at `agent`, a single
-#                 project-root-relative path with the full filename (store
-#                 agents wherever you like). Set human_in_loop = true to pause
-#                 for review AFTER it runs (same abort/proceed reply as
-#                 approval_gate).
-#   build       — run producer step(s), then gate step(s), re-running the
-#                 producers with the failing gate's feedback until a gate passes
-#                 or retry.max is exhausted (Phase 46). produce/gate reference
-#                 [steps.defs.*] ids; `retry = { max, on_exhausted }` tunes the
-#                 loop. A build step must list a gate unless `ungated = true`
-#                 (then the producer runs once). See orchestrator.example.toml
-#                 for the fully commented `lint-loop` worked example.
-#
-# `id` is the step's resume identity — don't rename it mid-run. The manifest
-# is validated at load time (unknown seam, duplicate id, missing script,
-# unknown agent, and — for build steps — unresolved produce/gate references)
-# and snapshotted per run: editing it mid-run refuses resume.
-#
-# Examples (uncomment and provide the referenced files to enable) — these run
-# AFTER the build below, in list order:
-#
-# [[steps.work]]
-# id            = "docs"
-# type          = "ai_agent"
-# agent         = ".orchestrator/agents/docs.md"  # project-root-relative path
-# model         = "claude-sonnet-4-6"
-# human_in_loop = false              # true = pause to review the agent's output
-#
-# [[steps.work]]
-# id   = "security_gate"
-# type = "approval_gate"
-# ask  = "QA passed. Approve security posture before commit?"
-# ---------------------------------------------------------------------------
-
-# --- The impl⇄QA loop moved to the per-task station (Phase 56) -----------------
-# Before Phase 56 the spine's core impl⇄QA producer⇄gate loop was declared HERE as
-# the first `[[steps.work]]` build entry. It is gone: the loop is now run ONCE PER
-# DECOMPOSED TASK by the built-in per-task station (the outer loop over the plan's
-# task list), configured under [workflow.task_build] / [workflow.final_qa] above —
-# not as a work-list step. So `[[steps.work]]` is EMPTY by default and is reserved
-# for ADDITIONAL user steps (scripts, approval gates, your own build loops) that
-# run AFTER the per-task station, in declared order. A single-task plan runs exactly
-# one build → the pre-56 behaviour.
-
-# --- Built-in spine agents: docs (Phase 41) + summarizer (Phase 42) -----------
-# The docs agent used to be a live pluggable step here. It is now
-# a permanent part of the workflow spine, and Phase 42 added a sibling
-# summarizer (it derives the commit/PR summary + test plan from the diff after
-# QA passes). Both run automatically on every run — no [steps.*] entry required
-# — and their prompts ship in the package at orchestrator/orchestrator/prompts/
-# docs.md and summarize.md (tracked), loaded via the same loader as
-# planning/implementation/qa. Configure them under [workflow.docs] and
-# [workflow.summarize] above.
-#
-# To customise either prompt, drop your own .orchestrator/prompts/docs.md or
-# .orchestrator/prompts/summarize.md in the repo — load_prompt prefers that
-# override over the packaged default (same mechanism as the other agents).
-# Add your own [[steps.work]] entries above (after the build) to run extra
-# pluggable steps on the QA-passed tree before summarize.
+include_content = false
