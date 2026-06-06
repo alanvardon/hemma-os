@@ -201,8 +201,7 @@ _FRONTMATTER_FIELDS = ("model", "allowed_tools", "disallowed_tools", "timeout")
 _V1_MIGRATION = (
     "This looks like a v1 orchestrator.toml ([workflow.*] / [[steps.work]] / "
     "[steps.defs.*]). The config format is now v2 (flow + [stage.*] + [builtin.*] "
-    "+ [defs.*]). Convert it with orchestrator.migrate.migrate_v1_to_v2, or see "
-    "orchestrator.v2.example.toml."
+    "+ [defs.*]). See orchestrator.example.toml for the v2 shape."
 )
 
 
