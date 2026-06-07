@@ -3,7 +3,8 @@ __pycache__/
 *.pyc
 *.egg-info/
 *.db
-.orchestrator/
+.orchestrator/*
+!.orchestrator/checks/
 inspect-script.log
 .misc_notes/
 .DS_Store

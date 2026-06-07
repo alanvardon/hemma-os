@@ -35,7 +35,7 @@ max_tasks = 0                        # 0 = uncapped; >0 = advisory soft cap
 # auto-fix retry runs per task). produce/gate reference parts by prefixed id.
 [stage.builtin.task-build]
 produce = ["builtin:implementation"]
-gate    = ["builtin:qa"]
+gate    = ["defs:tests", "builtin:qa"]   # cheap deterministic tests first, then the QA agent
 retry   = { max = 3, on_exhausted = "approval_gate" }   # or "abort" / "proceed"
 
 [stage.builtin.docs]
@@ -56,6 +56,12 @@ allowed_tools = ["Read", "Edit", "Write", "Bash"]
 
 [builtin.qa]
 allowed_tools = ["Read", "Grep", "Bash"]
+
+
+# ── your reusable parts: referenced as defs:<id> ──
+[defs.tests]
+type = "script"
+path = ".orchestrator/checks/tests.sh"   # deterministic unit-test gate (Phase 71)
 
 
 # ── locked git rails (config only — you can't reorder/remove them) ──
