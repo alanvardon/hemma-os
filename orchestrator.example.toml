@@ -52,6 +52,12 @@ db_path       = ".orchestrator/checkpoints.db"
 #     go green→red the run pauses for a human to review the RED suite before
 #     implementation: reply 'yes' to implement, 'abort' to stop, or feedback to
 #     re-author the tests. Set false to let red-green run unattended.
+#   - tdd_coverage_critic: a read-only critic judges whether the authored tests
+#     MEANINGFULLY pin down the task (catches tautological/vacuous tests). Default
+#     true. A negative verdict re-authors the tests with the critic's feedback, up
+#     to tdd_critic_max_attempts times; if still weak it proceeds and records a
+#     manual check (never blocks). Override its prompt via
+#     .orchestrator/prompts/coverage-critic.md. Set false to skip it.
 #   - Graceful-degrade: a task the author judges untestable (or a born-green /
 #     no-script-gate situation) falls back to the classic implement→qa path. Each
 #     such task is recorded in the run folder (test-author-<task>.md) and its
@@ -59,10 +65,12 @@ db_path       = ".orchestrator/checkpoints.db"
 #     run result's `manual_checks`) — what a human must verify by hand.
 #   - tdd = true is INCOMPATIBLE with fully_autonomous = true (the human
 #     red-review is the guard; autonomous TDD is a later phase) — load errors.
-# tdd              = false
-# test_paths       = ["**/*.test.js"]
-# test_author_path = "prompts/my-test-author.md"
-# tdd_red_review   = true
+# tdd                     = false
+# test_paths              = ["**/*.test.js"]
+# test_author_path        = "prompts/my-test-author.md"
+# tdd_red_review          = true
+# tdd_coverage_critic     = true
+# tdd_critic_max_attempts = 2
 
 
 # =============================================================================

@@ -281,11 +281,15 @@ def _patch(stubs: _Stubs, monkeypatch, *, hash_value: str = "SNAP") -> None:
     monkeypatch.setattr("orchestrator.workflow.ensure_on_main", stubs.ensure_on_main)
 
 
-def _tdd_cfg(*, red_review=False, **kw):
-    # red_review defaults False so these authoring/diff-gate/resume tests keep their
-    # single plan-approval resume; Phase 72b's own tests opt in with red_review=True.
+def _tdd_cfg(*, red_review=False, coverage_critic=False, **kw):
+    # red_review / coverage_critic default False so these authoring/diff-gate/resume
+    # tests keep their single plan-approval resume and don't invoke the critic agent;
+    # Phase 72b/74's own tests opt in.
     return task_build_config(**kw).model_copy(
-        update={"tdd": True, "test_paths": ["**/*.test.js"], "tdd_red_review": red_review}
+        update={
+            "tdd": True, "test_paths": ["**/*.test.js"],
+            "tdd_red_review": red_review, "tdd_coverage_critic": coverage_critic,
+        }
     )
 
 

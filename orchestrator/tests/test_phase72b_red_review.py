@@ -98,8 +98,10 @@ async def test_reauthor_skips_green_before(monkeypatch):
 
 
 def _review_cfg(**kw):
+    # coverage_critic off: these tests exercise the red-review pause, not the critic.
     return task_build_config(**kw).model_copy(
-        update={"tdd": True, "test_paths": ["**/*.test.js"], "tdd_red_review": True}
+        update={"tdd": True, "test_paths": ["**/*.test.js"],
+                "tdd_red_review": True, "tdd_coverage_critic": False}
     )
 
 

@@ -96,10 +96,22 @@ Call `emit_test_author_result` exactly once with:
 Before emitting `true`, make sure you actually ran the suite and saw your new tests FAIL (red). This call is how the orchestrator captures your output. If you don't call it, the workflow has nothing to record and will fail. Write test files only — do not implement the feature, and do not edit source files to make your own tests pass.
 """
 
+_COVERAGE_CRITIC_FOOTER = """\
+## When done
+
+Call `emit_coverage_critic_result` exactly once with:
+
+- `meaningful`: `true` if the tests would FAIL when the behaviour is implemented wrongly (they pin down this task's behaviour through its public interface); `false` if one or more are vacuous, tautological, assert only the shape of data, or would pass against a stub implementation.
+- `feedback`: on `false`, name which test(s) are weak and what behaviour they should assert instead, so the author can revise them; on `true`, a one-line confirmation.
+
+This call is how the orchestrator captures your verdict. If you don't call it, the workflow has nothing to record and will fail. Do not write or edit any files — your only output is the `emit_coverage_critic_result` call.
+"""
+
 _FOOTERS: dict[str, str] = {
     "implementation": _IMPLEMENTATION_FOOTER,
     "qa": _QA_FOOTER,
     "test-author": _TEST_AUTHOR_FOOTER,
+    "coverage-critic": _COVERAGE_CRITIC_FOOTER,
 }
 
 

@@ -39,7 +39,13 @@ logger = logging.getLogger(__name__)
 # interrupt after red-confirm and loop `test_author_task` (with feedback/attempt) to
 # re-author. New control flow + interrupt the body can reach → a half-finished 2.2.0
 # checkpoint can't safely resume into it. Gated on config.tdd_red_review (default on).
-WORKFLOW_VERSION = "2.3.0"
+#
+# 2.4.0 (Phase 74): the per-task coverage critic. _author_with_review now runs a new
+# checkpointed `critic_task` on the authored tests and can loop `test_author_task` to
+# re-author on a negative verdict. A new @task in the body's graph → a half-finished
+# 2.3.0 checkpoint can't safely resume into it. Gated on config.tdd_coverage_critic
+# (default on); CoverageCriticResult is on the serde allowlist.
+WORKFLOW_VERSION = "2.4.0"
 
 
 from orchestrator.errors import FatalError
@@ -124,6 +130,7 @@ from orchestrator.agents.planning import plan, PlanResult
 from orchestrator.agents.qa import qa, QaResult
 from orchestrator.agents.summarize import summarize, SummaryResult
 from orchestrator.agents.test_author import author_tests, TestAuthorResult
+from orchestrator.agents.coverage_critic import critique_tests, CoverageCriticResult
 from orchestrator.agents.runner import run_structured_agent
 from orchestrator.prompt_loader import load_prompt, load_prompt_frontmatter
 from orchestrator.agent_frontmatter import AgentFrontmatter, parse_agent_frontmatter
@@ -179,6 +186,9 @@ _ALLOWED_MSGPACK_MODULES = [
     # The test-author's per-task verdict (Phase 72). Checkpointed so a resume
     # replays the authored result rather than re-authoring the tests.
     ("orchestrator.agents.test_author", "TestAuthorResult"),
+    # The coverage critic's per-task verdict (Phase 74). Checkpointed so a resume
+    # replays the verdict rather than re-running the critic.
+    ("orchestrator.agents.coverage_critic", "CoverageCriticResult"),
     ("orchestrator.usage", "TaskUsage"),
     # One registered type for ALL injected steps, so the allowlist stays closed
     # however many steps users add.
@@ -769,6 +779,34 @@ def _test_author_prompt(config) -> str:
     return load_prompt("test-author")
 
 
+# ── Coverage critic (Phase 74) — same frontmatter-driven model/tools mechanism as
+# the other built-ins; overridable via .orchestrator/prompts/coverage-critic.md. No
+# path config knob (the critic is fully internal). ──────────────────────────────
+
+
+def _coverage_critic_model(config) -> str:
+    """Resolved model for the coverage critic: the prompt frontmatter's model, else
+    default_model."""
+    return config.resolved_model(load_prompt_frontmatter("coverage-critic").model)
+
+
+def _coverage_critic_tools(config) -> tuple[list[str] | None, list[str] | None]:
+    """(allowed, disallowed) tools from the critic prompt frontmatter, or (None,
+    None) → critique_tests uses its read-only role default (Read/Bash/Grep)."""
+    fm = load_prompt_frontmatter("coverage-critic")
+    return fm.allowed_tools, fm.disallowed_tools
+
+
+async def _run_coverage_critic(plan_text: str, model: str) -> CoverageCriticResult:
+    """Run the coverage critic on a task's authored tests. Factored out of
+    critic_task so the @task stays a pure checkpoint boundary (tests patch this)."""
+    config = load_config()
+    allowed, disallowed = _coverage_critic_tools(config)
+    return await critique_tests(
+        plan_text, model, load_prompt("coverage-critic"), allowed, disallowed
+    )
+
+
 def _script_gate_steps(config, gate_refs):
     """The ScriptStep for each SCRIPT-type part referenced in a build's gate.
 
@@ -935,6 +973,25 @@ async def test_author_task(
     return await _run_test_author(plan_text, model, test_paths, gate_refs, feedback)
 
 
+@task
+@_audited_task("coverage_critic")
+async def critic_task(plan_text: str, model: str, attempt: int = 0) -> CoverageCriticResult:
+    # The Phase 74 coverage critic, checkpointed so a resume replays the verdict.
+    # `attempt` is a cache-key discriminator only: each critic round (one per
+    # authored test version) is a distinct @task invocation, mirroring
+    # test_author_task, so a resume replays the right round.
+    return await _run_coverage_critic(plan_text, model)
+
+
+# Default re-author guidance when the critic rejects but gives no specific note.
+_CRITIC_DEFAULT_FEEDBACK = (
+    "The tests do not meaningfully pin down this task's behaviour. Rewrite them to "
+    "assert the observable behaviour through the public interface — they must fail "
+    "if the behaviour is implemented wrongly; no vacuous, tautological, or "
+    "shape-only checks."
+)
+
+
 # Resume words at the red-review pause that mean "implement against these tests".
 # Anything that is neither an approve word nor an abort word is treated as
 # re-author feedback.
@@ -947,30 +1004,65 @@ def _is_red_review_approve(decision) -> bool:
 
 async def _author_with_review(
     task, task_plan: str, config, usage_by_task: dict, gate_refs: list[str], *,
-    thread_id: str, audit, autonomous: bool,
+    thread_id: str, audit, autonomous: bool, manual_checks: list | None = None,
 ) -> TestAuthorResult:
-    """Author tests for one task with the supervised red-review pause + re-author
-    escape (Phase 72b).
+    """Author tests for one task, with the Phase 74 coverage critic and the Phase
+    72b supervised red-review pause + re-author escape.
 
-    Loops: author → if testable, PAUSE for a human to review the RED tests →
+    Per task: author → (testable?) → COVERAGE CRITIC judges the tests; a negative
+    verdict re-authors with the critic's feedback, bounded by tdd_critic_max_attempts
+    (still weak after the budget → proceed and record a manual check; never wedges).
+    Then, if tdd_red_review is on and the run isn't autonomous, PAUSE for a human:
       - an approve word ('yes'/…)  → return the verdict; the implement loop runs;
       - 'abort'/'no'/'stop'        → raise BuildFailed → clean status="failed";
-      - anything else              → treat as feedback and RE-AUTHOR the tests.
-    An untestable verdict returns immediately (classic fallback — nothing to
-    review). The pause is default-on (config.tdd_red_review); it is suppressed when
-    tdd_red_review is false or the run is fully_autonomous. Runs in the entrypoint
-    frame (called from _run_task_loop) so interrupt() is reachable; each re-author
-    is a distinct test_author_task @task (via `attempt`) so resume replays cleanly.
-    This is the escape machinery Phase 74's coverage critic reuses."""
+      - anything else              → treat as feedback and RE-AUTHOR (then re-critique).
+    An untestable verdict returns immediately (classic fallback). Runs in the
+    entrypoint frame so interrupt() is reachable; each re-author/critic round is a
+    distinct test_author_task / critic_task @task (via `attempt`) so resume replays
+    cleanly."""
     feedback: str | None = None
     attempt = 0
-    while True:
-        ta = await test_author_task(
-            task_plan, _test_author_model(config),
-            list(config.test_paths), gate_refs, feedback, attempt,
-        )
-        _record_usage(usage_by_task, "test_author", ta)
-        if not ta.testable or autonomous or not config.tdd_red_review:
+    while True:  # human-review loop (outer); each iteration re-resolves the tests
+        # Coverage-critic loop (inner): author → critique → re-author until the
+        # critic is satisfied, the critic is off, or its budget is exhausted.
+        critic_rounds = 0
+        while True:
+            ta = await test_author_task(
+                task_plan, _test_author_model(config),
+                list(config.test_paths), gate_refs, feedback, attempt,
+            )
+            _record_usage(usage_by_task, "test_author", ta)
+            if not ta.testable:
+                return ta
+            if not config.tdd_coverage_critic:
+                break
+            cr = await critic_task(task_plan, _coverage_critic_model(config), attempt)
+            _record_usage(usage_by_task, "coverage_critic", cr)
+            if cr.meaningful:
+                break
+            if critic_rounds >= config.tdd_critic_max_attempts:
+                # Budget exhausted, tests still weak: proceed (never wedge) but flag
+                # the criterion for manual verification (Phase 73 surfacing).
+                logger.warning(
+                    "TDD: coverage critic still flags weak tests for task %s after "
+                    "%d re-author(s); proceeding, flagged as a manual check.",
+                    task.id, critic_rounds,
+                )
+                if manual_checks is not None:
+                    manual_checks.append({
+                        "task_id": task.id,
+                        "title": task.title,
+                        "acceptance_criteria": task.acceptance_criteria,
+                        "reason": f"coverage critic unresolved after "
+                                  f"{critic_rounds} re-author(s): {cr.feedback}",
+                    })
+                break
+            feedback = cr.feedback or _CRITIC_DEFAULT_FEEDBACK
+            attempt += 1
+            critic_rounds += 1
+
+        # Supervised red-review (Phase 72b).
+        if autonomous or not config.tdd_red_review:
             return ta
         if audit is not None:
             emit_event(audit, thread_id, "interrupt",
@@ -1048,6 +1140,7 @@ async def _run_task_loop(
             ta = await _author_with_review(
                 task, task_plan, config, usage_by_task, gate_refs,
                 thread_id=thread_id, audit=audit, autonomous=autonomous,
+                manual_checks=manual_checks,
             )
             # Phase 73: record the test-author's verdict for EVERY TDD task, so the
             # run folder shows the decision for each (not only the ones that got
@@ -1733,6 +1826,7 @@ async def build_workflow(
                 "planning": [],
                 "decompose": [],
                 "test_author": [],
+                "coverage_critic": [],
                 "implementation": [],
                 "qa": [],
                 "summarize": [],

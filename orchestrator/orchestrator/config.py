@@ -180,6 +180,16 @@ class OrchestratorConfig(BaseModel):
     # supervised guard); set false to let red-green run unattended. Only consulted
     # when tdd is on and the run is not fully_autonomous.
     tdd_red_review: bool = True
+    # Coverage critic (Phase 74). When tdd is on, after the test-author writes
+    # failing tests a separate read-only agent judges whether they MEANINGFULLY pin
+    # down the task's behaviour (catches tautological/vacuous tests a green→red gate
+    # can't). A negative verdict re-authors the tests with the critic's feedback,
+    # bounded by tdd_critic_max_attempts; if still weak after the budget the run
+    # proceeds and the concern is recorded as a manual check (never wedges). Default
+    # on (the meaningfulness backstop); set false to skip it.
+    tdd_coverage_critic: bool = True
+    # Max critic-driven re-author rounds before proceeding-with-a-manual-check.
+    tdd_critic_max_attempts: int = 2
 
     pipeline: Pipeline = Field(default_factory=default_pipeline)
     branch: BranchConfig = Field(default_factory=BranchConfig)
@@ -267,6 +277,7 @@ _ALLOWED_TOP_LEVEL: frozenset[str] = frozenset({
     "default_model", "db_path", "fully_autonomous",
     "autonomous_max_seconds", "autonomous_max_cost_usd",
     "tdd", "test_paths", "test_author_path", "tdd_red_review",
+    "tdd_coverage_critic", "tdd_critic_max_attempts",
     "flow", "stage", "builtin", "defs",
     "branch", "pre_hooks", "qa", "git", "pr", "audit",
 })
@@ -315,7 +326,8 @@ def load_config(path: Path | None = None) -> OrchestratorConfig:
     fields: dict = {"pipeline": pipeline}
     for key in ("default_model", "db_path", "fully_autonomous",
                 "autonomous_max_seconds", "autonomous_max_cost_usd",
-                "tdd", "test_paths", "test_author_path", "tdd_red_review"):
+                "tdd", "test_paths", "test_author_path", "tdd_red_review",
+                "tdd_coverage_critic", "tdd_critic_max_attempts"):
         if key in data:
             fields[key] = data[key]
     if "branch" in data:
