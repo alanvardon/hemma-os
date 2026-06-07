@@ -79,26 +79,31 @@ def _build_user_message(plan_text: str) -> str:
 
 
 async def author_tests(
-    plan_text: str, model: str, system_prompt: str | None = None
+    plan_text: str,
+    model: str,
+    system_prompt: str | None = None,
+    allowed_tools: list[str] | None = None,
+    disallowed_tools: list[str] | None = None,
 ) -> TestAuthorResult:
     """Run the test-author agent and return its verdict.
 
     The agent writes test file(s) for the task and emits `testable` + a `reason`.
     It does NOT compute the snapshot or confirm red — that is the workflow's job
-    (it owns the green→red transition and the freeze). Tools are the author-role
-    default (a [builtin.test-author] override is a later enhancement); the model
-    is resolved by the caller.
+    (it owns the green→red transition and the freeze). The model and the prompt /
+    tool overrides are resolved by the caller from the prompt frontmatter.
 
-    `system_prompt`: the resolved prompt body+footer. None falls back to the
-    bundled/convention default (`_TEST_AUTHOR_SYSTEM_PROMPT`); the workflow passes
-    a config.test_author_path override when one is set.
+    `system_prompt`: the resolved prompt body+footer. None → the bundled/
+    convention default (`_TEST_AUTHOR_SYSTEM_PROMPT`).
+    `allowed_tools` / `disallowed_tools`: None → the author-role defaults
+    (`_DEFAULT_TOOLS` / none); the workflow passes the prompt frontmatter's tools
+    when it sets any.
     """
     return await run_structured_agent(
         system_prompt=system_prompt if system_prompt is not None else _TEST_AUTHOR_SYSTEM_PROMPT,
         user_message=_build_user_message(plan_text),
         model=model,
-        allowed_tools=_DEFAULT_TOOLS,
-        disallowed_tools=[],
+        allowed_tools=allowed_tools if allowed_tools is not None else _DEFAULT_TOOLS,
+        disallowed_tools=disallowed_tools if disallowed_tools is not None else [],
         # Same repo root as implementation/QA — the author writes test files there.
         cwd=REPO_ROOT,
         timeout=None,

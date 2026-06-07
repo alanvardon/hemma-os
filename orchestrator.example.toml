@@ -217,6 +217,11 @@ include_content = false            # true = also log prompt/result bodies (verbo
 # [defs.tests]
 # type = "script"
 # path = ".orchestrator/checks/tests.sh"
-# # The test-author uses default_model + Read/Edit/Write/Bash. Override its prompt
-# # by dropping .orchestrator/prompts/test-author.md (same loader as the others),
-# # or point it at an arbitrary path with test_author_path = "prompts/my-author.md".
+# # The test-author defaults to default_model + Read/Edit/Write/Bash. Override its
+# # prompt by dropping .orchestrator/prompts/test-author.md (same loader as the
+# # others), or point it at an arbitrary path with test_author_path. That prompt
+# # file's frontmatter sets the author's model + tools, same as the other built-ins:
+# #   ---
+# #   model: claude-opus-4-7
+# #   tools: [Read, Edit, Write, Bash]
+# #   ---

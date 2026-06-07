@@ -125,7 +125,7 @@ async def test_run_test_author_green_to_red_returns_snapshot(monkeypatch):
 
     _patch_scripts(monkeypatch, [(True, ""), (False, "FAILED: 1 test")])
 
-    async def _author(plan, model, system_prompt=None):
+    async def _author(plan, model, system_prompt=None, allowed_tools=None, disallowed_tools=None):
         return TestAuthorResult(testable=True, summary="covers behaviour X")
 
     monkeypatch.setattr(wf, "author_tests", _author)
@@ -144,7 +144,7 @@ async def test_run_test_author_born_green_falls_back(monkeypatch):
 
     _patch_scripts(monkeypatch, [(True, ""), (True, "")])
 
-    async def _author(plan, model, system_prompt=None):
+    async def _author(plan, model, system_prompt=None, allowed_tools=None, disallowed_tools=None):
         return TestAuthorResult(testable=True, summary="claims testable")
 
     monkeypatch.setattr(wf, "author_tests", _author)
@@ -162,7 +162,7 @@ async def test_run_test_author_baseline_red_falls_back_without_authoring(monkeyp
     _patch_scripts(monkeypatch, [(False, "pre-existing failure")])
     authored = {"called": False}
 
-    async def _author(plan, model, system_prompt=None):
+    async def _author(plan, model, system_prompt=None, allowed_tools=None, disallowed_tools=None):
         authored["called"] = True
         return TestAuthorResult(testable=True)
 
@@ -179,7 +179,7 @@ async def test_run_test_author_untestable_passthrough(monkeypatch):
 
     _patch_scripts(monkeypatch, [(True, "")])
 
-    async def _author(plan, model, system_prompt=None):
+    async def _author(plan, model, system_prompt=None, allowed_tools=None, disallowed_tools=None):
         return TestAuthorResult(testable=False, summary="DOM-only, no harness")
 
     monkeypatch.setattr(wf, "author_tests", _author)

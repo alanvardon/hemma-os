@@ -114,7 +114,8 @@ from orchestrator.agents.qa import qa, QaResult
 from orchestrator.agents.summarize import summarize, SummaryResult
 from orchestrator.agents.test_author import author_tests, TestAuthorResult
 from orchestrator.agents.runner import run_structured_agent
-from orchestrator.prompt_loader import load_prompt
+from orchestrator.prompt_loader import load_prompt, load_prompt_frontmatter
+from orchestrator.agent_frontmatter import AgentFrontmatter, parse_agent_frontmatter
 from orchestrator.retry_block import RetryBlock, feedback_section, run_retry_block
 from orchestrator.audit import AuditSink, NoopAuditSink, build_sink, emit_event
 from orchestrator.cancellation import WorkflowCancelled, raise_if_cancelled
@@ -685,10 +686,36 @@ def _build_hil(spec) -> HumanInLoopConfig:
 # ---------------------------------------------------------------------------
 
 
+def _test_author_frontmatter(config) -> AgentFrontmatter:
+    """The test-author prompt file's frontmatter (model/tools/…).
+
+    Resolved from the same file _test_author_prompt loads: config.test_author_path
+    when set, else the convention/bundled default. Same mechanism the other
+    built-ins use (load_prompt_frontmatter / _merge_builtin_frontmatter) — the
+    prompt file fully defines the agent, persona + model + tools. A missing
+    override file yields an empty frontmatter; _test_author_prompt raises the
+    clear FileNotFoundError, so model/tools resolution never crashes first."""
+    if config.test_author_path:
+        path = find_project_root() / config.test_author_path
+        if path.exists():
+            return parse_agent_frontmatter(path.read_text(encoding="utf-8"))[0]
+        return AgentFrontmatter()
+    return load_prompt_frontmatter("test-author")
+
+
 def _test_author_model(config) -> str:
-    """Resolved model for the test-author: default_model in the core slice (a
-    dedicated [builtin.test-author] override is a later enhancement)."""
-    return config.resolved_model(None)
+    """Resolved model for the test-author: the prompt frontmatter's `model` if it
+    sets one, else default_model. (Frontmatter is the only override surface — the
+    test-author is internal, not a [builtin.*] part.)"""
+    return config.resolved_model(_test_author_frontmatter(config).model)
+
+
+def _test_author_tools(config) -> tuple[list[str] | None, list[str] | None]:
+    """(allowed, disallowed) tools for the test-author from prompt frontmatter, or
+    (None, None) when it says nothing — author_tests then uses its role default
+    (Read/Edit/Write/Bash)."""
+    fm = _test_author_frontmatter(config)
+    return fm.allowed_tools, fm.disallowed_tools
 
 
 def _test_author_prompt(config) -> str:
@@ -813,7 +840,10 @@ async def _run_test_author(
         )
         return TestAuthorResult(testable=False, summary="suite not green before authoring")
 
-    verdict = await author_tests(plan_text, model, _test_author_prompt(config))
+    allowed, disallowed = _test_author_tools(config)
+    verdict = await author_tests(
+        plan_text, model, _test_author_prompt(config), allowed, disallowed
+    )
     if not verdict.testable:
         logger.info("TDD: task judged untestable (%s); classic fallback.", verdict.summary)
         return verdict
