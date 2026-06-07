@@ -64,7 +64,7 @@ max_tasks = 0                        # 0 = uncapped; >0 = advisory soft cap
 # uses, edit its produce/gate ids — not a prompt path here.
 [stage.builtin.task-build]
 produce = ["builtin:implementation"]
-gate    = ["defs:lint", "defs:strict-review", "defs:tests"]  # first to fail → retry
+gate    = ["defs:lint", "defs:strict-review", "builtin:qa"]  # first to fail → retry
 retry   = { max = 3, on_exhausted = "approval_gate" }        # or "abort"
 # Per-task human pauses (off by default):
 # human_in_loop = { after_producer = false, on_gate_fail = false }
