@@ -118,12 +118,14 @@ def _safe_id(task_id: str) -> str:
 
 
 def write_test_author(thread_id: str, task_id: str, ta: TestAuthorResult) -> None:
-    """Write test-author-<task_id>.md — the red→green record for one TDD task.
+    """Write test-author-<task_id>.md — the test-author's verdict for one TDD task.
 
-    Captures the author's verdict, the frozen-test snapshot, and the failing
-    (RED) suite output observed at red-confirm, so the red→green transition is
-    auditable after the fact. Best-effort; the checkpointed TestAuthorResult is
-    the source of truth. Only written for testable tasks (the caller gates this)."""
+    Written for EVERY TDD task (Phase 73), testable or not, so the run folder shows
+    the test-author's decision for each task — not only the ones that got tests. For
+    a testable task it captures the frozen-test snapshot and the failing (RED) suite
+    output; for a degraded task it records `testable=false` and the reason it fell
+    back to the classic implement→qa path. Best-effort; the checkpointed
+    TestAuthorResult is the source of truth."""
     try:
         d = _run_dir(thread_id)
         d.mkdir(parents=True, exist_ok=True)
@@ -136,6 +138,38 @@ def write_test_author(thread_id: str, task_id: str, ta: TestAuthorResult) -> Non
             f"{snap}{red}"
         )
         (d / f"test-author-{_safe_id(task_id)}.md").write_text(content, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def write_manual_checks(thread_id: str, items: list[dict]) -> None:
+    """Write manual-checks.md — the acceptance criteria NOT proven by a test (P73).
+
+    Each item is a degraded TDD task (the test-author judged it untestable / born-
+    green / had no script gate, so it ran the classic implement→qa path): its
+    title, id, the reason it degraded, and its acceptance_criteria — the spec a
+    human must now verify by hand. No-op when there are none. Best-effort."""
+    if not items:
+        return
+    try:
+        d = _run_dir(thread_id)
+        d.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "# Manual verification needed",
+            "",
+            "These tasks were not proven by an automated test (the test-author "
+            "degraded them to the classic implement→qa path). Verify each "
+            "acceptance criterion by hand:",
+            "",
+        ]
+        for it in items:
+            lines.append(f"## {it.get('title')}  (`{it.get('task_id')}`)")
+            lines.append("")
+            lines.append(f"**Why no test:** {it.get('reason') or '(unspecified)'}")
+            lines.append("")
+            lines.append(f"**Verify:** {it.get('acceptance_criteria') or '(none given)'}")
+            lines.append("")
+        (d / "manual-checks.md").write_text("\n".join(lines), encoding="utf-8")
     except OSError:
         pass
 

@@ -53,7 +53,10 @@ db_path       = ".orchestrator/checkpoints.db"
 #     implementation: reply 'yes' to implement, 'abort' to stop, or feedback to
 #     re-author the tests. Set false to let red-green run unattended.
 #   - Graceful-degrade: a task the author judges untestable (or a born-green /
-#     no-script-gate situation) falls back to the classic implement→qa path.
+#     no-script-gate situation) falls back to the classic implement→qa path. Each
+#     such task is recorded in the run folder (test-author-<task>.md) and its
+#     acceptance criterion is surfaced as a manual check (manual-checks.md + the
+#     run result's `manual_checks`) — what a human must verify by hand.
 #   - tdd = true is INCOMPATIBLE with fully_autonomous = true (the human
 #     red-review is the guard; autonomous TDD is a later phase) — load errors.
 # tdd              = false

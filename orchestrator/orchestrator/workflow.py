@@ -155,6 +155,7 @@ from orchestrator.pre_hooks import run_pre_hooks
 from orchestrator.run_artifacts import (
     rename_with_branch,
     write_decomposition,
+    write_manual_checks,
     write_plan,
     write_qa,
     write_summary,
@@ -1008,6 +1009,7 @@ async def _run_task_loop(
     thread_id: str,
     audit,
     autonomous: bool = False,
+    manual_checks: list | None = None,
 ) -> None:
     """The built-in `task-build` station: run the decomposed task list, one
     produce⇄gate build per task.
@@ -1018,7 +1020,12 @@ async def _run_task_loop(
     built-in implementation producer / qa gate are made task-aware by composing
     this task's context into the plan text. A task that exhausts its budget raises
     BuildFailed(step_id="task:<id>") → the entrypoint's clean status="failed".
-    Runs in the entrypoint body so its interrupt()s are reachable."""
+    Runs in the entrypoint body so its interrupt()s are reachable.
+
+    `manual_checks` (Phase 73): when tdd is on, each task DEGRADED to the classic
+    path (test-author judged it untestable / born-green / no script gate) appends
+    {task_id, title, acceptance_criteria, reason} here, so the entrypoint can record
+    the criteria a human must verify by hand."""
     hil = _build_hil(stage)
     for task in decomposition.tasks:
         task_plan = _compose_task_plan(plan_result.plan_text, task)
@@ -1042,6 +1049,10 @@ async def _run_task_loop(
                 task, task_plan, config, usage_by_task, gate_refs,
                 thread_id=thread_id, audit=audit, autonomous=autonomous,
             )
+            # Phase 73: record the test-author's verdict for EVERY TDD task, so the
+            # run folder shows the decision for each (not only the ones that got
+            # tests). write_test_author renders the testable=false case too.
+            write_test_author(thread_id, task.id, ta)
             if ta.testable:
                 repo_root = str(find_project_root())
                 diff_gate = {
@@ -1050,10 +1061,17 @@ async def _run_task_loop(
                     ),
                 }
                 gate_refs = ["builtin:diff-gate", *gate_refs]
-                # Phase 72b: give the implementer's first attempt the failing tests,
-                # and persist the red→green record for the run.
+                # Phase 72b: give the implementer's first attempt the failing tests.
                 impl_plan = _compose_red_green(task_plan, ta.red_output)
-                write_test_author(thread_id, task.id, ta)
+            elif manual_checks is not None:
+                # Degraded to the classic path: its acceptance criterion is a manual
+                # check (Phase 73). Surfaced in the result + a manual-checks.md artifact.
+                manual_checks.append({
+                    "task_id": task.id,
+                    "title": task.title,
+                    "acceptance_criteria": task.acceptance_criteria,
+                    "reason": ta.summary,
+                })
         producers, gates = _builtin_build_callables(
             config, plan_result, usage_by_task, qa_holder, thread_id,
             impl_plan=impl_plan, qa_plan=qa_plan,
@@ -1127,6 +1145,7 @@ async def _run_qa_stage(
 async def _dispatch_stage(
     stage, *, config, plan_result, decomposition, check_cancel, usage_by_task: dict,
     qa_holder: dict, summary_holder: dict, thread_id: str, audit, autonomous: bool,
+    manual_checks: list | None = None,
 ) -> None:
     """Run ONE post-branch stage, by id / effective type. Called in flow order
     from the entrypoint body (plan + decompose run earlier, so they are skipped by
@@ -1141,7 +1160,7 @@ async def _dispatch_stage(
         await _run_task_loop(
             stage, decomposition, plan_result, config, check_cancel,
             usage_by_task, qa_holder, thread_id=thread_id, audit=audit,
-            autonomous=autonomous,
+            autonomous=autonomous, manual_checks=manual_checks,
         )
         return
 
@@ -1782,6 +1801,9 @@ async def build_workflow(
                 # so resume replays the same graph.
                 _qa_holder: dict[str, QaResult] = {}
                 _summary_holder: dict[str, SummaryResult] = {}
+                # Phase 73: TDD tasks that degraded to the classic path; their
+                # acceptance criteria need manual verification.
+                _manual_checks: list[dict] = []
                 for stage in config.pipeline.stages:
                     if stage.id in ("plan", "decompose"):
                         continue
@@ -1792,7 +1814,11 @@ async def build_workflow(
                         usage_by_task=usage_by_task, qa_holder=_qa_holder,
                         summary_holder=_summary_holder, thread_id=thread_id,
                         audit=_audit, autonomous=autonomous,
+                        manual_checks=_manual_checks,
                     )
+
+                # Phase 73: persist the manual-verification list (no-op if empty).
+                write_manual_checks(thread_id, _manual_checks)
 
                 # The latest QA verdict (last task's per-task QA, or a qa stage).
                 # None only if the build was ungated AND no qa stage ran.
@@ -1814,6 +1840,9 @@ async def build_workflow(
                         plan=plan_result.model_dump(),
                         branch=branch_name,
                         qa=qa_result.model_dump() if qa_result else None,
+                        # Phase 73: present only when some task degraded (else omitted,
+                        # so non-TDD / all-testable results keep their exact shape).
+                        **({"manual_checks": _manual_checks} if _manual_checks else {}),
                     )
 
                 # Optional pre-PR gate ([pr].human_in_loop).
@@ -1846,6 +1875,8 @@ async def build_workflow(
                     # None when the build was ungated or gated only on a non-qa gate.
                     qa=qa_result.model_dump() if qa_result else None,
                     pr_url=pr_url,
+                    # Phase 73: criteria a human must verify (omitted when none).
+                    **({"manual_checks": _manual_checks} if _manual_checks else {}),
                 )
 
             except BuildFailed as exc:
