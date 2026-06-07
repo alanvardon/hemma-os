@@ -29,6 +29,11 @@
     return Math.max(0, loan - existingPantbrev) * 0.02;
   }
 
+  function cashToClose(price, loanAmount, existingPantbrev) {
+    var downPayment = Math.max(price * 0.15, price - loanAmount);
+    return downPayment + lagfart(price) + pantbrevCost(loanAmount, existingPantbrev);
+  }
+
   function ranteavdrag(annualInterest) {
     var threshold = 100000;
     if (annualInterest <= threshold) return annualInterest * 0.30;
@@ -74,6 +79,7 @@
     fastighetsavgiftCap: fastighetsavgiftCap,
     equityPct: equityPct,
     buildAmortSchedule: buildAmortSchedule,
+    cashToClose: cashToClose,
   };
 
   // Guarded CJS export for node --test (calc.test.js)

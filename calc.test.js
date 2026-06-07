@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 global.window = global.window || {};
 const calc = require('./calc.js');
 
-const { lagfart, pantbrevCost, ranteavdrag, fastighetsavgiftCap, equityPct } = calc;
+const { lagfart, pantbrevCost, ranteavdrag, fastighetsavgiftCap, equityPct, cashToClose } = calc;
 
 // ── Tests ────────────────────────────────────────────────────────
 
@@ -55,4 +55,75 @@ test('fastighetsavgiftCap: above cap', () => {
 
 test('fastighetsavgiftCap: below cap', () => {
   assert.equal(fastighetsavgiftCap(6_000), 6_000);
+});
+
+// ── cashToClose tests ─────────────────────────────────────────────
+
+// Acceptance criterion 6: CommonJS export must resolve to a function
+test('cashToClose: exported as a function via CommonJS (require)', () => {
+  assert.equal(typeof cashToClose, 'function');
+});
+
+// Acceptance criterion 7: IIFE return object must also carry the export
+test('cashToClose: exported as a function on window.App.calc (IIFE return)', () => {
+  assert.equal(typeof window.App.calc.cashToClose, 'function');
+});
+
+// Acceptance criterion 1: 15%-floor wins when implied down payment < 15% of price
+// price=3 000 000, loan=2 600 000 → implied=400 000 < floor=450 000 → use 450 000
+test('cashToClose: 15%-floor wins over implied down payment (price 3 000 000, loan 2 600 000)', () => {
+  const expected = 450_000 + lagfart(3_000_000) + pantbrevCost(2_600_000, 0);
+  assert.equal(cashToClose(3_000_000, 2_600_000, 0), expected);
+});
+
+// Acceptance criterion 2: actual down payment wins when it exceeds 15% floor
+// price=3 000 000, loan=2 000 000 → implied=1 000 000 > floor=450 000 → use 1 000 000
+test('cashToClose: actual down payment wins over 15%-floor (price 3 000 000, loan 2 000 000)', () => {
+  const expected = 1_000_000 + lagfart(3_000_000) + pantbrevCost(2_000_000, 0);
+  assert.equal(cashToClose(3_000_000, 2_000_000, 0), expected);
+});
+
+// Acceptance criterion 3: lagfart is always included — result exceeds bare down payment by at least lagfart(price)
+test('cashToClose: result exceeds bare down-payment by at least lagfart(price)', () => {
+  const price = 2_500_000;
+  const loanAmount = 1_500_000;
+  const downPayment = Math.max(price * 0.15, price - loanAmount);
+  const result = cashToClose(price, loanAmount, 0);
+  assert.ok(
+    result >= downPayment + lagfart(price),
+    `cashToClose ${result} should be >= downPayment(${downPayment}) + lagfart(${lagfart(price)})`
+  );
+});
+
+// Acceptance criterion 4: pantbrevCost is always included — result exceeds bare down payment by at least pantbrevCost(loanAmount, 0)
+test('cashToClose: result exceeds bare down-payment by at least pantbrevCost(loanAmount, 0)', () => {
+  const price = 2_500_000;
+  const loanAmount = 1_500_000;
+  const downPayment = Math.max(price * 0.15, price - loanAmount);
+  const result = cashToClose(price, loanAmount, 0);
+  assert.ok(
+    result >= downPayment + pantbrevCost(loanAmount, 0),
+    `cashToClose ${result} should be >= downPayment(${downPayment}) + pantbrevCost(${pantbrevCost(loanAmount, 0)})`
+  );
+});
+
+// Acceptance criterion 5: existing pantbrev reduces new pantbrev cost (existingPantbrev correctly forwarded)
+test('cashToClose: existing pantbrev reduces the pantbrev cost component', () => {
+  const price = 3_000_000;
+  const loanAmount = 2_000_000;
+  const withNoPantbrev = cashToClose(price, loanAmount, 0);
+  const withExistingPantbrev = cashToClose(price, loanAmount, 2_000_000);
+  // With existing pantbrev covering the whole loan, pantbrevCost should be 0
+  const expectedReduction = pantbrevCost(loanAmount, 0) - pantbrevCost(loanAmount, 2_000_000);
+  assert.equal(withNoPantbrev - withExistingPantbrev, expectedReduction);
+});
+
+// Acceptance criterion 5 (no mutation): lagfart still returns expected values after cashToClose is defined
+test('lagfart: unchanged — still returns 1.5% of price after cashToClose addition', () => {
+  assert.equal(lagfart(3_000_000), 45_000);
+});
+
+// Acceptance criterion 5 (no mutation): pantbrevCost still returns expected values after cashToClose is defined
+test('pantbrevCost: unchanged — still returns 2% of new loan portion after cashToClose addition', () => {
+  assert.equal(pantbrevCost(2_000_000, 0), 40_000);
 });
