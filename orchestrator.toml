@@ -22,6 +22,14 @@ autonomous_max_cost_usd = 0.0
 
 flow = "plan >> decompose >> task-build >> docs >> summarize"
 
+# ── TDD red-green station (Phase 72–74) ──
+# With tdd on, each task first gets failing tests from a separate test-author,
+# a read-only coverage critic judges they're meaningful, then a human reviews the
+# RED suite before the implementer makes them green. test_paths is the globset the
+# author writes into and the diff-gate freezes during implementation.
+tdd        = true
+test_paths = ["calc.test.js"]
+
 
 [stage.builtin.plan]
 type          = "ai_agent"
