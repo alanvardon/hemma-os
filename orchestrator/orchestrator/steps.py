@@ -77,6 +77,10 @@ def _run_script_sync(
     if proc.stderr:
         log.info("[%s] stderr:\n%s", step.id, err)
 
+    # The complete run, both streams, untruncated — the evidence layer persists
+    # this verbatim. `detail` below is only a short human summary derived from it.
+    full_output = "\n".join(part for part in (out, err) if part)
+
     if proc.returncode != 0:
         report = err or out or "(no output)"
         if as_gate:
@@ -84,7 +88,8 @@ def _run_script_sync(
             # abort). Its output becomes the feedback the engine injects into the
             # next producer attempt.
             return StepResult(
-                step_id=step.id, kind="script", ok=True, passed=False, detail=report
+                step_id=step.id, kind="script", ok=True, passed=False,
+                detail=report, full_output=full_output,
             )
         # As a plain step, the script's own output is the abort reason (pre-hooks
         # behaviour): a non-zero exit fails the whole workflow.
@@ -101,6 +106,7 @@ def _run_script_sync(
         ok=True,
         passed=True if as_gate else None,
         detail=detail,
+        full_output=full_output,
     )
 
 

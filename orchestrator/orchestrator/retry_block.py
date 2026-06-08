@@ -102,6 +102,7 @@ async def run_retry_block(
     run_gate: Callable[[str], Awaitable[StepResult]],
     check_cancel: Callable[[], None] = lambda: None,
     on_producers_done: Callable[[int], Awaitable[None]] | None = None,
+    on_attempt: Callable[[int, bool, list[StepResult]], Awaitable[None]] | None = None,
     on_gate_failed: Callable[[int, str], Awaitable[bool]] | None = None,
     interrupt_fn: Callable[[dict], Any] | None = None,
     autonomous: bool = False,
@@ -115,6 +116,13 @@ async def run_retry_block(
     Optional per-attempt approval gates (injected, so their interrupt() lives in the
     entrypoint):
       - on_producers_done(attempt): a pause after producers, before gates.
+      - on_attempt(attempt, passed, gate_results): fires ONCE per attempt after the
+        gates resolve, for EVERY attempt — including the passing (GREEN) one, which
+        on_gate_failed never sees. `gate_results` are the gate StepResults evaluated
+        this attempt (in order; ending at the first failing gate on a fail, or all
+        gates on a pass), so a consumer can persist their full_output/verdict. Fires
+        before on_gate_failed, so the attempt's evidence is recorded before any
+        human decision. A read-only observer: its return value is ignored.
       - on_gate_failed(attempt, feedback) -> keep_going: a decision after a gate
         fails; return False to stop the block immediately.
 
@@ -150,9 +158,12 @@ async def run_retry_block(
             if on_producers_done is not None:
                 await on_producers_done(attempt)
 
+            gate_results: list[StepResult] = []
+            attempt_passed = True
             for gid in block.gates:  # ordered; the first gate to fail wins
                 check_cancel()
                 gate_result = await run_gate(gid)
+                gate_results.append(gate_result)
                 if gate_result.passed is None:
                     raise RetryConfigError(
                         f"gate step {gid!r} returned no verdict (passed is None); "
@@ -160,8 +171,15 @@ async def run_retry_block(
                     )
                 if gate_result.passed is False:
                     feedback = gate_result.detail
+                    attempt_passed = False
                     break
-            else:
+
+            # Per-attempt evidence hook, every attempt (pass included), before the
+            # human gate-fail decision below.
+            if on_attempt is not None:
+                await on_attempt(attempt, attempt_passed, gate_results)
+
+            if attempt_passed:
                 # No gate failed → every gate passed.
                 return RetryBlockResult(ok=True, proceed=True, attempts=attempt)
 

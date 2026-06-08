@@ -284,6 +284,11 @@ class StepResult(BaseModel):
     kind: str
     ok: bool = True
     detail: str = ""
+    # The COMPLETE runner log (every line, both streams), kept untruncated so
+    # the evidence layer (Phase 77) can persist the full run. `detail` stays the
+    # short human summary (a tail / failure report); `full_output` is the whole
+    # thing. Empty for steps that produce no captured output (e.g. ai_agent).
+    full_output: str = ""
     # Gate verdict. None = this step is not a gate; True/False = a gate's
     # pass/fail. The retry engine fails closed on a None in a gate slot.
     passed: bool | None = None

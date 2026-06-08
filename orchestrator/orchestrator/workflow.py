@@ -57,7 +57,13 @@ logger = logging.getLogger(__name__)
 # can't safely resume into it. With tdd or fully_autonomous off the supervised /
 # non-TDD per-task graph is unchanged. No serde change (TestAuthorResult.degrade_kind
 # is an additive optional field).
-WORKFLOW_VERSION = "2.5.0"
+#
+# 2.6.0 (Phase 77a): evidence foundations. StepResult gains a `full_output` field
+# (the complete, untruncated runner log) and run_retry_block gains an `on_attempt`
+# per-attempt hook. Both are additive and inert until a consumer is wired (77c), so
+# the graph is unchanged — but a checkpointed StepResult shape changed, so a
+# half-finished 2.5.0 TDD run can't resume across the upgrade and needs a fresh start.
+WORKFLOW_VERSION = "2.6.0"
 
 
 from orchestrator.errors import FatalError
