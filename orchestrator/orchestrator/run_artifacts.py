@@ -84,30 +84,47 @@ def write_decomposition(thread_id: str, decomposition: DecompositionResult) -> N
         pass
 
 
-def write_summary(thread_id: str, summary: SummaryResult) -> None:
-    """Write summary.md and test-plan.md.
+def write_summary(thread_id: str, summary: SummaryResult, *, tdd: bool = False) -> None:
+    """Write summary.md, plus test-plan.md UNLESS tdd is on (Phase 77d).
 
     These come from the summarizer (post-retry-block), not the implementation
     producer — which is generic and reports no summary.
-    """
+
+    Under TDD the implementer's manual test-plan is both redundant and was
+    misleading (the Phase 75 run claimed "8 tests" for 9 and listed untested
+    speculation): the executed `test-author/` + `impl/` evidence is the real,
+    stronger verification record, so test-plan.md is suppressed. The gate is
+    strictly `tdd` — with it off there is no automated suite, so the manual
+    checklist still earns its place and is written exactly as before."""
     try:
         d = _run_dir(thread_id)
         d.mkdir(parents=True, exist_ok=True)
         (d / "summary.md").write_text(summary.summary, encoding="utf-8")
-        (d / "test-plan.md").write_text(summary.test_plan, encoding="utf-8")
+        if not tdd:
+            (d / "test-plan.md").write_text(summary.test_plan, encoding="utf-8")
     except OSError:
         pass
 
 
 def write_qa(thread_id: str, qa: QaResult) -> None:
-    """Write qa.md — latest attempt wins."""
+    """Write qa.md — the QA agent's own verdict and what it reviewed; latest
+    attempt wins.
+
+    QA-agent-only (Phase 77d): the verdict, the QA agent's account of the checks it
+    ran (`review` → a `## Checks performed` section), and any failure detail — never
+    the TDD red-green results, which live in the per-task `test-author/` + `impl/`
+    evidence folders. A reader of qa.md sees what QA did and nothing it didn't run,
+    so the two records never have to be disambiguated."""
     try:
         d = _run_dir(thread_id)
         d.mkdir(parents=True, exist_ok=True)
+        review_section = (
+            f"\n## Checks performed\n\n{qa.review}\n" if qa.review else ""
+        )
         failures_section = (
             f"\n## Failures\n\n{qa.failures}\n" if qa.failures else ""
         )
-        content = f"# QA Result: {qa.result}{failures_section}\n"
+        content = f"# QA Result: {qa.result}{review_section}{failures_section}\n"
         (d / "qa.md").write_text(content, encoding="utf-8")
     except OSError:
         pass

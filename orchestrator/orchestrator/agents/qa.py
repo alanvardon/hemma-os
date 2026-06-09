@@ -53,6 +53,12 @@ class QaResult(BaseModel):
     schema_version: int = 1
     result: Literal["PASS", "FAIL"]
     failures: str | None = None
+    # The QA agent's own account of what it reviewed and ran — the static checks
+    # and checklist items it worked through, each with its ✓ PASS / ✗ FAIL (Phase
+    # 77d). Drives the richer, QA-agent-only `qa.md`. Optional + defaulted, so it is
+    # a pure-additive checkpoint change (no schema_version bump) and the scripted-
+    # gate FAIL path, which returns before the agent runs, simply leaves it None.
+    review: str | None = None
     usage: TaskUsage | None = None
 
 
@@ -138,16 +144,20 @@ async def qa(plan: PlanResult, model: str) -> QaResult:
         emit_tool_description=(
             "Emit the final QA verdict. Call this exactly once when review is "
             "complete. `result` must be the exact string 'PASS' or 'FAIL'. "
-            "`failures` is an empty string on PASS, or a markdown failure report "
-            "on FAIL. After calling, stop — the orchestrator takes over."
+            "`review` is your own account of what you reviewed and ran — each "
+            "static check and checklist item with its ✓ PASS / ✗ FAIL; report only "
+            "checks you ran yourself, never a re-summary of test suites you did not "
+            "run. `failures` is an empty string on PASS, or a markdown failure "
+            "report on FAIL. After calling, stop — the orchestrator takes over."
         ),
         # Schema uses plain `str` for `result` because the SDK's @tool
         # decorator takes simple Python types; the factory below maps that raw
         # string onto the Literal["PASS","FAIL"] fail-closed via _coerce_verdict
         # (a non-canonical string becomes FAIL, never a ValidationError crash).
-        emit_tool_fields={"result": str, "failures": str},
+        emit_tool_fields={"result": str, "review": str, "failures": str},
         result_factory=lambda captured, usage: QaResult(
             result=_coerce_verdict(captured.get("result")),
+            review=(captured.get("review") or None),
             failures=(captured.get("failures") or None),
             usage=usage,
         ),

@@ -30,3 +30,11 @@ You receive the approved plan in the user message. Read it carefully — every Q
 - [ ] No changes made outside the approved plan
 - [ ] No unrelated code touched
 
+## When done
+
+Call `emit_qa_result` exactly once with:
+
+- `result` — the overall verdict: the exact string `PASS` or `FAIL`. FAIL if any check above fails.
+- `review` — your own record of what you reviewed and ran: each static check, then each checklist item, with its `✓ PASS` / `✗ FAIL`. This is the account of what *you* checked against the diff and the plan. Report only checks you ran yourself — do not restate or summarize automated test suites you did not run; those have their own record.
+- `failures` — empty on PASS; on FAIL, a markdown report of every failed check and why it failed.
+
