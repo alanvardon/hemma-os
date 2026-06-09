@@ -234,6 +234,13 @@ async def execute_ai_agent(
             result_factory=result_factory,
         )
     except FatalError as exc:
-        raise StepError(
-            f"ai_agent step {step.id!r} did not call emit_step_result"
-        ) from exc
+        # The runner may have attached a structured cause (Phase 80 — e.g. a
+        # billing_error pulled from the transcript). Carry it across the re-wrap so
+        # the real cause still reaches the audit payload / error.md / run_status,
+        # and reuse the runner's richer message when it already explains the cause.
+        err = StepError(
+            str(exc) if getattr(exc, "cause", None)
+            else f"ai_agent step {step.id!r} did not call emit_step_result"
+        )
+        err.cause = getattr(exc, "cause", None)
+        raise err from exc

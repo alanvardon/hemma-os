@@ -66,3 +66,35 @@ def append_run(
             f.write(json.dumps(record) + "\n")
     except OSError:
         pass
+
+
+def append_usage_rollup(
+    thread_id: str, rollup: dict, *, status: str | None = None
+) -> None:
+    """Append a run-END rollup record: per-category tokens + computed cost.
+
+    Phase 80c. The run-START record (append_run, no `event` key) logged only the
+    request; the run's token/cost figures had to be reconstructed by hand from
+    subprocess transcripts. This appends a second line tagged `event: "run_end"`
+    so a run's spend is durable and greppable alongside its start.
+
+    `rollup` is `usage.run_usage_rollup(...)`'s output; we lift its per-category
+    `total` (input/output/cache_read/cache_creation) and the computed `cost_usd`.
+    Best-effort: never raises (a recovery convenience, not load-bearing).
+    """
+    try:
+        total = dict(rollup.get("total", {}))
+        cost = total.pop("cost_usd", None)
+        _LOG_PATH.parent.mkdir(exist_ok=True)
+        record = {
+            "thread_id": thread_id,
+            "event": "run_end",
+            "status": status,
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "tokens": total,
+            "cost_usd": cost,
+        }
+        with _LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except OSError:
+        pass

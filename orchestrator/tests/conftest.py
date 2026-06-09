@@ -144,6 +144,19 @@ def _isolate_runs_dir(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_runs_log(monkeypatch):
+    """Redirect the runs.jsonl path (Phase 80c) so the workflow's run-END usage
+    rollup, fired from _finalize on every full-workflow test, doesn't append to the
+    developer's real recovery log. Mirrors _isolate_runs_dir. Tests that assert on
+    the rollup point _LOG_PATH at their own tmp_path (winning, since their
+    monkeypatch runs after this autouse fixture)."""
+    from orchestrator import run_log
+
+    log = find_project_root() / ".orchestrator" / "runs" / "developer_tests" / "runs.jsonl"
+    monkeypatch.setattr(run_log, "_LOG_PATH", log)
+
+
+@pytest.fixture(autouse=True)
 def _stub_docs_task(monkeypatch):
     """docs is a mandatory spine stage that would spawn a real Claude agent. Stub
     it for the whole suite so full-workflow tests never hit a live model. Tests

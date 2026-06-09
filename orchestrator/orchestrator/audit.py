@@ -26,18 +26,38 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
+# The event vocabulary. "usage" (Phase 80c) records per-task token/cost at run end.
+EventType = Literal[
+    "task_start", "task_complete", "task_failed",
+    "interrupt", "resume", "cancel", "auto_approved", "usage",
+]
+
+
 class AuditEvent(BaseModel):
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
     thread_id: str
     user: str | None = None
-    event_type: Literal[
-        "task_start", "task_complete", "task_failed",
-        "interrupt", "resume", "cancel", "auto_approved",
-    ]
+    event_type: EventType
     task_name: str | None = None
     payload: dict = Field(default_factory=dict)
+
+
+def failure_payload(exc: BaseException) -> dict:
+    """The `task_failed` audit payload (Phase 80a).
+
+    Captures the error type, the message, and any structured `cause` the runner's
+    transcript feeder attached (e.g. an Anthropic billing_error). Previously the
+    payload was `{}` — zero error text — so the real cause was lost at the audit
+    layer. Shared by the `audited()` context manager and the workflow's
+    `_audited_task` decorator so every task's failure is recorded identically.
+    """
+    return {
+        "error_type": type(exc).__name__,
+        "message": str(exc),
+        "cause": getattr(exc, "cause", None),
+    }
 
 
 @runtime_checkable
@@ -79,10 +99,7 @@ def build_sink(log_path: str) -> AuditSink:
 def emit_event(
     sink: AuditSink,
     thread_id: str,
-    event_type: Literal[
-        "task_start", "task_complete", "task_failed",
-        "interrupt", "resume", "cancel", "auto_approved",
-    ],
+    event_type: EventType,
     *,
     task_name: str | None = None,
     user: str | None = None,
@@ -116,6 +133,9 @@ async def audited(
     try:
         yield
         emit_event(sink, thread_id, "task_complete", task_name=task_name, user=user)
-    except Exception:
-        emit_event(sink, thread_id, "task_failed", task_name=task_name, user=user)
+    except Exception as exc:
+        emit_event(
+            sink, thread_id, "task_failed", task_name=task_name, user=user,
+            payload=failure_payload(exc),
+        )
         raise

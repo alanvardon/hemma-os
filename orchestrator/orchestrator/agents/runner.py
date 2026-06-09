@@ -29,6 +29,7 @@ from typing import Callable, TypeVar
 from anthropic import AsyncAnthropic
 from claude_agent_sdk import (
     ClaudeAgentOptions,
+    ClaudeSDKError,
     ResultMessage,
     create_sdk_mcp_server,
     query,
@@ -37,6 +38,7 @@ from claude_agent_sdk import (
 from pydantic import BaseModel
 
 from orchestrator.errors import FatalError
+from orchestrator.transcript import read_api_error_cause
 from orchestrator.usage import TaskUsage
 
 R = TypeVar("R")
@@ -170,26 +172,67 @@ async def run_structured_agent(
     )
 
     result_msg: ResultMessage | None = None
+    # Captured from the FIRST streamed message that carries a session id (the init
+    # SystemMessage), NOT only the ResultMessage — on a hard failure (e.g. a
+    # billing_error) the SDK raises before any ResultMessage is yielded, so the id
+    # we need to find the right transcript would otherwise be lost. None until seen;
+    # the transcript feeder then falls back to the newest transcript by mtime.
+    session_id: str | None = None
+
+    def _capture_session_id(msg) -> None:
+        nonlocal session_id
+        if session_id is not None:
+            return
+        data = getattr(msg, "data", None)
+        if isinstance(data, dict) and data.get("session_id"):
+            session_id = data["session_id"]
+            return
+        sid = getattr(msg, "session_id", None)
+        if sid:
+            session_id = sid
 
     async def _consume() -> None:
         nonlocal result_msg
         async for msg in query(prompt=user_message, options=options):
+            _capture_session_id(msg)
             if isinstance(msg, ResultMessage):
                 result_msg = msg
+
+    def _fatal_from_sdk(exc: ClaudeSDKError) -> FatalError:
+        # The SDK has already discarded the ProcessError stderr (query.py), so the
+        # real cause lives only in the CLI transcript. Read its tail and fold the
+        # API-error text into the message + attach the structured cause, so it
+        # travels to the audit log, error.md, and run_status downstream.
+        cause = read_api_error_cause(session_id, cwd)
+        detail = f" — {cause['text']}" if cause and cause.get("text") else ""
+        err = FatalError(
+            f"agent run failed before calling {emit_tool_name}: {exc}{detail}"
+        )
+        err.cause = cause
+        return err
 
     # Optional wall-clock timeout over the whole agent loop. None = no limit. On
     # expiry asyncio cancels the query;
     # we surface a FatalError so the run aborts with a clear reason. This is a
     # wall-clock bound, NOT the SDK's max_turns (a turn count) — different knob.
+    # A ClaudeSDKError (e.g. the subprocess exiting non-zero on a billing failure)
+    # is funnelled through the transcript feeder so the real cause survives.
     if timeout is not None:
         try:
             await asyncio.wait_for(_consume(), timeout=timeout)
         except asyncio.TimeoutError as exc:
-            raise FatalError(
+            err = FatalError(
                 f"agent timed out after {timeout}s before calling {emit_tool_name}"
-            ) from exc
+            )
+            err.cause = read_api_error_cause(session_id, cwd)
+            raise err from exc
+        except ClaudeSDKError as exc:
+            raise _fatal_from_sdk(exc) from exc
     else:
-        await _consume()
+        try:
+            await _consume()
+        except ClaudeSDKError as exc:
+            raise _fatal_from_sdk(exc) from exc
 
     if not captured:
         raise FatalError(f"agent did not call {emit_tool_name}")

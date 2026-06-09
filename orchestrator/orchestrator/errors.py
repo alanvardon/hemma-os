@@ -21,7 +21,17 @@ handling.
 
 
 class OrchestratorError(Exception):
-    """Base class for all structured orchestrator errors."""
+    """Base class for all structured orchestrator errors.
+
+    `cause` (Phase 80) optionally carries a structured failure cause —
+    `{error, api_status, text}` recovered from the CLI transcript when the SDK
+    collapsed the real error (e.g. an Anthropic billing_error) into a useless
+    subtype string. None unless the runner's transcript feeder attached one;
+    every downstream sink (audit payload, error.md, run_status) reads it via
+    `getattr(exc, "cause", None)`.
+    """
+
+    cause: dict | None = None
 
 
 class RetriableError(OrchestratorError):

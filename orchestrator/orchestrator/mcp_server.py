@@ -60,7 +60,9 @@ from orchestrator.errors import FatalError, RetriableError, UserActionError
 from orchestrator.idempotency import reserve as idempotency_reserve
 from orchestrator.mcp_progress import run_with_progress
 from orchestrator.paths import find_project_root
+from orchestrator.run_artifacts import write_error
 from orchestrator.run_log import append_run
+from orchestrator.transcript import is_billing_cause
 from orchestrator.workflow import (
     build_workflow,
     IncompatibleCheckpointError,
@@ -149,6 +151,19 @@ def _last_audit_event(thread_id: str) -> dict | None:
     }
 
 
+def _write_run_error(thread_id: str, exc: BaseException) -> None:
+    """Persist a run-terminating failure to .orchestrator/runs/<thread>/error.md
+    (Phase 80a, Sink B).
+
+    The failed task name comes from the audit-log tail — the last task_failed event
+    for this thread, emitted by the spine's @_audited_task wrapper just before the
+    exception propagated here. Best-effort; write_error swallows its own errors so
+    this never masks the original failure.
+    """
+    last = _last_audit_event(thread_id)
+    write_error(thread_id, exc, failed_task=(last or {}).get("task_name"))
+
+
 def _incompatible_checkpoint(
     thread_id: str, exc: IncompatibleCheckpointError
 ) -> dict:
@@ -226,15 +241,37 @@ def _retriable_error(thread_id: str, exc: RetriableError) -> dict:
 def _fatal_error(thread_id: str, exc: FatalError) -> dict:
     """Shape a FatalError into a structured response.
 
-    Non-retriable. Fix the root cause and start a fresh implement_feature.
-    The specific subclasses IncompatibleCheckpointError and
-    IncompatiblePipelineError still have their own handlers above so they
-    can surface extra structured fields (version numbers, hash values).
+    Surfaces the structured `cause` (Phase 80a) the runner's transcript feeder
+    attached, so the real reason (e.g. an Anthropic billing_error the SDK collapsed
+    to "...error result: success") reaches the caller instead of a useless string.
+
+    Minimal classification (Phase 80b): a credit/billing cause is NOT really fatal —
+    the run is fully checkpointed, so topping up and calling resume_run re-runs only
+    the failed leg. Reshape it to a clear, RESUMABLE "billing" status pointing at
+    resume_run, never "start a fresh implement_feature".
+
+    The specific subclasses IncompatibleCheckpointError and IncompatiblePipelineError
+    still have their own handlers above so they can surface extra structured fields.
     """
+    cause = getattr(exc, "cause", None)
+    if is_billing_cause(cause, str(exc)):
+        return {
+            "status": "billing",
+            "thread_id": thread_id,
+            "error": str(exc),
+            "cause": cause,
+            "next": (
+                "Your Anthropic credit balance is too low (billing_error). Top up "
+                "at https://console.anthropic.com/settings/billing, then call "
+                "resume_run(thread_id) — the run is checkpointed, so only the "
+                "failed leg re-runs. Do NOT start a fresh implement_feature."
+            ),
+        }
     return {
         "status": "fatal",
         "thread_id": thread_id,
         "error": str(exc),
+        "cause": cause,
         "next": (
             "This is a non-retriable error. Fix the root cause and start a "
             "fresh implement_feature run."
@@ -389,9 +426,18 @@ async def _run_workflow(
     except UserActionError as exc:
         return _user_action_required(thread_id, exc)
     except RetriableError as exc:
+        _write_run_error(thread_id, exc)
         return _retriable_error(thread_id, exc)
     except FatalError as exc:
+        _write_run_error(thread_id, exc)
         return _fatal_error(thread_id, exc)
+    except Exception as exc:
+        # Truly unexpected (the orchestrator-error families above are the known
+        # exits). Capture it to error.md before it escapes so a backgrounded
+        # failure isn't lost, then re-raise — run_status's background path shapes
+        # the raised exception into a fatal response.
+        _write_run_error(thread_id, exc)
+        raise
     if "__interrupt__" in result:
         return _awaiting_approval(thread_id, result, approval_hint)
     result["thread_id"] = thread_id

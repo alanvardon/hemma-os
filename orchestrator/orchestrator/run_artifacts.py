@@ -18,7 +18,9 @@ Usage in workflow.py:
 """
 
 import json
+import logging
 import shutil
+import traceback
 from pathlib import Path
 
 from orchestrator.agents.decompose import DecompositionResult, Task
@@ -27,6 +29,9 @@ from orchestrator.agents.qa import QaResult
 from orchestrator.agents.summarize import SummaryResult
 from orchestrator.agents.test_author import TestAuthorResult
 from orchestrator.paths import find_project_root, iter_test_files
+
+logger = logging.getLogger(__name__)
+
 
 def _runs_dir() -> Path:
     """Resolve the runs directory lazily.
@@ -375,6 +380,49 @@ def write_manual_checks(thread_id: str, items: list[dict]) -> None:
         (d / "manual-checks.md").write_text("\n".join(lines), encoding="utf-8")
     except OSError:
         pass
+
+
+def write_error(thread_id: str, exc: BaseException, *, failed_task: str | None = None) -> None:
+    """Write error.md — a durable, greppable record of a run-terminating failure
+    (Phase 80a, Sink B).
+
+    Lands in the run's artifact folder beside plan.md / qa.md. Records the error
+    type and message, the failed task (from the audit-log tail), any structured
+    `cause` the runner's transcript feeder attached (e.g. the real billing_error
+    the SDK collapsed to a useless subtype string), and the full traceback.
+
+    Bulletproof on purpose: this runs on the failure path, so a problem WRITING it
+    must never mask the original error. Any exception is logged at WARNING and
+    swallowed (mirrors the audit sink's own guard)."""
+    try:
+        d = _run_dir(thread_id)
+        d.mkdir(parents=True, exist_ok=True)
+        cause = getattr(exc, "cause", None)
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        lines = [
+            "# Run failed",
+            "",
+            f"**Error type:** {type(exc).__name__}",
+        ]
+        if failed_task:
+            lines.append(f"**Failed task:** {failed_task}")
+        lines += ["", "## Message", "", str(exc) or "(no message)", ""]
+        if cause:
+            lines += [
+                "## Cause",
+                "",
+                "Recovered from the CLI transcript (the SDK discarded the real "
+                "error). This is the actual reason the run failed:",
+                "",
+                "```json",
+                json.dumps(cause, indent=2),
+                "```",
+                "",
+            ]
+        lines += ["## Traceback", "", "```", tb.rstrip(), "```", ""]
+        (d / "error.md").write_text("\n".join(lines), encoding="utf-8")
+    except Exception:  # never mask the original failure
+        logger.warning("failed writing error.md for %s", thread_id, exc_info=True)
 
 
 def write_usage(thread_id: str, usage: dict) -> None:

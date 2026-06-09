@@ -180,7 +180,9 @@ from orchestrator.agents.runner import run_structured_agent
 from orchestrator.prompt_loader import load_prompt, load_prompt_frontmatter
 from orchestrator.agent_frontmatter import AgentFrontmatter, parse_agent_frontmatter
 from orchestrator.retry_block import RetryBlock, feedback_section, run_retry_block
-from orchestrator.audit import AuditSink, NoopAuditSink, build_sink, emit_event
+from orchestrator.audit import (
+    AuditSink, NoopAuditSink, build_sink, emit_event, failure_payload,
+)
 from orchestrator.cancellation import WorkflowCancelled, raise_if_cancelled
 from orchestrator.config import OrchestratorConfig, load_config
 from orchestrator.manifest import (
@@ -191,7 +193,7 @@ from orchestrator.manifest import (
     StepResult,
 )
 from orchestrator.steps import StepError, execute_ai_agent, execute_script
-from orchestrator.usage import TaskUsage, aggregate_usage
+from orchestrator.usage import TaskUsage, aggregate_usage, run_usage_rollup
 from orchestrator.git_ops import (
     commit,
     create_branch,
@@ -204,6 +206,7 @@ from orchestrator.git_ops import (
 )
 from orchestrator.paths import find_project_root, iter_test_files
 from orchestrator.pre_hooks import run_pre_hooks
+from orchestrator.run_log import append_usage_rollup
 from orchestrator.run_artifacts import (
     rename_with_branch,
     write_decomposition,
@@ -289,8 +292,11 @@ def _audited_task(task_name: str):
             emit_event(sink, thread_id, "task_start", task_name=task_name)
             try:
                 result = await fn(*args, **kwargs)
-            except Exception:
-                emit_event(sink, thread_id, "task_failed", task_name=task_name)
+            except Exception as exc:
+                emit_event(
+                    sink, thread_id, "task_failed", task_name=task_name,
+                    payload=failure_payload(exc),
+                )
                 raise
             emit_event(sink, thread_id, "task_complete", task_name=task_name)
             return result
@@ -2086,6 +2092,22 @@ async def _ship(
     return pr_url
 
 
+def _log_run_usage(usage_by_task: dict, thread: str, *, status: str | None) -> None:
+    """Persist per-task + run-level usage at run end (Phase 80c).
+
+    Two sinks, both best-effort: a per-task `usage` audit event (tokens by category
+    + models + cost) so the compliance log carries spend, and a run-END rollup line
+    in runs.jsonl so a run's total tokens/cost are durable and greppable next to its
+    start. No-op when no usage was captured (e.g. fully-stubbed tests)."""
+    rollup = run_usage_rollup(usage_by_task)
+    if not rollup:
+        return
+    sink = _build_task_audit_sink()
+    for task_name, totals in rollup["by_task"].items():
+        emit_event(sink, thread, "usage", task_name=task_name, payload=totals)
+    append_usage_rollup(thread, rollup, status=status)
+
+
 def _finalize(usage_by_task: dict, thread: str, **fields) -> dict:
     """Assemble a workflow result dict: aggregate + persist usage, append it.
 
@@ -2097,6 +2119,7 @@ def _finalize(usage_by_task: dict, thread: str, **fields) -> dict:
     """
     usage = aggregate_usage(usage_by_task)
     write_usage(thread, usage)
+    _log_run_usage(usage_by_task, thread, status=fields.get("status"))
     return {**fields, "usage": usage}
 
 
