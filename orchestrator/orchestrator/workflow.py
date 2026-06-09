@@ -81,7 +81,16 @@ logger = logging.getLogger(__name__)
 # shape change (the recorder is a best-effort side-effect in the entrypoint frame, like
 # the 77b writer), so the graph is byte-for-byte unchanged and no bump is needed; the
 # classic / non-TDD path passes on_attempt=None and writes nothing.
-WORKFLOW_VERSION = "2.7.0"
+#
+# 2.8.0 (Phase 81): decompose-time testability gating. The decomposer marks each Task
+# `testable` (default True, additive optional → no schema_version bump); under TDD a
+# `testable=False` task now SKIPS the test-author/critic and takes the classic
+# implement→qa path (a synthesized untestable degrade through the Phase 73 manual_checks
+# plumbing) — no `test_author_task` / `critic_task` @tasks are created for it. That
+# changes the per-task graph vs a pre-81 checkpoint, so a half-finished 2.7.0 TDD run
+# can't resume across the upgrade. tdd-OFF runs are functionally unchanged (the flag is
+# only consulted under config.tdd).
+WORKFLOW_VERSION = "2.8.0"
 
 
 from orchestrator.errors import FatalError
@@ -1434,6 +1443,37 @@ async def _run_task_loop(
             plan_text=_compose_task_qa(plan_result.plan_text, task),
         )
         base_gate_refs = list(stage.gate)
+
+        # Phase 81: the decomposer marked this task non-testable (markup/CSS/docs/
+        # config/rename). Skip the whole TDD station — test-author AND critic — and
+        # run the classic implement→qa build, recording the same degraded evidence a
+        # runtime testable=False produces (Phase 73 manual_checks + a degraded
+        # test-author/ summary.md) WITHOUT paying the author leg. Only under
+        # config.tdd; tdd-off already takes the classic path below. Handles both the
+        # autonomous and supervised stations uniformly (passes `autonomous` through),
+        # so the testable branches below are reached only for genuinely testable tasks.
+        if config.tdd and not task.testable:
+            ta = TestAuthorResult(
+                testable=False, degrade_kind=_DEGRADE_UNTESTABLE,
+                summary="non-testable per decompose",
+            )
+            write_test_author_folder(
+                thread_id, task_index, task, ta, list(config.test_paths), {},
+            )
+            if manual_checks is not None:
+                manual_checks.append({
+                    "task_id": task.id,
+                    "title": task.title,
+                    "acceptance_criteria": task.acceptance_criteria,
+                    "reason": "non-testable per decompose",
+                })
+            await _run_task_build_step(
+                task, plan_result, task_plan, qa_plan, base_gate_refs, {}, stage, hil,
+                config, check_cancel, usage_by_task, qa_holder,
+                thread_id=thread_id, audit=audit, autonomous=autonomous,
+                on_attempt=None,
+            )
+            continue
 
         # Phase 76: autonomous TDD has no human red-review / re-author guard, so it
         # runs a distinct station — a HARD red-confirm gate + a bounded re-author

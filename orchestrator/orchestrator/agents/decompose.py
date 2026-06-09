@@ -39,6 +39,20 @@ class Task(BaseModel):
                     "test-author writes tests against (Phase 72b); state behaviour, "
                     "not implementation steps.",
     )
+    # Phase 81: per-task testability, consulted ONLY under config.tdd. True → the
+    # task gets the full red-green station; False → the station skips the
+    # test-author/critic and runs the classic implement→qa path (so markup/CSS/
+    # docs tasks don't pay a full author leg to discover they're born-green).
+    # Default True keeps tdd-OFF and pre-81 checkpoints behaving as before.
+    testable: bool = Field(
+        default=True,
+        description="true ONLY if this task's acceptance behaviour is genuinely "
+                    "unit-testable deterministic logic (calculation, parsing, "
+                    "data/state transforms); false for presentation/copy, markup, "
+                    "CSS, documentation, config, or pure file renames/moves, whose "
+                    "tests would pass on the first run and prove nothing. When in "
+                    "doubt, set true.",
+    )
 
 
 # Schema used as the emit_decomposition tool's input_schema. Excludes
@@ -62,16 +76,24 @@ class DecompositionResult(_DecompositionSchema):
 
 # Phase 78b: under TDD a separate test-author writes each task's failing tests
 # BEFORE implementation, so a standalone "write tests" task is redundant and
-# harmful — it runs after the code exists, can't go red, and degrades. Stated as
-# a user-message instruction (not the static system prompt) because it is
-# conditional on `config.tdd`; the decomposer still has no repo access, so this is
-# only "don't emit test-writing TASKS", never a testability judgement (Phase 73).
+# harmful — it runs after the code exists, can't go red, and degrades.
+# Phase 81: the note ALSO asks the decomposer to mark each task `testable`, so the
+# station can skip the test-author/critic on non-unit-testable tasks (markup/CSS/
+# docs) instead of paying a full author leg to find they're born-green. This is a
+# behaviour judgement from the task description (still no repo access, contra the
+# original Phase 73 caution) — biased to `true`, with the runtime untestable/
+# born-green escapes as the backstop for mis-tags. Stated in the user message (not
+# the static prompt) because both halves are conditional on `config.tdd`.
 _TDD_DECOMPOSE_NOTE = (
     "\n\nThis run uses test-driven development: a separate test-author writes the "
     "FAILING tests for each task before it is implemented, so the tests are owned "
     "elsewhere. Do NOT emit any standalone 'write tests' / 'add tests' / 'unit "
     "tests' task. Every task must be behaviour-only, with acceptance criteria the "
-    "test-author will turn into tests."
+    "test-author will turn into tests.\n\nFor EACH task set `testable`: true only "
+    "when its acceptance behaviour is genuinely unit-testable deterministic logic "
+    "(calculation, parsing, data/state transforms); false for presentation/copy, "
+    "markup, CSS, documentation, config, or pure file renames/moves — work whose "
+    "test would pass on the first run and prove nothing. When in doubt, set true."
 )
 
 

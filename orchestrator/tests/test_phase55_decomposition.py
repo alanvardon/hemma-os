@@ -34,9 +34,14 @@ from orchestrator.manifest import StepResult
 def test_task_schema_fields():
     # The contract Phase 56 depends on: exactly these fields, nothing the
     # plan-only decomposer can't produce (no `files`, no `depends_on`).
-    assert set(Task.model_fields) == {"id", "title", "description", "acceptance_criteria"}
+    # Phase 81: `testable` added (per-task TDD gating; optional, default True).
+    assert set(Task.model_fields) == {
+        "id", "title", "description", "acceptance_criteria", "testable",
+    }
     # Phase 72b: acceptance_criteria is now REQUIRED (the test-author's spec).
     assert Task.model_fields["acceptance_criteria"].is_required()
+    # Phase 81: testable defaults True so tdd-off / pre-81 tasks are unchanged.
+    assert Task.model_fields["testable"].default is True
     assert set(DecompositionResult.model_fields) == {"tasks", "schema_version", "usage"}
 
 
