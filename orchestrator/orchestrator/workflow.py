@@ -1597,7 +1597,10 @@ async def _dispatch_stage(
             plan_result.plan_text, config.resolved_model(stage.model)
         )
         _record_usage(usage_by_task, "summarize", summary_result)
-        write_summary(thread_id, summary_result)
+        # Phase 77d: under TDD the executed test-author/ + impl/ evidence supersedes
+        # the implementer's manual test-plan, so test-plan.md is suppressed (strictly
+        # gated on config.tdd; off → written unchanged).
+        write_summary(thread_id, summary_result, tdd=config.tdd)
         summary_holder["summarize"] = summary_result
         return
 
