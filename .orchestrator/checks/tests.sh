@@ -12,4 +12,4 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-node --test calc.test.js
+node --test calc.test.js pages.test.js
