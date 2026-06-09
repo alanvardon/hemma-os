@@ -60,12 +60,28 @@ class DecompositionResult(_DecompositionSchema):
     usage: TaskUsage | None = None
 
 
-def _build_user_message(plan_text: str, max_tasks: int) -> str:
-    """The decomposer's user message: the plan, plus optional `max_tasks` guidance.
+# Phase 78b: under TDD a separate test-author writes each task's failing tests
+# BEFORE implementation, so a standalone "write tests" task is redundant and
+# harmful — it runs after the code exists, can't go red, and degrades. Stated as
+# a user-message instruction (not the static system prompt) because it is
+# conditional on `config.tdd`; the decomposer still has no repo access, so this is
+# only "don't emit test-writing TASKS", never a testability judgement (Phase 73).
+_TDD_DECOMPOSE_NOTE = (
+    "\n\nThis run uses test-driven development: a separate test-author writes the "
+    "FAILING tests for each task before it is implemented, so the tests are owned "
+    "elsewhere. Do NOT emit any standalone 'write tests' / 'add tests' / 'unit "
+    "tests' task. Every task must be behaviour-only, with acceptance criteria the "
+    "test-author will turn into tests."
+)
 
-    Pure (no I/O) so the cap behaviour is unit-testable without the SDK. The
-    prompt already asks for the fewest tasks; this is the soft cap. There is no
-    hard validation error — an over-split run should surface for review, not
+
+def _build_user_message(plan_text: str, max_tasks: int, tdd: bool = False) -> str:
+    """The decomposer's user message: the plan, plus optional `max_tasks` guidance
+    and, under TDD, the no-standalone-test-task note (Phase 78b).
+
+    Pure (no I/O) so the cap and TDD-note behaviour are unit-testable without the
+    SDK. The prompt already asks for the fewest tasks; this is the soft cap. There
+    is no hard validation error — an over-split run should surface for review, not
     abort."""
     guidance = (
         f"\n\nProduce at most {max_tasks} task(s); prefer the fewest tasks that "
@@ -73,21 +89,23 @@ def _build_user_message(plan_text: str, max_tasks: int) -> str:
         if max_tasks and max_tasks > 0
         else ""
     )
-    return f"## Plan\n\n{plan_text}{guidance}"
+    tdd_note = _TDD_DECOMPOSE_NOTE if tdd else ""
+    return f"## Plan\n\n{plan_text}{guidance}{tdd_note}"
 
 
 async def decompose(
-    plan_text: str, model: str, max_tasks: int = 0
+    plan_text: str, model: str, max_tasks: int = 0, tdd: bool = False
 ) -> DecompositionResult:
     """Turn an approved plan into an ordered task list.
 
     Same forced-tool-use structured-output path as planning.plan(), via the shared
     run_structured_completion. Reads ONLY `plan_text` — no repo access (repo-aware
-    decomposition is a later phase).
+    decomposition is a later phase). `tdd` injects the no-standalone-test-task note
+    (Phase 78b) when the run is test-driven.
     """
     return await run_structured_completion(
         system_prompt=_DECOMPOSE_SYSTEM_PROMPT,
-        user_message=_build_user_message(plan_text, max_tasks),
+        user_message=_build_user_message(plan_text, max_tasks, tdd),
         model=model,
         tool_name="emit_decomposition",
         tool_description="Emit the ordered task breakdown of the approved plan.",

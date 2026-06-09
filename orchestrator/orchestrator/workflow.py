@@ -1671,9 +1671,9 @@ async def planning_task(request: str, model: str) -> PlanResult:
 @task
 @_audited_task("decompose")
 async def decompose_task(
-    plan_text: str, model: str, max_tasks: int = 0
+    plan_text: str, model: str, max_tasks: int = 0, tdd: bool = False
 ) -> DecompositionResult:
-    return await decompose(plan_text, model, max_tasks)
+    return await decompose(plan_text, model, max_tasks, tdd=tdd)
 
 
 # Pre-flight check. Runs FIRST in the workflow — before planning — so a
@@ -1977,7 +1977,11 @@ async def _plan_and_approve(
 
     async def _run_decompose(pr: PlanResult) -> DecompositionResult:
         check_cancel()
-        d = await decompose_task(pr.plan_text, decompose_model, decompose_max_tasks)
+        # Phase 78b: under TDD the test-author owns each task's tests, so tell the
+        # decomposer not to emit a standalone test-writing task.
+        d = await decompose_task(
+            pr.plan_text, decompose_model, decompose_max_tasks, config.tdd
+        )
         _record_usage(usage_by_task, "decompose", d)
         write_decomposition(thread_id, d)
         return d

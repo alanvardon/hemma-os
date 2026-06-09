@@ -84,7 +84,8 @@ class _Stubs:
         return PlanResult(title=f"title-{n}", type="feature", plan_text=f"plan-{n}")
 
     async def decompose(
-        self, plan_text: str, model: str = "claude-sonnet-4-6", max_tasks: int = 0
+        self, plan_text: str, model: str = "claude-sonnet-4-6", max_tasks: int = 0,
+        tdd: bool = False,
     ) -> DecompositionResult:
         self.decompose_calls.append(plan_text)
         # Tag the task ids with the plan_text so a test can tell which plan was

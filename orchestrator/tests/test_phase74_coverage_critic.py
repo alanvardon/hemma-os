@@ -80,13 +80,17 @@ async def test_critique_tests_threads_prompt_and_tools(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# workflow helpers: frontmatter-driven model/tools (bundled = silent → defaults)
+# workflow helpers: frontmatter-driven model/tools
+# (Phase 78a: the bundled critic prompt now pins model: haiku; tools stay silent.)
 # --------------------------------------------------------------------------- #
 
 
-def test_critic_model_defaults_when_frontmatter_silent():
+def test_critic_model_resolves_to_bundled_haiku_frontmatter():
+    # Phase 78a: the bundled coverage-critic.md sets model: haiku, so the critic
+    # resolves to Haiku regardless of default_model (was Sonnet pre-78a, when the
+    # prompt was frontmatter-silent). The model resolution path itself is unchanged.
     c = OrchestratorConfig(tdd=True, test_paths=["**/*.test.js"], default_model="claude-sonnet-4-6")
-    assert wf._coverage_critic_model(c) == "claude-sonnet-4-6"
+    assert wf._coverage_critic_model(c) == "claude-haiku-4-5-20251001"
 
 
 def test_critic_tools_none_when_frontmatter_silent():

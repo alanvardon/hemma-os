@@ -43,7 +43,7 @@ class _Stubs:
     async def plan(self, request, model="claude-sonnet-4-6") -> PlanResult:
         return PlanResult(title="t", type="feature", plan_text="OVERALL-PLAN")
 
-    async def decompose(self, plan_text, model="claude-sonnet-4-6", max_tasks=0) -> DecompositionResult:
+    async def decompose(self, plan_text, model="claude-sonnet-4-6", max_tasks=0, tdd=False) -> DecompositionResult:
         return DecompositionResult(tasks=self.tasks)
 
     async def impl_producer(self, plan_text, feedback=None, model="claude-sonnet-4-6") -> StepResult:

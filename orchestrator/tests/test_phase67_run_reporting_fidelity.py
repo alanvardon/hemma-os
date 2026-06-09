@@ -137,7 +137,7 @@ async def test_empty_decomposition_is_fatal_not_no_changes(monkeypatch, tmp_path
     FatalError handler), NOT a silent 'no_changes'."""
     _patch(monkeypatch, tmp_path)
 
-    async def _empty_decompose(plan_text, model="claude-sonnet-4-6", max_tasks=0):
+    async def _empty_decompose(plan_text, model="claude-sonnet-4-6", max_tasks=0, tdd=False):
         return DecompositionResult(tasks=[], usage=None)
 
     # Overrides conftest's autouse single-task stub (runs after it, so wins).

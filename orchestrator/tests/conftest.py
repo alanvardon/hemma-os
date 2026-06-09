@@ -119,7 +119,7 @@ def _stub_decompose(monkeypatch):
     that exercise decomposition override this with their own monkeypatch."""
     from orchestrator.agents.decompose import DecompositionResult, Task
 
-    async def _fake_decompose(plan_text, model="claude-sonnet-4-6", max_tasks=0):
+    async def _fake_decompose(plan_text, model="claude-sonnet-4-6", max_tasks=0, tdd=False):
         return DecompositionResult(
             tasks=[Task(id="task-1", title="The change", description=plan_text,
                         acceptance_criteria="the change is implemented")],
