@@ -53,10 +53,21 @@ def test_override_frontmatter_is_read(at_root):
 
 
 def test_bundled_prompts_have_no_frontmatter(at_root):
-    # The shipped prompts stay frontmatter-free, so the merge is a no-op for a
-    # repo that doesn't override them.
-    for name in ("planning", "implementation", "qa", "docs", "summarize"):
+    # These shipped prompts stay frontmatter-free, so the merge is a no-op for a
+    # repo that doesn't override them. (qa is the deliberate exception — it pins a
+    # cheaper model; see test_bundled_qa_pins_sonnet_model.)
+    for name in ("planning", "implementation", "docs", "summarize"):
         assert pl.load_prompt_frontmatter(name) == AgentFrontmatter()
+
+
+def test_bundled_qa_pins_sonnet_model(at_root):
+    # qa.md intentionally ships with a `model: claude-sonnet-4-6` frontmatter pin
+    # (cost: QA runs on the cheaper Sonnet rather than the Opus default). That pin
+    # is the bundled default and a repo's own .orchestrator/prompts/qa.md still
+    # overrides it. Only model is set; everything else stays default.
+    fm = pl.load_prompt_frontmatter("qa")
+    assert fm.model == "claude-sonnet-4-6"
+    assert fm == AgentFrontmatter(model="claude-sonnet-4-6")
 
 
 # --------------------------- merge into built-in config ---------------------------
