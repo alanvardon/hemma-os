@@ -38,6 +38,7 @@ from claude_agent_sdk import (
 from pydantic import BaseModel
 
 from orchestrator.errors import FatalError
+from orchestrator.tracing import emit_llm_run
 from orchestrator.transcript import read_api_error_cause
 from orchestrator.usage import TaskUsage
 
@@ -124,6 +125,19 @@ async def run_structured_completion(
     tool_use = next(block for block in response.content if block.type == "tool_use")
     result = result_model.model_validate(tool_use.input)
     result.usage = _usage_from_completion(response.usage, model)
+    # Surface this call's tokens + cost as an LLM run in the active LangSmith
+    # trace (the bare AsyncAnthropic client is not auto-instrumented).
+    emit_llm_run(
+        result.usage,
+        name=tool_name,
+        inputs={
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ]
+        },
+        outputs={"role": "assistant", "content": tool_use.input},
+    )
     return result
 
 
@@ -237,4 +251,19 @@ async def run_structured_agent(
     if not captured:
         raise FatalError(f"agent did not call {emit_tool_name}")
 
-    return result_factory(captured, _extract_usage(result_msg, model))
+    usage = _extract_usage(result_msg, model)
+    # The implementation agent runs in a Claude Code subprocess (query()), which
+    # LangSmith cannot see; emit the cumulative tokens + cost as one LLM run so
+    # the trace header rolls up cost for this leg too.
+    emit_llm_run(
+        usage,
+        name=emit_tool_name,
+        inputs={
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ]
+        },
+        outputs={"role": "assistant", "content": captured},
+    )
+    return result_factory(captured, usage)
