@@ -105,8 +105,14 @@ Three independent records, each suited to a different question:
 - **LangSmith traces** — every step and every LLM call appears as a span in
   LangSmith with timing, token usage, prompts, and responses. The best view
   for drilling into a specific run. Enable by setting `LANGSMITH_TRACING=true`
-  and `LANGSMITH_API_KEY` in `.env` — no code changes needed, LangGraph and
-  the Anthropic SDK pick it up automatically.
+  and `LANGSMITH_API_KEY` in `.env`. LangGraph auto-traces the workflow graph;
+  the model calls themselves are *not* auto-instrumented (the structured agents
+  use a bare `AsyncAnthropic` client and the implementation agent runs in a
+  Claude Code subprocess), so [tracing.py](orchestrator/tracing.py) attaches an
+  `llm` child run per agent call carrying token counts **and the cost** we
+  compute in [usage.py](orchestrator/usage.py). The cost is supplied directly
+  (not derived from LangSmith's model price map, which doesn't yet know our
+  model IDs), so it rolls up correctly in the trace header.
 
 ### 6. Recovery — what happens when something goes wrong
 
