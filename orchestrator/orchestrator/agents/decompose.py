@@ -6,6 +6,7 @@ load_dotenv()
 
 import asyncio
 import sys
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -59,6 +60,24 @@ class Task(BaseModel):
 # schema_version/usage so the model is never asked to fill those in — mirrors the
 # _PlanSchema / PlanResult split in planning.py.
 class _DecompositionSchema(BaseModel):
+    # Phase 82b: judged BEFORE the task list (declared first so it anchors the
+    # split — the model commits to a size, then fills a budget). Informs task
+    # count; it is NOT a mechanical clamp (under-splitting costs more in retries
+    # than an extra clean task). Defaulted → additive-optional, resume-safe, no
+    # schema_version bump, same as Task.testable (Phase 81).
+    complexity: Literal["trivial", "moderate", "complex"] = Field(
+        default="moderate",
+        description="Overall implementation complexity of the WHOLE feature, judged "
+                    "before you split — it sets your task budget. 'trivial' = a "
+                    "single file or single behaviour (a copy/CSS tweak, a rename "
+                    "sweep, a one-line config change) → emit 1 task. 'moderate' = "
+                    "one main behaviour with a little surrounding work → 1-3 tasks. "
+                    "'complex' = genuinely several independent behaviours or "
+                    "subsystems → split by behaviour, as many as the plan needs. "
+                    "Size from the feature, NOT from the plan's paragraph/step count. "
+                    "Each task is a fresh agent with its own QA round, so splitting "
+                    "is never free — only split when behaviours are truly independent.",
+    )
     tasks: list[Task] = Field(
         description="ordered list of tasks; a later task may build on earlier "
                     "ones. Emit a SINGLE task when the change is atomic."

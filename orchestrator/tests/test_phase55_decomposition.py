@@ -42,7 +42,12 @@ def test_task_schema_fields():
     assert Task.model_fields["acceptance_criteria"].is_required()
     # Phase 81: testable defaults True so tdd-off / pre-81 tasks are unchanged.
     assert Task.model_fields["testable"].default is True
-    assert set(DecompositionResult.model_fields) == {"tasks", "schema_version", "usage"}
+    # Phase 82b: feature-level `complexity` added (sets the task budget; optional,
+    # defaults "moderate" → additive/resume-safe, no schema_version bump).
+    assert set(DecompositionResult.model_fields) == {
+        "complexity", "tasks", "schema_version", "usage",
+    }
+    assert DecompositionResult.model_fields["complexity"].default == "moderate"
 
 
 def test_user_message_includes_cap_only_when_positive():

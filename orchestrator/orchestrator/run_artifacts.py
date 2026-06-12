@@ -76,6 +76,8 @@ def write_decomposition(thread_id: str, decomposition: DecompositionResult) -> N
         d = _run_dir(thread_id)
         d.mkdir(parents=True, exist_ok=True)
         lines = ["# Task decomposition", ""]
+        lines.append(f"**Complexity:** {getattr(decomposition, 'complexity', 'moderate')}")
+        lines.append("")
         for i, t in enumerate(decomposition.tasks, 1):
             lines.append(f"## {i}. {t.title}  (`{t.id}`)")
             lines.append("")

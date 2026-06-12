@@ -36,6 +36,24 @@ That is the wrong shape.
 If a feature is a single behaviour, emit a SINGLE task — do not split it into layers
 to inflate the count.
 
+## Size the whole feature before you split
+
+Before enumerating tasks, judge the **overall implementation complexity** of the
+whole feature and emit it as `complexity`. Let it set your task budget:
+
+- **trivial** — a single file or a single behaviour (a copy/CSS tweak, a rename
+  sweep, a one-line config change). Emit **1 task**.
+- **moderate** — one main behaviour with a little surrounding work. **1–3 tasks.**
+- **complex** — genuinely several independent behaviours or subsystems. Split by
+  behaviour, **as many as the plan truly needs**.
+
+Set the budget from the feature's actual size, NOT from how many paragraphs or
+steps the plan happens to list. A plan can spell out five implementation steps for
+what is really one trivial behaviour — that is still **1 task**.
+
+Splitting is never free: every task is a fresh agent with its own QA round, so each
+extra task is real cost. Only split when the behaviours are genuinely independent.
+
 ## What makes a good task
 
 - **A complete behaviour** — once the task is done, something observable works that
