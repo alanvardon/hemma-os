@@ -12,7 +12,7 @@ mkdir -p "$WORKFLOW_DIR"
 fail() { printf '✗ FAIL — %s\n' "$1" >&2; VIOLATIONS=$((VIOLATIONS + 1)); }
 pass() { printf '✓ PASS — %s\n' "$1"; }
 
-JS_FILES="calc.js dom.js storage.js modals.js charts.js app.js"
+JS_FILES="calc.js dom.js storage.js modals.js charts.js app.js hero-canvas.js"
 ALL_FILES="index.html bostadskalkyl.html $JS_FILES styles.css home.css"
 
 DIFF_ADDED=$(git diff HEAD -- $ALL_FILES | grep '^+' | grep -v '^+++' || true)

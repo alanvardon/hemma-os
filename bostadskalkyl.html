@@ -33,7 +33,7 @@
 
 <!-- Scenarios modal -->
 <div class="modal-backdrop" id="scenariosModal">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Saved scenarios">
     <div class="modal-header">
       <span class="modal-title">Saved Scenarios</span>
       <button class="modal-close" id="scenariosCloseBtn">&times;</button>
@@ -44,7 +44,7 @@
 
 <!-- Save prompt -->
 <div class="save-prompt" id="savePrompt">
-  <div class="save-prompt-box">
+  <div class="save-prompt-box" role="dialog" aria-modal="true" aria-label="Save scenario">
     <p class="save-prompt-title" id="savePromptTitle">Save scenario</p>
     <input type="text" id="saveNameInput" placeholder="e.g. Lidingö house, Scenario A…">
     <div class="save-prompt-actions">
@@ -548,7 +548,7 @@
 
 <!-- Amortisation modal -->
 <div class="modal-backdrop" id="amortModal">
-  <div class="modal amort-modal">
+  <div class="modal amort-modal" role="dialog" aria-modal="true" aria-label="Mortgage payoff comparison">
     <div class="modal-header">
       <span class="modal-title">Mortgage payoff comparison</span>
       <button class="modal-close" id="amortCloseBtn">&times;</button>
@@ -604,7 +604,7 @@
 
 <!-- Fullscreen chart modal -->
 <div class="chart-fullscreen-backdrop" id="chartFullscreen">
-  <div class="chart-fullscreen-box">
+  <div class="chart-fullscreen-box" role="dialog" aria-modal="true" aria-label="Mortgage payoff comparison, fullscreen">
     <div class="chart-fullscreen-header">
       <span class="chart-fullscreen-title">Mortgage payoff comparison</span>
       <button class="modal-close" id="fullscreenCloseBtn">&times;</button>
@@ -617,7 +617,7 @@
 
 <!-- Driftkostnad modal -->
 <div class="modal-backdrop" id="driftModal">
-  <div class="modal" style="width:520px;">
+  <div class="modal" style="width:520px;" role="dialog" aria-modal="true" aria-label="Driftkostnad breakdown">
     <div class="modal-header">
       <span class="modal-title">Driftkostnad breakdown</span>
       <button class="modal-close" id="driftCloseBtn">&times;</button>
@@ -646,7 +646,7 @@
 
 <!-- Savings modal -->
 <div class="modal-backdrop" id="savingsModal">
-  <div class="modal" style="width:480px;">
+  <div class="modal" style="width:480px;" role="dialog" aria-modal="true" aria-label="Savings">
     <div class="modal-header">
       <span class="modal-title">Savings</span>
       <button class="modal-close" id="savingsCloseBtn">&times;</button>

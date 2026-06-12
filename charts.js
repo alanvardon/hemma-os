@@ -14,6 +14,7 @@
   var amortChartInstance      = null;
   var fullscreenChartInstance = null;
   var lumpSums                = []; // [{year, amount}]
+  var lastChartData           = null; // {years, currentData, newData} for the fullscreen rebuild
 
   // ── Chart colour helper ───────────────────────────────────────────
   function getChartColors() {
@@ -27,6 +28,119 @@
       tooltipTitle:  get('--ink'),
       tooltipBody:   get('--ink-mid'),
       legend:        get('--ink-mid'),
+      accent:        get('--accent'),
+      warnLight:     get('--warn-light'),
+    };
+  }
+
+  function hexToRgba(hex, alpha) {
+    hex = hex.replace('#', '');
+    if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+    var n = parseInt(hex, 16);
+    if (isNaN(n)) return 'rgba(0,0,0,' + alpha + ')';
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
+  }
+
+  // Scriptable background: vertical gradient fading the accent into the page
+  function accentGradient(hex, topAlpha) {
+    return function (context) {
+      var area = context.chart.chartArea;
+      if (!area) return hexToRgba(hex, 0.05);
+      var g = context.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+      g.addColorStop(0, hexToRgba(hex, topAlpha));
+      g.addColorStop(1, hexToRgba(hex, 0));
+      return g;
+    };
+  }
+
+  // Shared dataset/options builders — used by both the modal chart and the
+  // fullscreen chart so gradients and theme colours never go stale
+  function buildDatasets(cc, currentData, newData) {
+    return [
+      {
+        label: 'Current mortgage',
+        data: currentData,
+        borderColor: cc.warnLight,
+        backgroundColor: accentGradient(cc.warnLight, 0.10),
+        borderWidth: 2,
+        borderDash: [6, 4],
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHitRadius: 12,
+        tension: 0.3,
+        fill: true,
+      },
+      {
+        label: 'New mortgage',
+        data: newData,
+        borderColor: cc.accent,
+        backgroundColor: accentGradient(cc.accent, 0.22),
+        borderWidth: 2.5,
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHitRadius: 12,
+        pointHoverBackgroundColor: cc.accent,
+        tension: 0.3,
+        fill: true,
+      }
+    ];
+  }
+
+  function buildOptions(cc) {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      animation: { duration: 650, easing: 'easeOutQuart' },
+      plugins: {
+        legend: {
+          position: 'top',
+          labels: {
+            font: { family: 'Inter', size: 12 },
+            color: cc.legend,
+            boxWidth: 14,
+            padding: 16,
+            usePointStyle: true,
+            pointStyle: 'line',
+          }
+        },
+        tooltip: {
+          backgroundColor: cc.tooltipBg,
+          borderColor: cc.tooltipBorder,
+          borderWidth: 1,
+          titleColor: cc.tooltipTitle,
+          bodyColor: cc.tooltipBody,
+          titleFont: { family: 'Inter', size: 12, weight: '500' },
+          bodyFont: { family: 'Inter', size: 12 },
+          padding: 10,
+          cornerRadius: 10,
+          boxPadding: 4,
+          callbacks: {
+            title: function (items) { return 'Year ' + items[0].label; },
+            label: function (item) {
+              var v = item.raw;
+              if (v === null || v === undefined) return null;
+              return ' ' + item.dataset.label + ': ' + Math.round(v).toLocaleString('sv-SE') + ' kr';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Years from now', font: { family: 'Inter', size: 12 }, color: cc.tick },
+          grid: { color: cc.grid, lineWidth: 0.5 },
+          ticks: { font: { family: 'Inter', size: 11 }, color: cc.tick, maxTicksLimit: 15 }
+        },
+        y: {
+          title: { display: true, text: 'Remaining balance (kr)', font: { family: 'Inter', size: 12 }, color: cc.tick },
+          grid: { color: cc.grid, lineWidth: 0.5 },
+          ticks: {
+            font: { family: 'Inter', size: 11 },
+            color: cc.tick,
+            callback: function (v) { return (v / 1000000).toFixed(1) + ' Mkr'; }
+          }
+        }
+      }
     };
   }
 
@@ -84,86 +198,12 @@
     if (amortChartInstance) amortChartInstance.destroy();
 
     var cc = getChartColors();
-
-    var datasets = [
-      {
-        label: 'Current mortgage',
-        data: currentData,
-        borderColor: getComputedStyle(document.documentElement).getPropertyValue('--warn-light').trim(),
-        backgroundColor: 'rgba(184,122,42,0.06)',
-        borderWidth: 2,
-        borderDash: [6, 4],
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        tension: 0.3,
-        fill: false,
-      },
-      {
-        label: 'New mortgage',
-        data: newData,
-        borderColor: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
-        backgroundColor: 'rgba(45,90,61,0.08)',
-        borderWidth: 2.5,
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        tension: 0.3,
-        fill: false,
-      }
-    ];
+    lastChartData = { years: years, currentData: currentData, newData: newData };
 
     amortChartInstance = new Chart(ctx, {
       type: 'line',
-      data: { labels: years, datasets: datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: {
-            position: 'top',
-            labels: {
-              font: { family: 'Inter', size: 12 },
-              color: cc.legend,
-              boxWidth: 14,
-              padding: 16,
-            }
-          },
-          tooltip: {
-            backgroundColor: cc.tooltipBg,
-            borderColor: cc.tooltipBorder,
-            borderWidth: 1,
-            titleColor: cc.tooltipTitle,
-            bodyColor: cc.tooltipBody,
-            titleFont: { family: 'Inter', size: 12, weight: '500' },
-            bodyFont: { family: 'Inter', size: 12 },
-            padding: 10,
-            callbacks: {
-              title: function (items) { return 'Year ' + items[0].label; },
-              label: function (item) {
-                var v = item.raw;
-                if (v === null || v === undefined) return null;
-                return ' ' + item.dataset.label + ': ' + Math.round(v).toLocaleString('sv-SE') + ' kr';
-              }
-            }
-          }
-        },
-        scales: {
-          x: {
-            title: { display: true, text: 'Years from now', font: { family: 'Inter', size: 12 }, color: cc.tick },
-            grid: { color: cc.grid, lineWidth: 0.5 },
-            ticks: { font: { family: 'Inter', size: 11 }, color: cc.tick, maxTicksLimit: 15 }
-          },
-          y: {
-            title: { display: true, text: 'Remaining balance (kr)', font: { family: 'Inter', size: 12 }, color: cc.tick },
-            grid: { color: cc.grid, lineWidth: 0.5 },
-            ticks: {
-              font: { family: 'Inter', size: 11 },
-              color: cc.tick,
-              callback: function (v) { return (v / 1000000).toFixed(1) + ' Mkr'; }
-            }
-          }
-        }
-      }
+      data: { labels: years, datasets: buildDatasets(cc, currentData, newData) },
+      options: buildOptions(cc)
     });
   }
 
@@ -327,70 +367,23 @@
 
   // ── Fullscreen chart ──────────────────────────────────────────────
   function openFullscreenChart() {
-    if (!amortChartInstance) return;
+    if (!lastChartData) return;
     var backdrop = document.getElementById('chartFullscreen');
     backdrop.classList.add('open');
 
-    var src = amortChartInstance;
-    var ctx  = document.getElementById('amortChartFull').getContext('2d');
+    var ctx = document.getElementById('amortChartFull').getContext('2d');
     if (fullscreenChartInstance) fullscreenChartInstance.destroy();
 
+    // Rebuild from raw data with fresh theme-aware colours — a JSON clone of
+    // the modal chart would drop the scriptable gradient functions
     var cc = getChartColors();
-
-    // Build fresh options using theme-aware colours rather than cloning frozen hex values
     fullscreenChartInstance = new Chart(ctx, {
-      type: src.config.type,
-      data: JSON.parse(JSON.stringify(src.config.data)),
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: {
-            position: 'top',
-            labels: {
-              font: { family: 'Inter', size: 12 },
-              color: cc.legend,
-              boxWidth: 14,
-              padding: 16,
-            }
-          },
-          tooltip: {
-            backgroundColor: cc.tooltipBg,
-            borderColor: cc.tooltipBorder,
-            borderWidth: 1,
-            titleColor: cc.tooltipTitle,
-            bodyColor: cc.tooltipBody,
-            titleFont: { family: 'Inter', size: 12, weight: '500' },
-            bodyFont: { family: 'Inter', size: 12 },
-            padding: 10,
-            callbacks: {
-              title: function (items) { return 'Year ' + items[0].label; },
-              label: function (item) {
-                var v = item.raw;
-                if (v === null || v === undefined) return null;
-                return ' ' + item.dataset.label + ': ' + Math.round(v).toLocaleString('sv-SE') + ' kr';
-              }
-            }
-          }
-        },
-        scales: {
-          x: {
-            title: { display: true, text: 'Years from now', font: { family: 'Inter', size: 12 }, color: cc.tick },
-            grid: { color: cc.grid, lineWidth: 0.5 },
-            ticks: { font: { family: 'Inter', size: 11 }, color: cc.tick, maxTicksLimit: 15 }
-          },
-          y: {
-            title: { display: true, text: 'Remaining balance (kr)', font: { family: 'Inter', size: 12 }, color: cc.tick },
-            grid: { color: cc.grid, lineWidth: 0.5 },
-            ticks: {
-              font: { family: 'Inter', size: 11 },
-              color: cc.tick,
-              callback: function (v) { return (v / 1000000).toFixed(1) + ' Mkr'; }
-            }
-          }
-        }
-      }
+      type: 'line',
+      data: {
+        labels: lastChartData.years,
+        datasets: buildDatasets(cc, lastChartData.currentData, lastChartData.newData)
+      },
+      options: buildOptions(cc)
     });
   }
 

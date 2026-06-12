@@ -181,8 +181,26 @@ body::after {
 .theme-toggle-btn:hover { background: var(--paper-warm); transform: rotate(15deg); }
 
 /* ── Hero ───────────────────────────────────────────────────── */
+.hero-wrap { position: relative; }
+
+.hero-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, black 16%, black 84%, transparent),
+                      linear-gradient(90deg, transparent 0, black 7%, black 93%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(180deg, transparent 0, black 16%, black 84%, transparent),
+              linear-gradient(90deg, transparent 0, black 7%, black 93%, transparent);
+  mask-composite: intersect;
+}
+
 .hero {
-  padding: clamp(3.5rem, 9vh, 7rem) clamp(1.25rem, 4vw, 3rem) clamp(2.5rem, 6vh, 4.5rem);
+  position: relative;
+  z-index: 1;
+  padding: clamp(3.5rem, 9vh, 7rem) clamp(1.25rem, 4vw, 3rem) clamp(4rem, 11vh, 7.5rem);
   max-width: 1200px;
   margin: 0 auto;
   width: 100%;
@@ -291,14 +309,29 @@ body::after {
   text-decoration: none;
   color: inherit;
   overflow: hidden;
+  transform: perspective(700px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
   transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s, border-color 0.25s;
 }
 
 a.app-card:hover {
-  transform: translateY(-5px);
+  transform: perspective(700px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg)) translateY(-5px);
   box-shadow: var(--shadow-lg);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--rule));
 }
+
+/* pointer-tracked spotlight */
+a.app-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(290px circle at var(--mx, 50%) var(--my, 50%),
+              color-mix(in srgb, var(--accent-light) 11%, transparent), transparent 65%);
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+
+a.app-card:hover::before { opacity: 1; }
 
 /* sheen sweep on hover */
 a.app-card::after {

@@ -428,6 +428,10 @@ input::placeholder { color: var(--ink-faint); }
 .derived-value.positive { color: var(--accent); }
 .derived-value.negative { color: var(--warn); }
 
+/* "Recalculated" feedback — App.dom.set adds .val-flash when a value changes */
+.val-flash { animation: val-flash 0.55s ease-out; }
+@keyframes val-flash { from { opacity: 0.35; } }
+
 .derived-row.derived-total { border-top: 1px solid var(--rule); padding-top: 10px; margin-top: 4px; }
 .derived-row.derived-total .derived-label { font-weight: 550; color: var(--ink); }
 .derived-row.derived-total .derived-value { font-size: 16px; }
@@ -727,6 +731,10 @@ input::placeholder { color: var(--ink-faint); }
 
 .modal-backdrop.open { display: flex; animation: fade-in 0.22s ease; }
 
+/* Exit — .closing is added by modals.js, removed together with .open after the animation */
+.modal-backdrop.open.closing { animation: fade-out 0.17s ease forwards; }
+.modal-backdrop.open.closing .modal { animation: modal-out 0.17s ease forwards; }
+
 .modal {
   background: var(--paper-card);
   border: 1px solid var(--rule);
@@ -743,6 +751,8 @@ input::placeholder { color: var(--ink-faint); }
 
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes modal-in { from { opacity: 0; transform: translateY(12px) scale(0.97); } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes modal-out { to { opacity: 0; transform: translateY(10px) scale(0.97); } }
 
 .modal-header {
   display: flex;
@@ -871,6 +881,9 @@ input::placeholder { color: var(--ink-faint); }
 }
 
 .save-prompt.open { display: flex; animation: fade-in 0.22s ease; }
+
+.save-prompt.open.closing { animation: fade-out 0.17s ease forwards; }
+.save-prompt.open.closing .save-prompt-box { animation: modal-out 0.17s ease forwards; }
 
 .save-prompt-box {
   background: var(--paper-card);

@@ -37,6 +37,15 @@
     return savingsItems.reduce(function (sum, item) { return sum + (item.amount || 0); }, 0);
   }
 
+  // ── Animated overlay close ─────────────────────────────────────────
+  // Adds .closing so CSS can play the exit animation before display:none
+  function animateClose(id) {
+    var el = document.getElementById(id);
+    if (!el || !el.classList.contains('open')) return;
+    el.classList.add('closing');
+    setTimeout(function () { el.classList.remove('open', 'closing'); }, 170);
+  }
+
   // ── Header label ───────────────────────────────────────────────────
   function updateHeaderLabel() {
     var labelEl  = document.getElementById('activeScenarioLabel');
@@ -90,7 +99,7 @@
   }
 
   function closeSavePrompt() {
-    document.getElementById('savePrompt').classList.remove('open');
+    animateClose('savePrompt');
     document.getElementById('saveNameInput').placeholder = 'e.g. Lidingö house, Scenario A…';
   }
 
@@ -141,7 +150,7 @@
 
   // Renamed from closeModal() — plan decision 1
   function closeScenariosModal() {
-    document.getElementById('scenariosModal').classList.remove('open');
+    animateClose('scenariosModal');
   }
 
   document.getElementById('scenariosModal').addEventListener('click', function (e) {
@@ -255,7 +264,7 @@
   }
 
   function closeAmortModal() {
-    document.getElementById('amortModal').classList.remove('open');
+    animateClose('amortModal');
   }
 
   document.getElementById('amortModal').addEventListener('click', function (e) {
@@ -287,7 +296,7 @@
   }
 
   function closeDriftModal() {
-    document.getElementById('driftModal').classList.remove('open');
+    animateClose('driftModal');
   }
 
   document.getElementById('driftModal').addEventListener('click', function (e) {
@@ -433,7 +442,7 @@
   }
 
   function closeSavingsModal() {
-    document.getElementById('savingsModal').classList.remove('open');
+    animateClose('savingsModal');
   }
 
   document.getElementById('savingsModal').addEventListener('click', function (e) {
@@ -532,6 +541,24 @@
     document.getElementById('savingsModalTotal').textContent = App.calc.fmt(total);
     App.recalc();   // App.recalc() from app.js
   }
+
+  // ── Escape closes the topmost open overlay ─────────────────────────
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    var fullscreen = document.getElementById('chartFullscreen');
+    if (fullscreen.classList.contains('open')) { App.charts.closeFullscreenChart(); return; }
+    if (document.getElementById('savePrompt').classList.contains('open')) { closeSavePrompt(); return; }
+    var closers = {
+      scenariosModal: closeScenariosModal,
+      amortModal:     closeAmortModal,
+      driftModal:     closeDriftModal,
+      savingsModal:   closeSavingsModal,
+    };
+    Object.keys(closers).some(function (id) {
+      if (document.getElementById(id).classList.contains('open')) { closers[id](); return true; }
+      return false;
+    });
+  });
 
   // ── Static button event wiring ─────────────────────────────────────
   document.getElementById('scenariosBtn').addEventListener('click', openScenariosModal);

@@ -30,11 +30,14 @@
   </div>
 </header>
 
-<section class="hero">
-  <p class="greeting reveal reveal-1"><span id="greeting">Hej</span> <span class="date" id="dateLine"></span></p>
-  <h1 class="reveal reveal-2">Everything for the household, <em>in one place.</em></h1>
-  <p class="sub reveal reveal-3">The family operating system — calculators, plans and shared tools that grow with us. Local-first today, synced everywhere tomorrow.</p>
-</section>
+<div class="hero-wrap">
+  <canvas id="heroCanvas" class="hero-canvas" aria-hidden="true"></canvas>
+  <section class="hero">
+    <p class="greeting reveal reveal-1"><span id="greeting">Hej</span> <span class="date" id="dateLine"></span></p>
+    <h1 class="reveal reveal-2">Everything for the household, <em>in one place.</em></h1>
+    <p class="sub reveal reveal-3">The family operating system — calculators, plans and shared tools that grow with us. Local-first today, synced everywhere tomorrow.</p>
+  </section>
+</div>
 
 <main class="apps">
   <p class="apps-label reveal reveal-3">Tools</p>
@@ -144,7 +147,29 @@
 
     render();
     setInterval(render, 30000);
+
+    // ── App-card spotlight & tilt (fine pointers only) ───────────
+    var fineHover = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+    var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (fineHover && !reduceMotion) {
+      document.querySelectorAll('.app-card').forEach(function (card) {
+        card.addEventListener('pointermove', function (e) {
+          var r = card.getBoundingClientRect();
+          var px = (e.clientX - r.left) / r.width;
+          var py = (e.clientY - r.top) / r.height;
+          card.style.setProperty('--mx', (px * 100).toFixed(1) + '%');
+          card.style.setProperty('--my', (py * 100).toFixed(1) + '%');
+          card.style.setProperty('--tilt-x', ((0.5 - py) * 4).toFixed(2) + 'deg');
+          card.style.setProperty('--tilt-y', ((px - 0.5) * 5).toFixed(2) + 'deg');
+        });
+        card.addEventListener('pointerleave', function () {
+          card.style.setProperty('--tilt-x', '0deg');
+          card.style.setProperty('--tilt-y', '0deg');
+        });
+      });
+    }
   }());
 </script>
+<script src="hero-canvas.js"></script>
 </body>
 </html>
