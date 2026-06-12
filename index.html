@@ -13,6 +13,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300..600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="home.css">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="theme-color" content="">
 </head>
 <body>
 
@@ -124,14 +128,22 @@
       btn.textContent = document.documentElement.dataset.theme === 'dark' ? '☾' : '☀';
     }
 
+    // Browser-chrome color follows the page background
+    function syncThemeColor() {
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.content = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();
+    }
+
     btn.addEventListener('click', function () {
       var next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
       document.documentElement.dataset.theme = next;
       try { localStorage.setItem(THEME_KEY, next); } catch (_) {}
       applyThemeIcon();
+      syncThemeColor();
     });
 
     applyThemeIcon();
+    syncThemeColor();
 
     // ── Greeting, date & clock ───────────────────────────────────
     function render() {

@@ -12,6 +12,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300..600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="theme-color" content="">
 </head>
 <body>
 
@@ -211,10 +215,10 @@
         <div class="field">
           <label>Property tax (fastighetsavgift)</label>
           <div class="input-wrap has-suffix">
-            <input type="text" inputmode="numeric" data-type="currency" id="propertyTax" value="9 287">
+            <input type="text" inputmode="numeric" data-type="currency" id="propertyTax" value="9 725">
             <span class="suffix">kr/yr</span>
           </div>
-          <span class="hint">Max 9 287 kr/yr (2024)</span>
+          <span class="hint" id="propertyTaxHint">Capped at 9 725 kr/yr (2025)</span>
         </div>
         <div class="field">
           <label>Driftkostnad (running costs)</label>
@@ -598,6 +602,12 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- Undo toast (scenario delete) -->
+<div class="undo-toast" id="undoToast" role="status" aria-live="polite">
+  <span id="undoToastMsg"></span>
+  <button class="btn btn-ghost" id="undoToastBtn">Undo</button>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>

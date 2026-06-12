@@ -344,6 +344,11 @@ body {
   margin-top: 2px;
 }
 
+.field .hint.hint-warn {
+  color: var(--warn);
+  opacity: 1;
+}
+
 .input-wrap {
   position: relative;
   display: flex;
@@ -1228,6 +1233,36 @@ input::placeholder { color: var(--ink-faint); }
 .mobile-stat-val.negative { color: var(--warn); }
 .mobile-stat:last-child { text-align: right; }
 
+/* ── Undo toast ─────────────────────────────────────────────── */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(1.25rem + env(safe-area-inset-bottom));
+  transform: translate(-50%, 12px);
+  z-index: 220;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 8px 10px 8px 16px;
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  color: var(--ink);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+}
+
+.undo-toast.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 1080px) {
   .layout { grid-template-columns: 1fr 340px; }
@@ -1259,6 +1294,7 @@ input::placeholder { color: var(--ink-faint); }
   .amort-stat { flex-basis: 50%; border-bottom: 1px solid var(--rule); }
   .scenario-grid { grid-template-columns: 1fr; }
   .mobile-bar { display: block; }
+  .undo-toast { bottom: calc(4.5rem + env(safe-area-inset-bottom)); }
   .chart-fullscreen-box { width: calc(100vw - 1.5rem); height: calc(100vh - 3rem); }
 }
 

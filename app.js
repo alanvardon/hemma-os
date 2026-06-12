@@ -174,6 +174,17 @@
     const depPct = newPrice > 0 ? ((deposit / newPrice) * 100).toFixed(1) : '0';
     document.getElementById('depositPct').textContent = depPct + '% of purchase price';
 
+    // ── Fastighetsavgift cap hint ────────────────────────────
+    const taxHint = document.getElementById('propertyTaxHint');
+    const taxCap  = App.calc.FASTIGHETSAVGIFT_CAP;
+    if (propertyTax > taxCap) {
+      taxHint.textContent = 'Above the 2025 cap — houses pay max ' + fmt(taxCap) + '/yr';
+      taxHint.classList.add('hint-warn');
+    } else {
+      taxHint.textContent = 'Capped at ' + fmt(taxCap) + '/yr (2025)';
+      taxHint.classList.remove('hint-warn');
+    }
+
     // ── Inline derived ───────────────────────────────────────
     set('d-takeaway',    fmt(totalTakeaway), totalTakeaway >= 0 ? 'positive' : 'negative');
     set('d-netProceeds', fmt(netProceeds),   netProceeds >= 0 ? 'positive' : 'negative');
@@ -291,6 +302,16 @@
       markDirty();
     });
     el.addEventListener('input', () => { App.recalc(); markDirty(); });
+    // Arrow keys step the value: ±10 000, shift = ±100 000
+    el.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const step = e.shiftKey ? 100000 : 10000;
+      const n = Math.max(0, (parseFormatted(this.value) || 0) + (e.key === 'ArrowUp' ? step : -step));
+      this.value = String(n); // field shows the raw number while focused
+      App.recalc();
+      markDirty();
+    });
   });
 
   document.querySelectorAll('input[type="number"]').forEach(el => {
@@ -312,22 +333,30 @@
   // Ränteavdrag toggle
   document.getElementById('ranteavdragToggle').addEventListener('change', () => { App.recalc(); markDirty(); });
 
-  // Listing URL "Open ›" button
+  // Listing URL "Open ›" button — new tab so the calculator stays open
   document.getElementById('openListingBtn').addEventListener('click', function () {
     var u = document.getElementById('listingUrl').value.trim();
-    if (u) window.location.href = u.startsWith('http') ? u : 'https://' + u;
+    if (u) window.open(u.startsWith('http') ? u : 'https://' + u, '_blank', 'noopener');
   });
 
   // Theme toggle
   document.getElementById('themeToggleBtn').addEventListener('click', toggleTheme);
 
   // ── Theme ──────────────────────────────────────────────────────
+  // Browser-chrome color follows the page background (the meta has no
+  // static content so the value always comes from the active theme)
+  function syncThemeColor() {
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();
+  }
+
   function initTheme() {
     App.storage.loadTheme().then(function (stored) {
       const theme = stored === 'dark' ? 'dark' : 'light';
       document.documentElement.dataset.theme = theme;
       const btn = document.getElementById('themeToggleBtn');
       if (btn) btn.textContent = theme === 'dark' ? '☾' : '☀';
+      syncThemeColor();
     });
   }
 
@@ -338,6 +367,7 @@
     App.storage.saveTheme(next); // fire-and-forget
     const btn = document.getElementById('themeToggleBtn');
     if (btn) btn.textContent = next === 'dark' ? '☾' : '☀';
+    syncThemeColor();
     App.charts.renderAmortChart();
   }
 

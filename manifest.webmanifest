@@ -1,0 +1,14 @@
+{
+  "name": "Hemma",
+  "short_name": "Hemma",
+  "description": "Hemma — the Vardon family hub. Bostadskalkyl and household tools.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f2ea",
+  "theme_color": "#2e5d3e",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

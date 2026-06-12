@@ -35,8 +35,35 @@
     return threshold * 0.30 + (annualInterest - threshold) * 0.21;
   }
 
+  // Cap for småhus, income year 2025
+  var FASTIGHETSAVGIFT_CAP = 9725;
+
   function fastighetsavgiftCap(propertyTax) {
-    return Math.min(propertyTax, 9287);
+    return Math.min(propertyTax, FASTIGHETSAVGIFT_CAP);
+  }
+
+  // Derived key figures from a raw inputs object (scenario previews,
+  // future comparison views) — single source for the preview math
+  function summarize(d) {
+    d = d || {};
+    var loanAmount  = (d.newPrice || 0) - (d.deposit || 0);
+    var monthly     = (loanAmount * ((d.interestRateA || 0) / 100)) / 12
+                    + (loanAmount * ((d.amortRate || 0) / 100)) / 12
+                    + ((d.propertyTax || 0) / 12)
+                    + (d.driftkostnad || 0);
+    var takeaway    = (d.salePrice || 0) - (d.currentMortgage || 0);
+    var netProceeds = takeaway - (d.agentCost || 0) - (d.movingCost || 0);
+    var lagfartAmt  = lagfart(d.newPrice || 0);
+    var pantbrev    = pantbrevCost(loanAmount, d.existingPantbrev || 0);
+    var totalUpfront = (d.deposit || 0) + lagfartAmt + pantbrev;
+    return {
+      loanAmount:   loanAmount,
+      monthly:      monthly,
+      takeaway:     takeaway,
+      netProceeds:  netProceeds,
+      totalUpfront: totalUpfront,
+      cashBalance:  netProceeds - totalUpfront,
+    };
   }
 
   function equityPct(loanAmount, price) {
@@ -72,6 +99,8 @@
     pantbrevCost: pantbrevCost,
     ranteavdrag: ranteavdrag,
     fastighetsavgiftCap: fastighetsavgiftCap,
+    FASTIGHETSAVGIFT_CAP: FASTIGHETSAVGIFT_CAP,
+    summarize: summarize,
     equityPct: equityPct,
     buildAmortSchedule: buildAmortSchedule,
   };

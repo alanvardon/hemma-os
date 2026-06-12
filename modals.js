@@ -169,22 +169,18 @@
     var grid = document.createElement('div');
     grid.className = 'scenario-grid';
 
-    scenarios.forEach(function (s) {
+    var sorted = scenarios.slice().sort(function (a, b) {
+      return new Date(b.savedAt) - new Date(a.savedAt);
+    });
+
+    sorted.forEach(function (s) {
       var card = document.createElement('div');
       card.className = 'scenario-card' + (s.id === activeScenarioId ? ' active-card' : '');
 
-      var d        = s.inputs;
-      var loanAmt  = (d.newPrice || 0) - (d.deposit || 0);
-      var monthly  = ((loanAmt * ((d.interestRateA || 0) / 100)) / 12)
-                   + ((loanAmt * ((d.amortRate || 0) / 100)) / 12)
-                   + ((d.propertyTax || 0) / 12)
-                   + (d.driftkostnad || 0);
-      var takeaway = (d.salePrice || 0) - (d.currentMortgage || 0);
-      var netProc  = takeaway - (d.agentCost || 0) - (d.movingCost || 0);
-      var lagfartPreview = (d.newPrice || 0) * 0.015;
-      var newPb    = Math.max(0, loanAmt - (d.existingPantbrev || 0));
-      var upfront  = (d.deposit || 0) + lagfartPreview + newPb * 0.02;
-      var cash     = netProc - upfront;
+      var sum     = App.calc.summarize(s.inputs);
+      var monthly = sum.monthly;
+      var cash    = sum.cashBalance;
+      var d       = s.inputs;
 
       var dateStr = new Date(s.savedAt).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -212,12 +208,18 @@
       loadBtn.textContent = 'Load';
       loadBtn.addEventListener('click', function () { loadScenario(s.id); });
 
+      var dupBtn = document.createElement('button');
+      dupBtn.classList.add('btn', 'btn-ghost');
+      dupBtn.textContent = 'Duplicate';
+      dupBtn.addEventListener('click', function () { duplicateScenario(s.id); });
+
       var deleteBtn = document.createElement('button');
       deleteBtn.className = 'btn btn-danger';
       deleteBtn.textContent = 'Delete';
       deleteBtn.addEventListener('click', function (e) { deleteScenario(s.id, e); });
 
       actionsEl.appendChild(loadBtn);
+      actionsEl.appendChild(dupBtn);
       actionsEl.appendChild(deleteBtn);
 
       card.appendChild(nameEl);
@@ -244,10 +246,27 @@
     closeScenariosModal();
   }
 
+  function duplicateScenario(id) {
+    var scenarios = loadScenarios();
+    var s = scenarios.find(function (sc) { return sc.id === id; });
+    if (!s) return;
+    scenarios.push({
+      id: Date.now().toString(),
+      name: s.name + ' (copy)',
+      savedAt: new Date().toISOString(),
+      inputs: JSON.parse(JSON.stringify(s.inputs)),
+    });
+    saveScenarios(scenarios);
+    renderScenariosModal();
+  }
+
   function deleteScenario(id, e) {
     e.stopPropagation();
-    var scenarios = loadScenarios().filter(function (s) { return s.id !== id; });
-    saveScenarios(scenarios);
+    var all = loadScenarios();
+    var deleted = all.find(function (s) { return s.id === id; });
+    if (!deleted) return;
+    var prior = { activeScenarioId: activeScenarioId, isDirty: isDirty }; // globals from app.js
+    saveScenarios(all.filter(function (s) { return s.id !== id; }));
     if (activeScenarioId === id) {
       activeScenarioId = null;
       isDirty = true;
@@ -255,6 +274,41 @@
     updateHeaderLabel();
     saveSession();
     renderScenariosModal();
+    showUndoToast(deleted, prior);
+  }
+
+  // ── Undo toast for scenario delete ────────────────────────────────
+  var undoState = null; // { scenario, prior, timer }
+
+  function showUndoToast(scenario, prior) {
+    var toast = document.getElementById('undoToast');
+    if (!toast) return;
+    if (undoState && undoState.timer) clearTimeout(undoState.timer);
+    document.getElementById('undoToastMsg').textContent = 'Deleted “' + scenario.name + '”';
+    toast.classList.add('open');
+    undoState = { scenario: scenario, prior: prior, timer: setTimeout(hideUndoToast, 6000) };
+  }
+
+  function hideUndoToast() {
+    var toast = document.getElementById('undoToast');
+    if (toast) toast.classList.remove('open');
+    if (undoState && undoState.timer) clearTimeout(undoState.timer);
+    undoState = null;
+  }
+
+  function undoDelete() {
+    if (!undoState) return;
+    var scenarios = loadScenarios();
+    scenarios.push(undoState.scenario);
+    saveScenarios(scenarios);
+    if (undoState.prior.activeScenarioId === undoState.scenario.id) {
+      activeScenarioId = undoState.scenario.id;
+      isDirty = undoState.prior.isDirty;
+    }
+    updateHeaderLabel();
+    saveSession();
+    renderScenariosModal();
+    hideUndoToast();
   }
 
   // ── Amort modal ───────────────────────────────────────────────────
@@ -322,7 +376,7 @@
     driftItems = driftItems.filter(function (d) { return d.id !== id; });
     saveDriftItems();
     renderDriftItems();
-    updateDriftTotal();
+    applyDriftTotal();
   }
 
   function renderDriftItems() {
@@ -367,10 +421,10 @@
           ? App.calc.formatWithSpaces(App.calc.parseFormatted(this.value))
           : '';
         updateDriftAmount(idx, App.calc.parseFormatted(this.value));
-        updateDriftTotal();
+        applyDriftTotal();
       });
       amtInput.addEventListener('input', function () {
-        updateDriftTotal();
+        applyDriftTotal();
       });
 
       var suffix = document.createElement('span');
@@ -404,21 +458,25 @@
     saveDriftItems();
   }
 
+  // Display-only: refresh the modal's total line
   function updateDriftTotal() {
     var total = 0;
     document.querySelectorAll('input[data-drift-idx]').forEach(function (el) {
       var rawVal = App.calc.parseFormatted(el.value) || 0;
       total += driftYearly ? rawVal / 12 : rawVal;
     });
-
     document.getElementById('driftModalTotal').textContent = App.calc.fmt(total);
+    return total;
+  }
 
-    if (total > 0) {
-      var driftEl = document.getElementById('driftkostnad');
-      driftEl.value = App.calc.formatWithSpaces(total);
-      App.recalc();  // App.recalc() from app.js
-      markDirty();   // global from app.js
-    }
+  // User-edit path: also write the total back to the main field —
+  // including 0, so clearing all items doesn't leave a stale value
+  function applyDriftTotal() {
+    var total = updateDriftTotal();
+    var driftEl = document.getElementById('driftkostnad');
+    driftEl.value = total > 0 ? App.calc.formatWithSpaces(total) : '0';
+    App.recalc();  // App.recalc() from app.js
+    markDirty();   // global from app.js
   }
 
   // ── Savings modal ─────────────────────────────────────────────────
@@ -542,22 +600,49 @@
     App.recalc();   // App.recalc() from app.js
   }
 
-  // ── Escape closes the topmost open overlay ─────────────────────────
+  // ── Overlay stack helpers (Escape + focus trap) ────────────────────
+  // Priority order: fullscreen chart sits above the amort modal, the
+  // save prompt above everything else
+  var OVERLAY_IDS = ['chartFullscreen', 'savePrompt', 'scenariosModal', 'amortModal', 'driftModal', 'savingsModal'];
+  var OVERLAY_CLOSERS = {
+    chartFullscreen: function () { App.charts.closeFullscreenChart(); },
+    savePrompt:      function () { closeSavePrompt(); },
+    scenariosModal:  function () { closeScenariosModal(); },
+    amortModal:      function () { closeAmortModal(); },
+    driftModal:      function () { closeDriftModal(); },
+    savingsModal:    function () { closeSavingsModal(); },
+  };
+
+  function topOverlay() {
+    for (var i = 0; i < OVERLAY_IDS.length; i++) {
+      var el = document.getElementById(OVERLAY_IDS[i]);
+      if (el && el.classList.contains('open')) return el;
+    }
+    return null;
+  }
+
+  // Escape closes the topmost open overlay; Tab is trapped inside it
   document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    var fullscreen = document.getElementById('chartFullscreen');
-    if (fullscreen.classList.contains('open')) { App.charts.closeFullscreenChart(); return; }
-    if (document.getElementById('savePrompt').classList.contains('open')) { closeSavePrompt(); return; }
-    var closers = {
-      scenariosModal: closeScenariosModal,
-      amortModal:     closeAmortModal,
-      driftModal:     closeDriftModal,
-      savingsModal:   closeSavingsModal,
-    };
-    Object.keys(closers).some(function (id) {
-      if (document.getElementById(id).classList.contains('open')) { closers[id](); return true; }
-      return false;
+    if (e.key === 'Escape') {
+      var top = topOverlay();
+      if (top) OVERLAY_CLOSERS[top.id]();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    var overlay = topOverlay();
+    if (!overlay) return;
+    var nodes = overlay.querySelectorAll('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])');
+    var focusables = [];
+    nodes.forEach(function (n) {
+      if (!n.disabled && n.getClientRects().length > 0) focusables.push(n);
     });
+    if (!focusables.length) return;
+    var first  = focusables[0];
+    var last   = focusables[focusables.length - 1];
+    var active = document.activeElement;
+    if (!overlay.contains(active)) { e.preventDefault(); first.focus(); return; }
+    if (e.shiftKey && active === first)       { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && active === last)  { e.preventDefault(); first.focus(); }
   });
 
   // ── Static button event wiring ─────────────────────────────────────
@@ -575,6 +660,7 @@
   document.getElementById('addDriftItemBtn').addEventListener('click', addDriftItem);
   document.getElementById('savingsCloseBtn').addEventListener('click', closeSavingsModal);
   document.getElementById('addSavingsItemBtn').addEventListener('click', addSavingsItem);
+  document.getElementById('undoToastBtn').addEventListener('click', undoDelete);
 
   // ── Export ─────────────────────────────────────────────────────────
   // Public API via App.modals
@@ -591,7 +677,9 @@
     closeScenariosModal:     closeScenariosModal,
     renderScenariosModal:    renderScenariosModal,
     loadScenario:            loadScenario,
+    duplicateScenario:       duplicateScenario,
     deleteScenario:          deleteScenario,
+    undoDelete:              undoDelete,
     openAmortModal:          openAmortModal,
     closeAmortModal:         closeAmortModal,
     openDriftModal:          openDriftModal,
@@ -601,6 +689,7 @@
     removeDriftItem:         removeDriftItem,
     updateDriftAmount:       updateDriftAmount,
     updateDriftTotal:        updateDriftTotal,
+    applyDriftTotal:         applyDriftTotal,
     openSavingsModal:        openSavingsModal,
     closeSavingsModal:       closeSavingsModal,
     addSavingsItem:          addSavingsItem,
