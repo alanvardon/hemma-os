@@ -30,8 +30,7 @@
       ],
       incomes: [
         row('Lön / Salary', 46000, 'a'),
-        row('Lön / Salary', 39000, 'b'),
-        row('Barnbidrag', 2650, 'joint')
+        row('Lön / Salary', 39000, 'b')
       ],
       costs: [
         // Joint — grouped into categories
@@ -193,9 +192,10 @@
       var s = JSON.parse(raw);
       if (!s || s.version !== 1 || !Array.isArray(s.incomes) || !Array.isArray(s.costs) || !Array.isArray(s.savings)) return null;
       if (!Array.isArray(s.people) || s.people.length !== 2) s.people = ['Alan', 'Partner'];
-      // Joint savings was removed from the UI — fold any legacy joint savings
-      // rows into person A so saved budgets keep their money and still render.
+      // Joint savings + joint income were removed from the UI — fold any legacy
+      // joint rows into person A so saved budgets keep their money and render.
       s.savings.forEach(function (r) { if (r.owner === 'joint') r.owner = 'a'; });
+      s.incomes.forEach(function (r) { if (r.owner === 'joint') r.owner = 'a'; });
       // Categories are newer than some saved budgets: seed a starter set and
       // drop any uncategorised joint costs into the last category so nothing
       // disappears (the user can then drag them into place).
@@ -328,12 +328,10 @@
   }
 
   function renderIncome() {
-    ['a', 'b', 'joint'].forEach(function (owner) {
-      var list = listEl('income', owner);
-      list.replaceChildren();
-      state.incomes.forEach(function (row) {
-        if (row.owner === owner) list.appendChild(buildRow(row, 'income'));
-      });
+    ['a', 'b'].forEach(function (owner) { listEl('income', owner).replaceChildren(); });
+    state.incomes.forEach(function (row) {
+      var owner = row.owner === 'b' ? 'b' : 'a'; // joint income removed → goes to A
+      listEl('income', owner).appendChild(buildRow(row, 'income'));
     });
   }
 
@@ -498,7 +496,6 @@
     // Pot box (section 1)
     setMoney('d-potA', r.incomeA);
     setMoney('d-potB', r.incomeB);
-    setMoney('d-potJoint', r.incomeJoint);
     setMoney('d-potTotal', r.totalIncome);
     setMoney('d-equalShare', r.equalShare);
 
@@ -525,7 +522,6 @@
     // Income column subtotals
     setMoney('subA', r.incomeA);
     setMoney('subB', r.incomeB);
-    setMoney('subJoint', r.incomeJoint);
 
     // Per-category joint subtotals (cards persist across recalcs)
     (r.jointCategories || []).forEach(function (c) {
@@ -569,7 +565,6 @@
     setMoney('s-equalShare', r.equalShare);
     setMoney('s-potA', r.incomeA);
     setMoney('s-potB', r.incomeB);
-    setMoney('s-potJoint', r.incomeJoint);
 
     // Summary: person cards
     [['A', r.personA], ['B', r.personB]].forEach(function (pair) {

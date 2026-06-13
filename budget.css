@@ -316,7 +316,7 @@ input::placeholder { color: var(--ink-faint); }
 /* ── Income columns ─────────────────────────────────────────── */
 .income-cols {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 0.9rem;
 }
 
@@ -329,7 +329,6 @@ input::placeholder { color: var(--ink-faint); }
   flex-direction: column;
   min-width: 0; /* shrink within the grid track */
 }
-.income-col-joint { border-style: dashed; }
 
 .income-col-head {
   display: flex;
@@ -344,12 +343,6 @@ input::placeholder { color: var(--ink-faint); }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.income-col-tag {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--ink-soft);
-  letter-spacing: 0.02em;
 }
 .income-col-sub {
   font-family: var(--font-display);
