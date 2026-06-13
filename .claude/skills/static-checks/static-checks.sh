@@ -12,8 +12,11 @@ mkdir -p "$WORKFLOW_DIR"
 fail() { printf '✗ FAIL — %s\n' "$1" >&2; VIOLATIONS=$((VIOLATIONS + 1)); }
 pass() { printf '✓ PASS — %s\n' "$1"; }
 
-JS_FILES="calc.js dom.js storage.js modals.js charts.js app.js hero-canvas.js"
-ALL_FILES="index.html bostadskalkyl.html $JS_FILES styles.css home.css"
+JS_FILES="calc.js dom.js storage.js modals.js charts.js app.js hero-canvas.js budget.js"
+ALL_FILES="index.html bostadskalkyl.html hushallsbudget.html $JS_FILES styles.css home.css budget.css"
+TEST_FILES="calc.test.js budget.test.js"
+# Pages wired to app.js's id registry — only these are governed by check #5.
+CALC_INPUT_FILES="index.html bostadskalkyl.html"
 
 DIFF_ADDED=$(git diff HEAD -- $ALL_FILES | grep '^+' | grep -v '^+++' || true)
 
@@ -32,12 +35,16 @@ for f in $JS_FILES; do
 done
 
 # 2. Unit tests
-if node --test calc.test.js 2>/dev/null; then
-  pass "Tests: calc.test.js all pass"
-else
-  node --test calc.test.js 2>&1 | tail -20 | sed 's/^/  /' >&2
-  fail "Tests: calc.test.js has failing tests (see above)"
-fi
+for t in $TEST_FILES; do
+  if [ -f "$t" ]; then
+    if node --test "$t" 2>/dev/null; then
+      pass "Tests: $t all pass"
+    else
+      node --test "$t" 2>&1 | tail -20 | sed 's/^/  /' >&2
+      fail "Tests: $t has failing tests (see above)"
+    fi
+  fi
+done
 
 # 3. classList — no el.className = in added lines across all JS files
 CLS=$(echo "$DIFF_ADDED" | grep -E '\.className\s*=' || true)
@@ -57,7 +64,9 @@ else
 fi
 
 # 5. New input IDs must appear in CURRENCY_IDS, NUMBER_IDS, or TEXT_IDS
-NEW_IDS=$(echo "$DIFF_ADDED" | grep -E 'type="(text|number)"|data-type=' | grep -oE 'id="[^"]+"' | sed 's/id="//;s/"//' || true)
+# Scoped to the calculator pages — other pages (e.g. the budget) manage their own state.
+CALC_DIFF_ADDED=$(git diff HEAD -- $CALC_INPUT_FILES | grep '^+' | grep -v '^+++' || true)
+NEW_IDS=$(echo "$CALC_DIFF_ADDED" | grep -E 'type="(text|number)"|data-type=' | grep -oE 'id="[^"]+"' | sed 's/id="//;s/"//' || true)
 if [ -n "$NEW_IDS" ]; then
   while IFS= read -r id; do
     [ -z "$id" ] && continue

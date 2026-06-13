@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hushållsbudget — Hemma</title>
+<script>
+  // Pre-paint theme to avoid a light-mode flash (shared key with the rest of Hemma)
+  try { document.documentElement.dataset.theme = localStorage.getItem('bostadskalkyl_theme') === 'dark' ? 'dark' : 'light'; } catch (_) {}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="budget.css">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="theme-color" content="">
+</head>
+<body>
+
+<div class="page-header">
+  <div class="header-brand">
+    <a class="hub-link" href="index.html">‹ Hemma</a>
+    <div>
+      <h1>Hushållsbudget</h1>
+      <p class="tagline">One pot, split evenly — joint &amp; individual costs for two</p>
+    </div>
+  </div>
+  <div class="header-actions">
+    <span id="saveState" class="save-state">Saved ✓</span>
+    <button id="themeToggleBtn" class="btn btn-ghost theme-toggle-btn" title="Toggle dark mode">☀</button>
+    <button class="btn btn-ghost" id="resetBtn" title="Reset to the example budget">Reset</button>
+  </div>
+</div>
+
+<div class="layout">
+
+  <!-- INPUTS -->
+  <div class="inputs-col">
+
+    <!-- Section 1: The pot -->
+    <div class="section">
+      <div class="section-label">
+        <span class="section-num">1</span>
+        <span class="section-title">The pot — pool &amp; split</span>
+      </div>
+      <p class="section-note">
+        Every krona you both earn goes into one pot. It's split evenly so you each
+        end the month with the same income, then joint costs come off 50/50 and your
+        own costs come off your own share.
+      </p>
+
+      <div class="who-row">
+        <div class="who-field">
+          <label for="personAName">Person 1</label>
+          <input type="text" id="personAName" value="Alan" maxlength="20" autocomplete="off">
+        </div>
+        <span class="who-amp">&amp;</span>
+        <div class="who-field">
+          <label for="personBName">Person 2</label>
+          <input type="text" id="personBName" value="Partner" maxlength="20" autocomplete="off">
+        </div>
+      </div>
+
+      <div class="income-cols">
+        <div class="income-col">
+          <div class="income-col-head">
+            <span class="income-col-name" data-name-for="a">Alan</span>
+            <span class="income-col-sub" id="subA">—</span>
+          </div>
+          <div class="income-list" data-owner="a"></div>
+          <button type="button" class="btn btn-ghost row-add-btn" data-add="income" data-owner="a">+ Add income</button>
+        </div>
+
+        <div class="income-col">
+          <div class="income-col-head">
+            <span class="income-col-name" data-name-for="b">Partner</span>
+            <span class="income-col-sub" id="subB">—</span>
+          </div>
+          <div class="income-list" data-owner="b"></div>
+          <button type="button" class="btn btn-ghost row-add-btn" data-add="income" data-owner="b">+ Add income</button>
+        </div>
+
+        <div class="income-col income-col-joint">
+          <div class="income-col-head">
+            <span class="income-col-name">Joint <span class="income-col-tag">benefits etc.</span></span>
+            <span class="income-col-sub" id="subJoint">—</span>
+          </div>
+          <div class="income-list" data-owner="joint"></div>
+          <button type="button" class="btn btn-ghost row-add-btn" data-add="income" data-owner="joint">+ Add income</button>
+        </div>
+      </div>
+
+      <div class="pot-box">
+        <div class="pot-flow">
+          <div class="pot-flow-item">
+            <span class="pot-flow-label"><span data-name-for="a">Alan</span> pays in</span>
+            <span class="pot-flow-val" id="d-potA">—</span>
+          </div>
+          <span class="pot-plus">+</span>
+          <div class="pot-flow-item">
+            <span class="pot-flow-label"><span data-name-for="b">Partner</span> pays in</span>
+            <span class="pot-flow-val" id="d-potB">—</span>
+          </div>
+          <span class="pot-plus">+</span>
+          <div class="pot-flow-item">
+            <span class="pot-flow-label">Joint</span>
+            <span class="pot-flow-val" id="d-potJoint">—</span>
+          </div>
+        </div>
+        <div class="pot-total-row">
+          <span class="pot-total-label">In the pot</span>
+          <span class="pot-total-val" id="d-potTotal">—</span>
+        </div>
+        <div class="pot-split-row">
+          <span class="pot-split-label">Split evenly, you each take home</span>
+          <span class="pot-split-val" id="d-equalShare">—</span>
+        </div>
+        <div class="pot-transfer" id="potTransfer">
+          <span class="pot-transfer-icon" aria-hidden="true">⇄</span>
+          <span class="pot-transfer-text" id="potTransferText">—</span>
+        </div>
+        <p class="pot-transfer-note" id="potTransferNote"></p>
+      </div>
+    </div>
+
+    <!-- Section 2: Costs -->
+    <div class="section">
+      <div class="section-label">
+        <span class="section-num">2</span>
+        <span class="section-title">Costs</span>
+        <span class="section-total" id="costsTotal">—</span>
+      </div>
+      <p class="section-note">
+        <strong>Joint</strong> costs are split 50/50 from the pot — sort them into
+        categories and drag rows between them. Each person's <strong>own</strong>
+        costs come out of their own share.
+      </p>
+
+      <p class="owner-split-label">Joint costs <span class="owner-block-tag">split 50/50</span></p>
+      <div id="jointCategories" class="cat-cards"></div>
+      <button type="button" class="btn btn-ghost row-add-btn add-cat-btn" id="addCategoryBtn">+ Add category</button>
+
+      <p class="owner-split-label">Individual costs</p>
+      <div class="owner-cols">
+        <div class="owner-col">
+          <div class="owner-block-head">
+            <span class="owner-block-title" data-name-for="a">Alan</span>
+            <span class="owner-block-sub" id="costsASub">—</span>
+          </div>
+          <div class="b-list" id="ownCostListA"></div>
+          <button type="button" class="btn btn-ghost row-add-btn" data-add="cost" data-owner="a">+ Add</button>
+        </div>
+        <div class="owner-col">
+          <div class="owner-block-head">
+            <span class="owner-block-title" data-name-for="b">Partner</span>
+            <span class="owner-block-sub" id="costsBSub">—</span>
+          </div>
+          <div class="b-list" id="ownCostListB"></div>
+          <button type="button" class="btn btn-ghost row-add-btn" data-add="cost" data-owner="b">+ Add</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 3: Savings -->
+    <div class="section">
+      <div class="section-label">
+        <span class="section-num">3</span>
+        <span class="section-title">Savings &amp; pension</span>
+        <span class="section-total" id="savingsTotal">—</span>
+      </div>
+      <p class="section-note">
+        What each of you sets aside every month — pension, ISK and buffer.
+        These come out of your own take-home share.
+      </p>
+
+      <div class="owner-cols">
+        <div class="owner-col">
+          <div class="owner-block-head">
+            <span class="owner-block-title" data-name-for="a">Alan</span>
+            <span class="owner-block-sub" id="savingsASub">—</span>
+          </div>
+          <div class="b-list" id="ownSavingsListA"></div>
+          <button type="button" class="btn btn-ghost row-add-btn" data-add="saving" data-owner="a">+ Add</button>
+        </div>
+        <div class="owner-col">
+          <div class="owner-block-head">
+            <span class="owner-block-title" data-name-for="b">Partner</span>
+            <span class="owner-block-sub" id="savingsBSub">—</span>
+          </div>
+          <div class="b-list" id="ownSavingsListB"></div>
+          <button type="button" class="btn btn-ghost row-add-btn" data-add="saving" data-owner="b">+ Add</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- SUMMARY -->
+  <div class="summary-col">
+    <p class="summary-title">Summary</p>
+
+    <div class="sum-card sum-card-hero">
+      <div class="sum-card-title">Left over after everything</div>
+      <div class="sum-big" id="s-surplus">—</div>
+      <div class="sum-card-subtitle">across the whole household, each month</div>
+      <div class="flow-bar" role="img" aria-label="How the pot is spent">
+        <span class="flow-seg flow-joint" id="fbJoint"></span>
+        <span class="flow-seg flow-own" id="fbOwn"></span>
+        <span class="flow-seg flow-sav" id="fbSav"></span>
+        <span class="flow-seg flow-left" id="fbLeft"></span>
+      </div>
+      <div class="flow-legend">
+        <span class="flow-key"><span class="flow-dot flow-joint"></span>Joint <em id="fl-joint">—</em></span>
+        <span class="flow-key"><span class="flow-dot flow-own"></span>Own <em id="fl-own">—</em></span>
+        <span class="flow-key"><span class="flow-dot flow-sav"></span>Savings <em id="fl-sav">—</em></span>
+        <span class="flow-key"><span class="flow-dot flow-left"></span>Left <em id="fl-left">—</em></span>
+      </div>
+      <div class="sum-rows">
+        <div class="sum-row">
+          <span class="sum-row-label">Total income</span>
+          <span class="sum-row-val" id="s-income">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Total costs</span>
+          <span class="sum-row-val" id="s-costs">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Total savings</span>
+          <span class="sum-row-val" id="s-savings">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sum-card">
+      <div class="sum-card-title">Each of you, after the split</div>
+      <div class="compare-grid">
+        <span class="compare-corner" aria-hidden="true"></span>
+        <span class="compare-head" data-name-for="a">Alan</span>
+        <span class="compare-head" data-name-for="b">Partner</span>
+
+        <span class="compare-label">Take-home</span>
+        <span class="compare-val" id="pcardAShare">—</span>
+        <span class="compare-val" id="pcardBShare">—</span>
+
+        <span class="compare-label">Joint costs ½</span>
+        <span class="compare-val" id="pcardAJoint">—</span>
+        <span class="compare-val" id="pcardBJoint">—</span>
+
+        <span class="compare-label">Own costs</span>
+        <span class="compare-val" id="pcardAOwn">—</span>
+        <span class="compare-val" id="pcardBOwn">—</span>
+
+        <span class="compare-label">Savings</span>
+        <span class="compare-val" id="pcardASav">—</span>
+        <span class="compare-val" id="pcardBSav">—</span>
+
+        <span class="compare-label compare-foot-label">Left to spend</span>
+        <span class="compare-val compare-foot" id="pcardALeft">—</span>
+        <span class="compare-val compare-foot" id="pcardBLeft">—</span>
+      </div>
+    </div>
+
+    <hr class="sum-divider">
+
+    <div class="sum-card">
+      <div class="sum-card-title">The pot</div>
+      <div class="sum-big" id="s-equalShare">—</div>
+      <div class="sum-card-subtitle">take-home each, after the split</div>
+      <div class="sum-rows">
+        <div class="sum-row">
+          <span class="sum-row-label" data-name-for="a">Alan</span>
+          <span class="sum-row-val" id="s-potA">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label" data-name-for="b">Partner</span>
+          <span class="sum-row-val" id="s-potB">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label">Joint benefits</span>
+          <span class="sum-row-val" id="s-potJoint">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sum-card">
+      <div class="sum-card-title chart-head">
+        Where the pot goes
+        <button type="button" class="chart-expand-btn" id="chartExpandBtn" title="View full screen" aria-label="View chart full screen">⤢</button>
+      </div>
+      <div class="chart-wrap" id="chartWrap">
+        <canvas id="costChart"></canvas>
+      </div>
+    </div>
+
+    <div class="sum-card">
+      <div class="sum-card-title">Savings rate</div>
+      <div class="sum-big positive" id="s-savingsRate">—</div>
+      <div class="sum-card-subtitle">of total household income</div>
+      <div class="sum-rows">
+        <div class="sum-row">
+          <span class="sum-row-label" data-name-for="a">Alan</span>
+          <span class="sum-row-val" id="s-savA">—</span>
+        </div>
+        <div class="sum-row">
+          <span class="sum-row-label" data-name-for="b">Partner</span>
+          <span class="sum-row-val" id="s-savB">—</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Fullscreen chart overlay -->
+<div class="chart-overlay" id="chartOverlay" role="dialog" aria-modal="true" aria-label="Where the pot goes — full screen" hidden>
+  <div class="chart-overlay-inner">
+    <div class="chart-overlay-head">
+      <span class="chart-overlay-title">Where the pot goes</span>
+      <button type="button" class="chart-expand-btn chart-overlay-close" id="chartOverlayClose" title="Close" aria-label="Close full screen">×</button>
+    </div>
+    <div class="chart-overlay-stage" id="chartOverlayStage"></div>
+  </div>
+</div>
+
+<!-- Mobile key-figures bar -->
+<div class="mobile-bar">
+  <div class="mobile-bar-inner">
+    <div class="mobile-stat">
+      <span class="mobile-stat-label">Take-home each</span>
+      <span class="mobile-stat-val" id="m-each">—</span>
+    </div>
+    <div class="mobile-stat">
+      <span class="mobile-stat-label">Left over</span>
+      <span class="mobile-stat-val" id="m-surplus">—</span>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="calc.js"></script>
+<script src="budget.js"></script>
+</body>
+</html>
