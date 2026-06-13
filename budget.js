@@ -1064,66 +1064,94 @@
     return row[key] === 'b' ? (row.person_b_name || 'B') : (row.person_a_name || 'A');
   }
 
-  // A per-person item list, shown only when someone logged more than a single
-  // income that month (otherwise it just repeats the totals line above).
-  function incomeBreakdown(row) {
-    var items = Array.isArray(row.income_items) ? row.income_items : [];
-    var aItems = items.filter(function (it) { return it.owner === 'a'; });
-    var bItems = items.filter(function (it) { return it.owner === 'b'; });
-    if (aItems.length <= 1 && bItems.length <= 1) return '';
-    function side(name, its) {
-      if (!its.length) return '';
-      return name + ': ' + its.map(function (it) { return (it.label || 'Income') + ' ' + fmt(it.amount || 0); }).join(', ');
-    }
-    return [side(row.person_a_name || 'A', aItems), side(row.person_b_name || 'B', bItems)].filter(Boolean).join('  ·  ');
+  function transferText(row) {
+    if ((row.transfer_amount || 0) < 0.5) return 'Even — no transfer';
+    return personFromRow(row, 'transfer_from') + ' → ' + personFromRow(row, 'transfer_to') + '  ' + fmt(row.transfer_amount);
   }
 
+  function submittedLabel(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '');
+    if (!m) return '—';
+    return parseInt(m[3], 10) + ' ' + (MONTHS[parseInt(m[2], 10) - 1] || '?') + ' ' + m[1];
+  }
+
+  function detailRow(label, value) {
+    var r = document.createElement('div');
+    r.classList.add('detail-row');
+    var l = document.createElement('span'); l.classList.add('detail-label'); l.textContent = label;
+    var v = document.createElement('span'); v.classList.add('detail-val'); v.textContent = value;
+    r.appendChild(l); r.appendChild(v);
+    return r;
+  }
+
+  function detailSubhead(text) {
+    var h = document.createElement('div');
+    h.classList.add('detail-subhead');
+    h.textContent = text;
+    return h;
+  }
+
+  // The full submission, shown when its row is expanded.
+  function buildHistoryDetail(row) {
+    var detail = document.createElement('div');
+    detail.classList.add('history-detail');
+    detail.hidden = true;
+
+    detail.appendChild(detailRow('Submitted', submittedLabel(row.created_at)));
+    detail.appendChild(detailRow((row.person_a_name || 'A') + ' total', fmt(row.income_a || 0)));
+    detail.appendChild(detailRow((row.person_b_name || 'B') + ' total', fmt(row.income_b || 0)));
+    detail.appendChild(detailRow('Each takes home', fmt(row.equal_share || 0)));
+    detail.appendChild(detailRow('Transfer', transferText(row)));
+
+    var items = Array.isArray(row.income_items) ? row.income_items : [];
+    ['a', 'b'].forEach(function (owner) {
+      var its = items.filter(function (it) { return it.owner === owner; });
+      if (!its.length) return;
+      detail.appendChild(detailSubhead((owner === 'b' ? (row.person_b_name || 'B') : (row.person_a_name || 'A')) + ' income'));
+      its.forEach(function (it) { detail.appendChild(detailRow(it.label || 'Income', fmt(it.amount || 0))); });
+    });
+
+    if (row.note) {
+      detail.appendChild(detailSubhead('Note'));
+      var n = document.createElement('p');
+      n.classList.add('detail-note');
+      n.textContent = row.note;
+      detail.appendChild(n);
+    }
+
+    return detail;
+  }
+
+  // Collapsed row: month + the settle-up, click to expand the full submission.
   function buildHistoryItem(row) {
     var item = document.createElement('div');
     item.classList.add('history-item');
 
-    var meta = document.createElement('div');
-    meta.classList.add('history-meta');
+    var head = document.createElement('div');
+    head.classList.add('history-head');
 
-    var line = document.createElement('div');
-    line.classList.add('history-line');
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.classList.add('history-toggle');
+    toggle.setAttribute('aria-expanded', 'false');
 
     var month = document.createElement('span');
     month.classList.add('history-month');
     month.textContent = monthLabel(row.month);
-    line.appendChild(month);
+    toggle.appendChild(month);
 
     var amount = document.createElement('span');
     amount.classList.add('history-amount');
-    if ((row.transfer_amount || 0) < 0.5) {
-      amount.textContent = 'Even — no transfer';
-    } else {
-      amount.textContent = personFromRow(row, 'transfer_from') + ' → ' + personFromRow(row, 'transfer_to') + '  ' + fmt(row.transfer_amount);
-    }
-    line.appendChild(amount);
-    meta.appendChild(line);
+    amount.textContent = transferText(row);
+    toggle.appendChild(amount);
 
-    var sub = document.createElement('span');
-    sub.classList.add('history-sub');
-    sub.textContent = (row.person_a_name || 'A') + ' ' + fmt(row.income_a || 0) + ' · ' + (row.person_b_name || 'B') + ' ' + fmt(row.income_b || 0);
-    meta.appendChild(sub);
+    var chevron = document.createElement('span');
+    chevron.classList.add('history-chevron');
+    chevron.setAttribute('aria-hidden', 'true');
+    chevron.textContent = '⌄';
+    toggle.appendChild(chevron);
 
-    var brk = incomeBreakdown(row);
-    if (brk) {
-      var bEl = document.createElement('span');
-      bEl.classList.add('history-breakdown');
-      bEl.textContent = brk;
-      meta.appendChild(bEl);
-    }
-
-    if (row.note) {
-      var note = document.createElement('span');
-      note.classList.add('history-note');
-      note.textContent = row.note;
-      meta.appendChild(note);
-    }
-
-    item.appendChild(meta);
+    head.appendChild(toggle);
 
     var rm = document.createElement('button');
     rm.type = 'button';
@@ -1131,7 +1159,10 @@
     rm.dataset.id = row.id;
     rm.setAttribute('aria-label', 'Delete this submission');
     rm.textContent = '×';
-    item.appendChild(rm);
+    head.appendChild(rm);
+
+    item.appendChild(head);
+    item.appendChild(buildHistoryDetail(row));
 
     return item;
   }
@@ -1205,7 +1236,16 @@
     salaryHistory.addEventListener('click', function (e) {
       if (e.target === salaryHistory || e.target.closest('[data-close-history]')) { closeHistory(); return; }
       var del = e.target.closest('.history-delete');
-      if (del) deleteSubmission(del.dataset.id);
+      if (del) { deleteSubmission(del.dataset.id); return; }
+      var toggle = e.target.closest('.history-toggle');
+      if (toggle) {
+        var item = toggle.closest('.history-item');
+        var detail = item.querySelector('.history-detail');
+        var opening = detail.hidden;
+        detail.hidden = !opening;
+        toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+        item.classList.toggle('open', opening);
+      }
     });
   }
 

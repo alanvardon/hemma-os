@@ -955,31 +955,44 @@ input[type="month"]::-webkit-calendar-picker-indicator { cursor: pointer; opacit
 .history-empty { font-size: 13px; color: var(--ink-soft); text-align: center; padding: 1.5rem 0.5rem; line-height: 1.5; }
 
 .history-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.6rem;
-  padding: 0.75rem 0.85rem;
   background: var(--paper-warm);
   border: 1px solid var(--rule);
   border-radius: var(--r-md);
+  overflow: hidden;
 }
-.history-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.history-line { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; }
-.history-month { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.history-head { display: flex; align-items: stretch; }
+.history-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--ink);
+  text-align: left;
+  transition: background 0.15s;
+}
+.history-toggle:hover { background: var(--paper-card); }
+.history-month { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; margin-right: auto; }
 .history-amount {
   font-size: 12.5px;
   font-weight: 550;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
-  text-align: right;
   white-space: nowrap;
 }
-.history-sub { font-size: 11.5px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.history-breakdown { font-size: 11px; color: var(--ink-soft); line-height: 1.45; }
-.history-note { font-size: 11.5px; color: var(--ink-mid); font-style: italic; }
+.history-chevron { flex-shrink: 0; color: var(--ink-soft); font-size: 13px; transition: transform 0.18s; }
+.history-item.open .history-chevron { transform: rotate(180deg); }
+
 .history-delete {
   flex-shrink: 0;
+  align-self: center;
   width: 26px; height: 26px;
+  margin-right: 0.5rem;
   border: 1px solid transparent;
   background: transparent;
   color: var(--ink-faint);
@@ -990,6 +1003,27 @@ input[type="month"]::-webkit-calendar-picker-indicator { cursor: pointer; opacit
   transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .history-delete:hover { color: var(--warn); background: var(--warn-faint); border-color: var(--warn); }
+
+.history-detail {
+  padding: 0.55rem 0.85rem 0.8rem;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+}
+.history-detail[hidden] { display: none; }
+.detail-row { display: flex; justify-content: space-between; gap: 0.75rem; padding: 3px 0; font-size: 12px; }
+.detail-label { color: var(--ink-soft); min-width: 0; }
+.detail-val { color: var(--ink); font-weight: 550; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.detail-subhead {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-top: 0.55rem;
+  margin-bottom: 1px;
+}
+.detail-note { font-size: 12px; color: var(--ink-mid); font-style: italic; margin-top: 2px; line-height: 1.45; }
 
 /* ── Mobile key-figures bar ─────────────────────────────────── */
 .mobile-bar {
