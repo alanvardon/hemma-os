@@ -188,3 +188,33 @@ test('uncategorised / unknown joint costs collect in an Övrigt bucket', () => {
   });
   assert.ok(!clean.jointCategories.some(c => c.id === '_other'));
 });
+
+test('buildSubmission shapes a Supabase row; higher earner pays half the gap', () => {
+  const row = budget.buildSubmission({
+    month: '2026-06', incomeA: 52300, incomeB: 38900,
+    personAName: 'Alan', personBName: 'Partner', note: 'June'
+  });
+  assert.equal(row.month, '2026-06');
+  assert.equal(row.income_a, 52300);
+  assert.equal(row.income_b, 38900);
+  assert.equal(row.person_a_name, 'Alan');
+  assert.equal(row.person_b_name, 'Partner');
+  assert.equal(row.transfer_amount, (52300 - 38900) / 2); // 6700
+  assert.equal(row.transfer_from, 'a');
+  assert.equal(row.transfer_to, 'b');
+  assert.equal(row.equal_share, (52300 + 38900) / 2); // 45600
+  assert.equal(row.note, 'June');
+  // id + created_at are stamped by the data-access layer, not the pure builder
+  assert.ok(!('id' in row) && !('created_at' in row));
+});
+
+test('buildSubmission: equal salaries => no transfer; missing note => null; lower earner flips direction', () => {
+  const even = budget.buildSubmission({ month: '2026-07', incomeA: 40000, incomeB: 40000 });
+  assert.equal(even.transfer_amount, 0);
+  assert.equal(even.note, null);
+
+  const flipped = budget.buildSubmission({ incomeA: 30000, incomeB: 45000 });
+  assert.equal(flipped.transfer_from, 'b');
+  assert.equal(flipped.transfer_to, 'a');
+  assert.equal(flipped.transfer_amount, 7500);
+});

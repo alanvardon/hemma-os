@@ -109,6 +109,11 @@
         </div>
         <p class="pot-transfer-note" id="potTransferNote"></p>
       </div>
+
+      <div class="pot-actions">
+        <button type="button" class="btn btn-primary" id="submitSalaryBtn">Submit this month’s salaries</button>
+        <button type="button" class="btn btn-ghost" id="salaryHistoryBtn">History</button>
+      </div>
     </div>
 
     <!-- Section 2: Costs -->
@@ -306,6 +311,62 @@
   </div>
 </div>
 
+<!-- Submit this month's salaries -->
+<div class="modal-overlay" id="salaryModal" role="dialog" aria-modal="true" aria-label="Submit this month’s salaries" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <span class="modal-title">Submit this month’s salaries</span>
+      <button type="button" class="modal-close" data-close-salary aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-note">
+        Enter what you each actually earned this month. It's logged separately —
+        your budget baseline above stays exactly as it is.
+      </p>
+      <div class="field">
+        <label for="salaryMonth">Month</label>
+        <input type="month" id="salaryMonth">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="salaryIncomeA" data-name-for="a">Alan</label>
+          <input type="text" id="salaryIncomeA" inputmode="numeric" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="salaryIncomeB" data-name-for="b">Partner</label>
+          <input type="text" id="salaryIncomeB" inputmode="numeric" autocomplete="off">
+        </div>
+      </div>
+      <div class="field">
+        <label for="salaryNote">Note <span class="field-optional">(optional)</span></label>
+        <input type="text" id="salaryNote" placeholder="e.g. bonus, parental leave…" autocomplete="off">
+      </div>
+      <div class="salary-preview" id="salaryPreview">—</div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn btn-ghost" data-close-salary>Cancel</button>
+      <button type="button" class="btn btn-primary" id="salaryConfirmBtn">Confirm &amp; save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Submitted salary history -->
+<div class="modal-overlay" id="salaryHistory" role="dialog" aria-modal="true" aria-label="Submitted months" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <span class="modal-title">Submitted months</span>
+      <button type="button" class="modal-close" id="salaryHistoryClose" data-close-history aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="history-list" id="salaryHistoryList"></div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn btn-ghost" data-close-history>Close</button>
+      <button type="button" class="btn" id="salaryExportBtn">Download JSON</button>
+    </div>
+  </div>
+</div>
+
 <!-- Mobile key-figures bar -->
 <div class="mobile-bar">
   <div class="mobile-bar-inner">
@@ -322,6 +383,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="calc.js"></script>
+<script src="salary-store.js"></script>
 <script src="budget.js"></script>
 </body>
 </html>

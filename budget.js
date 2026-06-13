@@ -169,9 +169,33 @@
     };
   }
 
+  // Build a Supabase-shaped salary submission row from a month's two salaries.
+  // Pure: reuses computeBudget for the settle-up transfer + equal share, so the
+  // math has a single home. id + created_at are stamped later by the data-access
+  // layer (the DB would default them). note defaults to null.
+  function buildSubmission(input) {
+    input = input || {};
+    var incomeA = input.incomeA || 0;
+    var incomeB = input.incomeB || 0;
+    var r = computeBudget({ incomes: [{ amount: incomeA, owner: 'a' }, { amount: incomeB, owner: 'b' }] });
+    return {
+      month: input.month || '',
+      income_a: incomeA,
+      income_b: incomeB,
+      person_a_name: input.personAName || '',
+      person_b_name: input.personBName || '',
+      transfer_amount: r.transfer.amount,
+      transfer_from: r.transfer.from,
+      transfer_to: r.transfer.to,
+      equal_share: r.equalShare,
+      note: input.note ? input.note : null
+    };
+  }
+
   var api = {
     defaultState: defaultState,
-    computeBudget: computeBudget
+    computeBudget: computeBudget,
+    buildSubmission: buildSubmission
   };
 
   if (typeof module !== 'undefined') module.exports = api;
@@ -832,6 +856,230 @@
   if (expandBtn)    expandBtn.addEventListener('click', openChart);
   if (overlayClose) overlayClose.addEventListener('click', closeChart);
   if (overlay)      overlay.addEventListener('click', function (e) { if (e.target === overlay) closeChart(); });
+
+  // ── Monthly salary submission + history ───────────────────────────
+  // Salaries vary slightly month to month. The pot section stays a static
+  // budgeting baseline; submitting a month does NOT touch state.incomes — we
+  // only read the baseline to pre-fill, then write an append-only record via
+  // the data-access module (window.App.salaryStore).
+
+  var salaryStore = window.App.salaryStore;
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  var salaryModal       = document.getElementById('salaryModal');
+  var salaryHistory     = document.getElementById('salaryHistory');
+  var salaryMonthEl     = document.getElementById('salaryMonth');
+  var salaryIncomeAEl   = document.getElementById('salaryIncomeA');
+  var salaryIncomeBEl   = document.getElementById('salaryIncomeB');
+  var salaryNoteEl      = document.getElementById('salaryNote');
+  var salaryPreviewEl   = document.getElementById('salaryPreview');
+  var salaryHistoryList = document.getElementById('salaryHistoryList');
+  var openSalaryBtn     = document.getElementById('submitSalaryBtn');
+  var openHistoryBtn    = document.getElementById('salaryHistoryBtn');
+  var salaryConfirmBtn  = document.getElementById('salaryConfirmBtn');
+  var salaryExportBtn   = document.getElementById('salaryExportBtn');
+
+  function monthLabel(ym) {
+    var m = /^(\d{4})-(\d{2})$/.exec(ym || '');
+    if (!m) return ym || '—';
+    return (MONTHS[parseInt(m[2], 10) - 1] || '?') + ' ' + m[1];
+  }
+
+  function currentMonth() { return new Date().toISOString().slice(0, 7); } // YYYY-MM
+
+  function flashSaved() {
+    var el = document.getElementById('saveState');
+    el.classList.add('show');
+    clearTimeout(savedFlashTimer);
+    savedFlashTimer = setTimeout(function () { el.classList.remove('show'); }, 1400);
+  }
+
+  function readSalaryInputs() {
+    return {
+      month: salaryMonthEl.value || currentMonth(),
+      incomeA: App.calc.parseFormatted(salaryIncomeAEl.value),
+      incomeB: App.calc.parseFormatted(salaryIncomeBEl.value),
+      personAName: state.people[0],
+      personBName: state.people[1],
+      note: (salaryNoteEl.value || '').trim()
+    };
+  }
+
+  function updateSalaryPreview() {
+    var input = readSalaryInputs();
+    var sub = computeBudget({ incomes: [{ amount: input.incomeA, owner: 'a' }, { amount: input.incomeB, owner: 'b' }] });
+    var tr = sub.transfer;
+    if (tr.amount < 0.5) {
+      salaryPreviewEl.textContent = 'Even — nothing to transfer. You each take home ' + fmt(sub.equalShare) + '.';
+    } else {
+      salaryPreviewEl.replaceChildren(
+        nameStrong(tr.from), document.createTextNode(' pays '),
+        nameStrong(tr.to), document.createTextNode(' '),
+        moneyStrong(fmt(tr.amount)),
+        document.createTextNode(' · each takes home ' + fmt(sub.equalShare))
+      );
+    }
+  }
+
+  function onSalaryKey(e) { if (e.key === 'Escape') closeSalaryModal(); }
+
+  function openSalaryModal() {
+    var r = computeBudget(state); // read-only: pre-fill from the static baseline
+    salaryMonthEl.value = currentMonth();
+    salaryIncomeAEl.value = App.calc.formatWithSpaces(Math.round(r.incomeA));
+    salaryIncomeBEl.value = App.calc.formatWithSpaces(Math.round(r.incomeB));
+    salaryNoteEl.value = '';
+    updateSalaryPreview();
+    salaryModal.hidden = false;
+    document.addEventListener('keydown', onSalaryKey);
+    salaryIncomeAEl.focus();
+    salaryIncomeAEl.select();
+  }
+
+  function closeSalaryModal() {
+    salaryModal.hidden = true;
+    document.removeEventListener('keydown', onSalaryKey);
+    if (openSalaryBtn) openSalaryBtn.focus();
+  }
+
+  function submitSalary() {
+    var record = App.budget.buildSubmission(readSalaryInputs());
+    salaryStore.add(record).then(function () {
+      closeSalaryModal();
+      flashSaved();
+      if (salaryHistory && !salaryHistory.hidden) renderHistory();
+    });
+  }
+
+  function onHistoryKey(e) { if (e.key === 'Escape') closeHistory(); }
+
+  function openHistory() {
+    renderHistory();
+    salaryHistory.hidden = false;
+    document.addEventListener('keydown', onHistoryKey);
+    var close = document.getElementById('salaryHistoryClose');
+    if (close) close.focus();
+  }
+
+  function closeHistory() {
+    salaryHistory.hidden = true;
+    document.removeEventListener('keydown', onHistoryKey);
+    if (openHistoryBtn) openHistoryBtn.focus();
+  }
+
+  function personFromRow(row, key) {
+    return row[key] === 'b' ? (row.person_b_name || 'B') : (row.person_a_name || 'A');
+  }
+
+  function buildHistoryItem(row) {
+    var item = document.createElement('div');
+    item.classList.add('history-item');
+
+    var meta = document.createElement('div');
+    meta.classList.add('history-meta');
+
+    var line = document.createElement('div');
+    line.classList.add('history-line');
+
+    var month = document.createElement('span');
+    month.classList.add('history-month');
+    month.textContent = monthLabel(row.month);
+    line.appendChild(month);
+
+    var amount = document.createElement('span');
+    amount.classList.add('history-amount');
+    if ((row.transfer_amount || 0) < 0.5) {
+      amount.textContent = 'Even — no transfer';
+    } else {
+      amount.textContent = personFromRow(row, 'transfer_from') + ' → ' + personFromRow(row, 'transfer_to') + '  ' + fmt(row.transfer_amount);
+    }
+    line.appendChild(amount);
+    meta.appendChild(line);
+
+    var sub = document.createElement('span');
+    sub.classList.add('history-sub');
+    sub.textContent = (row.person_a_name || 'A') + ' ' + fmt(row.income_a || 0) + ' · ' + (row.person_b_name || 'B') + ' ' + fmt(row.income_b || 0);
+    meta.appendChild(sub);
+
+    if (row.note) {
+      var note = document.createElement('span');
+      note.classList.add('history-note');
+      note.textContent = row.note;
+      meta.appendChild(note);
+    }
+
+    item.appendChild(meta);
+
+    var rm = document.createElement('button');
+    rm.type = 'button';
+    rm.classList.add('history-delete');
+    rm.dataset.id = row.id;
+    rm.setAttribute('aria-label', 'Delete this submission');
+    rm.textContent = '×';
+    item.appendChild(rm);
+
+    return item;
+  }
+
+  function renderHistory() {
+    salaryStore.list().then(function (rows) {
+      salaryHistoryList.replaceChildren();
+      if (!rows.length) {
+        var empty = document.createElement('p');
+        empty.classList.add('history-empty');
+        empty.textContent = 'No months submitted yet — use “Submit this month’s salaries” to log one.';
+        salaryHistoryList.appendChild(empty);
+        return;
+      }
+      rows.forEach(function (row) { salaryHistoryList.appendChild(buildHistoryItem(row)); });
+    });
+  }
+
+  function deleteSubmission(id) {
+    if (!confirm('Delete this submission? This can’t be undone.')) return;
+    salaryStore.remove(id).then(renderHistory);
+  }
+
+  function downloadJSON() {
+    salaryStore.exportJSON().then(function (json) {
+      var blob = new Blob([json], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'salary-submissions.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  if (openSalaryBtn)    openSalaryBtn.addEventListener('click', openSalaryModal);
+  if (openHistoryBtn)   openHistoryBtn.addEventListener('click', openHistory);
+  if (salaryConfirmBtn) salaryConfirmBtn.addEventListener('click', submitSalary);
+  if (salaryExportBtn)  salaryExportBtn.addEventListener('click', downloadJSON);
+
+  if (salaryModal) {
+    salaryModal.addEventListener('click', function (e) {
+      if (e.target === salaryModal || e.target.closest('[data-close-salary]')) closeSalaryModal();
+    });
+    salaryModal.addEventListener('input', function (e) {
+      if (e.target === salaryIncomeAEl || e.target === salaryIncomeBEl || e.target === salaryMonthEl) updateSalaryPreview();
+    });
+    salaryModal.addEventListener('focusout', function (e) {
+      if (e.target === salaryIncomeAEl || e.target === salaryIncomeBEl) {
+        e.target.value = App.calc.formatWithSpaces(App.calc.parseFormatted(e.target.value));
+      }
+    });
+  }
+
+  if (salaryHistory) {
+    salaryHistory.addEventListener('click', function (e) {
+      if (e.target === salaryHistory || e.target.closest('[data-close-history]')) { closeHistory(); return; }
+      var del = e.target.closest('.history-delete');
+      if (del) deleteSubmission(del.dataset.id);
+    });
+  }
 
   // ── Theme (same storage key as the rest of Hemma) ────────────────
 
