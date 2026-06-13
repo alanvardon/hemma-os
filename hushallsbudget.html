@@ -367,11 +367,17 @@
       <button type="button" class="modal-close" id="salaryHistoryClose" data-close-history aria-label="Close">×</button>
     </div>
     <div class="modal-body">
+      <div id="salaryYearSummary"></div>
       <div class="history-list" id="salaryHistoryList"></div>
     </div>
-    <div class="modal-foot">
-      <button type="button" class="btn btn-ghost" data-close-history>Close</button>
-      <button type="button" class="btn" id="salaryExportBtn">Download JSON</button>
+    <div class="modal-foot modal-foot-split">
+      <div class="modal-foot-actions">
+        <button type="button" class="btn btn-ghost" id="salaryImportBtn">Import…</button>
+        <button type="button" class="btn btn-ghost" id="salaryExportCsvBtn">CSV</button>
+        <button type="button" class="btn btn-ghost" id="salaryExportBtn">JSON</button>
+      </div>
+      <button type="button" class="btn" data-close-history>Close</button>
+      <input type="file" id="salaryImportInput" accept="application/json,.json" hidden>
     </div>
   </div>
 </div>

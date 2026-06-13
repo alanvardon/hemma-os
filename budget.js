@@ -898,10 +898,14 @@
   var salaryNoteEl      = document.getElementById('salaryNote');
   var salaryPreviewEl   = document.getElementById('salaryPreview');
   var salaryHistoryList = document.getElementById('salaryHistoryList');
+  var salaryYearSummary = document.getElementById('salaryYearSummary');
   var openSalaryBtn     = document.getElementById('submitSalaryBtn');
   var openHistoryBtn    = document.getElementById('salaryHistoryBtn');
   var salaryConfirmBtn  = document.getElementById('salaryConfirmBtn');
   var salaryExportBtn   = document.getElementById('salaryExportBtn');
+  var salaryExportCsvBtn = document.getElementById('salaryExportCsvBtn');
+  var salaryImportBtn   = document.getElementById('salaryImportBtn');
+  var salaryImportInput = document.getElementById('salaryImportInput');
 
   function salaryListEl(owner) { return document.getElementById('salaryIncomeList' + owner.toUpperCase()); }
   function salarySubEl(owner)  { return document.getElementById('salarySub' + owner.toUpperCase()); }
@@ -921,24 +925,53 @@
     savedFlashTimer = setTimeout(function () { el.classList.remove('show'); }, 1400);
   }
 
+  // Lock background scroll while any modal is open (desktop already hides body
+  // overflow, but the mobile layout scrolls — this stops the page drifting
+  // behind an open dialog). Driven off whichever overlays are currently shown.
+  function syncScrollLock() {
+    var anyOpen = !!document.querySelector('.modal-overlay:not([hidden])');
+    document.documentElement.classList.toggle('modal-open', anyOpen);
+  }
+
   // Play the close animation, then hide. The .closing class drives the fade-out
-  // (see budget.css); we hide on animationend so the transition is visible.
+  // (see budget.css); we hide on animationend so the transition is visible. A
+  // timeout backs it up so the modal can never get stuck open if animationend
+  // never fires (interrupted animation, detached node, reduced-motion edge).
   function dismissModal(el) {
     if (!el || el.hidden) return;
     el.classList.add('closing');
+    var timer = null;
     var finish = function (e) {
       if (e && e.target !== el) return; // ignore the card's bubbling animationend
       el.removeEventListener('animationend', finish);
+      clearTimeout(timer);
       if (!el.classList.contains('closing')) return; // reopened mid-close
       el.classList.remove('closing');
       el.hidden = true;
+      syncScrollLock();
     };
     el.addEventListener('animationend', finish);
+    timer = setTimeout(finish, 260); // fallback (animations are 0.18s)
   }
 
   function showModal(el) {
     el.classList.remove('closing'); // cancel any in-flight fade-out before reopening
     el.hidden = false;
+    syncScrollLock();
+  }
+
+  // Keep Tab focus inside an open dialog (it's aria-modal, so focus must not
+  // escape to the obscured page behind it). Visible focusables only.
+  var FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  function trapTab(container, e) {
+    if (e.key !== 'Tab') return;
+    var nodes = Array.prototype.filter.call(container.querySelectorAll(FOCUSABLE), function (el) {
+      return el.offsetParent !== null; // skip hidden inputs / collapsed rows
+    });
+    if (!nodes.length) return;
+    var first = nodes[0], last = nodes[nodes.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
 
   // One editable income row in the modal (label + amount + remove). These rows
@@ -1011,6 +1044,8 @@
     var incomeB = sumItems(input.incomesB);
     salarySubEl('a').textContent = fmt(incomeA);
     salarySubEl('b').textContent = fmt(incomeB);
+    // Nothing to log until at least one income is entered.
+    if (salaryConfirmBtn) salaryConfirmBtn.disabled = (incomeA + incomeB) <= 0;
     var sub = computeBudget({ incomes: [{ amount: incomeA, owner: 'a' }, { amount: incomeB, owner: 'b' }] });
     var tr = sub.transfer;
     if (tr.amount < 0.5) {
@@ -1025,7 +1060,7 @@
     }
   }
 
-  function onSalaryKey(e) { if (e.key === 'Escape') closeSalaryModal(); }
+  function onSalaryKey(e) { if (e.key === 'Escape') closeSalaryModal(); else trapTab(salaryModal, e); }
 
   // Read-only snapshot of the static baseline income rows for a person, used to
   // pre-fill the modal. The user can then tweak amounts and add extra income
@@ -1056,15 +1091,23 @@
   }
 
   function submitSalary() {
-    var record = App.budget.buildSubmission(readSalaryInputs());
-    salaryStore.add(record).then(function () {
-      closeSalaryModal();
-      flashSaved();
-      if (salaryHistory && !salaryHistory.hidden) renderHistory();
+    var input = readSalaryInputs();
+    if (sumItems(input.incomesA) + sumItems(input.incomesB) <= 0) return; // nothing to log
+    var record = App.budget.buildSubmission(input);
+    // Append-only by design, but warn before a second entry for the same month
+    // so a stray double-submit doesn't quietly create a duplicate.
+    salaryStore.list().then(function (rows) {
+      var dupe = rows.some(function (r) { return r.month === record.month; });
+      if (dupe && !confirm('You’ve already logged ' + monthLabel(record.month) + '. Add another entry for it?')) return;
+      return salaryStore.add(record).then(function () {
+        closeSalaryModal();
+        flashSaved();
+        if (salaryHistory && !salaryHistory.hidden) renderHistory();
+      });
     });
   }
 
-  function onHistoryKey(e) { if (e.key === 'Escape') closeHistory(); }
+  function onHistoryKey(e) { if (e.key === 'Escape') closeHistory(); else trapTab(salaryHistory, e); }
 
   function openHistory() {
     renderHistory();
@@ -1087,6 +1130,99 @@
   function transferText(row) {
     if ((row.transfer_amount || 0) < 0.5) return 'Even — no transfer';
     return personFromRow(row, 'transfer_from') + ' → ' + personFromRow(row, 'transfer_to') + '  ' + fmt(row.transfer_amount);
+  }
+
+  // Signed settle-up for a row: positive = A pays B, negative = B pays A. Lets
+  // us net a whole year of transfers into one figure and drive the sparkline.
+  function signedTransfer(row) {
+    var amt = row.transfer_amount || 0;
+    return row.transfer_from === 'b' ? -amt : amt;
+  }
+
+  function netText(net, nameA, nameB) {
+    if (Math.abs(net) < 0.5) return 'Even over the year';
+    return (net > 0 ? nameA + ' → ' + nameB : nameB + ' → ' + nameA) + '  ' + fmt(Math.abs(net));
+  }
+
+  // A tiny SVG bar chart of each month's settle-up (chronological). Bars above
+  // the centre line = A pays B (accent), below = B pays A (copper); height is
+  // relative to the year's largest transfer. Colours come from CSS classes so
+  // the chart follows the theme. rows are oldest→newest.
+  function buildSparkline(rows) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var STEP = 14, BAR = 8, H = 40, mid = H / 2;
+    var W = Math.max(rows.length, 1) * STEP;
+    var maxAbs = rows.reduce(function (m, r) { return Math.max(m, Math.abs(signedTransfer(r))); }, 0) || 1;
+
+    var svg = document.createElementNS(NS, 'svg');
+    svg.classList.add('spark');
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Monthly settle-up across the year');
+
+    var axis = document.createElementNS(NS, 'line');
+    axis.setAttribute('x1', 0); axis.setAttribute('x2', W);
+    axis.setAttribute('y1', mid); axis.setAttribute('y2', mid);
+    axis.classList.add('spark-axis');
+    svg.appendChild(axis);
+
+    rows.forEach(function (r, i) {
+      var v = signedTransfer(r);
+      var h = Math.max(Math.abs(v) / maxAbs * (mid - 3), 0.6);
+      var rect = document.createElementNS(NS, 'rect');
+      rect.setAttribute('x', i * STEP + (STEP - BAR) / 2);
+      rect.setAttribute('width', BAR);
+      rect.setAttribute('y', v >= 0 ? mid - h : mid);
+      rect.setAttribute('height', h);
+      rect.setAttribute('rx', 1);
+      rect.classList.add(v >= 0 ? 'spark-up' : 'spark-down');
+      var title = document.createElementNS(NS, 'title');
+      title.textContent = monthLabel(r.month) + ' · ' + transferText(r);
+      rect.appendChild(title);
+      svg.appendChild(rect);
+    });
+    return svg;
+  }
+
+  // "2026 so far" card above the history list: per-person income totals, the
+  // net settle-up across the year, and the sparkline. Summarises the calendar
+  // year of the most recent submission. Returns null when there's nothing to show.
+  function buildYearSummary(rows) {
+    if (!rows.length) return null;
+    var year = String(rows[0].month || currentMonth()).slice(0, 4);
+    var yr = rows.filter(function (r) { return String(r.month || '').slice(0, 4) === year; });
+    if (!yr.length) return null;
+
+    var nameA = yr[0].person_a_name || 'A';
+    var nameB = yr[0].person_b_name || 'B';
+    var totalA = 0, totalB = 0, net = 0;
+    yr.forEach(function (r) {
+      totalA += r.income_a || 0;
+      totalB += r.income_b || 0;
+      net += signedTransfer(r);
+    });
+
+    var card = document.createElement('div');
+    card.classList.add('year-summary');
+
+    var head = document.createElement('div');
+    head.classList.add('year-summary-head');
+    var title = document.createElement('span');
+    title.classList.add('year-summary-title');
+    title.textContent = year + ' so far';
+    var count = document.createElement('span');
+    count.classList.add('year-summary-count');
+    count.textContent = yr.length + (yr.length === 1 ? ' month' : ' months');
+    head.appendChild(title);
+    head.appendChild(count);
+    card.appendChild(head);
+
+    card.appendChild(detailRow(nameA + ' income', fmt(totalA)));
+    card.appendChild(detailRow(nameB + ' income', fmt(totalB)));
+    card.appendChild(detailRow('Net settle-up', netText(net, nameA, nameB)));
+    card.appendChild(buildSparkline(yr.slice().reverse())); // oldest → newest
+    return card;
   }
 
   function submittedLabel(iso) {
@@ -1194,12 +1330,17 @@
   function renderHistory() {
     salaryStore.list().then(function (rows) {
       salaryHistoryList.replaceChildren();
+      if (salaryYearSummary) salaryYearSummary.replaceChildren();
       if (!rows.length) {
         var empty = document.createElement('p');
         empty.classList.add('history-empty');
         empty.textContent = 'No months submitted yet — use “Submit this month’s salaries” to log one.';
         salaryHistoryList.appendChild(empty);
         return;
+      }
+      if (salaryYearSummary) {
+        var summary = buildYearSummary(rows);
+        if (summary) salaryYearSummary.appendChild(summary);
       }
       rows.forEach(function (row) { salaryHistoryList.appendChild(buildHistoryItem(row)); });
     });
@@ -1210,24 +1351,60 @@
     salaryStore.remove(id).then(renderHistory);
   }
 
+  function download(filename, text, type) {
+    var blob = new Blob([text], { type: type });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   function downloadJSON() {
     salaryStore.exportJSON().then(function (json) {
-      var blob = new Blob([json], { type: 'application/json' });
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = 'salary-submissions.json';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      download('salary-submissions.json', json, 'application/json');
     });
   }
 
-  if (openSalaryBtn)    openSalaryBtn.addEventListener('click', openSalaryModal);
-  if (openHistoryBtn)   openHistoryBtn.addEventListener('click', openHistory);
-  if (salaryConfirmBtn) salaryConfirmBtn.addEventListener('click', submitSalary);
-  if (salaryExportBtn)  salaryExportBtn.addEventListener('click', downloadJSON);
+  function downloadCSV() {
+    salaryStore.exportCSV().then(function (csv) {
+      download('salary-submissions.csv', csv, 'text/csv');
+    });
+  }
+
+  // Restore from a previously-exported JSON file (merge, deduped by id).
+  function importFromFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      salaryStore.importJSON(String(reader.result)).then(function (added) {
+        renderHistory();
+        flashSaved();
+        alert(added > 0
+          ? 'Imported ' + added + ' submission' + (added === 1 ? '' : 's') + '.'
+          : 'Nothing new to import — those entries are already saved.');
+      }).catch(function (err) {
+        alert('Import failed: ' + (err && err.message ? err.message : 'unknown error'));
+      });
+    };
+    reader.readAsText(file);
+  }
+
+  if (openSalaryBtn)     openSalaryBtn.addEventListener('click', openSalaryModal);
+  if (openHistoryBtn)    openHistoryBtn.addEventListener('click', openHistory);
+  if (salaryConfirmBtn)  salaryConfirmBtn.addEventListener('click', submitSalary);
+  if (salaryExportBtn)   salaryExportBtn.addEventListener('click', downloadJSON);
+  if (salaryExportCsvBtn) salaryExportCsvBtn.addEventListener('click', downloadCSV);
+  if (salaryImportBtn && salaryImportInput) {
+    salaryImportBtn.addEventListener('click', function () { salaryImportInput.click(); });
+    salaryImportInput.addEventListener('change', function () {
+      importFromFile(salaryImportInput.files && salaryImportInput.files[0]);
+      salaryImportInput.value = ''; // allow re-importing the same file
+    });
+  }
 
   if (salaryModal) {
     salaryModal.addEventListener('click', function (e) {

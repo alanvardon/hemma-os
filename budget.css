@@ -181,6 +181,9 @@ body {
   color: var(--on-accent);
 }
 .btn-primary:hover { background: var(--accent-light); border-color: var(--accent-light); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:disabled:hover { background: var(--accent); border-color: var(--accent); } /* primary: no hover lift when disabled */
+.btn-ghost:disabled:hover { background: var(--paper-card); border-color: var(--rule); }
 
 .theme-toggle-btn {
   width: 36px; height: 36px;
@@ -833,6 +836,10 @@ input[type="month"]::-webkit-calendar-picker-indicator { cursor: pointer; opacit
 }
 .modal-overlay[hidden] { display: none; }
 
+/* Lock background scroll while a dialog is open (matters on the mobile layout,
+   where html/body scroll; desktop already hides overflow). JS toggles this. */
+html.modal-open, html.modal-open body { overflow: hidden; }
+
 /* Fade + drop out when closing (JS adds .closing, then hides on animationend) */
 .modal-overlay.closing { animation: overlay-out 0.18s ease forwards; }
 .modal-overlay.closing .modal-card { animation: modal-out 0.18s ease forwards; }
@@ -886,7 +893,12 @@ input[type="month"]::-webkit-calendar-picker-indicator { cursor: pointer; opacit
   gap: 0.6rem;
   padding: 0.9rem 1.3rem 1.1rem;
   border-top: 1px solid var(--rule);
+  flex-wrap: wrap;
 }
+/* History footer: export/import cluster on the left, Close on the right. */
+.modal-foot-split { justify-content: space-between; align-items: center; }
+.modal-foot-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.modal-foot-actions .btn { padding: 7px 12px; }
 
 /* Form fields inside the modal */
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 0.9rem; }
@@ -955,6 +967,35 @@ input[type="month"]::-webkit-calendar-picker-indicator { cursor: pointer; opacit
   transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .sal-row-remove:hover { color: var(--warn); background: var(--warn-faint); border-color: var(--warn); }
+
+/* ── Year-so-far summary (above the history list) ───────────── */
+.year-summary {
+  background: linear-gradient(160deg, var(--accent-faint), var(--paper-warm));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--rule));
+  border-radius: var(--r-md);
+  padding: 0.75rem 0.9rem 0.85rem;
+  margin-bottom: 0.85rem;
+}
+.year-summary-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.year-summary-title { font-family: var(--font-display); font-size: 1.1rem; color: var(--ink); }
+.year-summary-count {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.spark { width: 100%; height: 40px; margin-top: 0.6rem; display: block; }
+.spark-axis { stroke: var(--rule); stroke-width: 1; }
+.spark-up { fill: var(--accent); }
+.spark-down { fill: var(--copper); }
 
 /* ── Salary history list ────────────────────────────────────── */
 .history-list { display: flex; flex-direction: column; gap: 0.5rem; }

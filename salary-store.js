@@ -53,13 +53,17 @@
     return 'sub-' + new Date().getTime().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
   }
 
-  // Every submission, newest first (by created_at).
-  function list() {
-    var rows = _read().submissions.slice();
-    rows.sort(function (a, b) {
+  // Newest first (by created_at). Shared by list/exportJSON/exportCSV so every
+  // surface shows the same order.
+  function _sortedDesc(rows) {
+    return rows.slice().sort(function (a, b) {
       return String(b.created_at || '').localeCompare(String(a.created_at || ''));
     });
-    return Promise.resolve(rows);
+  }
+
+  // Every submission, newest first.
+  function list() {
+    return Promise.resolve(_sortedDesc(_read().submissions));
   }
 
   // Append one record. Stamps id + created_at (the DB would default these),
@@ -84,7 +88,59 @@
 
   // Pretty-printed export of the whole log, shaped for migration.
   function exportJSON() {
-    return Promise.resolve(JSON.stringify({ version: VERSION, submissions: _read().submissions }, null, 2));
+    return Promise.resolve(JSON.stringify({ version: VERSION, submissions: _sortedDesc(_read().submissions) }, null, 2));
+  }
+
+  // Merge submissions from a previously-exported JSON string (the { version,
+  // submissions } envelope or a bare array). Deduped by id so re-importing the
+  // same backup is idempotent — a restore, not a wipe. Resolves the number of
+  // NEW rows added; rejects on unparseable input.
+  function importJSON(text) {
+    return new Promise(function (resolve, reject) {
+      var parsed;
+      try { parsed = JSON.parse(text); } catch (_) { reject(new Error('That file isn’t valid JSON.')); return; }
+      var incoming = Array.isArray(parsed) ? parsed
+        : (parsed && Array.isArray(parsed.submissions)) ? parsed.submissions
+        : null;
+      if (!incoming) { reject(new Error('No submissions found in that file.')); return; }
+
+      var rows = _read().submissions;
+      var seen = {};
+      rows.forEach(function (r) { if (r && r.id) seen[r.id] = true; });
+
+      var added = 0;
+      incoming.forEach(function (raw) {
+        if (!raw || typeof raw !== 'object') return;
+        var row = _migrate(Object.assign({}, raw));
+        if (!row.id) row.id = _id();
+        if (seen[row.id]) return; // already have it — skip (idempotent restore)
+        if (!row.created_at) row.created_at = new Date().toISOString();
+        seen[row.id] = true;
+        rows.push(row);
+        added++;
+      });
+      _write(rows);
+      resolve(added);
+    });
+  }
+
+  // One CSV field: quote + double up inner quotes when it holds a comma, quote
+  // or newline (RFC 4180).
+  function _csvCell(v) {
+    var s = (v === null || v === undefined) ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  // Flat, spreadsheet-friendly export of the scalar summary columns (the
+  // itemised income breakdown stays in the JSON export). Newest first.
+  function exportCSV() {
+    var cols = ['month', 'created_at', 'person_a_name', 'income_a', 'person_b_name',
+      'income_b', 'transfer_from', 'transfer_to', 'transfer_amount', 'equal_share', 'note'];
+    var lines = [cols.join(',')];
+    _sortedDesc(_read().submissions).forEach(function (r) {
+      lines.push(cols.map(function (c) { return _csvCell(r[c]); }).join(','));
+    });
+    return Promise.resolve(lines.join('\r\n'));
   }
 
   window.App = window.App || {};
@@ -93,6 +149,8 @@
     list: list,
     add: add,
     remove: remove,
-    exportJSON: exportJSON
+    exportJSON: exportJSON,
+    importJSON: importJSON,
+    exportCSV: exportCSV
   };
 }());

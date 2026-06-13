@@ -14,7 +14,7 @@ pass() { printf '✓ PASS — %s\n' "$1"; }
 
 JS_FILES="calc.js dom.js storage.js modals.js charts.js app.js hero-canvas.js budget.js salary-store.js"
 ALL_FILES="index.html bostadskalkyl.html hushallsbudget.html $JS_FILES styles.css home.css budget.css"
-TEST_FILES="calc.test.js budget.test.js"
+TEST_FILES="calc.test.js budget.test.js salary-store.test.js"
 # Pages wired to app.js's id registry — only these are governed by check #5.
 CALC_INPUT_FILES="index.html bostadskalkyl.html"
 
