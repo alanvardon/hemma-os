@@ -229,7 +229,7 @@ test('addLoanPart stamps id + created_at and writes a versioned envelope', async
   const saved = await store.addLoanPart(m.makeLoanPart({ label: 'Del 1', start_balance: 1200000 }));
   assert.ok(saved.id && saved.created_at);
   const raw = JSON.parse(localStorage.getItem(store.STORAGE_KEY));
-  assert.equal(raw.version, 1);
+  assert.equal(raw.version, 3);
   assert.equal(raw.loan_parts.length, 1);
 });
 
@@ -284,7 +284,8 @@ test('settings default and saveSettings patches without clobbering', async () =>
   const { store } = freshStore();
   assert.deepEqual(await store.getSettings(), {
     property_name: '', owner_a_name: 'Alex', owner_b_name: 'Sam',
-    my_ownership_pct: 50, i_am: 'a', currency: 'SEK', ranteavdrag: true
+    my_ownership_pct: 50, i_am: 'a', currency: 'SEK', ranteavdrag: true,
+    household_income_yearly: null, import_presets: {}, track_contributions: false
   });
   const saved = await store.saveSettings({ owner_a_name: 'Mia', my_ownership_pct: 65 });
   assert.equal(saved.owner_a_name, 'Mia');
@@ -309,9 +310,9 @@ test('exportJSON / importJSON round-trip and merge idempotently by id', async ()
 
   const fresh = freshStore();
   const added = await fresh.store.importJSON(dump);
-  assert.deepEqual(added, { loan_parts: 1, payments: 1, valuations: 1 });
+  assert.deepEqual(added, { loan_parts: 1, payments: 1, valuations: 1, rate_changes: 0, contributions: 0 });
   const again = await fresh.store.importJSON(dump);
-  assert.deepEqual(again, { loan_parts: 0, payments: 0, valuations: 0 });
+  assert.deepEqual(again, { loan_parts: 0, payments: 0, valuations: 0, rate_changes: 0, contributions: 0 });
 
   await assert.rejects(() => fresh.store.importJSON('{ not json'), /valid JSON/);
   await assert.rejects(() => fresh.store.importJSON(JSON.stringify({ nope: true })), /No Bolånekoll data/);
@@ -362,4 +363,258 @@ test('the real Fastighetshypotek ledger imports correctly (interest-only)', asyn
   assert.equal(m.totalInterest(pays), 32357, 'sum of the eight Ränta rows');
   assert.equal(m.totalBalance(parts, pays), 1200000, 'interest-only → principal stays at 1.2M');
   assert.equal(m.totalAmortized(parts, pays), 0, 'nothing amortised');
+});
+
+// ════════════════════ Roadmap features ════════════════════
+
+// ── #1 Equity bridge ──
+test('partBalanceAsOf and totalBalanceAsOf bound entries by date', () => {
+  const part = { id: 'p1' };
+  const pays = [
+    { loan_part_id: 'p1', date: '2025-01-31', kind: 'payment', amount: 1, balance_after: 1000000 },
+    { loan_part_id: 'p1', date: '2025-06-30', kind: 'payment', amount: 1, balance_after: 900000 }
+  ];
+  assert.equal(m.partBalanceAsOf(part, pays, '2025-03-01'), 1000000, 'only the January row is in scope');
+  assert.equal(m.partBalanceAsOf(part, pays, '2025-12-31'), 900000);
+  assert.equal(m.totalBalanceAsOf([part], pays, '2025-03-01'), 1000000);
+});
+
+test('equityBridge splits equity growth into amortisation and appreciation', () => {
+  const parts = [{ id: 'p1' }];
+  const pays = [
+    { loan_part_id: 'p1', date: '2025-01-31', kind: 'payment', amount: 1, balance_after: 1200000 },
+    { loan_part_id: 'p1', date: '2025-12-31', kind: 'amortization', amount: 1, balance_after: 1100000 }
+  ];
+  const vals = [{ date: '2025-01-01', value: 3000000 }, { date: '2025-12-01', value: 3300000 }];
+  const b = m.equityBridge(parts, pays, vals, '2025-01-31', '2025-12-31');
+  assert.equal(b.start_equity, 1800000);
+  assert.equal(b.end_equity, 2200000);
+  assert.equal(b.amortization_gain, 100000, 'paid the balance down by 100k');
+  assert.equal(b.appreciation_gain, 300000, 'house rose 300k');
+  assert.equal(b.total_gain, 400000, 'and the two reconcile to Δequity');
+});
+
+// ── #2 Projection ──
+test('monthlyAmortizationRate reads the average principal drop off the timeline', () => {
+  const parts = [{ id: 'p1' }];
+  const pays = [
+    { loan_part_id: 'p1', date: '2025-01-31', kind: 'payment', amount: 1, balance_after: 1000000 },
+    { loan_part_id: 'p1', date: '2025-04-30', kind: 'amortization', amount: 1, balance_after: 970000 }
+  ];
+  assert.equal(m.monthlyAmortizationRate(parts, pays), 10000, '30k over 3 months');
+});
+
+test('projectBalance is flat for interest-only and amortises with extra', () => {
+  const flat = m.projectBalance([], [], { startBalance: 1200000, monthlyAmortization: 0 });
+  assert.equal(flat.flat, true);
+  assert.equal(flat.months, null);
+  const proj = m.projectBalance([], [], { startBalance: 100000, monthlyAmortization: 0, extraMonthly: 10000 });
+  assert.equal(proj.flat, false);
+  assert.equal(proj.months, 10);
+  assert.equal(proj.schedule[proj.schedule.length - 1].balance, 0);
+  const slow = m.projectBalance([], [], { startBalance: 5000000, monthlyAmortization: 1, maxMonths: 12 });
+  assert.equal(slow.months, null, 'debt still left at the horizon → not paid off');
+});
+
+test('projectMilestones reports months to LTV thresholds and payoff', () => {
+  const parts = [{ id: 'p1', start_balance: 1600000, start_date: '2025-01-01' }];
+  const vals = [{ date: '2025-01-01', value: 2000000 }];
+  const ms = m.projectMilestones(parts, [], vals, {}, { monthlyAmortization: 10000 });
+  assert.equal(ms.current_ltv, 80);
+  assert.equal(ms.ltv70_months, 20, '1.6M → 1.4M at 10k/mo');
+  assert.equal(ms.ltv50_months, 60, '1.6M → 1.0M at 10k/mo');
+  assert.equal(ms.payoff_months, 160);
+});
+
+// ── #3 Monthly cost ──
+test('monthlyCost groups interest + amortering per month, net of ränteavdrag', () => {
+  const pays = [
+    { date: '2025-03-31', kind: 'interest', amount: 4000 },
+    { date: '2025-03-15', kind: 'amortization', amount: 2000 },
+    { date: '2025-02-28', kind: 'interest', amount: 3000 }
+  ];
+  const rows = m.monthlyCost(pays);
+  assert.equal(rows.length, 2);
+  const march = rows[1];
+  assert.equal(march.gross, 6000);
+  assert.equal(march.deduction, 1200, '30% of 4000 interest');
+  assert.equal(march.net, 4800);
+  assert.equal(m.monthlyCost(pays, { ranteavdrag: false })[1].net, 6000, 'no deduction → net equals gross');
+});
+
+// ── #4 Fixed-rate expiry ──
+test('makeLoanPart carries bound-rate type and expiry; rörlig drops the date', () => {
+  const b = m.makeLoanPart({ label: 'B', rate_type: 'bunden', rate_binding_until: '2027-09-01' });
+  assert.equal(b.rate_type, 'bunden');
+  assert.equal(b.rate_binding_until, '2027-09-01');
+  const r = m.makeLoanPart({ label: 'R', rate_type: 'rörlig', rate_binding_until: '2027-09-01' });
+  assert.equal(r.rate_type, 'rörlig');
+  assert.equal(r.rate_binding_until, null, 'a variable rate has no binding date');
+  assert.equal(m.makeLoanPart({}).rate_type, 'rörlig', 'default is variable');
+});
+
+test('bindingStatus counts days to the villkorsändringsdag', () => {
+  const part = { rate_type: 'bunden', rate_binding_until: '2027-09-01' };
+  const s = m.bindingStatus(part, '2027-06-01');
+  assert.equal(s.bound, true);
+  assert.equal(s.days_left, 92);
+  assert.equal(s.expired, false);
+  assert.equal(m.bindingStatus(part, '2027-10-01').expired, true);
+  assert.equal(m.bindingStatus({ rate_type: 'rörlig' }, '2027-06-01').bound, false);
+});
+
+// ── #5 Rate history ──
+test('effectiveRate steps to the latest change, weightedAvgRate blends by balance', () => {
+  const part = { id: 'p1', interest_rate: 3.0 };
+  const changes = [{ loan_part_id: 'p1', date: '2025-06-01', rate: 2.5 }];
+  assert.equal(m.effectiveRate(part, changes, '2025-01-01'), 3.0, 'before the change → the part rate');
+  assert.equal(m.effectiveRate(part, changes, '2025-07-01'), 2.5, 'after → the changed rate');
+  assert.equal(m.effectiveRate(part, [], null), 3.0);
+
+  const p1 = { id: 'p1', interest_rate: 3.0 }, p2 = { id: 'p2', interest_rate: 1.0 };
+  const pays = [
+    { loan_part_id: 'p1', date: '2025-01-01', kind: 'payment', amount: 1, balance_after: 1000000 },
+    { loan_part_id: 'p2', date: '2025-01-01', kind: 'payment', amount: 1, balance_after: 3000000 }
+  ];
+  assert.equal(m.weightedAvgRate([p1, p2], [], pays), 1.5, '(3×1M + 1×3M) / 4M');
+});
+
+// ── #6 Amorteringskrav ──
+test('amorteringskrav encodes the LTV bands and the 4.5× income add-on', () => {
+  assert.equal(m.amorteringskrav(80, 0), 2);
+  assert.equal(m.amorteringskrav(60, 0), 1);
+  assert.equal(m.amorteringskrav(40, 0), 0);
+  assert.equal(m.amorteringskrav(80, 5), 3, '+1% over 4.5× income');
+  assert.equal(m.amorteringskrav(40, 5), 1);
+});
+
+test('amorteringskravStatus compares required vs observed amortisation', () => {
+  const parts = [{ id: 'p1', start_balance: 1600000, start_date: '2025-01-01' }];
+  const vals = [{ date: '2025-01-01', value: 2000000 }];
+  const s = m.amorteringskravStatus(parts, [], vals, { household_income_yearly: 0 });
+  assert.equal(s.ltv, 80);
+  assert.equal(s.required_pct, 2);
+  assert.equal(s.required_annual, 32000);
+  assert.equal(s.meets, false, 'interest-only meets nothing');
+  assert.equal(s.exempt, false);
+  const withIncome = m.amorteringskravStatus(parts, [], vals, { household_income_yearly: 300000 });
+  assert.equal(withIncome.required_pct, 3, 'debt is >4.5× income → +1%');
+});
+
+// ── #7 Import presets ──
+test('header presets round-trip by name and survive reordered columns', () => {
+  const headers = ['Bokföringsdag', 'Specifikation', 'Belopp', 'Saldo'];
+  const mapping = { date: 0, specification: 1, amount: 2, balance: 3, loan_number: null };
+  const names = m.mappingToNames(headers, mapping);
+  assert.equal(names.amount, 'Belopp');
+  assert.deepEqual(m.applyPreset(headers, names), mapping, 'resolves back to the same indices');
+  const reordered = ['Saldo', 'Belopp', 'Specifikation', 'Bokföringsdag'];
+  assert.deepEqual(m.applyPreset(reordered, names), { date: 3, specification: 2, amount: 1, balance: 0, loan_number: null });
+  assert.equal(m.headerSignature(headers), m.headerSignature(reordered), 'same column set → same signature');
+});
+
+// ── #8 CSV export ──
+test('paymentsToCsv emits a semicolon file with a header and escapes specials', () => {
+  const parts = [{ id: 'p1', label: 'Del 1' }, { id: 'p2', label: 'A;B' }];
+  const pays = [
+    { loan_part_id: 'p1', date: '2025-03-31', kind: 'interest', amount: 4323, balance_after: 1200000, paid_by: 'joint', source: 'import:bank.csv' },
+    { loan_part_id: 'p2', date: '2025-03-31', kind: 'amortization', amount: 1000, balance_after: null, paid_by: 'a', source: 'manual' }
+  ];
+  const lines = m.paymentsToCsv(pays, parts).split('\n');
+  assert.equal(lines[0], 'Date;Loan part;Type;Amount;Balance after;Paid by;Source');
+  assert.equal(lines[1], '2025-03-31;Del 1;interest;4323;1200000;joint;import:bank.csv');
+  assert.equal(lines[2], '2025-03-31;"A;B";amortization;1000;;a;manual', 'a label with ; is quoted, null balance blank');
+});
+
+// ── #9 Reconciliation ──
+test('reconcileBalance reports drift between derived and the imported Saldo', () => {
+  const parts = [{ id: 'p1', start_balance: 1000000 }, { id: 'p2', start_balance: 500000 }];
+  const pays = [
+    { loan_part_id: 'p1', date: '2025-02-01', kind: 'amortization', amount: 30000 },
+    { loan_part_id: 'p1', date: '2025-03-01', kind: 'payment', amount: 1, balance_after: 980000 }
+  ];
+  const r = m.reconcileBalance(parts, pays);
+  assert.equal(r[0].derived, 970000, '1.0M − 30k amortering');
+  assert.equal(r[0].csv, 980000);
+  assert.equal(r[0].drift, -10000);
+  assert.equal(r[1].csv, null, 'no payments → nothing to reconcile');
+  assert.equal(r[1].drift, null);
+});
+
+// ── #10 Contribution-based ownership ──
+test('normPaidBy and makePayment default paid_by to joint', () => {
+  assert.equal(m.normPaidBy('a'), 'a');
+  assert.equal(m.normPaidBy('x'), 'joint');
+  assert.equal(m.makePayment({ paid_by: 'b' }).paid_by, 'b');
+  assert.equal(m.makePayment({}).paid_by, 'joint');
+});
+
+test('contributionSplit builds ownership from amortering + lump sums', () => {
+  const settings = { i_am: 'a', my_ownership_pct: 50 };
+  const pays = [
+    { kind: 'amortization', amount: 10000, paid_by: 'a' },
+    { kind: 'amortization', amount: 5000, paid_by: 'b' },
+    { kind: 'amortization', amount: 4000, paid_by: 'joint' },
+    { kind: 'interest', amount: 9999, paid_by: 'a' }
+  ];
+  const contribs = [
+    { owner: 'a', amount: 200000 },
+    { owner: 'b', amount: 100000 },
+    { owner: 'joint', amount: 50000 }
+  ];
+  const split = m.contributionSplit(pays, contribs, settings);
+  assert.equal(split.a, 237000, '200k + 10k + half of 54k joint');
+  assert.equal(split.b, 132000);
+  assert.equal(split.total, 369000);
+  assert.equal(split.a_pct, 64.23);
+});
+
+test('settlement trues contributions up to the target ownership split', () => {
+  const settings = { i_am: 'a', my_ownership_pct: 50 };
+  const pays = [
+    { kind: 'amortization', amount: 10000, paid_by: 'a' },
+    { kind: 'amortization', amount: 5000, paid_by: 'b' },
+    { kind: 'amortization', amount: 4000, paid_by: 'joint' }
+  ];
+  const contribs = [{ owner: 'a', amount: 200000 }, { owner: 'b', amount: 100000 }, { owner: 'joint', amount: 50000 }];
+  const s = m.settlement(pays, contribs, settings);
+  assert.equal(s.total, 369000);
+  assert.equal(s.target_a, 184500);
+  assert.equal(s.a_over, 52500, 'A has put in more than a 50% share');
+  assert.equal(s.owes, 'b');
+  assert.equal(s.amount, 52500);
+});
+
+// ── store: new collections ──
+test('rate-change CRUD round-trips and cascades when its loan part is deleted', async () => {
+  const { store } = freshStore();
+  const p = await store.addLoanPart({ label: 'P' });
+  const rc = await store.addRateChange({ loan_part_id: p.id, date: '2025-06-01', rate: 2.5 });
+  assert.ok(rc.id && rc.created_at);
+  assert.equal((await store.listRateChanges()).length, 1);
+  const upd = await store.updateRateChange(rc.id, { rate: 2.25 });
+  assert.equal(upd.rate, 2.25);
+  await store.removeLoanPart(p.id);
+  assert.equal((await store.listRateChanges()).length, 0, 'rate changes cascade with the part');
+});
+
+test('contribution CRUD round-trips', async () => {
+  const { store } = freshStore();
+  const c = await store.addContribution({ owner: 'a', date: '2025-01-01', amount: 200000 });
+  assert.ok(c.id && c.created_at);
+  const upd = await store.updateContribution(c.id, { amount: 250000 });
+  assert.equal(upd.amount, 250000);
+  assert.equal(await store.removeContribution(c.id), 0);
+});
+
+test('exportJSON / importJSON carry rate changes and contributions', async () => {
+  const { store } = freshStore();
+  await store.addLoanPart({ id: 'p1', label: 'P', created_at: '2025-01-01T00:00:00.000Z' });
+  await store.addRateChange({ id: 'r1', loan_part_id: 'p1', date: '2025-06-01', rate: 2.5, created_at: '2025-06-01T00:00:00.000Z' });
+  await store.addContribution({ id: 'c1', owner: 'a', date: '2025-01-01', amount: 200000, created_at: '2025-01-01T00:00:00.000Z' });
+  const dump = await store.exportJSON();
+  const fresh = freshStore();
+  const added = await fresh.store.importJSON(dump);
+  assert.equal(added.rate_changes, 1);
+  assert.equal(added.contributions, 1);
 });

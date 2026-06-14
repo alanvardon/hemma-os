@@ -33,7 +33,10 @@
       my_ownership_pct: 50,
       i_am: 'a',
       currency: 'SEK',
-      ranteavdrag: true
+      ranteavdrag: true,
+      household_income_yearly: null,
+      import_presets: {},
+      track_contributions: false
     };
   }
   function otherOwner(p) { return p === 'a' ? 'b' : 'a'; }
@@ -156,12 +159,16 @@
   function makeLoanPart(partial) {
     partial = partial || {};
     var rate = partial.interest_rate;
+    var rt = partial.rate_type === 'bunden' ? 'bunden' : 'rörlig';
     return {
       label: partial.label || '',
       loan_number: partial.loan_number || '',
       start_balance: _round2(Number(partial.start_balance) || 0),
       start_date: partial.start_date || '',
       interest_rate: (rate == null || rate === '') ? null : Number(rate),
+      rate_type: rt,
+      // Only a bound (bunden) rate carries an expiry — the villkorsändringsdag.
+      rate_binding_until: (rt === 'bunden' && partial.rate_binding_until) ? String(partial.rate_binding_until) : null,
       archived: !!partial.archived
     };
   }
@@ -181,9 +188,13 @@
       description: partial.description || '',
       amount: amount,
       balance_after: (bal == null || bal === '') ? null : _round2(Math.abs(Number(bal) || 0)),
+      // Who paid this row. Amortering attributed to a single owner builds that
+      // owner's contribution share; 'joint' (the default) splits by ownership %.
+      paid_by: normPaidBy(partial.paid_by),
       source: partial.source || 'manual'
     };
   }
+  function normPaidBy(v) { return v === 'a' ? 'a' : (v === 'b' ? 'b' : 'joint'); }
 
   // ── Duplicate spotting on re-import ───────────────────────────────────────
   function paymentFingerprint(p) {
@@ -453,6 +464,334 @@
     });
   }
 
+  // ════════════════════════════════════════════════════════════════════════
+  // Roadmap features — equity bridge, projection, cost, bound rates, rate
+  // history, amorteringskrav, import presets, CSV export, reconciliation and
+  // contribution-based ownership. All pure; each is unit-tested.
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ── Date helpers (browser uses new Date(); tests pass explicit dates) ──────
+  function _todayISO() {
+    var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  function _daysBetween(fromISO, toISO) {
+    var a = new Date(String(fromISO) + 'T00:00:00');
+    var b = new Date(String(toISO) + 'T00:00:00');
+    if (isNaN(a.getTime()) || isNaN(b.getTime())) return null;
+    return Math.round((b.getTime() - a.getTime()) / 86400000);
+  }
+
+  // ── A part's balance as of a date (mirrors partBalance, date-bounded) ──────
+  // Used by the equity bridge and the blended-rate / projection helpers, where
+  // we need the outstanding debt at a point in time, not just today's.
+  function partBalanceAsOf(part, payments, asOf) {
+    if (!part) return 0;
+    var entries = (payments || []).filter(function (p) {
+      if (!p || p.loan_part_id !== part.id) return false;
+      if (asOf && p.date && String(p.date) > asOf) return false;
+      return true;
+    });
+    var withBal = entries.filter(function (p) { return p.balance_after != null && p.date; });
+    if (withBal.length) {
+      var latestDate = withBal.reduce(function (mx, p) { var d = String(p.date || ''); return d > mx ? d : mx; }, '');
+      var sameDate = withBal.filter(function (p) { return String(p.date || '') === latestDate; });
+      var bal = sameDate.reduce(function (mn, p) { var b = Number(p.balance_after) || 0; return (mn == null || b < mn) ? b : mn; }, null);
+      return Math.max(0, _round2(bal));
+    }
+    var start = Number(part.start_balance) || 0;
+    var startDate = String(part.start_date || '');
+    var amort = 0;
+    entries.forEach(function (p) {
+      if (p.kind !== 'amortization') return;
+      if (startDate && p.date && String(p.date) < startDate) return;
+      amort += Number(p.amount) || 0;
+    });
+    return Math.max(0, _round2(start - amort));
+  }
+  function totalBalanceAsOf(parts, payments, asOf) {
+    return _round2((parts || []).reduce(function (s, p) {
+      return (!p || p.archived) ? s : s + partBalanceAsOf(p, payments, asOf);
+    }, 0));
+  }
+
+  // #1 — Equity bridge. Decomposes the change in equity over a window into the
+  // part you paid down (amortisation) and the part the market gave you
+  // (appreciation). The two reconcile exactly to Δequity:
+  //   Δequity = (value_to − value_from) + (balance_from − balance_to).
+  function equityBridge(parts, payments, valuations, fromDate, toDate) {
+    var balFrom = totalBalanceAsOf(parts, payments, fromDate);
+    var balTo = totalBalanceAsOf(parts, payments, toDate);
+    var valFrom = propertyValue(valuations, fromDate);
+    var valTo = propertyValue(valuations, toDate);
+    var startEq = _round2(valFrom - balFrom);
+    var endEq = _round2(valTo - balTo);
+    return {
+      from: fromDate || '', to: toDate || '',
+      start_value: _round2(valFrom), end_value: _round2(valTo),
+      start_balance: balFrom, end_balance: balTo,
+      start_equity: startEq, end_equity: endEq,
+      amortization_gain: _round2(balFrom - balTo),
+      appreciation_gain: _round2(valTo - valFrom),
+      total_gain: _round2(endEq - startEq)
+    };
+  }
+
+  // #2 — Projection. The average monthly principal reduction observed so far,
+  // read off the balance timeline. Interest-only loans return 0 (flat).
+  function monthlyAmortizationRate(parts, payments) {
+    var tl = balanceTimeline(parts, payments);
+    if (tl.length < 2) return 0;
+    var drop = tl[0].balance - tl[tl.length - 1].balance;
+    var months = tl.length - 1;
+    if (drop <= 0 || months <= 0) return 0;
+    return _round2(drop / months);
+  }
+  // Project the outstanding balance forward at a chosen monthly amortisation
+  // (observed baseline + any extra). `flat` means the balance never moves —
+  // the honest verdict for an interest-only loan with no extra payment.
+  function projectBalance(parts, payments, opts) {
+    opts = opts || {};
+    var balance = opts.startBalance != null ? Number(opts.startBalance) : totalBalance(parts, payments);
+    var base = opts.monthlyAmortization != null ? Number(opts.monthlyAmortization) : monthlyAmortizationRate(parts, payments);
+    var perMonth = _round2((Number(base) || 0) + (Number(opts.extraMonthly) || 0));
+    var horizon = opts.maxMonths || 1200;
+    if (perMonth <= 0) return { flat: true, per_month: perMonth, months: null, start_balance: _round2(balance), schedule: [] };
+    var schedule = [];
+    var b = balance, months = 0;
+    while (b > 0 && months < horizon) {
+      b = _round2(b - perMonth);
+      months++;
+      if (b < 0) b = 0;
+      schedule.push({ month_index: months, balance: b });
+    }
+    // months is the payoff month only if the balance actually reached zero;
+    // hitting the horizon with debt left means "not within the horizon".
+    return { flat: false, per_month: perMonth, months: b <= 0 ? months : null, start_balance: _round2(balance), schedule: schedule };
+  }
+  // Months until 70% / 50% LTV and full payoff, at the chosen amortisation.
+  // Property value is held flat (future appreciation is unknown).
+  function projectMilestones(parts, payments, valuations, settings, opts) {
+    opts = opts || {};
+    var value = propertyValue(valuations);
+    var proj = projectBalance(parts, payments, opts);
+    var startBal = proj.start_balance;
+    function monthsToLtv(target) {
+      if (value <= 0) return null;
+      var targetBal = value * target / 100;
+      if (startBal <= targetBal) return 0;
+      if (proj.flat) return null;
+      for (var i = 0; i < proj.schedule.length; i++) {
+        if (proj.schedule[i].balance <= targetBal) return proj.schedule[i].month_index;
+      }
+      return null;
+    }
+    return {
+      flat: proj.flat, per_month: proj.per_month,
+      payoff_months: proj.flat ? null : proj.months,
+      ltv70_months: monthsToLtv(70),
+      ltv50_months: monthsToLtv(50),
+      current_ltv: loanToValue(startBal, value)
+    };
+  }
+
+  // #3 — Real monthly cost: what actually leaves the account each month
+  // (interest + amortering), and the same net of the estimated ränteavdrag.
+  function monthlyCost(payments, opts) {
+    opts = opts || {};
+    var useDeduction = opts.ranteavdrag !== false;
+    var byMonth = {};
+    (payments || []).forEach(function (p) {
+      if (!p) return;
+      var mk = monthKey(p.date);
+      if (!mk) return;
+      if (!byMonth[mk]) byMonth[mk] = { interest: 0, amortization: 0 };
+      if (p.kind === 'interest') byMonth[mk].interest += Number(p.amount) || 0;
+      else if (p.kind === 'amortization') byMonth[mk].amortization += Number(p.amount) || 0;
+    });
+    return Object.keys(byMonth).sort().map(function (mk) {
+      var r = byMonth[mk];
+      var gross = _round2(r.interest + r.amortization);
+      // A single month's interest is well under the 100k threshold, so the
+      // estimate is the 30% band — computed via ranteavdrag for consistency.
+      var deduction = useDeduction ? ranteavdrag(r.interest) : 0;
+      return {
+        month: mk, label: monthLabel(mk),
+        interest: _round2(r.interest), amortization: _round2(r.amortization),
+        gross: gross, deduction: deduction, net: _round2(gross - deduction)
+      };
+    });
+  }
+
+  // #4 — Fixed-rate (bunden) expiry. Days until the villkorsändringsdag.
+  function bindingStatus(part, asOf) {
+    var res = { bound: false, until: null, days_left: null, expired: false };
+    if (!part || part.rate_type !== 'bunden' || !part.rate_binding_until) return res;
+    res.bound = true;
+    res.until = String(part.rate_binding_until);
+    var days = _daysBetween(asOf || _todayISO(), res.until);
+    res.days_left = days;
+    res.expired = days != null && days < 0;
+    return res;
+  }
+
+  // #5 — Rate history. A part's effective rate on a date is the latest rate
+  // change on/before it, falling back to the part's own interest_rate.
+  function effectiveRate(part, rateChanges, asOf) {
+    var pid = part && part.id;
+    var changes = (rateChanges || []).filter(function (c) {
+      return c && c.loan_part_id === pid && c.rate != null && (!asOf || !c.date || String(c.date) <= asOf);
+    });
+    if (changes.length) {
+      changes = changes.slice().sort(function (a, b) { return String(a.date || '').localeCompare(String(b.date || '')); });
+      return Number(changes[changes.length - 1].rate);
+    }
+    return part && part.interest_rate != null ? Number(part.interest_rate) : null;
+  }
+  // Blended rate across active parts, weighted by each part's balance.
+  function weightedAvgRate(parts, rateChanges, payments, asOf) {
+    var num = 0, den = 0;
+    (parts || []).forEach(function (p) {
+      if (!p || p.archived) return;
+      var bal = asOf ? partBalanceAsOf(p, payments, asOf) : partBalance(p, payments);
+      var rate = effectiveRate(p, rateChanges, asOf);
+      if (rate == null || bal <= 0) return;
+      num += rate * bal; den += bal;
+    });
+    return den > 0 ? _round2(num / den) : 0;
+  }
+
+  // #6 — Amorteringskrav. Sweden's required amortisation as a % of the loan per
+  // year: >70% LTV → 2%, 50–70% → 1%, plus 1% if debt exceeds 4.5× gross income.
+  function amorteringskrav(ltv, debtToIncome) {
+    var l = Number(ltv) || 0;
+    var required = 0;
+    if (l > 70) required = 2;
+    else if (l > 50) required = 1;
+    if (Number(debtToIncome) > 4.5) required += 1;
+    return required;
+  }
+  function amorteringskravStatus(parts, payments, valuations, settings) {
+    settings = settings || {};
+    var balance = totalBalance(parts, payments);
+    var value = propertyValue(valuations);
+    var ltv = loanToValue(balance, value);
+    var income = Number(settings.household_income_yearly) || 0;
+    var dti = income > 0 ? _round2(balance / income) : 0;
+    var requiredPct = amorteringskrav(ltv, income > 0 ? dti : 0);
+    var requiredAnnual = _round2(balance * requiredPct / 100);
+    var actualAnnual = _round2(monthlyAmortizationRate(parts, payments) * 12);
+    return {
+      ltv: ltv, dti: dti, required_pct: requiredPct,
+      required_annual: requiredAnnual, actual_annual: actualAnnual,
+      meets: actualAnnual + 0.5 >= requiredAnnual,
+      exempt: requiredPct === 0,
+      has_income: income > 0, has_value: value > 0
+    };
+  }
+
+  // #7 — Import presets. A header signature keys a remembered column mapping so
+  // a recurring bank export re-maps itself. Mappings are stored by header NAME
+  // (order-independent) and resolved back to indices against a given header row.
+  function headerSignature(headers) {
+    return (headers || []).map(function (h) { return String(h == null ? '' : h).toLowerCase().trim(); })
+      .filter(Boolean).sort().join('|');
+  }
+  function mappingToNames(headers, mapping) {
+    mapping = mapping || {};
+    function nm(i) { return (i == null || headers[i] == null) ? null : String(headers[i]); }
+    return { date: nm(mapping.date), specification: nm(mapping.specification), amount: nm(mapping.amount), balance: nm(mapping.balance), loan_number: nm(mapping.loan_number) };
+  }
+  function applyPreset(headers, names) {
+    names = names || {};
+    var lower = (headers || []).map(function (h) { return String(h == null ? '' : h).toLowerCase().trim(); });
+    function idx(name) { if (name == null) return null; var i = lower.indexOf(String(name).toLowerCase().trim()); return i < 0 ? null : i; }
+    return { date: idx(names.date), specification: idx(names.specification), amount: idx(names.amount), balance: idx(names.balance), loan_number: idx(names.loan_number) };
+  }
+
+  // #8 — CSV export. Semicolon-delimited, the Swedish-locale default that the
+  // importer round-trips, so it re-opens cleanly in Excel/Sheets.
+  function _csvCell(v) {
+    var s = String(v == null ? '' : v);
+    return /[";\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function paymentsToCsv(payments, parts) {
+    var nameById = {};
+    (parts || []).forEach(function (p) { if (p) nameById[p.id] = p.label || ''; });
+    var rows = [['Date', 'Loan part', 'Type', 'Amount', 'Balance after', 'Paid by', 'Source']];
+    (payments || []).forEach(function (p) {
+      if (!p) return;
+      rows.push([
+        p.date || '', nameById[p.loan_part_id] || p.loan_part_id || '', p.kind || '',
+        (p.amount != null ? p.amount : ''), (p.balance_after != null ? p.balance_after : ''),
+        p.paid_by || 'joint', p.source || ''
+      ]);
+    });
+    return rows.map(function (r) { return r.map(_csvCell).join(';'); }).join('\n');
+  }
+
+  // #9 — Reconciliation. The derived balance (start − Σ amortering) vs the
+  // imported running Saldo we trust. A non-zero drift on a part flags a partial
+  // or malformed import. Only meaningful when a start balance is set.
+  function reconcileBalance(parts, payments) {
+    return (parts || []).filter(function (p) { return p && !p.archived; }).map(function (p) {
+      var entries = (payments || []).filter(function (x) { return x && x.loan_part_id === p.id; });
+      var withBal = entries.filter(function (x) { return x.balance_after != null; });
+      var csv = null;
+      if (withBal.length) {
+        var latestDate = withBal.reduce(function (mx, x) { var d = String(x.date || ''); return d > mx ? d : mx; }, '');
+        var sameDate = withBal.filter(function (x) { return String(x.date || '') === latestDate; });
+        csv = sameDate.reduce(function (mn, x) { var b = Number(x.balance_after) || 0; return (mn == null || b < mn) ? b : mn; }, null);
+      }
+      var hasStart = Number(p.start_balance) > 0;
+      var amort = 0;
+      entries.forEach(function (x) { if (x.kind === 'amortization') amort += Number(x.amount) || 0; });
+      var derived = hasStart ? _round2(Number(p.start_balance) - amort) : null;
+      var drift = (csv != null && derived != null) ? _round2(derived - csv) : null;
+      return { loan_part_id: p.id, label: p.label || '', csv: csv != null ? _round2(csv) : null, derived: derived, drift: drift };
+    });
+  }
+
+  // #10 — Contribution-based ownership. Amortering (and lump-sum contributions)
+  // attributed to one owner build that owner's share; 'joint' rows split by the
+  // ownership %. Interest is a cost, not equity, so it never counts here.
+  function contributionSplit(payments, contributions, settings) {
+    settings = settings || {};
+    var totals = { a: 0, b: 0, joint: 0 };
+    (contributions || []).forEach(function (c) {
+      if (!c) return;
+      totals[normPaidBy(c.owner)] += Number(c.amount) || 0;
+    });
+    (payments || []).forEach(function (p) {
+      if (!p || p.kind !== 'amortization') return;
+      totals[normPaidBy(p.paid_by)] += Number(p.amount) || 0;
+    });
+    var pct = ownerPercents(settings);
+    var aShareJoint = _round2(totals.joint * (pct.a || 50) / 100);
+    var aTotal = _round2(totals.a + aShareJoint);
+    var bTotal = _round2(totals.b + (totals.joint - aShareJoint));
+    var sum = _round2(aTotal + bTotal);
+    return {
+      a: aTotal, b: bTotal, joint: _round2(totals.joint), total: sum,
+      a_pct: sum > 0 ? _round2(aTotal / sum * 100) : (pct.a || 50),
+      b_pct: sum > 0 ? _round2(bTotal / sum * 100) : (pct.b || 50)
+    };
+  }
+  // Who owes whom to bring contributions back to the target ownership split.
+  function settlement(payments, contributions, settings) {
+    settings = settings || {};
+    var split = contributionSplit(payments, contributions, settings);
+    var pct = ownerPercents(settings);
+    var targetA = _round2(split.total * (pct.a || 50) / 100);
+    var aOver = _round2(split.a - targetA);
+    return {
+      a_contributed: split.a, b_contributed: split.b, total: split.total,
+      target_a: targetA, a_over: aOver,
+      owes: aOver > 0.005 ? 'b' : (aOver < -0.005 ? 'a' : null),
+      amount: _round2(Math.abs(aOver))
+    };
+  }
+
   var api = {
     defaultSettings: defaultSettings,
     otherOwner: otherOwner,
@@ -464,10 +803,13 @@
     classifyKind: classifyKind,
     makeLoanPart: makeLoanPart,
     makePayment: makePayment,
+    normPaidBy: normPaidBy,
     paymentFingerprint: paymentFingerprint,
     flagDuplicates: flagDuplicates,
     assignPaymentsToPart: assignPaymentsToPart,
     partBalance: partBalance,
+    partBalanceAsOf: partBalanceAsOf,
+    totalBalanceAsOf: totalBalanceAsOf,
     partOriginal: partOriginal,
     partAmortized: partAmortized,
     totalBalance: totalBalance,
@@ -484,7 +826,24 @@
     monthKey: monthKey,
     monthLabel: monthLabel,
     balanceTimeline: balanceTimeline,
-    equityTimeline: equityTimeline
+    equityTimeline: equityTimeline,
+    equityBridge: equityBridge,
+    monthlyAmortizationRate: monthlyAmortizationRate,
+    projectBalance: projectBalance,
+    projectMilestones: projectMilestones,
+    monthlyCost: monthlyCost,
+    bindingStatus: bindingStatus,
+    effectiveRate: effectiveRate,
+    weightedAvgRate: weightedAvgRate,
+    amorteringskrav: amorteringskrav,
+    amorteringskravStatus: amorteringskravStatus,
+    headerSignature: headerSignature,
+    mappingToNames: mappingToNames,
+    applyPreset: applyPreset,
+    paymentsToCsv: paymentsToCsv,
+    reconcileBalance: reconcileBalance,
+    contributionSplit: contributionSplit,
+    settlement: settlement
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -518,6 +877,23 @@
     var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
   }
+  // The start date for an equity-bridge window. 'all' returns null — the caller
+  // substitutes the earliest known date in the data.
+  function periodFrom(period) {
+    var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+    if (period === 'ytd') return d.getFullYear() + '-01-01';
+    if (period === '12m') { d.setFullYear(d.getFullYear() - 1); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+    return null;
+  }
+  // A month count from today, rendered as a Swedish "Mar 2031"-style label.
+  function monthsToWhen(months) {
+    if (months == null) return '—';
+    if (months <= 0) return 'nu · now';
+    var d = new Date();
+    d.setMonth(d.getMonth() + months);
+    var s = d.toLocaleDateString('sv-SE', { month: 'short', year: 'numeric' });
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
   var KIND_LABELS = { interest: 'Ränta', amortization: 'Amortering', payment: 'Betalning', loan: 'Lån', fee: 'Avgift', other: 'Övrigt' };
   function kindLabel(k) { return KIND_LABELS[k] || k || '—'; }
 
@@ -548,11 +924,15 @@
   var currentPaymentFilter = 'all';
   var importQueue = [];   // selected files, processed one at a time
   var queueIndex = 0;
+  var bridgePeriod = 'ytd';   // equity-bridge window: 'ytd' | '12m' | 'all'
 
   function nameOf(p) { return p === 'b' ? settings.owner_b_name : settings.owner_a_name; }
 
   // ── segmented control helpers ─────────────────────────────────────────────
-  function segVal(b) { return b.getAttribute('data-person') || b.getAttribute('data-class') || b.getAttribute('data-filter'); }
+  function segVal(b) {
+    return b.getAttribute('data-person') || b.getAttribute('data-class') || b.getAttribute('data-filter')
+      || b.getAttribute('data-rt') || b.getAttribute('data-period');
+  }
   function setSeg(container, val) {
     Array.prototype.forEach.call(container.querySelectorAll('.seg'), function (b) {
       var on = segVal(b) === val;
@@ -647,12 +1027,17 @@
 
         populateSelects();
         var auto = autoMapColumns(p.headers);
-        setSelect(elDate, auto.date);
-        setSelect(elType, auto.specification);
-        setSelect(elAmount, auto.amount);
-        setSelect(elBalance, auto.balance);
-        setSelect(elLoanNo, auto.loan_number);
+        // A remembered mapping for this exact header set wins over the heuristic.
+        var presets = settings.import_presets || {};
+        var preset = presets[headerSignature(p.headers)];
+        var mapped = preset ? applyPreset(p.headers, preset) : auto;
+        setSelect(elDate, mapped.date);
+        setSelect(elType, mapped.specification);
+        setSelect(elAmount, mapped.amount);
+        setSelect(elBalance, mapped.balance);
+        setSelect(elLoanNo, mapped.loan_number);
         rebuildImportPartSelect();
+        if (preset) toast('Reused your saved column mapping for this file.');
 
         $('fileName').textContent = fileName;
         $('fileMeta').textContent = p.rows.length + ' rows · “' + (p.delimiter === '\t' ? 'tab' : p.delimiter) + '” delimited';
@@ -800,6 +1185,11 @@
       }));
     });
     if (!drafts.length) { toast('Nothing selected to add.'); return; }
+    // Remember this column mapping for the file's header signature, so the next
+    // export from the same bank re-maps itself.
+    var presets = Object.assign({}, settings.import_presets || {});
+    presets[headerSignature(parsed.headers)] = mappingToNames(parsed.headers, map);
+    store.saveSettings({ import_presets: presets }).then(function (s) { settings = s; });
     store.addPayments(drafts).then(function (saved) {
       flashSaved();
       toast('Added ' + saved.length + ' row' + (saved.length === 1 ? '' : 's') + ' from “' + fileName + '”.');
@@ -825,8 +1215,8 @@
   var dashHeadline = $('dashHeadline'), dashHeadlineLabel = $('dashHeadlineLabel'),
       dashSub = $('dashSub'), dashSplit = $('dashSplit'), dashChips = $('dashChips');
 
-  function chip(label, value, accent) {
-    return '<div class="metric-chip' + (accent ? ' is-accent' : '') + '">'
+  function chip(label, value, accent, warn) {
+    return '<div class="metric-chip' + (accent ? ' is-accent' : '') + (warn ? ' is-warn' : '') + '">'
       + '<span class="metric-label">' + escapeHtml(label) + '</span>'
       + '<span class="metric-val">' + value + '</span></div>';
   }
@@ -870,6 +1260,15 @@
       chips += chip('Total amortised', formatMoney(amortized));
       chips += chip('Interest paid', formatMoney(interest));
       if (settings.ranteavdrag) chips += chip('Ränteavdrag (est.)', formatMoney(deduction));
+      // Soonest bound-rate (bunden) expiry across the parts — the next omförhandling.
+      var soon = null;
+      parts.forEach(function (p) {
+        var bs = bindingStatus(p);
+        if (bs.bound && bs.days_left != null && (soon == null || bs.days_left < soon.days)) {
+          soon = { days: bs.days_left, until: bs.until };
+        }
+      });
+      if (soon) chips += chip('Bound rate ends', soon.until, false, soon.days <= 90);
       dashChips.innerHTML = chips;
     });
   }
@@ -1067,19 +1466,196 @@
     });
   }
 
+  // ── reconciliation banner ─────────────────────────────────────────────────
+  function renderReconcile() {
+    return Promise.all([store.listLoanParts(), store.listPayments()]).then(function (res) {
+      var banner = $('reconcileBanner');
+      var rows = reconcileBalance(res[0], res[1]).filter(function (r) { return r.drift != null && Math.abs(r.drift) >= 1; });
+      if (!rows.length) { banner.hidden = true; banner.innerHTML = ''; return; }
+      var items = rows.map(function (r) {
+        return '<li>' + escapeHtml(r.label || 'Loan part') + ': derived ' + formatMoney(r.derived)
+          + ' vs Saldo ' + formatMoney(r.csv) + ' — off by ' + formatMoney(Math.abs(r.drift)) + '</li>';
+      }).join('');
+      banner.innerHTML = 'Balance check — the imported Saldo and the start-minus-amortering figure disagree '
+        + '(likely a partial import or a missing start balance):<ul>' + items + '</ul>';
+      banner.hidden = false;
+    });
+  }
+
+  // ── insights: equity bridge + cost / blended rate / amorteringskrav chips ──
+  function renderBridge(b) {
+    var amort = b.amortization_gain, appr = b.appreciation_gain, total = b.total_gain;
+    var wsum = Math.abs(amort) + Math.abs(appr);
+    var pa = wsum > 0 ? Math.round(Math.abs(amort) / wsum * 100) : 0;
+    var label = bridgePeriod === 'ytd' ? 'i år' : (bridgePeriod === '12m' ? 'senaste 12 mån' : 'sedan start');
+    function signed(n) { return (n >= 0 ? '+' : '−') + formatMoney(Math.abs(n)); }
+    $('bridgeHost').innerHTML = '<div class="bridge-head">'
+      + '<span class="bridge-title">Förändring eget kapital · equity change ' + escapeHtml(label) + '</span>'
+      + '<span class="bridge-total' + (total < 0 ? ' is-neg' : '') + '">' + signed(total) + '</span></div>'
+      + '<div class="bridge-bar">'
+      + '<span class="bridge-seg is-amort' + (amort < 0 ? ' is-neg' : '') + '" style="width:' + pa + '%"></span>'
+      + '<span class="bridge-seg is-appr' + (appr < 0 ? ' is-neg' : '') + '" style="width:' + (100 - pa) + '%"></span></div>'
+      + '<div class="bridge-legend">'
+      + '<span class="bridge-key"><span class="bridge-dot is-amort"></span>Amortering <b>' + signed(amort) + '</b></span>'
+      + '<span class="bridge-key"><span class="bridge-dot is-appr"></span>Värdeökning · appreciation <b>' + signed(appr) + '</b></span></div>';
+  }
+  function renderInsights() {
+    return Promise.all([store.listLoanParts(), store.listPayments(), store.listValuations(), store.listRateChanges()]).then(function (res) {
+      var parts = res[0], pays = res[1], vals = res[2], rates = res[3];
+      var emptyEl = $('insightsEmpty'), body = $('insightsBody');
+      if (!parts.length || !vals.length || !pays.length) { emptyEl.hidden = false; body.hidden = true; return; }
+      emptyEl.hidden = true; body.hidden = false;
+
+      var to = todayISO();
+      var from = periodFrom(bridgePeriod);
+      if (from == null) {
+        var dates = [];
+        vals.forEach(function (v) { if (v.date) dates.push(String(v.date)); });
+        pays.forEach(function (p) { if (p.date) dates.push(String(p.date)); });
+        dates.sort();
+        from = dates.length ? dates[0] : to;
+      }
+      renderBridge(equityBridge(parts, pays, vals, from, to));
+
+      var chips = '';
+      var costRows = monthlyCost(pays, { ranteavdrag: settings.ranteavdrag });
+      if (costRows.length) {
+        var last = costRows[costRows.length - 1];
+        chips += chip(settings.ranteavdrag ? 'Latest mo · net cost' : 'Latest mo · cost', formatMoney(last.net));
+      }
+      var blended = weightedAvgRate(parts, rates, pays);
+      if (blended > 0) chips += chip('Blended rate', formatPct(blended), true);
+      var krav = amorteringskravStatus(parts, pays, vals, settings);
+      if (krav.has_value) {
+        if (krav.exempt) chips += chip('Amorteringskrav', 'Exempt · 0 %');
+        else chips += chip('Amorteringskrav', krav.required_pct + ' % · ' + (krav.meets ? 'met' : 'below'), false, !krav.meets);
+      }
+      $('insightChips').innerHTML = chips;
+    });
+  }
+
+  // ── projection: payoff / LTV milestones + what-if extra amortering ────────
+  function renderProjection() {
+    return Promise.all([store.listLoanParts(), store.listPayments(), store.listValuations()]).then(function (res) {
+      var parts = res[0], pays = res[1], vals = res[2];
+      var note = $('projNote'), chipsHost = $('projChips');
+      if (!parts.length) { note.textContent = 'Add a loan part to project your payoff.'; chipsHost.innerHTML = ''; return; }
+      var extra = parseAmount($('extraAmort').value);
+      if (!isFinite(extra) || extra < 0) extra = 0;
+      var base = monthlyAmortizationRate(parts, pays);
+      var ms = projectMilestones(parts, pays, vals, settings, { extraMonthly: extra });
+      if (ms.flat && extra <= 0) {
+        note.textContent = 'Interest-only — the balance stays flat. Enter an extra monthly amortering above to see a payoff date.';
+      } else {
+        note.textContent = 'At ' + formatMoney(ms.per_month) + '/mo (' + formatMoney(base) + ' observed + ' + formatMoney(extra)
+          + ' extra), property value held flat.';
+      }
+      var chips = chip('Payoff', ms.payoff_months == null ? 'Never' : monthsToWhen(ms.payoff_months), ms.payoff_months != null);
+      if (vals.length) {
+        chips += chip('70 % LTV', monthsToWhen(ms.ltv70_months));
+        chips += chip('50 % LTV', monthsToWhen(ms.ltv50_months));
+      }
+      chipsHost.innerHTML = chips;
+    });
+  }
+
+  // ── rate history ──────────────────────────────────────────────────────────
+  function renderRateHistory() {
+    return Promise.all([store.listRateChanges(), store.listLoanParts(), store.listPayments()]).then(function (res) {
+      var rates = res[0], parts = res[1], pays = res[2];
+      $('rateCount').textContent = rates.length;
+      var partName = {};
+      parts.forEach(function (p) { partName[p.id] = p.label || '(part)'; });
+      var blended = weightedAvgRate(parts, rates, pays);
+      var head = blended > 0 ? '<p class="contrib-note">Blended rate now: <b>' + formatPct(blended) + '</b> — weighted by each part’s balance.</p>' : '';
+      if (!rates.length) {
+        $('rateHost').innerHTML = head + '<p class="empty">No rate changes logged. Add one whenever a part’s rate moves — the blended rate and cost view follow it.</p>';
+        return;
+      }
+      var body = rates.map(function (r) {
+        return '<tr>'
+          + '<td class="col-date">' + escapeHtml(r.date || '—') + '</td>'
+          + '<td>' + escapeHtml(partName[r.loan_part_id] || '—') + '</td>'
+          + '<td class="num">' + (r.rate != null ? formatPct(r.rate) : '—') + '</td>'
+          + '<td class="col-act">'
+          + '<button type="button" class="icon-btn" data-edit-rate="' + escapeHtml(r.id) + '" title="Edit" aria-label="Edit">✎</button>'
+          + '<button type="button" class="icon-btn" data-del-rate="' + escapeHtml(r.id) + '" title="Delete" aria-label="Delete">✕</button>'
+          + '</td></tr>';
+      }).join('');
+      $('rateHost').innerHTML = head + '<div class="table-wrap"><table class="data-table">'
+        + '<thead><tr><th class="col-date">Date</th><th>Loan part</th><th class="num">Rate</th><th class="col-act"></th></tr></thead>'
+        + '<tbody>' + body + '</tbody></table></div>';
+    });
+  }
+
+  // ── contributions (only when tracking is on) ──────────────────────────────
+  function contribSplitCard(person, amount, pct, accent) {
+    return '<div class="split-card' + (accent ? ' is-accent' : '') + '">'
+      + '<span class="split-name">' + escapeHtml(nameOf(person)) + ' · ' + formatPct(pct) + '</span>'
+      + '<span class="split-val">' + formatMoney(amount) + '</span>'
+      + '<span class="split-sub">contributed</span></div>';
+  }
+  function renderContributions() {
+    var card = $('contribCard');
+    if (!settings.track_contributions) { card.hidden = true; return Promise.resolve(); }
+    card.hidden = false;
+    return Promise.all([store.listContributions(), store.listPayments()]).then(function (res) {
+      var contribs = res[0], pays = res[1];
+      $('contribCount').textContent = contribs.length;
+      var split = contributionSplit(pays, contribs, settings);
+      var setl = settlement(pays, contribs, settings);
+      $('contribSplit').innerHTML = contribSplitCard('a', split.a, split.a_pct, settings.i_am !== 'b')
+        + contribSplitCard('b', split.b, split.b_pct, settings.i_am === 'b');
+      if (setl.owes && setl.amount > 0) {
+        $('contribNote').textContent = nameOf(setl.owes) + ' owes ' + nameOf(otherOwner(setl.owes)) + ' '
+          + formatMoney(setl.amount) + ' to reach the target ownership split.';
+      } else if (split.total > 0) {
+        $('contribNote').textContent = 'Contributions are in line with the target ownership split.';
+      } else {
+        $('contribNote').textContent = 'Log who paid each amortering (in a payment) and any lump sums to build contribution-based ownership.';
+      }
+      if (!contribs.length) {
+        $('contribHost').innerHTML = '<p class="empty">No lump sums yet. Per-owner amortering is counted automatically from the payments above; add down payments here.</p>';
+        return;
+      }
+      var ownerLabel = function (o) { return o === 'joint' ? 'Gemensam · Joint' : nameOf(o === 'b' ? 'b' : 'a'); };
+      var body = contribs.map(function (c) {
+        return '<tr>'
+          + '<td class="col-date">' + escapeHtml(c.date || '—') + '</td>'
+          + '<td>' + escapeHtml(ownerLabel(c.owner)) + '</td>'
+          + '<td class="num">' + formatMoney(c.amount) + '</td>'
+          + '<td>' + escapeHtml(c.note || '') + '</td>'
+          + '<td class="col-act">'
+          + '<button type="button" class="icon-btn" data-edit-contrib="' + escapeHtml(c.id) + '" title="Edit" aria-label="Edit">✎</button>'
+          + '<button type="button" class="icon-btn" data-del-contrib="' + escapeHtml(c.id) + '" title="Delete" aria-label="Delete">✕</button>'
+          + '</td></tr>';
+      }).join('');
+      $('contribHost').innerHTML = '<div class="table-wrap"><table class="data-table">'
+        + '<thead><tr><th class="col-date">Date</th><th>Owner</th><th class="num">Amount</th><th>Note</th><th class="col-act"></th></tr></thead>'
+        + '<tbody>' + body + '</tbody></table></div>';
+    });
+  }
+
   function refresh() {
     renderDashboard();
+    renderReconcile();
     renderChart();
+    renderInsights();
+    renderProjection();
     renderParts();
+    renderRateHistory();
     renderValuations();
     renderPayments();
+    renderContributions();
     refreshImportAvailability();
   }
 
   // ── loan-part dialog ──────────────────────────────────────────────────────
   var partDialog = $('partDialog'), partForm = $('partForm'), partDialogTitle = $('partDialogTitle');
   var pLabel = $('p-label'), pLoanNo = $('p-loanno'), pStart = $('p-start'), pStartDate = $('p-startdate'), pRate = $('p-rate');
+  var pRateType = $('p-ratetype'), pBindingField = $('p-binding-field'), pBinding = $('p-binding');
   var editingPartId = null;
+  function updateBindingField() { pBindingField.hidden = segValue(pRateType) !== 'bunden'; }
   function openPartDialog(id) {
     editingPartId = id || null;
     partDialogTitle.textContent = id ? 'Edit loan part' : 'Add loan part';
@@ -1089,6 +1665,9 @@
       pStart.value = p && p.start_balance ? String(p.start_balance) : '';
       pStartDate.value = (p && p.start_date) || todayISO();
       pRate.value = p && p.interest_rate != null ? String(p.interest_rate) : '';
+      setSeg(pRateType, (p && p.rate_type) === 'bunden' ? 'bunden' : 'rörlig');
+      pBinding.value = (p && p.rate_binding_until) || '';
+      updateBindingField();
       partDialog.showModal();
     }
     if (id) store.listLoanParts().then(function (parts) { var p = parts.filter(function (x) { return x.id === id; })[0]; if (p) show(p); });
@@ -1102,7 +1681,9 @@
       loan_number: clean(pLoanNo.value),
       start_balance: startRaw === '' ? 0 : parseAmount(startRaw),
       start_date: clean(pStartDate.value),
-      interest_rate: clean(pRate.value) === '' ? null : parseAmount(pRate.value)
+      interest_rate: clean(pRate.value) === '' ? null : parseAmount(pRate.value),
+      rate_type: segValue(pRateType) === 'bunden' ? 'bunden' : 'rörlig',
+      rate_binding_until: clean(pBinding.value) || null
     });
     var op = editingPartId ? store.updateLoanPart(editingPartId, rec) : store.addLoanPart(rec);
     op.then(function () { partDialog.close(); refresh(); flashSaved(); toast(editingPartId ? 'Loan part updated.' : 'Loan part added.'); });
@@ -1144,6 +1725,7 @@
   // ── payment dialog ────────────────────────────────────────────────────────
   var paymentDialog = $('paymentDialog'), paymentForm = $('paymentForm'), paymentDialogTitle = $('paymentDialogTitle');
   var payPart = $('pay-part'), payDate = $('pay-date'), payType = $('pay-type'), payAmount = $('pay-amount'), payBalance = $('pay-balance'), payHint = $('pay-hint');
+  var payPaidBy = $('pay-paidby'), payPaidByField = $('pay-paidby-field');
   var editingPayId = null;
   function fillPayHint() {
     var amt = parseAmount(payAmount.value);
@@ -1167,6 +1749,8 @@
         payType.value = (p && p.kind) || 'interest';
         payAmount.value = p && p.amount != null ? String(p.amount) : '';
         payBalance.value = p && p.balance_after != null ? String(p.balance_after) : '';
+        payPaidBy.value = (p && p.paid_by) || 'joint';
+        payPaidByField.hidden = !settings.track_contributions;
         fillPayHint();
         paymentDialog.showModal();
       }
@@ -1182,11 +1766,12 @@
       kind: payType.value,
       description: kindLabel(payType.value),
       amount: parseAmount(payAmount.value),
-      balance_after: clean(payBalance.value) === '' ? null : parseAmount(payBalance.value)
+      balance_after: clean(payBalance.value) === '' ? null : parseAmount(payBalance.value),
+      paid_by: payPaidBy.value
     });
     if (rec.amount === 0 && rec.balance_after == null) { toast('Enter an amount or a balance.'); return; }
     var op = editingPayId
-      ? store.updatePayment(editingPayId, { loan_part_id: rec.loan_part_id, date: rec.date, kind: rec.kind, description: rec.description, amount: rec.amount, balance_after: rec.balance_after })
+      ? store.updatePayment(editingPayId, { loan_part_id: rec.loan_part_id, date: rec.date, kind: rec.kind, description: rec.description, amount: rec.amount, balance_after: rec.balance_after, paid_by: rec.paid_by })
       : store.addPayment(rec);
     op.then(function () { paymentDialog.close(); refresh(); flashSaved(); toast(editingPayId ? 'Payment updated.' : 'Payment added.'); });
   }
@@ -1195,11 +1780,76 @@
     store.removePayment(id).then(function () { refresh(); flashSaved(); toast('Payment deleted.'); });
   }
 
+  // ── rate-change dialog ────────────────────────────────────────────────────
+  var rateDialog = $('rateDialog'), rateForm = $('rateForm'), rateDialogTitle = $('rateDialogTitle');
+  var rPart = $('r-part'), rDate = $('r-date'), rRate = $('r-rate');
+  var editingRateId = null;
+  function openRateDialog(id) {
+    editingRateId = id || null;
+    rateDialogTitle.textContent = id ? 'Edit rate change' : 'Add rate change';
+    store.listLoanParts().then(function (parts) {
+      if (!parts.length) { toast('Add a loan part first.'); return; }
+      rPart.innerHTML = parts.map(function (p) { return '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.label || '(loan part)') + '</option>'; }).join('');
+      function show(r) {
+        rPart.value = (r && r.loan_part_id) || parts[0].id;
+        rDate.value = (r && r.date) || todayISO();
+        rRate.value = r && r.rate != null ? String(r.rate) : '';
+        rateDialog.showModal();
+      }
+      if (id) store.listRateChanges().then(function (rs) { var r = rs.filter(function (x) { return x.id === id; })[0]; if (r) show(r); });
+      else show(null);
+    });
+  }
+  function submitRate(e) {
+    e.preventDefault();
+    var rate = parseAmount(rRate.value);
+    if (!isFinite(rate)) { toast('Enter the new rate.'); return; }
+    var rec = { loan_part_id: rPart.value, date: clean(rDate.value), rate: round2(rate) };
+    var op = editingRateId ? store.updateRateChange(editingRateId, rec) : store.addRateChange(rec);
+    op.then(function () { rateDialog.close(); refresh(); flashSaved(); toast(editingRateId ? 'Rate change updated.' : 'Rate change added.'); });
+  }
+  function deleteRate(id) {
+    if (!window.confirm('Delete this rate change?')) return;
+    store.removeRateChange(id).then(function () { refresh(); flashSaved(); toast('Rate change deleted.'); });
+  }
+
+  // ── contribution dialog ───────────────────────────────────────────────────
+  var contribDialog = $('contribDialog'), contribForm = $('contribForm'), contribDialogTitle = $('contribDialogTitle');
+  var cOwner = $('c-owner'), cDate = $('c-date'), cAmount = $('c-amount'), cNote = $('c-note');
+  var editingContribId = null;
+  function openContribDialog(id) {
+    editingContribId = id || null;
+    contribDialogTitle.textContent = id ? 'Edit contribution' : 'Add contribution';
+    applyNames();
+    function show(c) {
+      setSeg(cOwner, (c && c.owner) === 'b' ? 'b' : 'a');
+      cDate.value = (c && c.date) || todayISO();
+      cAmount.value = c && c.amount != null ? String(c.amount) : '';
+      cNote.value = (c && c.note) || '';
+      contribDialog.showModal();
+    }
+    if (id) store.listContributions().then(function (cs) { var c = cs.filter(function (x) { return x.id === id; })[0]; if (c) show(c); });
+    else show(null);
+  }
+  function submitContrib(e) {
+    e.preventDefault();
+    var amt = parseAmount(cAmount.value);
+    if (!isFinite(amt) || amt <= 0) { toast('Enter the amount.'); return; }
+    var rec = { owner: segValue(cOwner) === 'b' ? 'b' : 'a', date: clean(cDate.value), amount: round2(amt), note: clean(cNote.value) };
+    var op = editingContribId ? store.updateContribution(editingContribId, rec) : store.addContribution(rec);
+    op.then(function () { contribDialog.close(); refresh(); flashSaved(); toast(editingContribId ? 'Contribution updated.' : 'Contribution added.'); });
+  }
+  function deleteContrib(id) {
+    if (!window.confirm('Delete this contribution?')) return;
+    store.removeContribution(id).then(function () { refresh(); flashSaved(); toast('Contribution deleted.'); });
+  }
+
   // ── settings dialog ────────────────────────────────────────────────────────
   var settingsDialog = $('settingsDialog'), settingsForm = $('settingsForm'), settingsBtn = $('settingsBtn');
   var sPropName = $('s-propname'), sNameA = $('s-nameA'), sNameB = $('s-nameB'), sMyPct = $('s-mypct'),
-      sIam = $('s-iam'), sCurrency = $('s-currency'), sRanteavdrag = $('s-ranteavdrag');
-  var exportBtn = $('exportBtn'), importBtn = $('importBtn'), importInput = $('importInput');
+      sIam = $('s-iam'), sCurrency = $('s-currency'), sRanteavdrag = $('s-ranteavdrag'),
+      sIncome = $('s-income'), sTrackContrib = $('s-track-contrib');
+  var exportBtn = $('exportBtn'), exportCsvBtn = $('exportCsvBtn'), importBtn = $('importBtn'), importInput = $('importInput');
   var sMyPctLabel = $('s-mypct-label');
   function refreshPctLabel() {
     if (!sMyPctLabel) return;
@@ -1214,6 +1864,8 @@
     setSeg(sIam, settings.i_am === 'b' ? 'b' : 'a');
     if (sCurrency) sCurrency.value = settings.currency || 'SEK';
     sRanteavdrag.checked = settings.ranteavdrag !== false;
+    sIncome.value = settings.household_income_yearly != null ? String(settings.household_income_yearly) : '';
+    sTrackContrib.checked = !!settings.track_contributions;
     applyNames();
     refreshPctLabel();
     settingsDialog.showModal();
@@ -1221,6 +1873,7 @@
   function submitSettings(e) {
     e.preventDefault();
     var pct = parseAmount(sMyPct.value);
+    var income = parseAmount(sIncome.value);
     store.saveSettings({
       property_name: clean(sPropName.value),
       owner_a_name: clean(sNameA.value) || 'Alex',
@@ -1228,7 +1881,9 @@
       my_ownership_pct: isFinite(pct) ? Math.max(0, Math.min(100, pct)) : 50,
       i_am: (segValue(sIam) || 'a') === 'b' ? 'b' : 'a',
       currency: (sCurrency && sCurrency.value) || 'SEK',
-      ranteavdrag: !!sRanteavdrag.checked
+      ranteavdrag: !!sRanteavdrag.checked,
+      household_income_yearly: isFinite(income) && income > 0 ? round2(income) : null,
+      track_contributions: !!sTrackContrib.checked
     }).then(function (s) {
       settings = s;
       applyNames();
@@ -1249,6 +1904,18 @@
     store.exportJSON().then(function (text) {
       downloadText('bolanekoll-backup-' + todayISO() + '.json', text);
       toast('Backup downloaded.');
+    });
+  }
+  function exportCsv() {
+    Promise.all([store.listPayments(), store.listLoanParts()]).then(function (res) {
+      if (!res[0].length) { toast('No payments to export yet.'); return; }
+      var blob = new Blob([paymentsToCsv(res[0], res[1])], { type: 'text/csv' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = 'bolanekoll-payments-' + todayISO() + '.csv';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast('Payments CSV downloaded.');
     });
   }
   function importBackup(file) {
@@ -1317,6 +1984,8 @@
   $('addPartBtn').addEventListener('click', function () { openPartDialog(null); });
   $('addValuationBtn').addEventListener('click', function () { openValuationDialog(null); });
   $('addPaymentBtn').addEventListener('click', function () { openPaymentDialog(null); });
+  $('addRateBtn').addEventListener('click', function () { openRateDialog(null); });
+  $('addContribBtn').addEventListener('click', function () { openContribDialog(null); });
   clearPaymentsBtn.addEventListener('click', function () {
     Promise.all([store.listPayments(), store.listLoanParts()]).then(function (res) {
       var pays = res[0], parts = res[1];
@@ -1350,6 +2019,14 @@
     var ed = e.target.closest('[data-edit-pay]'); if (ed) { openPaymentDialog(ed.getAttribute('data-edit-pay')); return; }
     var dl = e.target.closest('[data-del-pay]'); if (dl) { deletePayment(dl.getAttribute('data-del-pay')); }
   });
+  $('rateHost').addEventListener('click', function (e) {
+    var ed = e.target.closest('[data-edit-rate]'); if (ed) { openRateDialog(ed.getAttribute('data-edit-rate')); return; }
+    var dl = e.target.closest('[data-del-rate]'); if (dl) { deleteRate(dl.getAttribute('data-del-rate')); }
+  });
+  $('contribHost').addEventListener('click', function (e) {
+    var ed = e.target.closest('[data-edit-contrib]'); if (ed) { openContribDialog(ed.getAttribute('data-edit-contrib')); return; }
+    var dl = e.target.closest('[data-del-contrib]'); if (dl) { deleteContrib(dl.getAttribute('data-del-contrib')); }
+  });
   paymentFilterEl.addEventListener('click', function (e) {
     var b = e.target.closest('.seg'); if (!b) return;
     currentPaymentFilter = b.getAttribute('data-filter');
@@ -1359,8 +2036,15 @@
   partForm.addEventListener('submit', submitPart);
   valuationForm.addEventListener('submit', submitValuation);
   paymentForm.addEventListener('submit', submitPayment);
+  rateForm.addEventListener('submit', submitRate);
+  contribForm.addEventListener('submit', submitContrib);
   payAmount.addEventListener('input', fillPayHint);
   payType.addEventListener('change', fillPayHint);
+  wireSeg(pRateType, updateBindingField);
+
+  // Insights period + projection what-if
+  wireSeg($('bridgePeriod'), function (v) { bridgePeriod = v; renderInsights(); });
+  $('extraAmort').addEventListener('input', renderProjection);
 
   settingsBtn.addEventListener('click', openSettings);
   settingsForm.addEventListener('submit', submitSettings);
@@ -1368,6 +2052,7 @@
   sNameA.addEventListener('input', function () { var el = sIam.querySelector('[data-person="a"]'); if (el) el.textContent = clean(sNameA.value) || 'A'; refreshPctLabel(); });
   sNameB.addEventListener('input', function () { var el = sIam.querySelector('[data-person="b"]'); if (el) el.textContent = clean(sNameB.value) || 'B'; refreshPctLabel(); });
   exportBtn.addEventListener('click', exportBackup);
+  exportCsvBtn.addEventListener('click', exportCsv);
   importBtn.addEventListener('click', function () { importInput.click(); });
   importInput.addEventListener('change', function () { if (importInput.files[0]) { importBackup(importInput.files[0]); importInput.value = ''; } });
 

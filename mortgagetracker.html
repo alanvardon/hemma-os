@@ -45,6 +45,7 @@
     </div>
     <div class="split-row" id="dashSplit"></div>
     <div class="metric-row" id="dashChips"></div>
+    <div class="reconcile-banner" id="reconcileBanner" hidden></div>
   </section>
 
   <!-- ── Ownership vs bank over time ─────────────────────────── -->
@@ -56,6 +57,38 @@
       <canvas id="equityChart" hidden></canvas>
       <p class="chart-empty" id="chartEmpty">Add a property value to chart your equity vs the bank.</p>
     </div>
+  </section>
+
+  <!-- ── Insights: equity bridge, cost, blended rate, amorteringskrav ── -->
+  <section class="card" id="insightsCard">
+    <div class="card-head">
+      <h2>Insikter <span class="card-en">· Insights</span></h2>
+      <div class="card-actions">
+        <div class="segmented" id="bridgePeriod" role="radiogroup" aria-label="Equity bridge period">
+          <button type="button" class="seg is-active" data-period="ytd" role="radio" aria-checked="true">I år</button>
+          <button type="button" class="seg" data-period="12m" role="radio" aria-checked="false">12 mån</button>
+          <button type="button" class="seg" data-period="all" role="radio" aria-checked="false">Allt</button>
+        </div>
+      </div>
+    </div>
+    <p class="insights-empty" id="insightsEmpty">Add a property value and a few months of payments to see how your equity is growing.</p>
+    <div id="insightsBody" hidden>
+      <div class="bridge" id="bridgeHost"></div>
+      <div class="metric-row" id="insightChips"></div>
+    </div>
+  </section>
+
+  <!-- ── Projection: payoff & LTV milestones, what-if extra amortering ── -->
+  <section class="card" id="projectionCard">
+    <div class="card-head">
+      <h2>Prognos <span class="card-en">· Projection</span></h2>
+      <div class="card-actions">
+        <label class="proj-field" for="extraAmort">Extra amortering / mån</label>
+        <input type="text" id="extraAmort" class="proj-input" inputmode="decimal" autocomplete="off" placeholder="0">
+      </div>
+    </div>
+    <p class="proj-note" id="projNote">Add a loan part to project your payoff.</p>
+    <div class="metric-row" id="projChips"></div>
   </section>
 
   <!-- ── Import payments ─────────────────────────────────────── -->
@@ -164,6 +197,18 @@
     <div id="partsHost"></div>
   </section>
 
+  <!-- ── Rate history ────────────────────────────────────────── -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Räntehistorik <span class="card-en">· Rate history</span></h2>
+      <span class="count-pill" id="rateCount">0</span>
+      <div class="card-actions">
+        <button type="button" class="btn btn-ghost" id="addRateBtn">+ Add rate change</button>
+      </div>
+    </div>
+    <div id="rateHost"></div>
+  </section>
+
   <!-- ── Property value ──────────────────────────────────────── -->
   <section class="card">
     <div class="card-head">
@@ -192,6 +237,20 @@
     <div id="paymentsHost"></div>
   </section>
 
+  <!-- ── Contributions (shown when tracking is on) ───────────── -->
+  <section class="card" id="contribCard" hidden>
+    <div class="card-head">
+      <h2>Insatser <span class="card-en">· Contributions</span></h2>
+      <span class="count-pill" id="contribCount">0</span>
+      <div class="card-actions">
+        <button type="button" class="btn btn-ghost" id="addContribBtn">+ Add contribution</button>
+      </div>
+    </div>
+    <div class="split-row" id="contribSplit"></div>
+    <p class="contrib-note" id="contribNote"></p>
+    <div id="contribHost"></div>
+  </section>
+
 </main>
 
 <!-- ── Loan-part dialog ──────────────────────────────────────── -->
@@ -202,6 +261,14 @@
       <label class="form-field form-wide"><span>Label</span><input type="text" id="p-label" autocomplete="off" placeholder="e.g. Lånedel 1 (rörlig)"></label>
       <label class="form-field"><span>Loan # (optional)</span><input type="text" id="p-loanno" autocomplete="off" placeholder="e.g. 9021 33 12345"></label>
       <label class="form-field"><span>Interest rate % (optional)</span><input type="text" id="p-rate" inputmode="decimal" autocomplete="off" placeholder="e.g. 3.54"></label>
+      <div class="form-field">
+        <span>Rate type</span>
+        <div class="segmented" id="p-ratetype" role="radiogroup" aria-label="Rate type">
+          <button type="button" class="seg is-active" data-rt="rörlig" role="radio" aria-checked="true">Rörlig</button>
+          <button type="button" class="seg" data-rt="bunden" role="radio" aria-checked="false">Bunden</button>
+        </div>
+      </div>
+      <label class="form-field" id="p-binding-field" hidden><span>Bound until (villkorsändring)</span><input type="date" id="p-binding"></label>
       <label class="form-field"><span>Start balance</span><input type="text" id="p-start" inputmode="decimal" autocomplete="off" placeholder="0"></label>
       <label class="form-field"><span>As of date</span><input type="date" id="p-startdate"></label>
     </div>
@@ -249,6 +316,13 @@
       </label>
       <label class="form-field"><span>Amount (Belopp)</span><input type="text" id="pay-amount" inputmode="decimal" autocomplete="off" placeholder="0"></label>
       <label class="form-field"><span>Balance after (Saldo, optional)</span><input type="text" id="pay-balance" inputmode="decimal" autocomplete="off" placeholder="0"></label>
+      <label class="form-field form-wide" id="pay-paidby-field" hidden><span>Paid by</span>
+        <select id="pay-paidby" class="select">
+          <option value="joint">Joint · split by ownership</option>
+          <option value="a" data-name="a">Owner A</option>
+          <option value="b" data-name="b">Owner B</option>
+        </select>
+      </label>
     </div>
     <p class="form-hint" id="pay-hint"></p>
     <div class="dialog-actions">
@@ -284,20 +358,67 @@
           <option value="GBP">GBP · £</option>
         </select>
       </label>
+      <label class="form-field"><span>Household income / year (optional)</span><input type="text" id="s-income" inputmode="decimal" autocomplete="off" placeholder="e.g. 720000"></label>
       <label class="form-field checkbox-field form-wide">
         <input type="checkbox" id="s-ranteavdrag">
         <span>Show estimated ränteavdrag (interest tax deduction)</span>
+      </label>
+      <label class="form-field checkbox-field form-wide">
+        <input type="checkbox" id="s-track-contrib">
+        <span>Track contributions — per-owner amortering &amp; lump sums for contribution-based ownership</span>
       </label>
       <div class="form-field form-wide">
         <span>Backup</span>
         <div class="settings-data-row">
           <button type="button" class="btn btn-ghost" id="exportBtn">Export JSON</button>
+          <button type="button" class="btn btn-ghost" id="exportCsvBtn">Export CSV</button>
           <button type="button" class="btn btn-ghost" id="importBtn">Import JSON</button>
           <input type="file" id="importInput" accept=".json,application/json" hidden>
         </div>
-        <p class="config-note">Download everything — loan parts, payments, valuations and settings — or restore a backup (merges by id, so re-importing is safe).</p>
+        <p class="config-note">Download everything as JSON — loan parts, payments, valuations and settings — or restore a backup (merges by id, so re-importing is safe). Export CSV writes the payment ledger for Excel/Sheets or your tax return.</p>
       </div>
     </div>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ── Rate-change dialog ─────────────────────────────────────── -->
+<dialog id="rateDialog" class="dialog">
+  <form id="rateForm" class="dialog-body">
+    <h3 class="dialog-title" id="rateDialogTitle">Add rate change</h3>
+    <div class="form-grid">
+      <label class="form-field form-wide"><span>Loan part</span><select id="r-part" class="select"></select></label>
+      <label class="form-field"><span>Date</span><input type="date" id="r-date"></label>
+      <label class="form-field"><span>Interest rate %</span><input type="text" id="r-rate" inputmode="decimal" autocomplete="off" placeholder="e.g. 2.54"></label>
+    </div>
+    <p class="form-hint">The new rate applies from this date forward — it feeds the blended rate and the cost view.</p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ── Contribution dialog ────────────────────────────────────── -->
+<dialog id="contribDialog" class="dialog">
+  <form id="contribForm" class="dialog-body">
+    <h3 class="dialog-title" id="contribDialogTitle">Add contribution</h3>
+    <div class="form-grid">
+      <div class="form-field">
+        <span>Who paid</span>
+        <div class="segmented" id="c-owner" role="radiogroup" aria-label="Who paid">
+          <button type="button" class="seg is-active" data-person="a" data-name="a" role="radio" aria-checked="true">Owner A</button>
+          <button type="button" class="seg" data-person="b" data-name="b" role="radio" aria-checked="false">Owner B</button>
+        </div>
+      </div>
+      <label class="form-field"><span>Date</span><input type="date" id="c-date"></label>
+      <label class="form-field"><span>Amount</span><input type="text" id="c-amount" inputmode="decimal" autocomplete="off" placeholder="0"></label>
+      <label class="form-field form-wide"><span>Note (optional)</span><input type="text" id="c-note" autocomplete="off" placeholder="e.g. Down payment"></label>
+    </div>
+    <p class="form-hint">A lump sum one owner put in — down payment or extra amortering — beyond the shared split.</p>
     <div class="dialog-actions">
       <button type="button" class="btn btn-ghost" data-close>Cancel</button>
       <button type="submit" class="btn btn-primary">Save</button>
