@@ -497,6 +497,26 @@ test('derivedRate annualises interest ÷ balance over the actual days between ch
   assert.equal(m.derivedRate({ id: 'p1' }, pays.slice(0, 2)), null, 'one charge → not enough to bound a period');
 });
 
+test('rateTimeline opens with the base rate and dates each period to the next change', () => {
+  const part = { id: 'p1', start_date: '2024-07-24', interest_rate: 3.79 };
+  const changes = [
+    { id: 'r1', loan_part_id: 'p1', date: '2025-06-01', rate: 2.54 },
+    { id: 'r2', loan_part_id: 'p1', date: '2025-01-01', rate: 4.10 }
+  ];
+  const tl = m.rateTimeline(part, changes);
+  assert.equal(tl.length, 3);
+  assert.equal(tl[0].base, true, 'base rate is the first entry');
+  assert.equal(tl[0].date, '2024-07-24');
+  assert.equal(tl[0].rate, 3.79);
+  assert.equal(tl[0].end, '2024-12-31', 'base ends the day before the first change');
+  assert.equal(tl[0].id, null, 'base has no rate-change id (edited via the field)');
+  assert.equal(tl[1].date, '2025-01-01');
+  assert.equal(tl[1].end, '2025-05-31');
+  assert.equal(tl[2].date, '2025-06-01');
+  assert.equal(tl[2].end, null, 'the latest rate is ongoing');
+  assert.equal(m.rateTimeline({ id: 'p1' }, []).length, 0, 'no base rate and no changes → empty');
+});
+
 // ── #6 Amorteringskrav ──
 test('amorteringskrav encodes the LTV bands and the 4.5× income add-on', () => {
   assert.equal(m.amorteringskrav(80, 0), 2);

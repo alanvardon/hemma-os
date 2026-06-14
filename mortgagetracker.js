@@ -688,6 +688,32 @@
     use.forEach(function (p) { num += p.rate * p.days; den += p.days; });
     return den > 0 ? _round2(num / den * 100) : null;
   }
+  function _dayBefore(iso) {
+    var d = new Date(String(iso) + 'T00:00:00');
+    if (isNaN(d.getTime())) return null;
+    d.setDate(d.getDate() - 1);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  // A part's full rate timeline for display: the base rate (interest_rate, from
+  // the part's start date) as the opening entry, then each logged change, sorted
+  // ascending. Each entry is dated to the period it was in effect — `end` is the
+  // day before the next change (null = ongoing, the current headline rate).
+  function rateTimeline(part, rateChanges) {
+    var entries = [];
+    if (part && part.interest_rate != null && part.interest_rate !== '') {
+      entries.push({ date: String(part.start_date || ''), rate: Number(part.interest_rate), id: null, base: true });
+    }
+    (rateChanges || []).forEach(function (r) {
+      if (!r || r.loan_part_id !== (part && part.id) || r.rate == null) return;
+      entries.push({ date: String(r.date || ''), rate: Number(r.rate), id: r.id, base: false });
+    });
+    entries.sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
+    return entries.map(function (e, i) {
+      var next = entries[i + 1];
+      return { date: e.date, rate: e.rate, id: e.id, base: e.base, end: (next && next.date) ? _dayBefore(next.date) : null };
+    });
+  }
 
   // #6 — Amorteringskrav. Sweden's required amortisation as a % of the loan per
   // year: >70% LTV → 2%, 50–70% → 1%, plus 1% if debt exceeds 4.5× gross income.
@@ -878,6 +904,7 @@
     effectiveRate: effectiveRate,
     weightedAvgRate: weightedAvgRate,
     derivedRate: derivedRate,
+    rateTimeline: rateTimeline,
     amorteringskrav: amorteringskrav,
     amorteringskravStatus: amorteringskravStatus,
     headerSignature: headerSignature,
@@ -1696,18 +1723,22 @@
     if (!editingPartId) { pRatesSection.hidden = true; return; }
     pRatesSection.hidden = false;
     Promise.all([store.listRateChanges(), store.listPayments(), store.listLoanParts()]).then(function (res) {
-      var rates = res[0].filter(function (r) { return r.loan_part_id === editingPartId; });
       var part = res[2].filter(function (x) { return x.id === editingPartId; })[0];
       var der = part ? derivedRate(part, res[1]) : null;
       pRateDerived.textContent = der != null ? 'Ledger ≈ ' + formatPct(der) : '';
-      if (!rates.length) {
-        pRateList.innerHTML = '<li class="rate-empty">No changes logged — the base rate above is used.</li>';
+      var tl = part ? rateTimeline(part, res[0]) : [];
+      if (!tl.length) {
+        pRateList.innerHTML = '<li class="rate-empty">No rate yet — set the part’s rate above, then log changes here.</li>';
         return;
       }
-      pRateList.innerHTML = rates.map(function (r) {
-        return '<li><span class="rate-when">' + escapeHtml(r.date || '—') + '</span>'
-          + '<span class="rate-pct">' + (r.rate != null ? formatPct(r.rate) : '—') + '</span>'
-          + '<button type="button" class="icon-btn" data-del-rate="' + escapeHtml(r.id) + '" title="Delete" aria-label="Delete">✕</button></li>';
+      // Chronological: base rate first, latest (ongoing) last. The base row is
+      // edited via the field above, so it shows a "base" tag instead of delete.
+      pRateList.innerHTML = tl.map(function (e) {
+        var period = escapeHtml(e.date || '—') + ' → ' + escapeHtml(e.end || 'nu · now');
+        var tail = e.id
+          ? '<button type="button" class="icon-btn" data-del-rate="' + escapeHtml(e.id) + '" title="Delete" aria-label="Delete">✕</button>'
+          : '<span class="rate-base">base</span>';
+        return '<li><span class="rate-when">' + period + '</span><span class="rate-pct">' + formatPct(e.rate) + '</span>' + tail + '</li>';
       }).join('');
     });
   }

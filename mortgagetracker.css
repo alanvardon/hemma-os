@@ -476,10 +476,11 @@ body {
 }
 .rate-derived { font-weight: 550; text-transform: none; letter-spacing: 0; color: var(--accent); font-size: 12px; }
 .rate-list { list-style: none; margin: 0.6rem 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
-.rate-list li { display: flex; align-items: center; gap: 0.6rem; font-size: 13.5px; }
-.rate-when { color: var(--ink-mid); min-width: 92px; }
-.rate-pct { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 550; }
+.rate-list li { display: flex; align-items: center; gap: 0.6rem; font-size: 13px; }
+.rate-when { color: var(--ink-mid); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rate-pct { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
 .rate-list .icon-btn { margin-left: auto; }
+.rate-list .rate-base { margin-left: auto; font-size: 11px; font-style: italic; color: var(--ink-soft); }
 .rate-empty { color: var(--ink-soft); font-size: 13px; font-style: italic; }
 .rate-add { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .rate-add-date, .rate-add-val {
