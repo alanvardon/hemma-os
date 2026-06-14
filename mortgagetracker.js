@@ -880,10 +880,16 @@
   function clean(v) { return String(v == null ? '' : v).trim(); }
   function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
   var CURRENCY_SUFFIX = { SEK: 'kr', NOK: 'kr', DKK: 'kr', EUR: '€', USD: '$', GBP: '£' };
-  // Always two decimals, everywhere — money and percentages alike.
+  // Exact balances (and percentages) show two decimals.
   function formatMoney(n) {
     var suffix = CURRENCY_SUFFIX[settings && settings.currency] || 'kr';
     return (Number(n) || 0).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + suffix;
+  }
+  // Whole kronor — for summary/estimate figures (interest paid, ränteavdrag,
+  // monthly cost) where the öre is just noise.
+  function formatMoney0(n) {
+    var suffix = CURRENCY_SUFFIX[settings && settings.currency] || 'kr';
+    return Math.round(Number(n) || 0).toLocaleString('sv-SE', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' ' + suffix;
   }
   function formatPct(n) {
     return (Number(n) || 0).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' %';
@@ -1273,8 +1279,8 @@
       chips += chip('Property value', hasValuation ? formatMoney(value) : '—');
       chips += chip('Loan-to-value', hasValuation ? formatPct(ltv) : '—');
       chips += chip('Total amortised', formatMoney(amortized));
-      chips += chip('Interest paid', formatMoney(interest));
-      if (settings.ranteavdrag) chips += chip('Ränteavdrag (est.)', formatMoney(deduction));
+      chips += chip('Interest paid', formatMoney0(interest));
+      if (settings.ranteavdrag) chips += chip('Ränteavdrag (est.)', formatMoney0(deduction));
       // Soonest bound-rate (bunden) expiry across the parts — the next omförhandling.
       var soon = null;
       parts.forEach(function (p) {
@@ -1542,7 +1548,7 @@
       var costRows = monthlyCost(pays, { ranteavdrag: settings.ranteavdrag });
       if (costRows.length) {
         var last = costRows[costRows.length - 1];
-        chips += chip(settings.ranteavdrag ? 'Latest mo · net cost' : 'Latest mo · cost', formatMoney(last.net));
+        chips += chip(settings.ranteavdrag ? 'Latest mo · net cost' : 'Latest mo · cost', formatMoney0(last.net));
       }
       var blended = weightedAvgRate(parts, rates, pays);
       if (blended > 0) chips += chip('Blended rate', formatPct(blended), true);
@@ -1553,7 +1559,7 @@
       var krav = amorteringskravStatus(parts, pays, vals, settings);
       if (krav.has_value) {
         if (krav.exempt) chips += chip('Amorteringskrav (est.)', 'None · LTV ≤ 50 %');
-        else chips += chip('Amorteringskrav (est.)', formatPct(krav.required_pct) + ' · ' + formatMoney(krav.required_annual) + '/år');
+        else chips += chip('Amorteringskrav (est.)', krav.required_pct + ' % · ' + formatMoney(krav.required_annual) + '/år');
       }
       $('insightChips').innerHTML = chips;
     });
