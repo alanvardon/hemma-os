@@ -12,9 +12,9 @@ mkdir -p "$WORKFLOW_DIR"
 fail() { printf '✗ FAIL — %s\n' "$1" >&2; VIOLATIONS=$((VIOLATIONS + 1)); }
 pass() { printf '✓ PASS — %s\n' "$1"; }
 
-JS_FILES="calc.js dom.js storage.js modals.js charts.js app.js hero-canvas.js budget.js salary-store.js konsultkalkyl.js manadsavslut.js manadsavslut-store.js mortgagetracker.js mortgagetracker-store.js"
-ALL_FILES="index.html bostadskalkyl.html hushallsbudget.html konsultkalkyl.html manadsavslut.html mortgagetracker.html $JS_FILES styles.css home.css budget.css konsultkalkyl.css manadsavslut.css mortgagetracker.css"
-TEST_FILES="calc.test.js budget.test.js salary-store.test.js konsultkalkyl.test.js manadsavslut.test.js mortgagetracker.test.js"
+JS_FILES="calc.js dom.js storage.js modals.js charts.js app.js hero-canvas.js budget.js salary-store.js konsultkalkyl.js manadsavslut.js manadsavslut-store.js mortgagetracker.js mortgagetracker-store.js lonevaxling.js"
+ALL_FILES="index.html bostadskalkyl.html hushallsbudget.html konsultkalkyl.html manadsavslut.html mortgagetracker.html lonevaxling.html $JS_FILES styles.css home.css budget.css konsultkalkyl.css manadsavslut.css mortgagetracker.css lonevaxling.css"
+TEST_FILES="calc.test.js budget.test.js salary-store.test.js konsultkalkyl.test.js manadsavslut.test.js mortgagetracker.test.js lonevaxling.test.js"
 # Pages wired to app.js's id registry — only these are governed by check #5.
 CALC_INPUT_FILES="index.html bostadskalkyl.html"
 
