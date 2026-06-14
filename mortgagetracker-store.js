@@ -29,7 +29,7 @@
   'use strict';
 
   var STORAGE_KEY = 'bostadskalkyl_mortgage_v1';
-  var VERSION = 3;
+  var VERSION = 4;
 
   function _defaultSettings() {
     return {
@@ -47,24 +47,27 @@
   }
 
   // Read the whole envelope. Tolerates a missing/corrupt key by returning an
-  // empty store so the UI never throws. Collections absent in an older (v1/v2)
-  // envelope default to [] — that IS the forward migration.
+  // empty store so the UI never throws. Collections absent in an older envelope
+  // default to []. A pre-v4 envelope is migrated to rate_periods (and persisted
+  // once) — see _migrateToPeriods.
   function _read() {
-    var empty = { version: VERSION, loan_parts: [], payments: [], valuations: [], rate_changes: [], contributions: [], settings: _defaultSettings() };
+    var empty = { version: VERSION, loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [], settings: _defaultSettings() };
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return empty;
       var data = JSON.parse(raw);
       if (!data || typeof data !== 'object') return empty;
-      return {
+      var out = {
         version: VERSION,
         loan_parts: Array.isArray(data.loan_parts) ? data.loan_parts : [],
         payments: Array.isArray(data.payments) ? data.payments : [],
         valuations: Array.isArray(data.valuations) ? data.valuations : [],
-        rate_changes: Array.isArray(data.rate_changes) ? data.rate_changes : [],
+        rate_periods: Array.isArray(data.rate_periods) ? data.rate_periods : [],
         contributions: Array.isArray(data.contributions) ? data.contributions : [],
         settings: Object.assign(_defaultSettings(), data.settings || {})
       };
+      if ((Number(data.version) || 1) < 4) { _migrateToPeriods(out, data); _write(out); }
+      return out;
     } catch (_) {
       return empty;
     }
@@ -77,7 +80,7 @@
         loan_parts: data.loan_parts,
         payments: data.payments,
         valuations: data.valuations,
-        rate_changes: data.rate_changes,
+        rate_periods: data.rate_periods,
         contributions: data.contributions,
         settings: data.settings
       }));
@@ -85,6 +88,46 @@
     } catch (_) {
       return false;
     }
+  }
+
+  // v1–v3 → v4: fold each part's static rate (interest_rate / rate_type /
+  // rate_binding_until) and any old point-in-time rate_changes into rate_periods
+  // — a chronological list of {start_date, end_date, rate, rate_type}, end-dated
+  // to the day before the next period (the last stays open/ongoing). The old
+  // part-level rate fields are stripped. Idempotent: only runs when empty.
+  function _dayBefore(iso) {
+    var d = new Date(String(iso) + 'T00:00:00');
+    if (isNaN(d.getTime())) return null;
+    d.setDate(d.getDate() - 1);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  function _migrateToPeriods(out, raw) {
+    if (out.rate_periods.length) return;
+    var oldChanges = Array.isArray(raw.rate_changes) ? raw.rate_changes : [];
+    var periods = [];
+    out.loan_parts.forEach(function (p) {
+      if (!p) return;
+      var seeds = [];
+      if (p.interest_rate != null && p.interest_rate !== '') {
+        seeds.push({
+          start_date: p.start_date || '', rate: Number(p.interest_rate),
+          rate_type: p.rate_type === 'bunden' ? 'bunden' : 'rörlig',
+          end_date: (p.rate_type === 'bunden' && p.rate_binding_until) ? p.rate_binding_until : null
+        });
+      }
+      oldChanges.filter(function (r) { return r && r.loan_part_id === p.id; }).forEach(function (r) {
+        seeds.push({ start_date: r.date || '', rate: Number(r.rate), rate_type: 'rörlig', end_date: null });
+      });
+      seeds.sort(function (a, b) { return String(a.start_date).localeCompare(String(b.start_date)); });
+      seeds.forEach(function (s, i) {
+        var next = seeds[i + 1];
+        if (s.end_date == null && next && next.start_date) s.end_date = _dayBefore(next.start_date);
+        periods.push(_stamp({ loan_part_id: p.id, start_date: s.start_date, end_date: s.end_date, rate: s.rate, rate_type: s.rate_type }, 'rate'));
+      });
+      delete p.interest_rate; delete p.rate_type; delete p.rate_binding_until;
+    });
+    out.rate_periods = periods;
   }
 
   // Client-side id; Supabase would supply this via gen_random_uuid().
@@ -141,13 +184,13 @@
     return Promise.resolve(found);
   }
 
-  // Delete a loan part AND its payments + rate changes (an orphaned payment would
+  // Delete a loan part AND its payments + rate periods (an orphaned payment would
   // silently stop moving any balance). Resolves the remaining loan-part count.
   function removeLoanPart(id) {
     var data = _read();
     data.loan_parts = data.loan_parts.filter(function (p) { return p && p.id !== id; });
     data.payments = data.payments.filter(function (pay) { return !(pay && pay.loan_part_id === id); });
-    data.rate_changes = data.rate_changes.filter(function (r) { return !(r && r.loan_part_id === id); });
+    data.rate_periods = data.rate_periods.filter(function (r) { return !(r && r.loan_part_id === id); });
     _write(data);
     return Promise.resolve(data.loan_parts.length);
   }
@@ -230,22 +273,29 @@
     return Promise.resolve(data.valuations.length);
   }
 
-  // ── Rate changes (v2) ──────────────────────────────────────────────────────
-  // A part's interest rate over time. Each row { loan_part_id, date, rate }.
-  function listRateChanges() { return Promise.resolve(_byDateDesc(_read().rate_changes)); }
+  // ── Rate periods (v4) ──────────────────────────────────────────────────────
+  // A part's rate over time as editable periods, each
+  // { loan_part_id, start_date, end_date|null, rate, rate_type }. The period
+  // covering today is the part's headline rate; a bunden period's end_date is its
+  // villkorsändringsdag. Listed by start date, newest first.
+  function listRatePeriods() {
+    return Promise.resolve(_read().rate_periods.slice().sort(function (a, b) {
+      return String(b.start_date || '').localeCompare(String(a.start_date || ''));
+    }));
+  }
 
-  function addRateChange(record) {
+  function addRatePeriod(record) {
     var saved = _stamp(record, 'rate');
     var data = _read();
-    data.rate_changes.push(saved);
+    data.rate_periods.push(saved);
     _write(data);
     return Promise.resolve(saved);
   }
 
-  function updateRateChange(id, patch) {
+  function updateRatePeriod(id, patch) {
     var data = _read();
     var found = null;
-    data.rate_changes = data.rate_changes.map(function (r) {
+    data.rate_periods = data.rate_periods.map(function (r) {
       if (r && r.id === id) { found = Object.assign({}, r, patch); return found; }
       return r;
     });
@@ -253,11 +303,11 @@
     return Promise.resolve(found);
   }
 
-  function removeRateChange(id) {
+  function removeRatePeriod(id) {
     var data = _read();
-    data.rate_changes = data.rate_changes.filter(function (r) { return r && r.id !== id; });
+    data.rate_periods = data.rate_periods.filter(function (r) { return r && r.id !== id; });
     _write(data);
-    return Promise.resolve(data.rate_changes.length);
+    return Promise.resolve(data.rate_periods.length);
   }
 
   // ── Contributions (v3) ─────────────────────────────────────────────────────
@@ -308,7 +358,7 @@
       loan_parts: data.loan_parts,
       payments: _byDateDesc(data.payments),
       valuations: _byDateDesc(data.valuations),
-      rate_changes: _byDateDesc(data.rate_changes),
+      rate_periods: data.rate_periods,
       contributions: _byDateDesc(data.contributions),
       settings: data.settings
     }, null, 2));
@@ -323,12 +373,12 @@
       var parsed;
       try { parsed = JSON.parse(text); } catch (_) { reject(new Error('That file isn’t valid JSON.')); return; }
       if (!parsed || typeof parsed !== 'object') { reject(new Error('No Bolånekoll data found in that file.')); return; }
-      if (!parsed.loan_parts && !parsed.payments && !parsed.valuations && !parsed.rate_changes && !parsed.contributions) {
+      if (!parsed.loan_parts && !parsed.payments && !parsed.valuations && !parsed.rate_periods && !parsed.contributions) {
         reject(new Error('No Bolånekoll data found in that file.')); return;
       }
 
       var data = _read();
-      var added = { loan_parts: 0, payments: 0, valuations: 0, rate_changes: 0, contributions: 0 };
+      var added = { loan_parts: 0, payments: 0, valuations: 0, rate_periods: 0, contributions: 0 };
 
       function merge(collection, incoming, prefix) {
         var seen = {};
@@ -350,7 +400,7 @@
       added.loan_parts = merge(data.loan_parts, parsed.loan_parts, 'part');
       added.payments = merge(data.payments, parsed.payments, 'pay');
       added.valuations = merge(data.valuations, parsed.valuations, 'val');
-      added.rate_changes = merge(data.rate_changes, parsed.rate_changes, 'rate');
+      added.rate_periods = merge(data.rate_periods, parsed.rate_periods, 'rate');
       added.contributions = merge(data.contributions, parsed.contributions, 'contrib');
       if (parsed.settings && typeof parsed.settings === 'object') {
         data.settings = Object.assign(_defaultSettings(), data.settings, parsed.settings);
@@ -377,10 +427,10 @@
     addValuation: addValuation,
     updateValuation: updateValuation,
     removeValuation: removeValuation,
-    listRateChanges: listRateChanges,
-    addRateChange: addRateChange,
-    updateRateChange: updateRateChange,
-    removeRateChange: removeRateChange,
+    listRatePeriods: listRatePeriods,
+    addRatePeriod: addRatePeriod,
+    updateRatePeriod: updateRatePeriod,
+    removeRatePeriod: removeRatePeriod,
     listContributions: listContributions,
     addContribution: addContribution,
     updateContribution: updateContribution,

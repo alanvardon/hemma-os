@@ -248,34 +248,45 @@
     <div class="form-grid">
       <label class="form-field form-wide"><span>Label</span><input type="text" id="p-label" autocomplete="off" placeholder="e.g. Lånedel 1 (rörlig)"></label>
       <label class="form-field"><span>Loan # (optional)</span><input type="text" id="p-loanno" autocomplete="off" placeholder="e.g. 9021 33 12345"></label>
-      <label class="form-field"><span>Interest rate % (optional)</span><input type="text" id="p-rate" inputmode="decimal" autocomplete="off" placeholder="e.g. 3.54"></label>
+      <label class="form-field"><span>Start balance</span><input type="text" id="p-start" inputmode="decimal" autocomplete="off" placeholder="0"></label>
+      <label class="form-field"><span>As of date</span><input type="date" id="p-startdate"></label>
+    </div>
+    <p class="form-hint">The start balance is the part's debt on the "as of" date. The interest rate is set per period below.</p>
+
+    <!-- Rate periods — only for a saved part; the period spanning today is the headline rate -->
+    <div class="rate-history" id="p-rates-section" hidden>
+      <div class="rate-history-head">
+        <span>Rate periods</span>
+        <span class="rate-derived" id="p-rate-derived"></span>
+      </div>
+      <ul class="rate-list" id="p-rate-list"></ul>
+      <button type="button" class="btn btn-ghost" id="p-rate-add">+ Add rate period</button>
+    </div>
+
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ── Rate-period dialog ────────────────────────────────────── -->
+<dialog id="periodDialog" class="dialog">
+  <form id="periodForm" class="dialog-body">
+    <h3 class="dialog-title" id="periodDialogTitle">Add rate period</h3>
+    <div class="form-grid">
+      <label class="form-field"><span>From (start)</span><input type="date" id="per-start"></label>
+      <label class="form-field"><span>To (end, optional)</span><input type="date" id="per-end"></label>
+      <label class="form-field"><span>Interest rate %</span><input type="text" id="per-rate" inputmode="decimal" autocomplete="off" placeholder="e.g. 3.54"></label>
       <div class="form-field">
         <span>Rate type</span>
-        <div class="segmented" id="p-ratetype" role="radiogroup" aria-label="Rate type">
+        <div class="segmented" id="per-type" role="radiogroup" aria-label="Rate type">
           <button type="button" class="seg is-active" data-rt="rörlig" role="radio" aria-checked="true">Rörlig</button>
           <button type="button" class="seg" data-rt="bunden" role="radio" aria-checked="false">Bunden</button>
         </div>
       </div>
-      <label class="form-field" id="p-binding-field" hidden><span>Bound until (villkorsändring)</span><input type="date" id="p-binding"></label>
-      <label class="form-field"><span>Start balance</span><input type="text" id="p-start" inputmode="decimal" autocomplete="off" placeholder="0"></label>
-      <label class="form-field"><span>As of date</span><input type="date" id="p-startdate"></label>
     </div>
-    <p class="form-hint">The start balance is the part's debt on the "as of" date. Imported amortering since then is subtracted to get today's balance.</p>
-
-    <!-- Rate history — only for a saved part; the latest entry is the headline rate -->
-    <div class="rate-history" id="p-rates-section" hidden>
-      <div class="rate-history-head">
-        <span>Rate history</span>
-        <span class="rate-derived" id="p-rate-derived"></span>
-      </div>
-      <ul class="rate-list" id="p-rate-list"></ul>
-      <div class="rate-add">
-        <input type="date" id="p-rate-date" class="rate-add-date" aria-label="Rate change date">
-        <input type="text" id="p-rate-val" class="rate-add-val" inputmode="decimal" autocomplete="off" placeholder="rate %" aria-label="New rate">
-        <button type="button" class="btn btn-ghost" id="p-rate-add">+ Add</button>
-      </div>
-    </div>
-
+    <p class="form-hint">Leave “to” blank for the current, ongoing rate. A bunden term’s end date is its villkorsändringsdag.</p>
     <div class="dialog-actions">
       <button type="button" class="btn btn-ghost" data-close>Cancel</button>
       <button type="submit" class="btn btn-primary">Save</button>

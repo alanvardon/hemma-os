@@ -69,12 +69,22 @@ test('classifyKind reads the Specifikation text', () => {
 
 // ───────────────────────── row builders ─────────────────────────
 
-test('makeLoanPart normalises a draft', () => {
-  const p = m.makeLoanPart({ label: 'Del 1', start_balance: 1200000, interest_rate: 3.54 });
+test('makeLoanPart normalises a draft (no rate fields — rate lives in periods)', () => {
+  const p = m.makeLoanPart({ label: 'Del 1', start_balance: 1200000, start_date: '2024-07-24' });
   assert.equal(p.start_balance, 1200000);
-  assert.equal(p.interest_rate, 3.54);
+  assert.equal(p.start_date, '2024-07-24');
   assert.equal(p.archived, false);
-  assert.equal(m.makeLoanPart({}).interest_rate, null, 'a blank rate stays null');
+  assert.ok(!('interest_rate' in p), 'the part no longer carries a static rate');
+});
+
+test('makeRatePeriod normalises start / end / rate / type', () => {
+  const r = m.makeRatePeriod({ loan_part_id: 'p1', start_date: '2024-07-24', end_date: '2027-09-01', rate: 3.54, rate_type: 'bunden' });
+  assert.equal(r.rate, 3.54);
+  assert.equal(r.rate_type, 'bunden');
+  assert.equal(r.end_date, '2027-09-01');
+  const open = m.makeRatePeriod({ loan_part_id: 'p1', start_date: '2024-07-24', rate: 2.5 });
+  assert.equal(open.end_date, null, 'no end → open / ongoing');
+  assert.equal(open.rate_type, 'rörlig', 'default type is variable');
 });
 
 test('makePayment classifies, keeps magnitudes and derives the kind', () => {
@@ -229,7 +239,7 @@ test('addLoanPart stamps id + created_at and writes a versioned envelope', async
   const saved = await store.addLoanPart(m.makeLoanPart({ label: 'Del 1', start_balance: 1200000 }));
   assert.ok(saved.id && saved.created_at);
   const raw = JSON.parse(localStorage.getItem(store.STORAGE_KEY));
-  assert.equal(raw.version, 3);
+  assert.equal(raw.version, 4);
   assert.equal(raw.loan_parts.length, 1);
 });
 
@@ -310,9 +320,9 @@ test('exportJSON / importJSON round-trip and merge idempotently by id', async ()
 
   const fresh = freshStore();
   const added = await fresh.store.importJSON(dump);
-  assert.deepEqual(added, { loan_parts: 1, payments: 1, valuations: 1, rate_changes: 0, contributions: 0 });
+  assert.deepEqual(added, { loan_parts: 1, payments: 1, valuations: 1, rate_periods: 0, contributions: 0 });
   const again = await fresh.store.importJSON(dump);
-  assert.deepEqual(again, { loan_parts: 0, payments: 0, valuations: 0, rate_changes: 0, contributions: 0 });
+  assert.deepEqual(again, { loan_parts: 0, payments: 0, valuations: 0, rate_periods: 0, contributions: 0 });
 
   await assert.rejects(() => fresh.store.importJSON('{ not json'), /valid JSON/);
   await assert.rejects(() => fresh.store.importJSON(JSON.stringify({ nope: true })), /No Bolånekoll data/);
@@ -443,40 +453,40 @@ test('monthlyCost groups interest + amortering per month, net of ränteavdrag', 
 });
 
 // ── #4 Fixed-rate expiry ──
-test('makeLoanPart carries bound-rate type and expiry; rörlig drops the date', () => {
-  const b = m.makeLoanPart({ label: 'B', rate_type: 'bunden', rate_binding_until: '2027-09-01' });
-  assert.equal(b.rate_type, 'bunden');
-  assert.equal(b.rate_binding_until, '2027-09-01');
-  const r = m.makeLoanPart({ label: 'R', rate_type: 'rörlig', rate_binding_until: '2027-09-01' });
-  assert.equal(r.rate_type, 'rörlig');
-  assert.equal(r.rate_binding_until, null, 'a variable rate has no binding date');
-  assert.equal(m.makeLoanPart({}).rate_type, 'rörlig', 'default is variable');
-});
-
-test('bindingStatus counts days to the villkorsändringsdag', () => {
-  const part = { rate_type: 'bunden', rate_binding_until: '2027-09-01' };
-  const s = m.bindingStatus(part, '2027-06-01');
+test('bindingStatus counts days to the active bunden period’s villkorsändringsdag', () => {
+  const part = { id: 'p1' };
+  const periods = [{ loan_part_id: 'p1', start_date: '2024-01-01', end_date: '2027-09-01', rate: 2.5, rate_type: 'bunden' }];
+  const s = m.bindingStatus(part, periods, '2027-06-01');
   assert.equal(s.bound, true);
   assert.equal(s.days_left, 92);
   assert.equal(s.expired, false);
-  assert.equal(m.bindingStatus(part, '2027-10-01').expired, true);
-  assert.equal(m.bindingStatus({ rate_type: 'rörlig' }, '2027-06-01').bound, false);
+  assert.equal(m.bindingStatus(part, periods, '2027-10-01').expired, true);
+  const rorlig = [{ loan_part_id: 'p1', start_date: '2024-01-01', rate: 3, rate_type: 'rörlig' }];
+  assert.equal(m.bindingStatus(part, rorlig, '2027-06-01').bound, false, 'a rörlig period has no binding');
 });
 
-// ── #5 Rate history ──
-test('effectiveRate steps to the latest change, weightedAvgRate blends by balance', () => {
-  const part = { id: 'p1', interest_rate: 3.0 };
-  const changes = [{ loan_part_id: 'p1', date: '2025-06-01', rate: 2.5 }];
-  assert.equal(m.effectiveRate(part, changes, '2025-01-01'), 3.0, 'before the change → the part rate');
-  assert.equal(m.effectiveRate(part, changes, '2025-07-01'), 2.5, 'after → the changed rate');
-  assert.equal(m.effectiveRate(part, [], null), 3.0);
+// ── #5 Rate periods ──
+test('effectiveRatePeriod picks the period spanning the date, weightedAvgRate blends by balance', () => {
+  const part = { id: 'p1' };
+  const periods = [
+    { loan_part_id: 'p1', start_date: '2024-01-01', end_date: '2025-05-31', rate: 3.0, rate_type: 'rörlig' },
+    { loan_part_id: 'p1', start_date: '2025-06-01', end_date: null, rate: 2.5, rate_type: 'rörlig' }
+  ];
+  assert.equal(m.effectiveRate(part, periods, '2025-01-01'), 3.0, 'within the first period');
+  assert.equal(m.effectiveRate(part, periods, '2025-07-01'), 2.5, 'within the open period');
+  assert.equal(m.effectiveRatePeriod(part, periods, '2025-07-01').rate_type, 'rörlig');
+  assert.equal(m.effectiveRate(part, [], null), null, 'no periods → no rate');
 
-  const p1 = { id: 'p1', interest_rate: 3.0 }, p2 = { id: 'p2', interest_rate: 1.0 };
+  const p1 = { id: 'p1' }, p2 = { id: 'p2' };
+  const per = [
+    { loan_part_id: 'p1', start_date: '2024-01-01', end_date: null, rate: 3.0, rate_type: 'rörlig' },
+    { loan_part_id: 'p2', start_date: '2024-01-01', end_date: null, rate: 1.0, rate_type: 'rörlig' }
+  ];
   const pays = [
     { loan_part_id: 'p1', date: '2025-01-01', kind: 'payment', amount: 1, balance_after: 1000000 },
     { loan_part_id: 'p2', date: '2025-01-01', kind: 'payment', amount: 1, balance_after: 3000000 }
   ];
-  assert.equal(m.weightedAvgRate([p1, p2], [], pays), 1.5, '(3×1M + 1×3M) / 4M');
+  assert.equal(m.weightedAvgRate([p1, p2], per, pays), 1.5, '(3×1M + 1×3M) / 4M');
 });
 
 test('derivedRate annualises interest ÷ balance over the actual days between charges', () => {
@@ -495,26 +505,6 @@ test('derivedRate annualises interest ÷ balance over the actual days between ch
   const r = m.derivedRate(part, pays, { trailing: 3 });
   assert.ok(r > 3.8 && r < 4.1, 'trailing-3 day-weighted lands ~3.98 %, got ' + r);
   assert.equal(m.derivedRate({ id: 'p1' }, pays.slice(0, 2)), null, 'one charge → not enough to bound a period');
-});
-
-test('rateTimeline opens with the base rate and dates each period to the next change', () => {
-  const part = { id: 'p1', start_date: '2024-07-24', interest_rate: 3.79 };
-  const changes = [
-    { id: 'r1', loan_part_id: 'p1', date: '2025-06-01', rate: 2.54 },
-    { id: 'r2', loan_part_id: 'p1', date: '2025-01-01', rate: 4.10 }
-  ];
-  const tl = m.rateTimeline(part, changes);
-  assert.equal(tl.length, 3);
-  assert.equal(tl[0].base, true, 'base rate is the first entry');
-  assert.equal(tl[0].date, '2024-07-24');
-  assert.equal(tl[0].rate, 3.79);
-  assert.equal(tl[0].end, '2024-12-31', 'base ends the day before the first change');
-  assert.equal(tl[0].id, null, 'base has no rate-change id (edited via the field)');
-  assert.equal(tl[1].date, '2025-01-01');
-  assert.equal(tl[1].end, '2025-05-31');
-  assert.equal(tl[2].date, '2025-06-01');
-  assert.equal(tl[2].end, null, 'the latest rate is ongoing');
-  assert.equal(m.rateTimeline({ id: 'p1' }, []).length, 0, 'no base rate and no changes → empty');
 });
 
 // ── #6 Amorteringskrav ──
@@ -631,16 +621,16 @@ test('settlement trues contributions up to the target ownership split', () => {
 });
 
 // ── store: new collections ──
-test('rate-change CRUD round-trips and cascades when its loan part is deleted', async () => {
+test('rate-period CRUD round-trips and cascades when its loan part is deleted', async () => {
   const { store } = freshStore();
   const p = await store.addLoanPart({ label: 'P' });
-  const rc = await store.addRateChange({ loan_part_id: p.id, date: '2025-06-01', rate: 2.5 });
+  const rc = await store.addRatePeriod({ loan_part_id: p.id, start_date: '2024-07-24', end_date: null, rate: 2.5, rate_type: 'rörlig' });
   assert.ok(rc.id && rc.created_at);
-  assert.equal((await store.listRateChanges()).length, 1);
-  const upd = await store.updateRateChange(rc.id, { rate: 2.25 });
+  assert.equal((await store.listRatePeriods()).length, 1);
+  const upd = await store.updateRatePeriod(rc.id, { rate: 2.25 });
   assert.equal(upd.rate, 2.25);
   await store.removeLoanPart(p.id);
-  assert.equal((await store.listRateChanges()).length, 0, 'rate changes cascade with the part');
+  assert.equal((await store.listRatePeriods()).length, 0, 'rate periods cascade with the part');
 });
 
 test('contribution CRUD round-trips', async () => {
@@ -652,14 +642,34 @@ test('contribution CRUD round-trips', async () => {
   assert.equal(await store.removeContribution(c.id), 0);
 });
 
-test('exportJSON / importJSON carry rate changes and contributions', async () => {
+test('exportJSON / importJSON carry rate periods and contributions', async () => {
   const { store } = freshStore();
   await store.addLoanPart({ id: 'p1', label: 'P', created_at: '2025-01-01T00:00:00.000Z' });
-  await store.addRateChange({ id: 'r1', loan_part_id: 'p1', date: '2025-06-01', rate: 2.5, created_at: '2025-06-01T00:00:00.000Z' });
+  await store.addRatePeriod({ id: 'r1', loan_part_id: 'p1', start_date: '2024-07-24', end_date: null, rate: 2.5, rate_type: 'rörlig', created_at: '2024-07-24T00:00:00.000Z' });
   await store.addContribution({ id: 'c1', owner: 'a', date: '2025-01-01', amount: 200000, created_at: '2025-01-01T00:00:00.000Z' });
   const dump = await store.exportJSON();
   const fresh = freshStore();
   const added = await fresh.store.importJSON(dump);
-  assert.equal(added.rate_changes, 1);
+  assert.equal(added.rate_periods, 1);
   assert.equal(added.contributions, 1);
+});
+
+test('a pre-v4 envelope migrates the part rate + rate_changes into rate_periods', async () => {
+  const { store, localStorage } = freshStore();
+  localStorage.setItem(store.STORAGE_KEY, JSON.stringify({
+    version: 3,
+    loan_parts: [{ id: 'p1', label: 'Del 1', start_date: '2024-07-24', interest_rate: 3.79, rate_type: 'rörlig', rate_binding_until: null }],
+    payments: [], valuations: [],
+    rate_changes: [{ id: 'rc1', loan_part_id: 'p1', date: '2025-06-01', rate: 2.54 }],
+    contributions: [], settings: {}
+  }));
+  const periods = await store.listRatePeriods();
+  assert.equal(periods.length, 2, 'base rate + the one change become two periods');
+  const byStart = periods.slice().sort((a, b) => a.start_date.localeCompare(b.start_date));
+  assert.equal(byStart[0].rate, 3.79);
+  assert.equal(byStart[0].end_date, '2025-05-31', 'base ends the day before the change');
+  assert.equal(byStart[1].rate, 2.54);
+  assert.equal(byStart[1].end_date, null, 'latest stays open');
+  const parts = await store.listLoanParts();
+  assert.ok(!('interest_rate' in parts[0]), 'the old static rate field is stripped');
 });

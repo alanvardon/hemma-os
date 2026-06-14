@@ -158,18 +158,26 @@
   // ── Row builders ────────────────────────────────────────────────────────
   function makeLoanPart(partial) {
     partial = partial || {};
-    var rate = partial.interest_rate;
-    var rt = partial.rate_type === 'bunden' ? 'bunden' : 'rörlig';
     return {
       label: partial.label || '',
       loan_number: partial.loan_number || '',
       start_balance: _round2(Number(partial.start_balance) || 0),
       start_date: partial.start_date || '',
-      interest_rate: (rate == null || rate === '') ? null : Number(rate),
-      rate_type: rt,
-      // Only a bound (bunden) rate carries an expiry — the villkorsändringsdag.
-      rate_binding_until: (rt === 'bunden' && partial.rate_binding_until) ? String(partial.rate_binding_until) : null,
       archived: !!partial.archived
+    };
+  }
+  // A rate period: the rate in effect from start_date to end_date (null = ongoing),
+  // and whether it's bunden (fixed — end_date is the villkorsändringsdag) or rörlig.
+  // Rate lives entirely in these periods; the loan part no longer carries one.
+  function makeRatePeriod(partial) {
+    partial = partial || {};
+    var rate = partial.rate;
+    return {
+      loan_part_id: partial.loan_part_id || null,
+      start_date: partial.start_date || '',
+      end_date: (partial.end_date == null || partial.end_date === '') ? null : String(partial.end_date),
+      rate: (rate == null || rate === '') ? null : Number(rate),
+      rate_type: partial.rate_type === 'bunden' ? 'bunden' : 'rörlig'
     };
   }
 
@@ -623,38 +631,51 @@
     });
   }
 
-  // #4 — Fixed-rate (bunden) expiry. Days until the villkorsändringsdag.
-  function bindingStatus(part, asOf) {
+  // #5 — Rate periods. The period in effect for a part on a date: the one whose
+  // [start, end] spans asOf (end null = open), else the latest by start date.
+  function effectiveRatePeriod(part, periods, asOf) {
+    var pid = part && part.id;
+    var mine = (periods || []).filter(function (r) { return r && r.loan_part_id === pid && r.rate != null; });
+    if (!mine.length) return null;
+    if (asOf) {
+      var covering = mine.filter(function (r) {
+        var s = String(r.start_date || '');
+        var e = r.end_date ? String(r.end_date) : null;
+        return (!s || s <= asOf) && (e == null || asOf <= e);
+      });
+      if (covering.length) {
+        covering.sort(function (a, b) { return String(a.start_date || '').localeCompare(String(b.start_date || '')); });
+        return covering[covering.length - 1];
+      }
+    }
+    var sorted = mine.slice().sort(function (a, b) { return String(a.start_date || '').localeCompare(String(b.start_date || '')); });
+    return sorted[sorted.length - 1];
+  }
+  function effectiveRate(part, periods, asOf) {
+    var p = effectiveRatePeriod(part, periods, asOf);
+    return p ? Number(p.rate) : null;
+  }
+
+  // #4 — Fixed-rate (bunden) expiry. If the active period is bunden with an end
+  // date, the days until that villkorsändringsdag.
+  function bindingStatus(part, periods, asOf) {
     var res = { bound: false, until: null, days_left: null, expired: false };
-    if (!part || part.rate_type !== 'bunden' || !part.rate_binding_until) return res;
+    var p = effectiveRatePeriod(part, periods, asOf);
+    if (!p || p.rate_type !== 'bunden' || !p.end_date) return res;
     res.bound = true;
-    res.until = String(part.rate_binding_until);
+    res.until = String(p.end_date);
     var days = _daysBetween(asOf || _todayISO(), res.until);
     res.days_left = days;
     res.expired = days != null && days < 0;
     return res;
   }
-
-  // #5 — Rate history. A part's effective rate on a date is the latest rate
-  // change on/before it, falling back to the part's own interest_rate.
-  function effectiveRate(part, rateChanges, asOf) {
-    var pid = part && part.id;
-    var changes = (rateChanges || []).filter(function (c) {
-      return c && c.loan_part_id === pid && c.rate != null && (!asOf || !c.date || String(c.date) <= asOf);
-    });
-    if (changes.length) {
-      changes = changes.slice().sort(function (a, b) { return String(a.date || '').localeCompare(String(b.date || '')); });
-      return Number(changes[changes.length - 1].rate);
-    }
-    return part && part.interest_rate != null ? Number(part.interest_rate) : null;
-  }
   // Blended rate across active parts, weighted by each part's balance.
-  function weightedAvgRate(parts, rateChanges, payments, asOf) {
+  function weightedAvgRate(parts, periods, payments, asOf) {
     var num = 0, den = 0;
     (parts || []).forEach(function (p) {
       if (!p || p.archived) return;
       var bal = asOf ? partBalanceAsOf(p, payments, asOf) : partBalance(p, payments);
-      var rate = effectiveRate(p, rateChanges, asOf);
+      var rate = effectiveRate(p, periods, asOf);
       if (rate == null || bal <= 0) return;
       num += rate * bal; den += bal;
     });
@@ -687,32 +708,6 @@
     var num = 0, den = 0;
     use.forEach(function (p) { num += p.rate * p.days; den += p.days; });
     return den > 0 ? _round2(num / den * 100) : null;
-  }
-  function _dayBefore(iso) {
-    var d = new Date(String(iso) + 'T00:00:00');
-    if (isNaN(d.getTime())) return null;
-    d.setDate(d.getDate() - 1);
-    var p = function (n) { return (n < 10 ? '0' : '') + n; };
-    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-  }
-  // A part's full rate timeline for display: the base rate (interest_rate, from
-  // the part's start date) as the opening entry, then each logged change, sorted
-  // ascending. Each entry is dated to the period it was in effect — `end` is the
-  // day before the next change (null = ongoing, the current headline rate).
-  function rateTimeline(part, rateChanges) {
-    var entries = [];
-    if (part && part.interest_rate != null && part.interest_rate !== '') {
-      entries.push({ date: String(part.start_date || ''), rate: Number(part.interest_rate), id: null, base: true });
-    }
-    (rateChanges || []).forEach(function (r) {
-      if (!r || r.loan_part_id !== (part && part.id) || r.rate == null) return;
-      entries.push({ date: String(r.date || ''), rate: Number(r.rate), id: r.id, base: false });
-    });
-    entries.sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
-    return entries.map(function (e, i) {
-      var next = entries[i + 1];
-      return { date: e.date, rate: e.rate, id: e.id, base: e.base, end: (next && next.date) ? _dayBefore(next.date) : null };
-    });
   }
 
   // #6 — Amorteringskrav. Sweden's required amortisation as a % of the loan per
@@ -870,6 +865,7 @@
     autoMapColumns: autoMapColumns,
     classifyKind: classifyKind,
     makeLoanPart: makeLoanPart,
+    makeRatePeriod: makeRatePeriod,
     makePayment: makePayment,
     normPaidBy: normPaidBy,
     paymentFingerprint: paymentFingerprint,
@@ -901,10 +897,10 @@
     projectMilestones: projectMilestones,
     monthlyCost: monthlyCost,
     bindingStatus: bindingStatus,
+    effectiveRatePeriod: effectiveRatePeriod,
     effectiveRate: effectiveRate,
     weightedAvgRate: weightedAvgRate,
     derivedRate: derivedRate,
-    rateTimeline: rateTimeline,
     amorteringskrav: amorteringskrav,
     amorteringskravStatus: amorteringskravStatus,
     headerSignature: headerSignature,
@@ -1299,8 +1295,8 @@
   }
 
   function renderDashboard() {
-    return Promise.all([store.listLoanParts(), store.listPayments(), store.listValuations()]).then(function (res) {
-      var parts = res[0], pays = res[1], vals = res[2];
+    return Promise.all([store.listLoanParts(), store.listPayments(), store.listValuations(), store.listRatePeriods()]).then(function (res) {
+      var parts = res[0], pays = res[1], vals = res[2], periods = res[3];
       var balance = totalBalance(parts, pays);
       var value = propertyValue(vals);
       var eq = equity(value, balance);
@@ -1334,7 +1330,7 @@
       // Soonest bound-rate (bunden) expiry across the parts — the next omförhandling.
       var soon = null;
       parts.forEach(function (p) {
-        var bs = bindingStatus(p);
+        var bs = bindingStatus(p, periods);
         if (bs.bound && bs.days_left != null && (soon == null || bs.days_left < soon.days)) {
           soon = { days: bs.days_left, until: bs.until };
         }
@@ -1426,8 +1422,8 @@
   // ── loan parts ──────────────────────────────────────────────────────────────
   var partsHost = $('partsHost'), partsCount = $('partsCount');
   function renderParts() {
-    return Promise.all([store.listLoanParts(), store.listPayments(), store.listRateChanges()]).then(function (res) {
-      var parts = res[0], pays = res[1], rates = res[2];
+    return Promise.all([store.listLoanParts(), store.listPayments(), store.listRatePeriods()]).then(function (res) {
+      var parts = res[0], pays = res[1], periods = res[2];
       partsCount.textContent = parts.length;
       if (!parts.length) {
         partsHost.innerHTML = '<p class="empty">No loan parts yet. Add your lånedelar — one per loan account — to begin.</p>';
@@ -1437,13 +1433,15 @@
       var body = parts.map(function (p) {
         var bal = partBalance(p, pays);
         var pct = total > 0 ? bal / total * 100 : 0;
-        // Headline = latest logged rate (else the part's base rate); ledger-derived
+        // Headline = the rate period spanning today (with its type); ledger-derived
         // rate shown alongside as a cross-check.
-        var eff = effectiveRate(p, rates, null);
+        var per = effectiveRatePeriod(p, periods, null);
         var der = derivedRate(p, pays);
         var rateCell;
-        if (eff != null) rateCell = formatPct(eff) + (der != null ? ' <span class="row-note">· ~' + formatPct(der) + ' ledger</span>' : '');
-        else if (der != null) rateCell = '<span class="row-note">~' + formatPct(der) + ' ledger</span>';
+        if (per && per.rate != null) {
+          rateCell = formatPct(per.rate) + ' <span class="row-note">' + (per.rate_type === 'bunden' ? 'bunden' : 'rörlig') + '</span>'
+            + (der != null ? ' <span class="row-note">· ~' + formatPct(der) + ' ledger</span>' : '');
+        } else if (der != null) rateCell = '<span class="row-note">~' + formatPct(der) + ' ledger</span>';
         else rateCell = '—';
         return '<tr' + (p.archived ? ' class="is-settled"' : '') + '>'
           + '<td>' + escapeHtml(p.label || '(no name)') + (p.loan_number ? ' <span class="row-note">#' + escapeHtml(p.loan_number) + '</span>' : '') + '</td>'
@@ -1584,7 +1582,7 @@
       + '<span class="bridge-key"><span class="bridge-dot is-appr"></span>Värdeökning · appreciation <b>' + signed(appr) + '</b></span></div>';
   }
   function renderInsights() {
-    return Promise.all([store.listLoanParts(), store.listPayments(), store.listValuations(), store.listRateChanges()]).then(function (res) {
+    return Promise.all([store.listLoanParts(), store.listPayments(), store.listValuations(), store.listRatePeriods()]).then(function (res) {
       var parts = res[0], pays = res[1], vals = res[2], rates = res[3];
       var emptyEl = $('insightsEmpty'), body = $('insightsBody');
       if (!parts.length || !vals.length || !pays.length) { emptyEl.hidden = false; body.hidden = true; return; }
@@ -1710,45 +1708,37 @@
 
   // ── loan-part dialog ──────────────────────────────────────────────────────
   var partDialog = $('partDialog'), partForm = $('partForm'), partDialogTitle = $('partDialogTitle');
-  var pLabel = $('p-label'), pLoanNo = $('p-loanno'), pStart = $('p-start'), pStartDate = $('p-startdate'), pRate = $('p-rate');
-  var pRateType = $('p-ratetype'), pBindingField = $('p-binding-field'), pBinding = $('p-binding');
-  var pRatesSection = $('p-rates-section'), pRateList = $('p-rate-list'), pRateDerived = $('p-rate-derived'),
-      pRateDate = $('p-rate-date'), pRateVal = $('p-rate-val');
+  var pLabel = $('p-label'), pLoanNo = $('p-loanno'), pStart = $('p-start'), pStartDate = $('p-startdate');
+  var pRatesSection = $('p-rates-section'), pRateList = $('p-rate-list'), pRateDerived = $('p-rate-derived');
   var editingPartId = null;
-  function updateBindingField() { pBindingField.hidden = segValue(pRateType) !== 'bunden'; }
-  // Rate history lives in the part dialog: the logged changes (latest is the
-  // headline rate) with the ledger-derived rate alongside as a cross-check.
-  // Available once the part is saved — a new part has no id to attach changes to.
+  // Rate periods live in the part dialog — one per fixed/variable term, each
+  // with start, end, rate and bunden/rörlig. The period spanning today is the
+  // headline rate; the ledger-derived rate shows alongside as a cross-check.
+  // Available once the part is saved (a new part has no id to attach periods to).
   function renderPartRates() {
     if (!editingPartId) { pRatesSection.hidden = true; return; }
     pRatesSection.hidden = false;
-    Promise.all([store.listRateChanges(), store.listPayments(), store.listLoanParts()]).then(function (res) {
+    Promise.all([store.listRatePeriods(), store.listPayments(), store.listLoanParts()]).then(function (res) {
+      var periods = res[0].filter(function (r) { return r.loan_part_id === editingPartId; })
+        .sort(function (a, b) { return String(a.start_date || '').localeCompare(String(b.start_date || '')); });
       var part = res[2].filter(function (x) { return x.id === editingPartId; })[0];
       var der = part ? derivedRate(part, res[1]) : null;
       pRateDerived.textContent = der != null ? 'Ledger ≈ ' + formatPct(der) : '';
-      var tl = part ? rateTimeline(part, res[0]) : [];
-      if (!tl.length) {
-        pRateList.innerHTML = '<li class="rate-empty">No rate yet — set the part’s rate above, then log changes here.</li>';
+      if (!periods.length) {
+        pRateList.innerHTML = '<li class="rate-empty">No rate periods yet — add one to set this part’s rate.</li>';
         return;
       }
-      // Chronological: base rate first, latest (ongoing) last. The base row is
-      // edited via the field above, so it shows a "base" tag instead of delete.
-      pRateList.innerHTML = tl.map(function (e) {
-        var period = escapeHtml(e.date || '—') + ' → ' + escapeHtml(e.end || 'nu · now');
-        var tail = e.id
-          ? '<button type="button" class="icon-btn" data-del-rate="' + escapeHtml(e.id) + '" title="Delete" aria-label="Delete">✕</button>'
-          : '<span class="rate-base">base</span>';
-        return '<li><span class="rate-when">' + period + '</span><span class="rate-pct">' + formatPct(e.rate) + '</span>' + tail + '</li>';
+      pRateList.innerHTML = periods.map(function (r) {
+        var period = escapeHtml(r.start_date || '—') + ' → ' + escapeHtml(r.end_date || 'nu · now');
+        var bunden = r.rate_type === 'bunden';
+        return '<li><span class="rate-when">' + period + '</span>'
+          + '<span class="rate-pct">' + (r.rate != null ? formatPct(r.rate) : '—') + '</span>'
+          + '<span class="rate-type' + (bunden ? ' is-bunden' : '') + '">' + (bunden ? 'Bunden' : 'Rörlig') + '</span>'
+          + '<span class="rate-acts">'
+          + '<button type="button" class="icon-btn" data-edit-period="' + escapeHtml(r.id) + '" title="Edit" aria-label="Edit">✎</button>'
+          + '<button type="button" class="icon-btn" data-del-period="' + escapeHtml(r.id) + '" title="Delete" aria-label="Delete">✕</button>'
+          + '</span></li>';
       }).join('');
-    });
-  }
-  function addPartRate() {
-    if (!editingPartId) { toast('Save the loan part first, then log rate changes.'); return; }
-    var v = parseAmount(pRateVal.value);
-    if (!isFinite(v)) { toast('Enter the new rate.'); return; }
-    store.addRateChange({ loan_part_id: editingPartId, date: clean(pRateDate.value) || todayISO(), rate: round2(v) }).then(function () {
-      pRateVal.value = '';
-      renderPartRates(); refresh(); flashSaved();
     });
   }
   function openPartDialog(id) {
@@ -1759,12 +1749,6 @@
       pLoanNo.value = (p && p.loan_number) || '';
       pStart.value = p && p.start_balance ? String(p.start_balance) : '';
       pStartDate.value = (p && p.start_date) || todayISO();
-      pRate.value = p && p.interest_rate != null ? String(p.interest_rate) : '';
-      setSeg(pRateType, (p && p.rate_type) === 'bunden' ? 'bunden' : 'rörlig');
-      pBinding.value = (p && p.rate_binding_until) || '';
-      updateBindingField();
-      pRateDate.value = todayISO();
-      pRateVal.value = '';
       renderPartRates();
       partDialog.showModal();
     }
@@ -1778,10 +1762,7 @@
       label: clean(pLabel.value) || 'Lånedel',
       loan_number: clean(pLoanNo.value),
       start_balance: startRaw === '' ? 0 : parseAmount(startRaw),
-      start_date: clean(pStartDate.value),
-      interest_rate: clean(pRate.value) === '' ? null : parseAmount(pRate.value),
-      rate_type: segValue(pRateType) === 'bunden' ? 'bunden' : 'rörlig',
-      rate_binding_until: clean(pBinding.value) || null
+      start_date: clean(pStartDate.value)
     });
     var op = editingPartId ? store.updateLoanPart(editingPartId, rec) : store.addLoanPart(rec);
     op.then(function () { partDialog.close(); refresh(); flashSaved(); toast(editingPartId ? 'Loan part updated.' : 'Loan part added.'); });
@@ -1789,6 +1770,43 @@
   function deletePart(id) {
     if (!window.confirm('Delete this loan part and all its payments? This can’t be undone.')) return;
     store.removeLoanPart(id).then(function () { refresh(); flashSaved(); toast('Loan part deleted.'); });
+  }
+
+  // ── rate-period dialog (opened from the loan-part dialog) ─────────────────
+  var periodDialog = $('periodDialog'), periodForm = $('periodForm'), periodDialogTitle = $('periodDialogTitle');
+  var perStart = $('per-start'), perEnd = $('per-end'), perRate = $('per-rate'), perType = $('per-type');
+  var editingPeriodId = null;
+  function openPeriodDialog(id) {
+    if (!editingPartId) { toast('Save the loan part first.'); return; }
+    editingPeriodId = id || null;
+    periodDialogTitle.textContent = id ? 'Edit rate period' : 'Add rate period';
+    function show(r) {
+      perStart.value = (r && r.start_date) || todayISO();
+      perEnd.value = (r && r.end_date) || '';
+      perRate.value = r && r.rate != null ? String(r.rate) : '';
+      setSeg(perType, (r && r.rate_type) === 'bunden' ? 'bunden' : 'rörlig');
+      periodDialog.showModal();
+    }
+    if (id) store.listRatePeriods().then(function (rs) { var r = rs.filter(function (x) { return x.id === id; })[0]; if (r) show(r); });
+    else show(null);
+  }
+  function submitPeriod(e) {
+    e.preventDefault();
+    var rate = parseAmount(perRate.value);
+    if (!isFinite(rate)) { toast('Enter the rate.'); return; }
+    var rec = makeRatePeriod({
+      loan_part_id: editingPartId,
+      start_date: clean(perStart.value) || todayISO(),
+      end_date: clean(perEnd.value) || null,
+      rate: round2(rate),
+      rate_type: segValue(perType) === 'bunden' ? 'bunden' : 'rörlig'
+    });
+    var op = editingPeriodId ? store.updateRatePeriod(editingPeriodId, rec) : store.addRatePeriod(rec);
+    op.then(function () { periodDialog.close(); renderPartRates(); refresh(); flashSaved(); toast(editingPeriodId ? 'Rate period updated.' : 'Rate period added.'); });
+  }
+  function deletePeriod(id) {
+    if (!window.confirm('Delete this rate period?')) return;
+    store.removeRatePeriod(id).then(function () { renderPartRates(); refresh(); flashSaved(); });
   }
 
   // ── valuation dialog ──────────────────────────────────────────────────────
@@ -2099,17 +2117,15 @@
   contribForm.addEventListener('submit', submitContrib);
   payAmount.addEventListener('input', fillPayHint);
   payType.addEventListener('change', fillPayHint);
-  wireSeg(pRateType, updateBindingField);
 
-  // Loan-part dialog: nested rate-history add / delete
-  $('p-rate-add').addEventListener('click', addPartRate);
+  // Loan-part dialog: rate periods (add/edit via the period dialog, delete inline)
+  $('p-rate-add').addEventListener('click', function () { openPeriodDialog(null); });
   pRateList.addEventListener('click', function (e) {
-    var dl = e.target.closest('[data-del-rate]'); if (!dl) return;
-    store.removeRateChange(dl.getAttribute('data-del-rate')).then(function () { renderPartRates(); refresh(); flashSaved(); });
+    var ed = e.target.closest('[data-edit-period]'); if (ed) { openPeriodDialog(ed.getAttribute('data-edit-period')); return; }
+    var dl = e.target.closest('[data-del-period]'); if (dl) { deletePeriod(dl.getAttribute('data-del-period')); }
   });
-  [pRateVal, pRateDate].forEach(function (el) {
-    el.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addPartRate(); } });
-  });
+  periodForm.addEventListener('submit', submitPeriod);
+  wireSeg(perType);
 
   // Insights period + projection what-if
   wireSeg($('bridgePeriod'), function (v) { bridgePeriod = v; renderInsights(); });
