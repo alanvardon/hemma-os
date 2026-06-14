@@ -1484,8 +1484,13 @@
   function renderReconcile() {
     return Promise.all([store.listLoanParts(), store.listPayments()]).then(function (res) {
       var banner = $('reconcileBanner');
-      // Ignore sub-1-kr rounding; only flag a genuine start-vs-ledger gap.
-      var rows = reconcileBalance(res[0], res[1]).filter(function (r) { return r.drift != null && Math.abs(r.drift) >= 1; });
+      // Only flag a MATERIAL start-vs-ledger gap. A hairline difference just means
+      // the import starts a month or two after origination (normal) — a real
+      // partial import is large. Threshold: ≥1% of the loan, and ≥5 000 kr.
+      var rows = reconcileBalance(res[0], res[1]).filter(function (r) {
+        if (r.drift == null || r.start_balance == null) return false;
+        return Math.abs(r.drift) >= Math.max(r.start_balance * 0.01, 5000);
+      });
       if (!rows.length) { banner.hidden = true; banner.innerHTML = ''; return; }
       var items = rows.map(function (r) {
         return '<li>' + escapeHtml(r.label || 'Loan part') + ': start balance ' + formatMoney(r.start_balance)
