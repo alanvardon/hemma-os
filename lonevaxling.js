@@ -139,6 +139,9 @@
     var withdrawalRate = num(d.withdrawalTaxPct) / 100;
     var netPensionValue = premiumToPension * (1 - withdrawalRate);
     var leverage = takeHomeReduction > 0 ? netPensionValue / takeHomeReduction : 0;
+    // What you actually come out ahead, in today's kronor: the net pension you'll
+    // draw minus the net salary you gave up to fund it (tax arbitrage + uplift).
+    var netBenefit = sacrificeYr > 0 ? netPensionValue - takeHomeReduction : 0;
 
     // Eligibility & ceilings (monthly).
     var ceilingMo = PENSION_CEILING_YR / 12;
@@ -173,6 +176,7 @@
       premiumToPension: premiumToPension,
       upliftAmount: upliftAmount,
       netPensionValue: netPensionValue,
+      netBenefit: netBenefit,
       withdrawalRate: withdrawalRate,
       leverage: leverage,
       leveragePct: (leverage - 1) * 100,
@@ -233,7 +237,8 @@
     ['taxSavedNow',      'o-taxSaved-m',    'o-taxSaved-y'],
     ['premiumToPension', 'o-premium-m',     'o-premium-y'],
     ['upliftAmount',     'o-uplift-m',      'o-uplift-y'],
-    ['netPensionValue',  'o-netPension-m',  'o-netPension-y']
+    ['netPensionValue',  'o-netPension-m',  'o-netPension-y'],
+    ['netBenefit',       'o-netBenefit-m',  'o-netBenefit-y']
   ];
 
   var state = load();
@@ -353,7 +358,8 @@
     setText('o-marginal', pct0(r.marginalRateNow * 100));
     setText('o-withdrawalRate', pct0(r.withdrawalRate * 100));
     var spread = (r.marginalRateNow - r.withdrawalRate) * 100;
-    setText('o-spread', (spread >= 0 ? '+' : '−') + Math.abs(Math.round(spread)) + ' pp');
+    var spreadStr = (Math.round(Math.abs(spread) * 10) / 10).toString().replace('.', ',');
+    setText('o-spread', (spread >= 0 ? '+' : '−') + spreadStr + ' pp');
 
     // eligibility verdict
     var verdict = document.getElementById('verdictBox');
@@ -370,7 +376,8 @@
     setText('o-leverage', r.leverage > 0 ? signedPct0(r.leveragePct) : '—');
     setText('o-leverageSub', r.netGivenUp > 0
       ? 'Du avstår ' + money(r.netGivenUp / 12) + ' netto/mån och får ' +
-        money(r.netPensionValue / 12) + ' (efter skatt) till pension.'
+        money(r.netPensionValue / 12) + ' (efter skatt) till pension — ' +
+        'en nettovinst på ' + money(r.netBenefit) + '/år i dagens kronor.'
       : 'Ange en löneväxling för att se hävstången.');
     setText('o-heroGiveUp', money(r.netGivenUp / 12));
     setText('o-heroGet', money(r.netPensionValue / 12));

@@ -51,6 +51,12 @@ test('leverage > 1 when you defer at 52 % and withdraw at 32 %', () => {
   near(r.leveragePct, (r.leverage - 1) * 100, 0.001);
 });
 
+test('net benefit = net pension value − net salary given up (today\'s kronor)', () => {
+  const r = L.computeLonevaxling({ grossSalaryMonthly: 65000, sacrificeMonthly: 5000, withdrawalTaxPct: 32 });
+  near(r.netBenefit, r.netPensionValue - r.netGivenUp, 0.001);
+  assert.ok(r.netBenefit > 0, 'a 52%→32% swap with uplift comes out ahead');
+});
+
 // ── Optimal-sacrifice suggestion ───────────────────────────────────
 test('suggested sacrifice = salary down to the pension ceiling', () => {
   const r = L.computeLonevaxling({ grossSalaryMonthly: 65000 });
