@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Löneväxling — Hemma</title>
+<script>
+  // Pre-paint theme to avoid a light-mode flash (shared key with the rest of Hemma)
+  try { document.documentElement.dataset.theme = localStorage.getItem('bostadskalkyl_theme') === 'dark' ? 'dark' : 'light'; } catch (_) {}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="lonevaxling.css">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="theme-color" content="">
+</head>
+<body>
+
+<div class="page-header">
+  <div class="header-brand">
+    <a class="hub-link" href="index.html">‹ Hemma</a>
+    <div>
+      <h1>Löneväxling</h1>
+      <p class="tagline">Is it worth swapping salary for pension — and how much? Sweden, 2026</p>
+    </div>
+  </div>
+  <div class="header-actions">
+    <span id="saveState" class="save-state">Saved ✓</span>
+    <button id="themeToggleBtn" class="btn btn-ghost theme-toggle-btn" title="Toggle dark mode">☀</button>
+    <button class="btn btn-ghost" id="resetBtn" title="Reset to the example">Reset</button>
+  </div>
+</div>
+
+<div class="layout">
+
+  <!-- INPUTS (left rail) -->
+  <div class="inputs-col">
+
+    <!-- Section 1: Salary -->
+    <div class="section">
+      <div class="section-label">
+        <span class="section-num">1</span>
+        <span class="section-title">Lön · Salary</span>
+      </div>
+      <p class="section-note">
+        Your monthly gross salary, and how much of it you want to
+        <strong>löneväxla</strong> — swap into a pension premium each month.
+      </p>
+      <div class="field-grid">
+        <div class="field">
+          <label for="in-gross">Bruttolön / mån <span class="field-en">Gross/month</span></label>
+          <div class="input-wrap"><input type="text" id="in-gross" inputmode="decimal" autocomplete="off"><span class="unit">kr</span></div>
+        </div>
+        <div class="field">
+          <label for="in-sacrifice">Löneväxling / mån <span class="field-en">Sacrifice</span></label>
+          <div class="input-wrap"><input type="text" id="in-sacrifice" inputmode="decimal" autocomplete="off"><span class="unit">kr</span></div>
+        </div>
+      </div>
+      <button class="btn btn-suggest" id="btn-suggest" type="button">Föreslå optimalt belopp ✦</button>
+      <div class="mini-readout">
+        <div class="mini-stat">
+          <span class="mini-stat-label">Pensionstak / mån</span>
+          <span class="mini-stat-val" id="o-ceiling">—</span>
+        </div>
+        <div class="mini-stat">
+          <span class="mini-stat-label">Växla max utan att tappa pension</span>
+          <span class="mini-stat-val" id="o-maxSafe">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 2: Pension & withdrawal -->
+    <div class="section">
+      <div class="section-label">
+        <span class="section-num">2</span>
+        <span class="section-title">Pension &amp; uttag · Payout</span>
+      </div>
+      <p class="section-note">
+        The employer swaps 31,42 % arbetsgivaravgift for 24,26 % löneskatt — a
+        <strong>~5,76 % uppräkning</strong> good employers add to your premium. Tax at
+        withdrawal is usually your future kommunalskatt as a pensioner.
+      </p>
+      <div class="field-grid">
+        <div class="field">
+          <label for="in-uplift">Uppräkning <span class="field-en">Employer uplift</span></label>
+          <div class="input-wrap"><input type="text" id="in-uplift" inputmode="decimal" autocomplete="off"><span class="unit">%</span></div>
+        </div>
+        <div class="field">
+          <label for="in-withdrawalTax">Skatt vid uttag <span class="field-en">At payout</span></label>
+          <div class="input-wrap"><input type="text" id="in-withdrawalTax" inputmode="decimal" autocomplete="off"><span class="unit">%</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 3: Tax rate -->
+    <details class="section section-rates">
+      <summary class="section-label section-label-summary">
+        <span class="section-num">3</span>
+        <span class="section-title">Skattesats · Rate 2026</span>
+        <span class="summary-caret" aria-hidden="true">▾</span>
+      </summary>
+      <p class="section-note">
+        Set your <strong>kommunalskatt</strong> to your municipality. The state tax
+        (20 % over the 643 000 kr brytpunkt) is fixed for 2026.
+      </p>
+      <div class="field-grid">
+        <div class="field">
+          <label for="in-municipalTax">Kommunalskatt <span class="field-en">Municipal</span></label>
+          <div class="input-wrap"><input type="text" id="in-municipalTax" inputmode="decimal" autocomplete="off"><span class="unit">%</span></div>
+        </div>
+      </div>
+    </details>
+
+  </div>
+
+  <!-- LEDGER (right) -->
+  <div class="ledger-col">
+
+    <div class="hero-card">
+      <div id="verdictBox" class="verdict">
+        <span class="verdict-icon" id="o-verdictIcon">✓</span>
+        <span id="o-verdict">—</span>
+      </div>
+      <div class="hero-label">Hävstång · what you give up vs get</div>
+      <div class="hero-big" id="o-leverage">—</div>
+      <div class="hero-sub" id="o-leverageSub">—</div>
+      <div class="hero-flow">
+        <div class="flow-stat flow-give">
+          <span class="flow-label">Du avstår netto/mån</span>
+          <span class="flow-val" id="o-heroGiveUp">—</span>
+        </div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div class="flow-stat flow-get">
+          <span class="flow-label">Till pension netto/mån</span>
+          <span class="flow-val" id="o-heroGet">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ledger">
+      <div class="ledger-head">
+        <span class="ledger-head-item">Line item</span>
+        <span class="ledger-head-num">Per månad</span>
+        <span class="ledger-head-num">Per år</span>
+      </div>
+
+      <!-- Now -->
+      <div class="ledger-group">Nu · varje månad</div>
+      <div class="lr lr-strong">
+        <span class="lr-label">Löneväxling <span class="lr-en">Gross sacrificed</span></span>
+        <span class="lr-num" id="o-sacrifice-m">—</span>
+        <span class="lr-num" id="o-sacrifice-y">—</span>
+      </div>
+      <div class="lr lr-minus">
+        <span class="lr-label">Nettolön du avstår <span class="lr-en">Net salary given up</span></span>
+        <span class="lr-num" id="o-netGivenUp-m">—</span>
+        <span class="lr-num" id="o-netGivenUp-y">—</span>
+      </div>
+      <div class="lr lr-plus">
+        <span class="lr-label">Skatt du slipper nu <span class="lr-en">Tax saved now</span></span>
+        <span class="lr-num" id="o-taxSaved-m">—</span>
+        <span class="lr-num" id="o-taxSaved-y">—</span>
+      </div>
+      <div class="lr lr-rate">
+        <span class="lr-label">Marginalskatt nu <span class="lr-en">Marginal rate</span></span>
+        <span class="lr-num lr-num-wide" id="o-marginal">—</span>
+      </div>
+
+      <!-- To pension -->
+      <div class="ledger-group">Till pensionen</div>
+      <div class="lr">
+        <span class="lr-label">Premie till pension <span class="lr-en">incl. uplift</span></span>
+        <span class="lr-num" id="o-premium-m">—</span>
+        <span class="lr-num" id="o-premium-y">—</span>
+      </div>
+      <div class="lr lr-muted">
+        <span class="lr-label">varav uppräkning <span class="lr-en">Employer uplift</span></span>
+        <span class="lr-num" id="o-uplift-m">—</span>
+        <span class="lr-num" id="o-uplift-y">—</span>
+      </div>
+
+      <!-- At withdrawal -->
+      <div class="ledger-group">Vid uttag · today's kronor</div>
+      <div class="lr lr-rate">
+        <span class="lr-label">Skatt vid uttag <span class="lr-en">Withdrawal tax</span></span>
+        <span class="lr-num lr-num-wide" id="o-withdrawalRate">—</span>
+      </div>
+      <div class="lr lr-rate">
+        <span class="lr-label">Skatteskillnad <span class="lr-en">Marginal now − payout</span></span>
+        <span class="lr-num lr-num-wide" id="o-spread">—</span>
+      </div>
+      <div class="lr lr-sub lr-good">
+        <span class="lr-label">Netto till pension <span class="lr-en">Net pension value</span></span>
+        <span class="lr-num" id="o-netPension-m">—</span>
+        <span class="lr-num" id="o-netPension-y">—</span>
+      </div>
+      <div class="lr lr-total">
+        <span class="lr-label">Nettovinst vs kontant lön <span class="lr-en">Net gain, today's kronor</span></span>
+        <span class="lr-num" id="o-netBenefit-m">—</span>
+        <span class="lr-num" id="o-netBenefit-y">—</span>
+      </div>
+    </div>
+
+    <!-- Warnings / checks -->
+    <div class="warn-card">
+      <div class="warn-card-label">Att tänka på · before you decide</div>
+      <ul class="warn-list" id="warnList"></ul>
+    </div>
+
+    <p class="ledger-foot">
+      Estimate for an employee under 66, income year 2026. The eligibility floor is the
+      income-pension ceiling (8,07 × inkomstbasbelopp ÷ 12 ≈ 56 087 kr/mån). "Vid uttag"
+      figures are in today's kronor — no investment growth is assumed. Not tax advice.
+    </p>
+  </div>
+</div>
+
+<!-- Mobile key-figures bar -->
+<div class="mobile-bar">
+  <div class="mobile-bar-inner">
+    <div class="mobile-stat">
+      <span class="mobile-stat-label">Avstår netto/mån</span>
+      <span class="mobile-stat-val" id="m-giveUp">—</span>
+    </div>
+    <div class="mobile-stat">
+      <span class="mobile-stat-label">Hävstång</span>
+      <span class="mobile-stat-val" id="m-leverage">—</span>
+    </div>
+  </div>
+</div>
+
+<script src="calc.js"></script>
+<script src="lonevaxling.js"></script>
+</body>
+</html>
