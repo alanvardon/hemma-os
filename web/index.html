@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      // Pre-paint theme to avoid a light-mode flash. Shares the key with the
+      // vanilla app (bostadskalkyl_theme) so the choice carries over.
+      try {
+        document.documentElement.dataset.theme =
+          localStorage.getItem('bostadskalkyl_theme') === 'dark' ? 'dark' : 'light';
+      } catch (_) {}
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300..600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <meta name="theme-color" content="" />
+    <title>Bostadskalkyl — Hemma</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

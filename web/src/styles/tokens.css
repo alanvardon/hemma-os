@@ -1,0 +1,67 @@
+/* ════════════════════════════════════════════════════════════════
+   Design tokens — ported VERBATIM from the vanilla styles.css.
+   Nordic editorial: warm paper, deep forest accent, serif numerals.
+   Do NOT rename these — charts read them via getComputedStyle, and the
+   rest of the Hemma suite shares the same names.
+   ════════════════════════════════════════════════════════════════ */
+
+:root {
+  --ink: #1a1a15;
+  --ink-mid: #46463f;
+  --ink-soft: #85857a;
+  --ink-faint: #c3c3b6;
+  --paper: #f4f2ea;
+  --paper-warm: #ebe8dd;
+  --paper-card: #fcfbf7;
+  --accent: #2e5d3e;
+  --accent-light: #4d8a62;
+  --accent-faint: #e7efe9;
+  --copper: #b06b38;
+  --warn: #9c4d17;
+  --warn-light: #c07a36;
+  --warn-faint: #f6ecdf;
+  --rule: #dcd8ca;
+  --on-accent: #ffffff;
+  --input-bg: #fbfaf5;
+  --input-focus-bg: #ffffff;
+  --modal-backdrop: rgba(24, 24, 19, 0.45);
+  --glass: rgba(252, 251, 247, 0.82);
+  --shadow-sm: 0 1px 2px rgba(26, 26, 21, 0.05), 0 2px 8px rgba(26, 26, 21, 0.04);
+  --shadow-md: 0 2px 6px rgba(26, 26, 21, 0.06), 0 10px 28px rgba(26, 26, 21, 0.08);
+  --shadow-lg: 0 8px 24px rgba(26, 26, 21, 0.12), 0 24px 64px rgba(26, 26, 21, 0.16);
+  --ring: 0 0 0 3px rgba(46, 93, 62, 0.16);
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --font-display: 'Instrument Serif', 'DM Serif Display', Georgia, serif;
+  --font-ui: 'Inter', 'DM Sans', system-ui, sans-serif;
+}
+
+[data-theme="dark"] {
+  --ink: #ebe9df;
+  --ink-mid: #b3b1a6;
+  --ink-soft: #807f74;
+  --ink-faint: #50504a;
+  --paper: #131510;
+  --paper-warm: #1c1e18;
+  --paper-card: #191b15;
+  --accent: #5fa674;
+  --accent-light: #7cbf8f;
+  --accent-faint: #1c2a1f;
+  --copper: #cf8a4e;
+  --warn: #cb7a3c;
+  --warn-light: #dd9a52;
+  --warn-faint: #2c2115;
+  --rule: #2d2f27;
+  --input-bg: #1e201a;
+  --input-focus-bg: #24261f;
+  --modal-backdrop: rgba(0, 0, 0, 0.66);
+  --glass: rgba(19, 21, 16, 0.8);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.35), 0 10px 28px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45), 0 24px 64px rgba(0, 0, 0, 0.5);
+  --ring: 0 0 0 3px rgba(95, 166, 116, 0.22);
+}
+
+html { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }

@@ -8,3 +8,13 @@ __pycache__/
 inspect-script.log
 .misc_notes/
 .DS_Store
+
+# Node / build (root playwright deps + the React pilot)
+node_modules/
+dist/
+
+# Playwright MCP artifacts + UI assessment / pilot screenshots (not source)
+.playwright-mcp/
+bk-*.png
+hub-*.png
+react-shell-*.png

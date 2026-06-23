@@ -1,0 +1,266 @@
+/* Global base + shell layout — ported from the vanilla styles.css.
+   Component-level styles (input fields, real summary cards) arrive WITH
+   their components in Phase 2. The .summary-title / .sum-card* / .shell-*
+   rules below are temporary Phase-0 placeholders. */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  font-family: var(--font-ui);
+  background:
+    radial-gradient(1100px 500px at 85% -10%, var(--accent-faint), transparent 60%),
+    var(--paper);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+::selection { background: var(--accent); color: var(--on-accent); }
+
+:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 2px; }
+
+/* Slim, quiet scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--ink-faint) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: var(--ink-faint); border-radius: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ── Header ─────────────────────────────────────────────────── */
+.page-header {
+  border-bottom: 1px solid var(--rule);
+  padding: 1.4rem 2.5rem 1.3rem;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  position: relative;
+  z-index: 50;
+  flex-shrink: 0;
+}
+
+.header-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.hub-link {
+  font-size: 12.5px;
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  text-decoration: none;
+  padding: 5px 11px 5px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--paper-card);
+  transition: color 0.18s, border-color 0.18s, transform 0.18s;
+  white-space: nowrap;
+  align-self: center;
+}
+.hub-link:hover { color: var(--accent); border-color: var(--accent-light); transform: translateX(-2px); }
+
+.page-header h1 {
+  font-family: var(--font-display);
+  font-size: 1.85rem;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  line-height: 1.1;
+}
+
+.page-header .tagline {
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 400;
+  margin-top: 2px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* ── Buttons ────────────────────────────────────────────────── */
+.btn {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 550;
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--rule);
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s, transform 0.18s, box-shadow 0.18s;
+  white-space: nowrap;
+}
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.btn-ghost { background: var(--paper-card); color: var(--ink-mid); }
+.btn-ghost:hover:not(:disabled) { background: var(--paper-warm); border-color: var(--ink-faint); }
+
+.btn-primary {
+  background: linear-gradient(160deg, var(--accent-light), var(--accent) 70%);
+  color: var(--on-accent);
+  border-color: transparent;
+  box-shadow: 0 2px 8px rgba(46, 93, 62, 0.28);
+}
+.btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(46, 93, 62, 0.34); filter: brightness(1.05); }
+
+.theme-toggle-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  font-size: 17px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Layout ─────────────────────────────────────────────────── */
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 0;
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.inputs-col {
+  padding: 2rem 2.25rem 3rem;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.summary-col {
+  padding: 2rem 1.75rem 3rem;
+  background: var(--paper-card);
+  border-left: 1px solid var(--rule);
+  overflow-y: auto;
+  height: 100%;
+}
+
+/* ── Sections (input column cards) ──────────────────────────── */
+.section {
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 1.5rem 1.6rem 1.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.section-num {
+  font-family: var(--font-display);
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-faint);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: 50%;
+  width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+.section-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-mid);
+}
+
+/* ── Summary (Phase-0 placeholders → real cards in Phase 2) ──── */
+.summary-title {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 1.4rem;
+  color: var(--ink);
+  margin-bottom: 1.1rem;
+}
+
+.sum-card {
+  background: var(--paper-warm);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  padding: 1rem 1.1rem;
+  margin-bottom: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sum-card-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.sum-card-figure {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  color: var(--ink-faint);
+}
+
+.shell-placeholder {
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* ── Section / card entrance ────────────────────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  .inputs-col .section { animation: rise-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+  .inputs-col .section:nth-child(2) { animation-delay: 0.06s; }
+  .inputs-col .section:nth-child(3) { animation-delay: 0.12s; }
+
+  .summary-col .sum-card { animation: rise-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+  .summary-col .sum-card:nth-of-type(2) { animation-delay: 0.05s; }
+  .summary-col .sum-card:nth-of-type(3) { animation-delay: 0.1s; }
+  .summary-col .sum-card:nth-of-type(4) { animation-delay: 0.15s; }
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── Mobile ─────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .summary-col { border-left: none; border-top: 1px solid var(--rule); }
+  .page-header { padding: 1.1rem 1.25rem; }
+}
