@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
-import { DEFAULT_INPUTS, derive, type Inputs } from './lib/calc'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { derive } from './lib/calc'
 import { fmt } from './lib/format'
+import { useStore, type DeletedInfo } from './store/useStore'
 import InputsColumn from './components/InputsColumn'
 import SummaryColumn from './components/SummaryColumn'
+import ScenariosModal from './components/ScenariosModal'
+import SavePrompt from './components/SavePrompt'
+import UndoToast from './components/UndoToast'
 
 type Theme = 'light' | 'dark'
 
@@ -18,14 +22,29 @@ const sign = (n: number) => (n >= 0 ? '+' : '')
 
 export default function App() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
-  const [inputs, setInputs] = useState<Inputs>(DEFAULT_INPUTS)
+
+  // Store
+  const inputs = useStore((s) => s.inputs)
+  const setField = useStore((s) => s.setField)
+  const scenarios = useStore((s) => s.scenarios)
+  const activeScenarioId = useStore((s) => s.activeScenarioId)
+  const isDirty = useStore((s) => s.isDirty)
+  const hydrate = useStore((s) => s.hydrate)
+  const saveNewScenario = useStore((s) => s.saveNewScenario)
+  const updateActiveScenario = useStore((s) => s.updateActiveScenario)
+  const loadScenario = useStore((s) => s.loadScenario)
+  const duplicateScenario = useStore((s) => s.duplicateScenario)
+  const deleteScenario = useStore((s) => s.deleteScenario)
+  const restoreScenario = useStore((s) => s.restoreScenario)
 
   const figures = useMemo(() => derive(inputs), [inputs])
 
-  function setField<K extends keyof Inputs>(key: K, value: Inputs[K]) {
-    setInputs((prev) => ({ ...prev, [key]: value }))
-  }
+  // Restore the saved session + scenarios on first mount.
+  useEffect(() => {
+    hydrate()
+  }, [hydrate])
 
+  // ── Theme ──────────────────────────────────────────────────────
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     try {
@@ -42,6 +61,42 @@ export default function App() {
 
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
 
+  // ── Scenarios / save UI state ──────────────────────────────────
+  const [scenariosOpen, setScenariosOpen] = useState(false)
+  const [savePrompt, setSavePrompt] = useState<{ open: boolean; mode: 'new' | 'update'; activeName: string }>({
+    open: false,
+    mode: 'new',
+    activeName: '',
+  })
+  const [undo, setUndo] = useState<{ open: boolean; message: string; info: DeletedInfo | null }>({
+    open: false,
+    message: '',
+    info: null,
+  })
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const active = scenarios.find((s) => s.id === activeScenarioId)
+  const saveLabel = active ? (isDirty ? 'Update' : 'Save as new') : 'Save'
+
+  const handleSave = () => {
+    if (active && isDirty) setSavePrompt({ open: true, mode: 'update', activeName: active.name })
+    else setSavePrompt({ open: true, mode: 'new', activeName: '' })
+  }
+
+  const handleDelete = (id: string) => {
+    const info = deleteScenario(id)
+    if (!info) return
+    if (undoTimer.current) clearTimeout(undoTimer.current)
+    setUndo({ open: true, message: `Deleted “${info.deleted.name}”`, info })
+    undoTimer.current = setTimeout(() => setUndo((u) => ({ ...u, open: false })), 6000)
+  }
+
+  const handleUndo = () => {
+    if (undo.info) restoreScenario(undo.info)
+    if (undoTimer.current) clearTimeout(undoTimer.current)
+    setUndo((u) => ({ ...u, open: false }))
+  }
+
   return (
     <>
       <header className="page-header">
@@ -55,6 +110,17 @@ export default function App() {
           </div>
         </div>
         <div className="header-actions">
+          {active ? (
+            <span className="active-scenario-label">
+              <span className="active-scenario-name">{active.name}</span>
+              {isDirty && <span className="unsaved-dot" title="Unsaved changes" />}
+            </span>
+          ) : isDirty ? (
+            <span className="active-scenario-label">
+              <span className="active-scenario-name">Unsaved</span>
+              <span className="unsaved-dot" />
+            </span>
+          ) : null}
           <button
             className="btn btn-ghost theme-toggle-btn"
             title="Toggle dark mode"
@@ -63,11 +129,11 @@ export default function App() {
           >
             {theme === 'dark' ? '☾' : '☀'}
           </button>
-          <button className="btn btn-ghost" disabled title="Scenarios (Phase 3)">
+          <button className="btn btn-ghost" onClick={() => setScenariosOpen(true)}>
             Scenarios
           </button>
-          <button className="btn btn-primary" disabled title="Save (Phase 3)">
-            Save
+          <button className="btn btn-primary" onClick={handleSave}>
+            {saveLabel}
           </button>
         </div>
       </header>
@@ -93,6 +159,30 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      <ScenariosModal
+        open={scenariosOpen}
+        onOpenChange={setScenariosOpen}
+        scenarios={scenarios}
+        activeScenarioId={activeScenarioId}
+        onLoad={(id) => {
+          loadScenario(id)
+          setScenariosOpen(false)
+        }}
+        onDuplicate={duplicateScenario}
+        onDelete={handleDelete}
+      />
+
+      <SavePrompt
+        open={savePrompt.open}
+        mode={savePrompt.mode}
+        activeName={savePrompt.activeName}
+        onOpenChange={(o) => setSavePrompt((p) => ({ ...p, open: o }))}
+        onSaveNew={saveNewScenario}
+        onUpdate={updateActiveScenario}
+      />
+
+      <UndoToast open={undo.open} message={undo.message} onUndo={handleUndo} />
     </>
   )
 }
