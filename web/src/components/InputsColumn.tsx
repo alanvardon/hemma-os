@@ -243,16 +243,17 @@ function StressTest({ inputs }: { inputs: Inputs }) {
         title="Stress curve"
         subtitle="Total monthly cost across interest rates · marker = slider"
         preview={<StressChart inputs={inputs} rate={rate} compact />}
-        full={<StressChart inputs={inputs} rate={rate} />}
-        legend={
-          <ChartLegend
-            items={[
-              { label: 'Total monthly', token: 'accent' },
-              { label: 'After ränteavdrag', token: 'accentLight', dashed: true },
-            ]}
-          />
-        }
-      />
+      >
+        <div className="chart-overlay-chart">
+          <StressChart inputs={inputs} rate={rate} />
+        </div>
+        <ChartLegend
+          items={[
+            { label: 'Total monthly', token: 'accent' },
+            { label: 'After ränteavdrag', token: 'accentLight', dashed: true },
+          ]}
+        />
+      </ExpandableChartCard>
     </div>
   )
 }

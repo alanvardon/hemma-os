@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { DEFAULT_INPUTS } from '../../lib/calc'
-import { amortSeries, equitySeries, stressSeries } from './chartData'
+import { amortSeries, equitySeries, stressSeries, solveTargetLumpSum } from './chartData'
 
 describe('amortSeries', () => {
   const s = amortSeries(DEFAULT_INPUTS)
@@ -51,5 +51,37 @@ describe('stressSeries', () => {
 
   it('monthly cost rises strictly with the rate', () => {
     for (let n = 1; n < pts.length; n++) expect(pts[n].total).toBeGreaterThan(pts[n - 1].total)
+  })
+})
+
+describe('amortSeries with lump sums', () => {
+  it('a lump payment brings payoff forward', () => {
+    const base = amortSeries(DEFAULT_INPUTS)
+    const withLump = amortSeries(DEFAULT_INPUTS, [{ year: 2, amount: 3_000_000 }])
+    expect(base.nextPayoff).toBe(50)
+    expect(withLump.nextPayoff).not.toBeNull()
+    expect(withLump.nextPayoff!).toBeLessThan(base.nextPayoff!)
+  })
+})
+
+describe('solveTargetLumpSum', () => {
+  it('finds a positive lump (rounded to 1000s) for a reachable target', () => {
+    const sol = solveTargetLumpSum(DEFAULT_INPUTS, 25)
+    expect(sol.kind).toBe('has-result')
+    expect(sol.amount!).toBeGreaterThan(0)
+    expect(sol.amount! % 1000).toBe(0)
+    // applying it as a year-1 lump should actually hit the target
+    const payoff = amortSeries(DEFAULT_INPUTS, [{ year: 1, amount: sol.amount! }]).nextPayoff
+    expect(payoff!).toBeLessThanOrEqual(25)
+  })
+
+  it('reports already-paid when the target is past the natural payoff', () => {
+    const sol = solveTargetLumpSum(DEFAULT_INPUTS, 70)
+    expect(sol.kind).toBe('already')
+    expect(sol.amount).toBe(0)
+  })
+
+  it('rejects an empty / zero target year', () => {
+    expect(solveTargetLumpSum(DEFAULT_INPUTS, 0).kind).toBe('no-solution')
   })
 })

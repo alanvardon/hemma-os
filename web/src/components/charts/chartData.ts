@@ -2,7 +2,7 @@
 // Kept separate from the chart components (which stay dumb) and from calc.ts
 // (which returns scalar figures), and unit-tested alongside the golden figures.
 
-import { buildAmortSchedule, stressAt, type AmortPoint, type Inputs } from '../../lib/calc'
+import { buildAmortSchedule, stressAt, type AmortPoint, type Inputs, type LumpPayment } from '../../lib/calc'
 
 export interface AmortSeries {
   years: number[]
@@ -26,11 +26,12 @@ function payoffYear(schedule: AmortPoint[]): number | null {
   return pt ? pt.year : null
 }
 
-/** Current vs new mortgage remaining-balance over time — the payoff comparison. */
-export function amortSeries(i: Inputs): AmortSeries {
+/** Current vs new mortgage remaining-balance over time — the payoff comparison.
+ *  `lumps` are extra one-off payments applied to the NEW mortgage (Phase 5b). */
+export function amortSeries(i: Inputs, lumps: LumpPayment[] = []): AmortSeries {
   const newBalance = Math.max(0, i.newPrice - i.deposit)
   const currentSchedule = buildAmortSchedule(i.currentMortgage, Math.max(i.currentAmortRate, 0.01), [], i.currentTerm)
-  const newSchedule = buildAmortSchedule(newBalance, Math.max(i.amortRate, 0.01), [], 60)
+  const newSchedule = buildAmortSchedule(newBalance, Math.max(i.amortRate, 0.01), lumps, 60)
 
   const maxYear = Math.max(
     currentSchedule[currentSchedule.length - 1].year,
@@ -82,4 +83,63 @@ export function stressSeries(i: Inputs, lo = 0.5, hi = 12, step = 0.25): StressP
     points.push({ rate, total: s.total, afterRelief: s.afterRelief })
   }
   return points
+}
+
+export interface TargetSolution {
+  kind: 'has-result' | 'already' | 'no-solution'
+  amount: number | null // required lump sum (rounded up to nearest 1000); 0 if already paid off in time
+  message: string
+}
+
+/** Binary-search the smallest lump sum (paid in `paymentYear`) that makes the
+ *  new mortgage payoff by `targetYear`. Pure port of the legacy
+ *  charts.js calcTargetLumpSum — Phase 5b. */
+export function solveTargetLumpSum(i: Inputs, targetYear: number, paymentYear = 1): TargetSolution {
+  const newBalance = Math.max(0, i.newPrice - i.deposit)
+  const rate = Math.max(i.amortRate, 0.01)
+
+  if (!targetYear || targetYear <= 0) {
+    return { kind: 'no-solution', amount: null, message: 'Enter a target payoff year.' }
+  }
+
+  const payoffOf = (lumps: LumpPayment[]) => {
+    const pt = buildAmortSchedule(newBalance, rate, lumps).find((p) => p.balance === 0)
+    return pt ? pt.year : null
+  }
+
+  // Already paid off in time without any extra payment?
+  const noLumpPayoff = payoffOf([])
+  if (noLumpPayoff != null && noLumpPayoff <= targetYear) {
+    return { kind: 'already', amount: 0, message: `Already mortgage-free by year ${noLumpPayoff} — no lump sum needed.` }
+  }
+
+  // Even paying the whole balance can't hit the target → unreachable.
+  const fullPayoff = payoffOf([{ year: paymentYear, amount: newBalance }])
+  if (fullPayoff == null || fullPayoff > targetYear) {
+    return { kind: 'no-solution', amount: null, message: 'Not achievable — try a later target year.' }
+  }
+
+  let lo = 0
+  let hi = newBalance
+  let found: number | null = null
+  for (let iter = 0; iter < 60; iter++) {
+    const mid = (lo + hi) / 2
+    const payoff = payoffOf([{ year: paymentYear, amount: mid }])
+    if (payoff != null && payoff <= targetYear) {
+      found = mid
+      hi = mid
+    } else {
+      lo = mid
+    }
+  }
+  if (found == null) {
+    return { kind: 'no-solution', amount: null, message: 'Could not find a solution. Try a later target year.' }
+  }
+
+  const amount = Math.ceil(found / 1000) * 1000
+  return {
+    kind: 'has-result',
+    amount,
+    message: `Pay this in year ${paymentYear} → mortgage-free by year ${targetYear}.`,
+  }
 }

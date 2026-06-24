@@ -100,13 +100,21 @@
 }
 
 .chart-overlay-body {
-  height: min(58vh, 440px);
-  padding: 1rem 1.2rem 0.4rem;
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.1rem 1.4rem 1.4rem;
 }
 
-.chart-overlay-legend {
-  padding: 0.4rem 1.4rem 1.1rem;
-  flex-shrink: 0;
+/* Sized chart wrapper inside the scrollable body — ParentSize fills it. */
+.chart-overlay-chart {
+  height: min(52vh, 420px);
+}
+.chart-overlay-chart.amort {
+  height: clamp(200px, 32vh, 300px);
+}
+
+.chart-overlay-body .chart-legend {
+  margin-top: 0.7rem;
 }
 
 /* ── Legend ────────────────────────────────────────────────────── */
@@ -173,6 +181,141 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── Amort planner (lump sums + target payoff) — Phase 5b ──────── */
+.amort-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 1rem;
+}
+.amort-meta-row {
+  display: flex;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  background: var(--paper-warm);
+  overflow: hidden;
+}
+.amort-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0.55rem 0.9rem;
+  border-right: 1px solid var(--rule);
+  flex: 1;
+}
+.amort-stat:last-child { border-right: none; }
+.amort-stat-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.amort-stat-val {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.amort-lump-section {
+  border-top: 1px solid var(--rule);
+  margin-top: 1.1rem;
+  padding-top: 1.25rem;
+}
+.amort-lump-title {
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+.amort-lump-hint {
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin-bottom: 0.75rem;
+}
+
+.lump-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 32px;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 8px;
+}
+.lump-row .field { margin-bottom: 0; }
+.lump-remove {
+  background: none;
+  border: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px;
+  height: 38px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.lump-remove:hover { background: var(--warn-faint); color: var(--warn); }
+
+.amort-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1px 1fr;
+  gap: 0 1.5rem;
+}
+.amort-lump-col { display: flex; flex-direction: column; }
+.amort-lump-divider {
+  background: var(--rule);
+  width: 1px;
+  align-self: stretch;
+}
+
+.amort-target-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 0.75rem;
+}
+.amort-target-fields.single { grid-template-columns: 1fr; }
+
+.amort-target-result {
+  min-height: 36px;
+  margin-bottom: 0.5rem;
+  font-size: 13px;
+  color: var(--ink-mid);
+}
+.amort-target-result.has-result {
+  background: var(--paper-warm);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+}
+.amort-target-result .result-amount {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  color: var(--accent);
+  display: block;
+  margin-bottom: 2px;
+}
+.amort-target-result.no-solution {
+  background: var(--warn-faint);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  color: var(--warn);
+}
+
+.amort-add-btn { margin-top: 4px; font-size: 13px; padding: 6px 14px; align-self: flex-start; }
+.lump-result-input { background: var(--paper-warm); color: var(--ink); cursor: default; }
+.amort-field { margin-bottom: 0.75rem; }
+
 @media (max-width: 900px) {
-  .chart-overlay-body { height: 52vh; }
+  .chart-overlay-chart { height: 44vh; }
+  .chart-overlay-chart.amort { height: 240px; }
+  .amort-two-col { grid-template-columns: 1fr; gap: 1.25rem 0; }
+  .amort-lump-divider { width: 100%; height: 1px; }
+  .amort-meta-row { flex-wrap: wrap; }
+  .amort-stat { flex-basis: 50%; }
 }

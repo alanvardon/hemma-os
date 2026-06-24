@@ -10,11 +10,10 @@ interface Props {
   title: string
   subtitle?: string
   preview: ReactNode // compact chart (no axes/tooltip)
-  full: ReactNode // full chart (axes + tooltip), mounted only while open
-  legend?: ReactNode // small legend / caption under the full chart
+  children: ReactNode // fullscreen body (sized chart + legend + any controls), mounted only while open
 }
 
-export default function ExpandableChartCard({ title, subtitle, preview, full, legend }: Props) {
+export default function ExpandableChartCard({ title, subtitle, preview, children }: Props) {
   const [open, setOpen] = useState(false)
   const reduce = useReducedMotion()
   const rawId = useId()
@@ -90,8 +89,7 @@ export default function ExpandableChartCard({ title, subtitle, preview, full, le
                   ×
                 </button>
               </div>
-              <div className="chart-overlay-body">{full}</div>
-              {legend && <div className="chart-overlay-legend">{legend}</div>}
+              <div className="chart-overlay-body">{children}</div>
             </motion.div>
           </motion.div>
         )}

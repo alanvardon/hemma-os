@@ -1,14 +1,22 @@
 import { useMemo } from 'react'
 import { ParentSize } from '@visx/responsive'
-import type { Inputs } from '../../lib/calc'
+import type { Inputs, LumpPayment } from '../../lib/calc'
 import { amortSeries } from './chartData'
 import { useChartTheme } from './useChartTheme'
 import LineAreaChart, { type SeriesDef } from './LineAreaChart'
 
 /** Remaining-balance payoff comparison: new vs current mortgage over time. */
-export default function AmortChart({ inputs, compact }: { inputs: Inputs; compact?: boolean }) {
+export default function AmortChart({
+  inputs,
+  lumps,
+  compact,
+}: {
+  inputs: Inputs
+  lumps?: LumpPayment[]
+  compact?: boolean
+}) {
   const theme = useChartTheme()
-  const data = useMemo(() => amortSeries(inputs), [inputs])
+  const data = useMemo(() => amortSeries(inputs, lumps), [inputs, lumps])
 
   const series: SeriesDef[] = [
     { key: 'next', label: 'New mortgage', color: theme.accent, values: data.next, area: true, strokeWidth: 2.5 },
