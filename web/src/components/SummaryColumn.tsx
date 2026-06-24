@@ -1,5 +1,9 @@
 import type { Inputs, Figures } from '../lib/calc'
 import { Money, Percent } from './AnimatedNumber'
+import ExpandableChartCard from './charts/ExpandableChartCard'
+import ChartLegend from './charts/ChartLegend'
+import AmortChart from './charts/AmortChart'
+import EquityChart from './charts/EquityChart'
 
 interface Props {
   inputs: Inputs
@@ -114,6 +118,22 @@ export default function SummaryColumn({ inputs: i, setField, figures: f }: Props
           </div>
         </div>
       </div>
+
+      {/* Payoff comparison chart */}
+      <ExpandableChartCard
+        title="Mortgage payoff"
+        subtitle="New vs current — remaining balance over time"
+        preview={<AmortChart inputs={i} compact />}
+        full={<AmortChart inputs={i} />}
+        legend={
+          <ChartLegend
+            items={[
+              { label: 'New mortgage', token: 'accent' },
+              { label: 'Current mortgage', token: 'warnLight', dashed: true },
+            ]}
+          />
+        }
+      />
 
       <hr className="sum-divider" />
 
@@ -241,6 +261,15 @@ export default function SummaryColumn({ inputs: i, setField, figures: f }: Props
           </div>
         </div>
       </div>
+
+      {/* Equity growth chart */}
+      <ExpandableChartCard
+        title="Equity growth"
+        subtitle="Equity building as the mortgage amortises"
+        preview={<EquityChart inputs={i} compact />}
+        full={<EquityChart inputs={i} />}
+        legend={<ChartLegend items={[{ label: 'Equity (deposit + amortised principal)', token: 'accent' }]} />}
+      />
     </div>
   )
 }

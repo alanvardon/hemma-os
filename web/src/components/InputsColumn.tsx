@@ -3,6 +3,9 @@ import { stressAt, FASTIGHETSAVGIFT_CAP, type Inputs, type Figures, type BankFig
 import { fmt } from '../lib/format'
 import { CurrencyInput, NumberInput, Field, DerivedRow } from './fields'
 import { Money } from './AnimatedNumber'
+import ExpandableChartCard from './charts/ExpandableChartCard'
+import ChartLegend from './charts/ChartLegend'
+import StressChart from './charts/StressChart'
 
 interface Props {
   inputs: Inputs
@@ -234,6 +237,22 @@ function StressTest({ inputs }: { inputs: Inputs }) {
           </div>
         </div>
       </div>
+
+      {/* Stress curve — total monthly cost across the rate range */}
+      <ExpandableChartCard
+        title="Stress curve"
+        subtitle="Total monthly cost across interest rates · marker = slider"
+        preview={<StressChart inputs={inputs} rate={rate} compact />}
+        full={<StressChart inputs={inputs} rate={rate} />}
+        legend={
+          <ChartLegend
+            items={[
+              { label: 'Total monthly', token: 'accent' },
+              { label: 'After ränteavdrag', token: 'accentLight', dashed: true },
+            ]}
+          />
+        }
+      />
     </div>
   )
 }
