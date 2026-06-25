@@ -211,9 +211,9 @@ export default function Home() {
             <span className="app-cta">Open <span className="arrow">→</span></span>
           </a>
 
-          <a
+          <Link
             className="app-card reveal reveal-9"
-            href="lonevaxling.html"
+            to="/lonevaxling"
             onPointerMove={onCardMove}
             onPointerLeave={onCardLeave}
           >
@@ -229,7 +229,7 @@ export default function Home() {
             <span className="app-name">Löneväxling</span>
             <span className="app-desc">Salary sacrifice into pension — at what salary it pays off, the tax you save now and what it's worth net at payout. Sweden, 2026.</span>
             <span className="app-cta">Open <span className="arrow">→</span></span>
-          </a>
+          </Link>
 
           <div
             className="app-card soon reveal reveal-10"

@@ -1,0 +1,143 @@
+/* lonevaxling.css — Löneväxling route styles.
+   Tokens, reset, shared components (.page-header, .btn, .section, .konsult-layout,
+   .ledger, .lr, .hero-card, .mini-readout, etc.) are in tokens.css / global.css /
+   components.css / konsultkalkyl.css. Only classes unique to this route live here. */
+
+/* ── Suggest button (accent fill variant of .btn) ────────────── */
+.btn-suggest {
+  width: 100%;
+  margin-top: 1rem;
+  color: var(--accent);
+  background: var(--accent-faint);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.btn-suggest:hover {
+  background: color-mix(in srgb, var(--accent) 14%, var(--accent-faint));
+  border-color: var(--accent-light);
+}
+
+/* ── Verdict box (inside hero-card) ─────────────────────────── */
+.verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--r-md);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  margin-bottom: 1.1rem;
+  border: 1px solid transparent;
+}
+.verdict-icon { font-size: 14px; line-height: 1.2; flex-shrink: 0; }
+.verdict-good {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.verdict-warn {
+  color: var(--warn);
+  background: var(--warn-faint);
+  border-color: color-mix(in srgb, var(--warn) 32%, transparent);
+}
+
+/* ── Hero sub — slightly more breathing room on this route ──── */
+.hero-sub { line-height: 1.5; }
+
+/* ── Hero flow (give-up → get comparison) ────────────────────── */
+.hero-flow {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  margin-top: 1.2rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.flow-stat {
+  flex: 1;
+  min-width: 0;
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  padding: 0.65rem 0.8rem;
+}
+.flow-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 3px;
+}
+.flow-val {
+  font-family: var(--font-display);
+  font-size: 1.45rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1.1;
+}
+.flow-give .flow-val { color: var(--copper); }
+.flow-get .flow-val { color: var(--accent); }
+.flow-arrow {
+  align-self: center;
+  color: var(--ink-faint);
+  font-size: 1.3rem;
+  flex-shrink: 0;
+}
+
+/* ── Rate rows (single-value: label + one right-aligned figure) ─ */
+.lr-rate { grid-template-columns: 1fr auto; }
+.lr-num-wide { color: var(--ink); font-weight: 600; }
+
+/* ── Warnings / checks card ─────────────────────────────────── */
+.warn-card {
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 1.2rem 1.4rem 1.3rem;
+  margin-top: 1.4rem;
+}
+.warn-card-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 0.9rem;
+}
+.warn-list { list-style: none; display: flex; flex-direction: column; gap: 0.7rem; }
+.warn-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-mid);
+}
+.warn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+  background: var(--ink-faint);
+}
+.warn-good .warn-dot { background: var(--accent); }
+.warn-amber .warn-dot { background: var(--warn); }
+.warn-info .warn-dot { background: var(--copper); }
+.warn-text { min-width: 0; }
+
+/* ── Entrance animation — 3 ledger children (vs 2 in konsult) ── */
+@media (prefers-reduced-motion: no-preference) {
+  .ledger-col > *:nth-child(3) { animation-delay: 0.16s; }
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .lr-rate { grid-template-columns: 1fr auto; }
+  .hero-flow { flex-direction: column; }
+  .flow-arrow { transform: rotate(90deg); }
+}

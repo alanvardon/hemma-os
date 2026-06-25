@@ -3,6 +3,7 @@ import { HashRouter, Routes, Route } from 'react-router-dom'
 import Home from './routes/Home'
 import Bostadskalkyl from './routes/Bostadskalkyl'
 import Konsultkalkyl from './routes/Konsultkalkyl'
+import Lonevaxling from './routes/Lonevaxling'
 
 type Theme = 'light' | 'dark'
 const THEME_KEY = 'bostadskalkyl_theme'
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/bostadskalkyl" element={<Bostadskalkyl />} />
           <Route path="/konsultkalkyl" element={<Konsultkalkyl />} />
+          <Route path="/lonevaxling" element={<Lonevaxling />} />
         </Routes>
       </HashRouter>
     </ThemeContext.Provider>
