@@ -48,9 +48,15 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  flex-wrap: wrap;
   position: relative;
   z-index: 50;
   flex-shrink: 0;
+  /* A query container so the header adapts to its OWN width — Phase 6.
+     Safe to containerise: the header has no fixed/absolute descendants
+     (modals render through a portal at <body>). */
+  container-type: inline-size;
+  container-name: header;
 }
 
 .header-brand {
@@ -59,6 +65,7 @@ body {
   gap: 1rem;
   min-width: 0;
 }
+.header-brand > div { min-width: 0; }
 
 .hub-link {
   font-size: 12.5px;
@@ -78,11 +85,27 @@ body {
 
 .page-header h1 {
   font-family: var(--font-display);
-  font-size: 1.85rem;
+  /* Fluid display size (Phase 6): ~1.4rem on a phone → 1.85rem on desktop. */
+  font-size: clamp(1.4rem, 1.15rem + 1.1vw, 1.85rem);
   font-weight: 400;
   letter-spacing: -0.015em;
   color: var(--ink);
   line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Header container queries (Phase 6 — fixes the 390px collision) ──
+   The active-scenario label collided with the title on a phone; the Save /
+   Update button already signals the active + dirty state, so drop the label
+   on narrow headers, then wrap the actions to their own row below the brand. */
+@container header (max-width: 580px) {
+  .active-scenario-label { display: none; }
+}
+@container header (max-width: 440px) {
+  .header-brand { flex: 1 1 100%; }
+  .header-actions { width: 100%; justify-content: flex-end; }
 }
 
 .page-header .tagline {
@@ -186,7 +209,7 @@ body {
   font-size: 12px;
   color: var(--accent);
   background: var(--accent-faint);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border: 1px solid color-mix(in oklch, var(--accent) 25%, transparent);
   border-radius: 50%;
   width: 24px; height: 24px;
   display: flex; align-items: center; justify-content: center;

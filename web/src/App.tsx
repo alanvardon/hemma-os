@@ -144,7 +144,7 @@ export default function App() {
         </div>
       </header>
 
-      <div className="layout">
+      <main className="layout">
         <InputsColumn inputs={inputs} setField={setField} figures={figures} onOpenDrift={() => setDriftOpen(true)} />
         <SummaryColumn
           inputs={inputs}
@@ -153,7 +153,7 @@ export default function App() {
           savingsTotal={savingsTotal}
           onOpenSavings={() => setSavingsOpen(true)}
         />
-      </div>
+      </main>
 
       {/* Mobile key-figures bar */}
       <div className="mobile-bar">

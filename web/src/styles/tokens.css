@@ -1,29 +1,34 @@
 /* ════════════════════════════════════════════════════════════════
-   Design tokens — ported VERBATIM from the vanilla styles.css.
-   Nordic editorial: warm paper, deep forest accent, serif numerals.
-   Do NOT rename these — charts read them via getComputedStyle, and the
+   Design tokens — Nordic editorial: warm paper, deep forest accent,
+   serif numerals. Phase 6: the solid palette is now expressed in OKLCH
+   (perceptually-uniform, computed 1:1 from the original sRGB hex, so the
+   look is unchanged) — this gives smoother color-mix blends and wider gamut
+   on capable displays. Neutral alpha tokens (backdrops/shadows/ring) stay
+   rgba. Do NOT rename these — charts read them via getComputedStyle, and the
    rest of the Hemma suite shares the same names.
    ════════════════════════════════════════════════════════════════ */
 
 :root {
-  --ink: #1a1a15;
-  --ink-mid: #46463f;
-  --ink-soft: #85857a;
-  --ink-faint: #c3c3b6;
-  --paper: #f4f2ea;
-  --paper-warm: #ebe8dd;
-  --paper-card: #fcfbf7;
-  --accent: #2e5d3e;
-  --accent-light: #4d8a62;
-  --accent-faint: #e7efe9;
-  --copper: #b06b38;
-  --warn: #9c4d17;
-  --warn-light: #c07a36;
-  --warn-faint: #f6ecdf;
-  --rule: #dcd8ca;
-  --on-accent: #ffffff;
-  --input-bg: #fbfaf5;
-  --input-focus-bg: #ffffff;
+  --ink: oklch(21.59% 0.0095 107.17);
+  --ink-mid: oklch(39.19% 0.0115 106.92);
+  /* Darkened from the original #85857a (3.6:1) to clear WCAG AA 4.5:1 on every
+     paper background, incl. the warm card fill (#ebe8dd) — Phase 6 a11y. */
+  --ink-soft: oklch(51.42% 0.0154 106.93);
+  --ink-faint: oklch(81.35% 0.0179 106.79);
+  --paper: oklch(96.05% 0.0108 95.16);
+  --paper-warm: oklch(93.03% 0.015 94.21);
+  --paper-card: oklch(98.77% 0.0054 95.1);
+  --accent: oklch(43.57% 0.0731 153.33);
+  --accent-light: oklch(58.07% 0.089 153.93);
+  --accent-faint: oklch(94.44% 0.0116 153.67);
+  --copper: oklch(59.36% 0.1102 55.08);
+  --warn: oklch(51.02% 0.1228 49.89);
+  --warn-light: oklch(64.11% 0.1201 61.72);
+  --warn-faint: oklch(94.74% 0.0204 74.66);
+  --rule: oklch(88.16% 0.0194 93.68);
+  --on-accent: oklch(100% 0 0);
+  --input-bg: oklch(98.45% 0.0067 97.35);
+  --input-focus-bg: oklch(100% 0 0);
   --modal-backdrop: rgba(24, 24, 19, 0.45);
   --glass: rgba(252, 251, 247, 0.82);
   --shadow-sm: 0 1px 2px rgba(26, 26, 21, 0.05), 0 2px 8px rgba(26, 26, 21, 0.04);
@@ -38,23 +43,25 @@
 }
 
 [data-theme="dark"] {
-  --ink: #ebe9df;
-  --ink-mid: #b3b1a6;
-  --ink-soft: #807f74;
-  --ink-faint: #50504a;
-  --paper: #131510;
-  --paper-warm: #1c1e18;
-  --paper-card: #191b15;
-  --accent: #5fa674;
-  --accent-light: #7cbf8f;
-  --accent-faint: #1c2a1f;
-  --copper: #cf8a4e;
-  --warn: #cb7a3c;
-  --warn-light: #dd9a52;
-  --warn-faint: #2c2115;
-  --rule: #2d2f27;
-  --input-bg: #1e201a;
-  --input-focus-bg: #24261f;
+  --ink: oklch(93.28% 0.0135 97.45);
+  --ink-mid: oklch(75.89% 0.0156 98.35);
+  /* Lightened from the original #807f74 (4.3:1) to clear WCAG AA 4.5:1 on the
+     dark paper backgrounds — Phase 6 a11y. */
+  --ink-soft: oklch(65.01% 0.016 106.84);
+  --ink-faint: oklch(42.93% 0.0097 106.8);
+  --paper: oklch(19.16% 0.0103 125.13);
+  --paper-warm: oklch(23.07% 0.0116 122.31);
+  --paper-card: oklch(21.77% 0.0118 122.38);
+  --accent: oklch(66.47% 0.1037 152.22);
+  --accent-light: oklch(74.67% 0.0974 152.48);
+  --accent-faint: oklch(26.83% 0.0279 150.77);
+  --copper: oklch(69.15% 0.1137 60.19);
+  --warn: oklch(65.57% 0.1268 55.51);
+  --warn-light: oklch(73.78% 0.1195 66.01);
+  --warn-faint: oklch(25.72% 0.0269 68.61);
+  --rule: oklch(30.04% 0.0143 118.67);
+  --input-bg: oklch(23.92% 0.0115 122.28);
+  --input-focus-bg: oklch(26.4% 0.013 120.26);
   --modal-backdrop: rgba(0, 0, 0, 0.66);
   --glass: rgba(19, 21, 16, 0.8);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.25);
