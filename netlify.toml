@@ -1,0 +1,22 @@
+# Netlify build for the Hemma multi-tool site.
+#
+# The site is published from the repo root: the hub (index.html) and the
+# calculators are flat static HTML served as-is. Bostadskalkyl is now a
+# React + Vite app in web/ — this build compiles it and drops the output in as
+# bostadskalkyl.html + /bk-assets/, so the hub link and the existing public URL
+# keep working while every other tool stays byte-for-byte untouched.
+#
+# There was previously no netlify.toml; the build settings lived only in the
+# Netlify dashboard. This file makes the deploy explicit and version-controlled
+# (netlify.toml overrides the dashboard), so production no longer depends on
+# invisible settings. To roll the cutover back, delete this file.
+
+[build]
+  publish = "."
+  # Build the React app, then place its output at the site root. Netlify checks
+  # out fresh each deploy, so bk-assets/ never pre-exists (no nested-copy risk).
+  command = "npm --prefix web ci && npm --prefix web run build && cp web/dist/index.html bostadskalkyl.html && cp -R web/dist/bk-assets bk-assets"
+
+[build.environment]
+  # Match the local toolchain (Vite 8 / TS 6 need a modern Node).
+  NODE_VERSION = "22"

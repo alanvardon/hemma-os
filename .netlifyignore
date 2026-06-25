@@ -1,1 +1,5 @@
 *.test.js
+# Build inputs / installed deps — consumed during the build, never served.
+# (web/dist is copied into the root as bostadskalkyl.html + bk-assets first.)
+node_modules
+web/dist

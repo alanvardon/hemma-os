@@ -12,6 +12,9 @@ inspect-script.log
 # Node / build (root playwright deps + the React pilot)
 node_modules/
 dist/
+# Netlify drops the built bostadskalkyl app here at deploy time (see netlify.toml);
+# never commit the generated bundle.
+/bk-assets/
 
 # Playwright MCP artifacts + UI assessment / pilot screenshots (not source)
 .playwright-mcp/
