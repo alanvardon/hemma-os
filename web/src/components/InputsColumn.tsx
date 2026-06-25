@@ -11,9 +11,10 @@ interface Props {
   inputs: Inputs
   setField: <K extends keyof Inputs>(key: K, value: Inputs[K]) => void
   figures: Figures
+  onOpenDrift: () => void
 }
 
-export default function InputsColumn({ inputs: i, setField, figures: f }: Props) {
+export default function InputsColumn({ inputs: i, setField, figures: f, onOpenDrift }: Props) {
   const [listingUrl, setListingUrl] = useState('')
 
   const bankAName = i.bankAName.trim() || 'Bank A'
@@ -121,8 +122,11 @@ export default function InputsColumn({ inputs: i, setField, figures: f }: Props)
           >
             <CurrencyInput value={i.propertyTax} onChange={(v) => setField('propertyTax', v)} suffix="kr/yr" id="propertyTax" ariaLabel="Property tax" />
           </Field>
-          <Field label="Driftkostnad (running costs)" hint="Heating, water, electricity etc.">
+          <Field label="Driftkostnad (running costs)">
             <CurrencyInput value={i.driftkostnad} onChange={(v) => setField('driftkostnad', v)} suffix="kr/mo" id="driftkostnad" ariaLabel="Driftkostnad" />
+            <button type="button" className="field-breakdown-btn" onClick={onOpenDrift}>
+              Itemise breakdown ›
+            </button>
           </Field>
         </div>
 

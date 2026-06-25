@@ -205,3 +205,87 @@
 @media (max-width: 900px) {
   .undo-toast { bottom: calc(4.5rem + env(safe-area-inset-bottom)); }
 }
+
+/* ── Drift breakdown + savings line-item modals (Phase 7) ─────────── */
+.modal.modal-narrow { width: 520px; }
+
+.modal-note { font-size: 13px; color: var(--ink-soft); margin: 0; }
+.modal-note-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+.mode-switch { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.mode-switch-label { font-size: 12px; color: var(--ink-soft); }
+
+.modal-add-btn { margin-top: 0.75rem; font-size: 13px; padding: 6px 14px; }
+
+.drift-item-row {
+  display: grid;
+  grid-template-columns: 1fr 160px 28px;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.drift-item-label-input {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  padding: 2px 0;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.drift-item-label-input:focus { border-bottom-color: var(--accent-light); background: transparent; box-shadow: none; }
+.drift-item-label-input::placeholder { color: var(--ink-faint); }
+
+.drift-delete {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.drift-delete:hover { background: var(--warn-faint); color: var(--warn); }
+
+.drift-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 0 0.25rem;
+  border-top: 1px solid var(--rule);
+  margin-top: 0.5rem;
+}
+.modal-total-label { font-size: 13px; font-weight: 550; color: var(--ink-mid); }
+.modal-total-val { font-family: var(--font-display); font-size: 1.25rem; font-variant-numeric: tabular-nums; color: var(--ink); }
+.modal-total-val.accent { color: var(--accent); }
+
+/* Drift breakdown trigger under the driftkostnad field */
+.field-breakdown-btn {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  cursor: pointer;
+  transition: color 0.15s, transform 0.15s;
+}
+.field-breakdown-btn:hover { color: var(--accent-light); transform: translateX(2px); }

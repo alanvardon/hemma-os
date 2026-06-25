@@ -6,6 +6,8 @@ import SummaryColumn from './components/SummaryColumn'
 import ScenariosModal from './components/ScenariosModal'
 import SavePrompt from './components/SavePrompt'
 import UndoToast from './components/UndoToast'
+import DriftModal from './components/DriftModal'
+import SavingsModal from './components/SavingsModal'
 import { Money } from './components/AnimatedNumber'
 
 type Theme = 'light' | 'dark'
@@ -34,8 +36,12 @@ export default function App() {
   const duplicateScenario = useStore((s) => s.duplicateScenario)
   const deleteScenario = useStore((s) => s.deleteScenario)
   const restoreScenario = useStore((s) => s.restoreScenario)
+  const savingsItems = useStore((s) => s.savingsItems)
 
   const figures = useMemo(() => derive(inputs), [inputs])
+  // Savings augment the cash surplus / shortfall (P&L + mobile bar), Phase 7.
+  const savingsTotal = useMemo(() => savingsItems.reduce((s, i) => s + (i.amount || 0), 0), [savingsItems])
+  const totalBalance = figures.cashBalance + savingsTotal
 
   // Restore the saved session + scenarios on first mount.
   useEffect(() => {
@@ -61,6 +67,8 @@ export default function App() {
 
   // ── Scenarios / save UI state ──────────────────────────────────
   const [scenariosOpen, setScenariosOpen] = useState(false)
+  const [driftOpen, setDriftOpen] = useState(false)
+  const [savingsOpen, setSavingsOpen] = useState(false)
   const [savePrompt, setSavePrompt] = useState<{ open: boolean; mode: 'new' | 'update'; activeName: string }>({
     open: false,
     mode: 'new',
@@ -137,8 +145,14 @@ export default function App() {
       </header>
 
       <main className="layout">
-        <InputsColumn inputs={inputs} setField={setField} figures={figures} />
-        <SummaryColumn inputs={inputs} setField={setField} figures={figures} />
+        <InputsColumn inputs={inputs} setField={setField} figures={figures} onOpenDrift={() => setDriftOpen(true)} />
+        <SummaryColumn
+          inputs={inputs}
+          setField={setField}
+          figures={figures}
+          savingsTotal={savingsTotal}
+          onOpenSavings={() => setSavingsOpen(true)}
+        />
       </main>
 
       {/* Mobile key-figures bar */}
@@ -152,8 +166,8 @@ export default function App() {
           </div>
           <div className="mobile-stat">
             <span className="mobile-stat-label">Surplus / shortfall</span>
-            <span className={`mobile-stat-val ${figures.cashBalance >= 0 ? 'positive' : 'negative'}`}>
-              <Money value={figures.cashBalance} signed />
+            <span className={`mobile-stat-val ${totalBalance >= 0 ? 'positive' : 'negative'}`}>
+              <Money value={totalBalance} signed />
             </span>
           </div>
         </div>
@@ -182,6 +196,9 @@ export default function App() {
       />
 
       <UndoToast open={undo.open} message={undo.message} onUndo={handleUndo} />
+
+      <DriftModal open={driftOpen} onOpenChange={setDriftOpen} />
+      <SavingsModal open={savingsOpen} onOpenChange={setSavingsOpen} />
     </>
   )
 }

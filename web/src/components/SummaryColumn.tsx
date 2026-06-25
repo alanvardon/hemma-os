@@ -9,14 +9,19 @@ interface Props {
   inputs: Inputs
   setField: <K extends keyof Inputs>(key: K, value: Inputs[K]) => void
   figures: Figures
+  savingsTotal: number
+  onOpenSavings: () => void
 }
 
-export default function SummaryColumn({ inputs: i, setField, figures: f }: Props) {
-  // Phase 2: no savings store yet → savings total is 0, so total = cashBalance.
-  // (The P&L card gains the savings augmentation in Phase 3.)
-  const totalBalance = f.cashBalance
+export default function SummaryColumn({ inputs: i, setField, figures: f, savingsTotal, onOpenSavings }: Props) {
+  // Phase 7: savings entries augment the cash surplus / shortfall.
+  const totalBalance = f.cashBalance + savingsTotal
   const pnlClass =
-    totalBalance > 0 ? 'sum-card pnl-positive' : totalBalance < 0 ? 'sum-card pnl-negative' : 'sum-card'
+    totalBalance > 0
+      ? 'sum-card sum-card-clickable pnl-positive'
+      : totalBalance < 0
+        ? 'sum-card sum-card-clickable pnl-negative'
+        : 'sum-card sum-card-clickable'
   const equity = Math.min(Math.max(f.equityShare, 0), 100)
   const ltvColor =
     f.equityShare < 15 ? 'var(--warn)' : f.equityShare < 30 ? 'var(--warn-light)' : 'var(--accent)'
@@ -25,9 +30,24 @@ export default function SummaryColumn({ inputs: i, setField, figures: f }: Props
     <div className="summary-col">
       <p className="summary-title">Summary</p>
 
-      {/* Cash surplus / shortfall (P&L) */}
-      <div className={pnlClass}>
-        <div className="sum-card-title">Cash surplus / shortfall</div>
+      {/* Cash surplus / shortfall (P&L) — click to edit savings */}
+      <div
+        className={pnlClass}
+        role="button"
+        tabIndex={0}
+        aria-label="Edit savings entries"
+        onClick={onOpenSavings}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onOpenSavings()
+          }
+        }}
+      >
+        <div className="sum-card-title-row">
+          <div className="sum-card-title">Cash surplus / shortfall</div>
+          <span className="sum-card-hint">Edit savings ›</span>
+        </div>
         <div className={`sum-big ${totalBalance >= 0 ? 'positive' : 'negative'}`}>
           <Money value={totalBalance} signed />
         </div>
@@ -44,6 +64,14 @@ export default function SummaryColumn({ inputs: i, setField, figures: f }: Props
               <Money value={f.totalUpfront} prefix="−" />
             </span>
           </div>
+          {savingsTotal > 0 && (
+            <div className="sum-row">
+              <span className="sum-row-label">Savings</span>
+              <span className="sum-row-val positive">
+                <Money value={savingsTotal} signed />
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

@@ -11,12 +11,21 @@ const KEYS = {
   savingsItems: 'bostadskalkyl_savings_items_v1',
 } as const
 const KEY_THEME = 'bostadskalkyl_theme'
+const KEY_DRIFT_YEARLY = 'bostadskalkyl_drift_yearly'
 
 export interface Scenario {
   id: string
   name: string
   savedAt: string
   inputs: Inputs
+}
+
+// A line item in the driftkostnad breakdown or the savings list. `amount` is
+// always stored as a MONTHLY figure for drift (the yearly toggle is a view).
+export interface LineItem {
+  id: string
+  label: string
+  amount: number
 }
 
 export interface Session {
@@ -98,6 +107,47 @@ export function loadTheme(): Promise<string | null> {
 export function saveTheme(theme: string): Promise<void> {
   try {
     localStorage.setItem(KEY_THEME, theme)
+  } catch {
+    /* ignore */
+  }
+  return Promise.resolve()
+}
+
+// ── Drift breakdown + savings line items (Phase 7) ──────────────────
+function loadItems(key: string): Promise<LineItem[]> {
+  try {
+    const raw = localStorage.getItem(key)
+    return Promise.resolve(raw ? (JSON.parse(raw) as LineItem[]) : [])
+  } catch {
+    return Promise.resolve([])
+  }
+}
+
+function saveItems(key: string, items: LineItem[]): Promise<void> {
+  try {
+    localStorage.setItem(key, JSON.stringify(items))
+  } catch {
+    /* ignore */
+  }
+  return Promise.resolve()
+}
+
+export const loadDriftItems = (): Promise<LineItem[]> => loadItems(KEYS.driftItems)
+export const saveDriftItems = (items: LineItem[]): Promise<void> => saveItems(KEYS.driftItems, items)
+export const loadSavingsItems = (): Promise<LineItem[]> => loadItems(KEYS.savingsItems)
+export const saveSavingsItems = (items: LineItem[]): Promise<void> => saveItems(KEYS.savingsItems, items)
+
+export function loadDriftYearly(): Promise<boolean> {
+  try {
+    return Promise.resolve(localStorage.getItem(KEY_DRIFT_YEARLY) === 'true')
+  } catch {
+    return Promise.resolve(false)
+  }
+}
+
+export function saveDriftYearly(yearly: boolean): Promise<void> {
+  try {
+    localStorage.setItem(KEY_DRIFT_YEARLY, String(yearly))
   } catch {
     /* ignore */
   }
