@@ -1,0 +1,351 @@
+/* konsultkalkyl.css — Konsultkalkyl route styles.
+   Tokens, reset, shared components (.page-header, .btn, .section, etc.)
+   are in tokens.css / global.css / components.css. */
+
+/* ── Save badge ─────────────────────────────────────────────── */
+.save-state {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--accent);
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.2s, transform 0.2s;
+  white-space: nowrap;
+}
+.save-state.show { opacity: 1; transform: none; }
+
+/* ── Two-column layout (fixed inputs rail + expanding ledger) ── */
+.konsult-layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 0;
+  max-width: 1320px;
+  width: 100%;
+  margin: 0 auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/* The inputs-col baseline (overflow / height) comes from global.css;
+   override only the padding and right border for this tool. */
+.konsult-layout .inputs-col {
+  padding: 2rem 1.75rem 3rem;
+  border-right: 1px solid var(--rule);
+}
+
+.ledger-col {
+  padding: 2rem 2.25rem 3rem;
+  overflow-y: auto;
+  height: 100%;
+}
+
+/* ── Section note ────────────────────────────────────────────── */
+.section-note {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  line-height: 1.55;
+  margin-bottom: 1.1rem;
+}
+.section-note strong { color: var(--ink-mid); font-weight: 600; }
+
+/* ── Collapsible rates section ───────────────────────────────── */
+.section-rates > summary { cursor: pointer; list-style: none; }
+.section-rates > summary::-webkit-details-marker { display: none; }
+.section-label-summary { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+.section-rates[open] .section-label-summary {
+  margin-bottom: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--rule);
+}
+.summary-caret { margin-left: auto; color: var(--ink-soft); font-size: 11px; transition: transform 0.2s; }
+.section-rates[open] .summary-caret { transform: rotate(180deg); }
+
+/* ── Fields ─────────────────────────────────────────────────── */
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem 0.85rem;
+}
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field-wide { grid-column: 1 / -1; }
+.field label {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--ink-mid);
+  letter-spacing: 0.01em;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.field-en { color: var(--ink-faint); font-weight: 400; font-size: 10.5px; }
+
+.input-wrap { position: relative; display: flex; align-items: center; }
+.input-wrap input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 38px 9px 12px;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--input-bg);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  outline: none;
+  transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+}
+.input-wrap input[type="text"]:hover { border-color: var(--ink-faint); }
+.input-wrap input[type="text"]:focus {
+  border-color: var(--accent-light);
+  background: var(--input-focus-bg);
+  box-shadow: var(--ring);
+}
+.unit {
+  position: absolute;
+  right: 11px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  pointer-events: none;
+}
+
+/* ── Mini readout under billing ─────────────────────────────── */
+.mini-readout {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 1.1rem;
+}
+.mini-stat {
+  flex: 1;
+  min-width: 0;
+  background: var(--accent-faint);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: var(--r-md);
+  padding: 0.6rem 0.75rem;
+}
+.mini-stat-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 3px;
+}
+.mini-stat-val {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── Hero card ──────────────────────────────────────────────── */
+.hero-card {
+  background: linear-gradient(160deg, var(--accent-faint), var(--paper-warm));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  padding: 1.5rem 1.6rem;
+  margin-bottom: 1.4rem;
+}
+.hero-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 0.4rem;
+}
+.hero-big {
+  font-family: var(--font-display);
+  font-size: 2.9rem;
+  font-weight: 400;
+  color: var(--accent);
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+.hero-sub { font-size: 13px; color: var(--ink-soft); margin-top: 3px; }
+.hero-sub span { color: var(--ink-mid); font-weight: 550; }
+
+.hero-split {
+  display: flex;
+  height: 9px;
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 1rem 0 0.6rem;
+  background: var(--paper-warm);
+}
+.hero-seg { display: block; height: 100%; transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
+.hero-seg.hero-salary { background: var(--accent); }
+.hero-seg.hero-dividend { background: var(--copper); }
+.hero-legend { display: flex; gap: 1.2rem; flex-wrap: wrap; }
+.hero-key { font-size: 11.5px; color: var(--ink-soft); display: inline-flex; align-items: center; gap: 6px; }
+.hero-key em { font-style: normal; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.hero-dot { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+.hero-dot.hero-salary { background: var(--accent); }
+.hero-dot.hero-dividend { background: var(--copper); }
+
+.hero-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+  margin-top: 1.2rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.hero-stat { text-align: center; min-width: 0; }
+.hero-stat-val {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.hero-stat-label {
+  display: block;
+  font-size: 10px;
+  color: var(--ink-soft);
+  margin-top: 4px;
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+}
+
+/* ── Ledger (P&L table) ─────────────────────────────────────── */
+.ledger {
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 0.4rem 1.4rem 1rem;
+}
+.ledger-head,
+.lr {
+  display: grid;
+  grid-template-columns: 1fr 130px 140px;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+.ledger-head {
+  padding: 0.9rem 0 0.7rem;
+  border-bottom: 1px solid var(--rule);
+  position: sticky;
+  top: 0;
+  background: var(--paper-card);
+  z-index: 2;
+}
+.ledger-head-item { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
+.ledger-head-num { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-soft); text-align: right; }
+
+.ledger-group {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding: 0.95rem 0 0.3rem;
+}
+
+.lr {
+  padding: 6px 0;
+  font-size: 13.5px;
+  border-top: 1px solid color-mix(in srgb, var(--rule) 55%, transparent);
+}
+.lr:first-of-type { border-top: none; }
+.lr-label { color: var(--ink-mid); min-width: 0; }
+.lr-en { color: var(--ink-faint); font-size: 11px; margin-left: 6px; }
+.lr-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.lr-num:last-child { color: var(--ink-mid); }
+
+.lr-strong .lr-label { font-weight: 600; color: var(--ink); }
+.lr-strong .lr-num { font-weight: 650; }
+.lr-minus .lr-num,
+.lr-minus .lr-label { color: var(--ink-soft); }
+.lr-minus .lr-num::before { content: "− "; }
+.lr-plus .lr-num::before { content: "+ "; }
+.lr-plus .lr-num { color: var(--accent); }
+.lr-sub {
+  border-top: 1px solid var(--rule);
+  margin-top: 2px;
+}
+.lr-sub .lr-label { font-weight: 600; color: var(--ink); }
+.lr-sub .lr-num { font-weight: 650; color: var(--ink); }
+.lr-good .lr-num { color: var(--accent); }
+.lr-good .lr-num:last-child { color: var(--accent-light); }
+.lr-muted .lr-label,
+.lr-muted .lr-num { color: var(--ink-soft); font-weight: 450; }
+
+.lr-total {
+  margin-top: 0.7rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: var(--r-md);
+  background: var(--accent-faint);
+}
+.lr-total .lr-label { font-weight: 650; color: var(--ink); font-size: 14px; }
+.lr-total .lr-num {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 400;
+  color: var(--accent);
+}
+
+.ledger-foot {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  line-height: 1.6;
+  margin-top: 1.1rem;
+  max-width: 60ch;
+}
+
+/* ── Entrance animation — extra section + ledger column ─────── */
+@media (prefers-reduced-motion: no-preference) {
+  .konsult-layout .inputs-col .section:nth-child(4) { animation-delay: 0.15s; }
+  .ledger-col > * { animation: rise-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+  .ledger-col > *:nth-child(2) { animation-delay: 0.08s; }
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 1080px) {
+  .konsult-layout { grid-template-columns: 320px 1fr; }
+  .ledger-col { padding: 1.5rem 1.5rem 3rem; }
+}
+@media (max-width: 900px) {
+  .konsult-layout {
+    grid-template-columns: 1fr;
+    flex: none;
+    height: auto;
+    min-height: auto;
+  }
+  .konsult-layout .inputs-col {
+    overflow-y: visible;
+    height: auto;
+    border-right: none;
+    padding: 1.25rem 1rem 0.5rem;
+  }
+  .ledger-col {
+    overflow-y: visible;
+    height: auto;
+    padding: 0.5rem 1rem calc(5.5rem + env(safe-area-inset-bottom));
+  }
+  .ledger-head { position: static; }
+  .konsult-layout .section { padding: 1.2rem 1.1rem 1.3rem; }
+}
+@media (max-width: 480px) {
+  .ledger-head, .lr { grid-template-columns: 1fr 88px 96px; gap: 0.4rem; }
+  .lr-en { display: none; }
+  .hero-big { font-size: 2.4rem; }
+  .ledger { padding: 0.4rem 1rem 1rem; }
+}
