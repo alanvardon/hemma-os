@@ -136,10 +136,10 @@ export default function App() {
         </div>
       </header>
 
-      <div className="layout">
+      <main className="layout">
         <InputsColumn inputs={inputs} setField={setField} figures={figures} />
         <SummaryColumn inputs={inputs} setField={setField} figures={figures} />
-      </div>
+      </main>
 
       {/* Mobile key-figures bar */}
       <div className="mobile-bar">

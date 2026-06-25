@@ -301,7 +301,7 @@
 }
 .amort-target-result.no-solution {
   background: var(--warn-faint);
-  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border: 1px solid color-mix(in oklch, var(--warn) 35%, transparent);
   border-radius: var(--r-sm);
   padding: 8px 12px;
   color: var(--warn);
