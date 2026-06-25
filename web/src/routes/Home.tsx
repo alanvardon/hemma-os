@@ -168,9 +168,9 @@ export default function Home() {
             <span className="app-cta">Open <span className="arrow">→</span></span>
           </Link>
 
-          <a
+          <Link
             className="app-card reveal reveal-7"
-            href="manadsavslut.html"
+            to="/manadsavslut"
             onPointerMove={onCardMove}
             onPointerLeave={onCardLeave}
           >
@@ -188,7 +188,7 @@ export default function Home() {
             <span className="app-name">Månadsavslut</span>
             <span className="app-desc">The month-end close — import card statements, split shared spending and settle up who owes whom in one tap.</span>
             <span className="app-cta">Open <span className="arrow">→</span></span>
-          </a>
+          </Link>
 
           <Link
             className="app-card reveal reveal-8"
