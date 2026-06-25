@@ -146,9 +146,9 @@ export default function Home() {
             <span className="app-cta">Open <span className="arrow">→</span></span>
           </a>
 
-          <a
+          <Link
             className="app-card reveal reveal-6"
-            href="konsultkalkyl.html"
+            to="/konsultkalkyl"
             onPointerMove={onCardMove}
             onPointerLeave={onCardLeave}
           >
@@ -166,7 +166,7 @@ export default function Home() {
             <span className="app-name">Konsultkalkyl</span>
             <span className="app-desc">What could it pay to go independent? Turn an hourly rate into salary, dividend and the tax in between — Sweden, 2026.</span>
             <span className="app-cta">Open <span className="arrow">→</span></span>
-          </a>
+          </Link>
 
           <a
             className="app-card reveal reveal-7"

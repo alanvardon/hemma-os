@@ -50,9 +50,8 @@ jobs:
           cp icon.svg manifest.webmanifest _site/
           # Vanilla tools not yet migrated to React — served as static HTML alongside
           # the SPA. Remove each tool's files below once its React route ships.
-          cp calc.js _site/  # shared calc utils used by konsultkalkyl + lonevaxling + hushallsbudget
+          cp calc.js _site/  # shared calc utils used by lonevaxling + hushallsbudget
           cp hushallsbudget.html budget.css budget.js salary-store.js _site/
-          cp konsultkalkyl.html konsultkalkyl.css konsultkalkyl.js _site/
           cp manadsavslut.html manadsavslut.css manadsavslut.js manadsavslut-store.js _site/
           cp mortgagetracker.html mortgagetracker.css mortgagetracker.js mortgagetracker-store.js _site/
           cp lonevaxling.html lonevaxling.css lonevaxling.js _site/
