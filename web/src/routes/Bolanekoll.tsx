@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Chart from 'chart.js/auto'
+import { Money, Percent } from '../components/AnimatedNumber'
 import { useTheme } from '../App'
 import {
   defaultSettings, parseCsv, parseAmount, autoMapColumns, classifyKind,
@@ -406,6 +407,14 @@ function fmtMoney(n: number): string {
 }
 function fmtPct(n: number): string { return (Number(n) || 0).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' %' }
 
+// Animated equivalents for the SUMMARY figures (dashboard, bridge, insights).
+// Data-table cells, the import triage and prose keep the plain string formatters
+// above (long ledgers shouldn't roll on every keystroke).
+function M(value: number, signed?: boolean) {
+  return <Money value={value} currencySuffix={CURRENCY_SUFFIX[CURRENT_CURRENCY] || 'kr'} signed={signed} />
+}
+function P(value: number) { return <Percent value={value} decimals={2} space locale="sv-SE" /> }
+
 // ── Main component ─────────────────────────────────────────────────────────
 
 export default function Bolanekoll() {
@@ -705,7 +714,6 @@ export default function Bolanekoll() {
       : fmtPct(ltv) + ' loan-to-value · ' + fmtMoney(balance) + ' still owed to the bank.'
 
   const bridgeLabel = bridgePeriod === 'ytd' ? 'i år' : bridgePeriod === '12m' ? 'senaste 12 mån' : 'sedan start'
-  const signed = (n: number) => (n >= 0 ? '+' : '−') + fmtMoney(Math.abs(n))
   const wsum = Math.abs(bridge.amortization_gain) + Math.abs(bridge.appreciation_gain)
   const pa = wsum > 0 ? Math.round(Math.abs(bridge.amortization_gain) / wsum * 100) : 0
 
@@ -742,28 +750,28 @@ export default function Bolanekoll() {
         <section className="card dashboard-card">
           <div className="dash-main">
             <p className="dash-label">Eget kapital · Total equity</p>
-            <p className="dash-headline">{hasValuation ? fmtMoney(eq) : '—'}</p>
+            <p className="dash-headline">{hasValuation ? M(eq) : '—'}</p>
             <p className="dash-sub">{dashSub}</p>
           </div>
           <div className="split-row">
             <div className="split-card is-accent">
               <span className="split-name">{nameOf('a')} · {fmtPct(pct.a)}</span>
-              <span className="split-val">{hasValuation ? fmtMoney(split.a) : '—'}</span>
+              <span className="split-val">{hasValuation ? M(split.a) : '—'}</span>
               <span className="split-sub">equity share</span>
             </div>
             <div className="split-card">
               <span className="split-name">{nameOf('b')} · {fmtPct(pct.b)}</span>
-              <span className="split-val">{hasValuation ? fmtMoney(split.b) : '—'}</span>
+              <span className="split-val">{hasValuation ? M(split.b) : '—'}</span>
               <span className="split-sub">equity share</span>
             </div>
           </div>
           <div className="metric-row">
-            <div className="metric-chip is-accent"><span className="metric-label">Remaining debt</span><span className="metric-val">{fmtMoney(balance)}</span></div>
-            <div className="metric-chip"><span className="metric-label">Property value</span><span className="metric-val">{hasValuation ? fmtMoney(value) : '—'}</span></div>
-            <div className="metric-chip"><span className="metric-label">Loan-to-value</span><span className="metric-val">{hasValuation ? fmtPct(ltv) : '—'}</span></div>
-            <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{fmtMoney(amortized)}</span></div>
-            <div className="metric-chip"><span className="metric-label">Interest paid</span><span className="metric-val">{fmtMoney(interest)}</span></div>
-            {settings.ranteavdrag && <div className="metric-chip"><span className="metric-label">Ränteavdrag (est.)</span><span className="metric-val">{fmtMoney(deduction)}</span></div>}
+            <div className="metric-chip is-accent"><span className="metric-label">Remaining debt</span><span className="metric-val">{M(balance)}</span></div>
+            <div className="metric-chip"><span className="metric-label">Property value</span><span className="metric-val">{hasValuation ? M(value) : '—'}</span></div>
+            <div className="metric-chip"><span className="metric-label">Loan-to-value</span><span className="metric-val">{hasValuation ? P(ltv) : '—'}</span></div>
+            <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{M(amortized)}</span></div>
+            <div className="metric-chip"><span className="metric-label">Interest paid</span><span className="metric-val">{M(interest)}</span></div>
+            {settings.ranteavdrag && <div className="metric-chip"><span className="metric-label">Ränteavdrag (est.)</span><span className="metric-val">{M(deduction)}</span></div>}
             {soon && <div className={'metric-chip' + (soon.days <= 90 ? ' is-warn' : '')}><span className="metric-label">Bound rate ends</span><span className="metric-val">{soon.until}</span></div>}
           </div>
           {reconcile.length > 0 && (
@@ -800,20 +808,20 @@ export default function Bolanekoll() {
               <div className="bridge">
                 <div className="bridge-head">
                   <span className="bridge-title">Förändring eget kapital · equity change {bridgeLabel}</span>
-                  <span className={'bridge-total' + (bridge.total_gain < 0 ? ' is-neg' : '')}>{signed(bridge.total_gain)}</span>
+                  <span className={'bridge-total' + (bridge.total_gain < 0 ? ' is-neg' : '')}>{M(bridge.total_gain, true)}</span>
                 </div>
                 <div className="bridge-bar">
                   <span className={'bridge-seg is-amort' + (bridge.amortization_gain < 0 ? ' is-neg' : '')} style={{ width: pa + '%' }} />
                   <span className={'bridge-seg is-appr' + (bridge.appreciation_gain < 0 ? ' is-neg' : '')} style={{ width: (100 - pa) + '%' }} />
                 </div>
                 <div className="bridge-legend">
-                  <span className="bridge-key"><span className="bridge-dot is-amort" />Amortering <b>{signed(bridge.amortization_gain)}</b></span>
-                  <span className="bridge-key"><span className="bridge-dot is-appr" />Värdeökning · appreciation <b>{signed(bridge.appreciation_gain)}</b></span>
+                  <span className="bridge-key"><span className="bridge-dot is-amort" />Amortering <b>{M(bridge.amortization_gain, true)}</b></span>
+                  <span className="bridge-key"><span className="bridge-dot is-appr" />Värdeökning · appreciation <b>{M(bridge.appreciation_gain, true)}</b></span>
                 </div>
               </div>
               <div className="metric-row">
-                {lastCost && <div className="metric-chip"><span className="metric-label">{settings.ranteavdrag ? 'Latest mo · net cost' : 'Latest mo · cost'}</span><span className="metric-val">{fmtMoney(lastCost.net)}</span></div>}
-                {blended > 0 && <div className="metric-chip is-accent"><span className="metric-label">Blended rate</span><span className="metric-val">{fmtPct(blended)}</span></div>}
+                {lastCost && <div className="metric-chip"><span className="metric-label">{settings.ranteavdrag ? 'Latest mo · net cost' : 'Latest mo · cost'}</span><span className="metric-val">{M(lastCost.net)}</span></div>}
+                {blended > 0 && <div className="metric-chip is-accent"><span className="metric-label">Blended rate</span><span className="metric-val">{P(blended)}</span></div>}
                 {krav.has_value && <div className="metric-chip"><span className="metric-label">Amorteringskrav (est.)</span><span className="metric-val">{krav.exempt ? 'None · LTV ≤ 50 %' : krav.required_pct + ' % · ' + fmtMoney(krav.required_annual) + '/år'}</span></div>}
               </div>
             </>

@@ -13,25 +13,40 @@ interface MoneyProps {
   prefix?: string
   /** Trailing unit, e.g. "/mo" or "/yr". */
   suffix?: string
+  /**
+   * Render "<sv-SE number> <currencySuffix>" instead of the Intl SEK currency
+   * style — for the multi-currency tools (Bolånekoll: kr/€/$/£), matching their
+   * own `fmtMoney`. When omitted, the default SEK currency formatting is used.
+   */
+  currencySuffix?: string
   className?: string
 }
 
 /**
  * SEK figure matching the legacy `fmt()` output ("30 623 kr", sv-SE grouping).
  * sv-SE currency formatting yields "kr" after the number, so this is a 1:1
- * visual replacement for the old `fmt(n)` strings.
+ * visual replacement for the old `fmt(n)` strings. Pass `currencySuffix` to
+ * render an explicit unit (other currencies) instead of the Intl SEK style.
  */
-export function Money({ value, signed, prefix, suffix, className }: MoneyProps) {
+export function Money({ value, signed, prefix, suffix, currencySuffix, className }: MoneyProps) {
+  const signFmt = signed ? { signDisplay: 'exceptZero' as const } : {}
+  if (currencySuffix != null) {
+    return (
+      <NumberFlow
+        value={value}
+        locales="sv-SE"
+        format={{ maximumFractionDigits: 0, ...signFmt }}
+        prefix={prefix}
+        suffix={(suffix ?? '') + ' ' + currencySuffix}
+        className={className}
+      />
+    )
+  }
   return (
     <NumberFlow
       value={value}
       locales="sv-SE"
-      format={{
-        style: 'currency',
-        currency: 'SEK',
-        maximumFractionDigits: 0,
-        ...(signed ? { signDisplay: 'exceptZero' as const } : {}),
-      }}
+      format={{ style: 'currency', currency: 'SEK', maximumFractionDigits: 0, ...signFmt }}
       prefix={prefix}
       suffix={suffix}
       className={className}

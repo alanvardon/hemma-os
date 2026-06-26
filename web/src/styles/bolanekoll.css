@@ -329,6 +329,25 @@ dialog.bk-dialog {
   width: min(540px, calc(100vw - 2rem)); max-width: 100%;
 }
 .bk-dialog::backdrop { background: var(--modal-backdrop); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
+
+/* Entrance/exit animation for the native <dialog> — rise + fade on open, reverse
+   on close (display/overlay kept via allow-discrete so the exit is visible).
+   Progressive enhancement: browsers without @starting-style just appear/vanish.
+   Gated on reduced-motion. */
+@media (prefers-reduced-motion: no-preference) {
+  dialog.bk-dialog {
+    transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+      overlay 0.22s ease allow-discrete, display 0.22s ease allow-discrete;
+  }
+  dialog.bk-dialog:not([open]) { opacity: 0; transform: translateY(8px) scale(0.985); }
+  @starting-style { dialog.bk-dialog[open] { opacity: 0; transform: translateY(8px) scale(0.985); } }
+
+  .bk-dialog::backdrop {
+    transition: opacity 0.22s ease, overlay 0.22s ease allow-discrete, display 0.22s ease allow-discrete;
+  }
+  .bk-dialog:not([open])::backdrop { opacity: 0; }
+  @starting-style { .bk-dialog[open]::backdrop { opacity: 0; } }
+}
 .bk-dialog .dialog-body { padding: 1.5rem 1.6rem 1.4rem; }
 .bk-dialog .dialog-title {
   font-family: var(--font-display); font-weight: 400;
