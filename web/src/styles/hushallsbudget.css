@@ -1,0 +1,1008 @@
+/* hushallsbudget.css — Hushållsbudget route styles.
+
+   Faithful port of the standalone budget.css. Everything is scoped under
+   `.hb-root` (the route wrapper) via native CSS nesting, so the original
+   generic class names (.section, .b-row, .sum-card, .modal-overlay …) are
+   reused 1:1 with the original markup without leaking into the rest of the
+   suite. Design tokens come from the shared tokens.css; only the category
+   palette (--cat-*) — budget-only — is defined here. The page-header, buttons
+   and base resets come from global.css, matching the other React routes.
+
+   Imported LAST in main.tsx so the few generic-name collisions with the
+   shared sheets (field / sum-card / mobile-bar / chart-overlay) resolve here. */
+
+.hb-root {
+  --cat-1: #2e6f5e;
+  --cat-2: #3f6f9e;
+  --cat-3: #c08a2e;
+  --cat-4: #8a5a8f;
+  --cat-5: #b0552f;
+  --cat-6: #6b8e4e;
+  --cat-7: #51606e;
+  --cat-8: #a87f52;
+
+  /* Lock the split view to the viewport on desktop; the columns scroll
+     independently. Under 900px (below) this relaxes to normal page flow. */
+  display: flex;
+  flex-direction: column;
+  height: 100svh;
+  overflow: hidden;
+
+  /* ── Header save-state ──────────────────────────────────────── */
+  .save-state {
+    font-size: 12px;
+    font-weight: 550;
+    color: var(--accent);
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: opacity 0.2s, transform 0.2s;
+    white-space: nowrap;
+  }
+  .save-state.show { opacity: 1; transform: none; }
+
+  /* ── Layout ─────────────────────────────────────────────────── */
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 0;
+    max-width: 1280px;
+    width: 100%;
+    margin: 0 auto;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .inputs-col { padding: 2rem 2.25rem 3rem; overflow-y: auto; height: 100%; }
+  .summary-col {
+    padding: 2rem 1.75rem 3rem;
+    background: var(--paper-card);
+    border-left: 1px solid var(--rule);
+    overflow-y: auto;
+    height: 100%;
+  }
+
+  /* ── Sections ───────────────────────────────────────────────── */
+  .section {
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-sm);
+    padding: 1.5rem 1.6rem 1.6rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .section-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 1rem;
+    padding-bottom: 0.85rem;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .section-num {
+    font-family: var(--font-display);
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--accent-faint);
+    border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    border-radius: 50%;
+    width: 24px; height: 24px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .section-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-mid);
+  }
+
+  .section-total {
+    margin-left: auto;
+    font-family: var(--font-display);
+    font-size: 1.2rem;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .section-note {
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    line-height: 1.55;
+    margin-bottom: 1.1rem;
+  }
+  .section-note strong { color: var(--ink-mid); font-weight: 600; }
+
+  /* ── Inputs (shared) ────────────────────────────────────────── */
+  input[type="text"],
+  input[type="month"] {
+    width: 100%;
+    min-width: 0;
+    padding: 9px 12px;
+    font-family: var(--font-ui);
+    font-size: 14px;
+    font-weight: 450;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    background: var(--input-bg);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    outline: none;
+    transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+  }
+  input[type="text"]:hover,
+  input[type="month"]:hover { border-color: var(--ink-faint); }
+  input[type="text"]:focus,
+  input[type="month"]:focus { border-color: var(--accent-light); background: var(--input-focus-bg); box-shadow: var(--ring); }
+  input::placeholder { color: var(--ink-faint); }
+  input[type="month"]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: 0.6; }
+
+  /* ── Who's in the household ─────────────────────────────────── */
+  .who-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.75rem;
+    margin-bottom: 1.4rem;
+  }
+  .who-field { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+  .who-field label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .who-amp { font-family: var(--font-display); font-size: 1.3rem; color: var(--ink-faint); padding-bottom: 6px; }
+
+  /* ── Income columns ─────────────────────────────────────────── */
+  .income-cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.9rem;
+  }
+
+  .income-col {
+    background: var(--paper-warm);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    padding: 0.85rem 0.85rem 0.7rem;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .income-col-head {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-bottom: 0.7rem;
+  }
+  .income-col-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .income-col-sub {
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .income-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 7px; }
+
+  /* ── Owner blocks (joint / individual side-by-side) ─────────── */
+  .owner-block {
+    background: var(--paper-warm);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    padding: 0.9rem 1rem 0.8rem;
+  }
+  .owner-block-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.7rem;
+    padding-bottom: 0.45rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  .owner-block-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-mid);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .owner-block-tag {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    color: var(--accent);
+  }
+  .owner-block-sub {
+    margin-left: auto;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .owner-split-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 1.1rem 0 0.6rem;
+  }
+  .owner-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; }
+  .owner-col {
+    background: var(--paper-warm);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    padding: 0.85rem 0.85rem 0.7rem;
+    min-width: 0;
+  }
+
+  .b-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 7px; min-width: 0; }
+
+  /* ── Editable rows (income / cost / saving) ─────────────────── */
+  .b-row {
+    display: grid;
+    grid-template-columns: 1fr 92px auto;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .b-row-label { font-size: 13px !important; padding: 7px 9px !important; }
+  .b-row-amount { text-align: right; font-size: 13px !important; padding: 7px 9px !important; font-variant-numeric: tabular-nums; }
+
+  .b-row-remove {
+    width: 26px; height: 26px;
+    flex-shrink: 0;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--ink-faint);
+    border-radius: 7px;
+    font-size: 17px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+  }
+  .b-row-remove:hover { color: var(--warn); background: var(--warn-faint); border-color: var(--warn); }
+
+  /* In the narrow income & individual columns, stack amount under label */
+  .income-col .b-row,
+  .owner-col .b-row { grid-template-columns: 1fr auto; }
+  .income-col .b-row-amount,
+  .owner-col .b-row-amount { grid-column: 1; }
+  .income-col .b-row-remove,
+  .owner-col .b-row-remove { grid-column: 2; grid-row: 1 / span 2; }
+
+  .row-add-btn {
+    align-self: flex-start;
+    font-size: 12px;
+    padding: 6px 11px;
+    color: var(--ink-soft);
+  }
+
+  /* ── Cost categories (joint) ────────────────────────────────── */
+  .cat-cards { display: flex; flex-direction: column; gap: 0.7rem; }
+  .add-cat-btn { margin: 0.1rem 0 0.2rem; }
+
+  .cat-card {
+    background: var(--paper-warm);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    padding: 0.8rem 0.9rem 0.7rem;
+    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  }
+  .cat-card.drag-over {
+    border-color: var(--accent-light);
+    box-shadow: var(--ring);
+    background: var(--accent-faint);
+  }
+
+  .cat-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+    padding-bottom: 0.45rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  .cat-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px !important;
+    font-weight: 600 !important;
+    padding: 5px 8px !important;
+    background: transparent;
+    border-color: transparent;
+  }
+  .cat-name:hover { border-color: var(--rule); }
+  .cat-name:focus { border-color: var(--accent-light); background: var(--input-focus-bg); }
+  .cat-sub {
+    flex-shrink: 0;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .cat-remove {
+    flex-shrink: 0;
+    width: 24px; height: 24px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--ink-faint);
+    border-radius: 6px;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+  }
+  .cat-remove:hover { color: var(--warn); background: var(--warn-faint); border-color: var(--warn); }
+
+  .cat-list:empty {
+    min-height: 30px;
+    border: 1px dashed var(--rule);
+    border-radius: var(--r-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .cat-list:empty::before {
+    content: 'Drop a cost here, or add one below';
+    font-size: 11px;
+    color: var(--ink-faint);
+  }
+
+  /* Draggable joint cost rows: drag handle in front of the label */
+  .b-row.b-draggable { grid-template-columns: auto 1fr 92px auto; }
+  .b-row.b-draggable.dragging { opacity: 0.4; }
+  .b-drag-handle {
+    color: var(--ink-faint);
+    font-size: 14px;
+    line-height: 1;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    padding: 0 1px;
+  }
+  .b-drag-handle:hover { color: var(--ink-soft); }
+  .b-drag-handle:active { cursor: grabbing; }
+
+  /* ── The pot box ────────────────────────────────────────────── */
+  .pot-box {
+    margin-top: 1.4rem;
+    background: linear-gradient(160deg, var(--accent-faint), var(--paper-warm));
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    border-radius: var(--r-md);
+    padding: 1.1rem 1.2rem;
+  }
+
+  .pot-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .pot-flow-item { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .pot-flow-label { font-size: 10.5px; color: var(--ink-soft); letter-spacing: 0.02em; }
+  .pot-flow-val { font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .pot-plus { font-size: 15px; color: var(--ink-faint); font-weight: 300; }
+
+  .pot-total-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 0.9rem;
+    padding-top: 0.8rem;
+    border-top: 1px dashed color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  .pot-total-label { font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-mid); }
+  .pot-total-val { font-family: var(--font-display); font-size: 1.4rem; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  .pot-split-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 0.4rem;
+  }
+  .pot-split-label { font-size: 12.5px; color: var(--accent); font-weight: 550; }
+  .pot-split-val { font-family: var(--font-display); font-size: 1.55rem; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+  .pot-transfer {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-top: 1rem;
+    padding: 0.7rem 0.85rem;
+    background: var(--paper-card);
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--rule));
+    border-radius: var(--r-sm);
+  }
+  .pot-transfer-icon {
+    flex-shrink: 0;
+    width: 26px; height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--accent-faint);
+    color: var(--accent);
+    font-size: 14px;
+  }
+  .pot-transfer-text { font-size: 13.5px; color: var(--ink-mid); line-height: 1.35; }
+  .pot-transfer-text strong { color: var(--ink); font-weight: 600; }
+  .pot-transfer-text .pot-transfer-amount { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pot-transfer.even .pot-transfer-icon { background: var(--rule); color: var(--ink-soft); }
+  .pot-transfer-note { font-size: 11px; color: var(--ink-soft); margin-top: 0.45rem; line-height: 1.45; }
+  .pot-transfer-note:empty { display: none; }
+
+  .pot-actions { display: flex; gap: 0.6rem; margin-top: 1rem; flex-wrap: wrap; }
+  .pot-actions .btn { flex: 1; min-width: 0; }
+
+  /* ── Summary cards ──────────────────────────────────────────── */
+  .summary-title {
+    font-family: var(--font-display);
+    font-size: 1.15rem;
+    font-weight: 400;
+    margin-bottom: 1.1rem;
+    color: var(--ink);
+  }
+
+  .sum-card {
+    position: relative;
+    background: var(--paper-warm);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    padding: 1.05rem 1.1rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .sum-card-hero {
+    background: linear-gradient(160deg, var(--accent-faint), var(--paper-warm));
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  .sum-card-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 0.45rem;
+  }
+
+  .sum-big {
+    font-family: var(--font-display);
+    font-size: 1.85rem;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+  }
+  .sum-big.positive { color: var(--accent); }
+  .sum-big.negative { color: var(--warn); }
+
+  .sum-card-subtitle { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+
+  .sum-rows { margin-top: 0.6rem; }
+  .sum-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 5px 0;
+    border-top: 1px solid var(--rule);
+    font-size: 13px;
+  }
+  .sum-row-label { color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .sum-row-val { font-weight: 550; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .sum-row-val.positive { color: var(--accent); }
+  .sum-row-val.negative { color: var(--warn); }
+
+  .sum-divider { border: none; border-top: 1px solid var(--rule); margin: 1.1rem 0; }
+
+  /* Per-person comparison — one shared table beats two cramped cards. */
+  .compare-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 0.6rem;
+    margin-top: 0.7rem;
+    align-items: baseline;
+  }
+  .compare-head {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-bottom: 7px;
+  }
+  .compare-label {
+    font-size: 12px;
+    color: var(--ink-soft);
+    padding: 6px 0;
+    border-top: 1px solid var(--rule);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .compare-val {
+    font-size: 12.5px;
+    font-weight: 550;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    padding: 6px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .compare-val.positive { color: var(--accent); }
+  .compare-val.negative { color: var(--warn); }
+  .compare-foot-label,
+  .compare-foot { border-top-width: 2px; font-weight: 600; padding-top: 7px; }
+  .compare-foot-label { color: var(--ink-mid); }
+
+  /* Household cashflow — the two leftovers combined, below the per-person grid */
+  .compare-household {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.75rem;
+    margin-top: 0.7rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--rule);
+  }
+  .compare-household-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-mid);
+  }
+  .compare-household-val {
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .compare-household-val.positive { color: var(--accent); }
+  .compare-household-val.negative { color: var(--warn); }
+
+  /* ── Flow bar ───────────────────────────────────────────────── */
+  .flow-bar {
+    display: flex;
+    height: 12px;
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 0.9rem 0 0.6rem;
+    background: var(--rule);
+  }
+  .flow-seg { height: 100%; transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
+  .flow-seg.flow-joint { background: var(--accent); }
+  .flow-seg.flow-own { background: var(--accent-light); }
+  .flow-seg.flow-sav { background: var(--copper); }
+  .flow-seg.flow-left { background: var(--ink-faint); }
+
+  .flow-legend { display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; }
+  .flow-key { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ink-soft); }
+  .flow-key em { font-style: normal; font-weight: 600; color: var(--ink-mid); font-variant-numeric: tabular-nums; }
+  .flow-dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+  .flow-dot.flow-joint { background: var(--accent); }
+  .flow-dot.flow-own { background: var(--accent-light); }
+  .flow-dot.flow-sav { background: var(--copper); }
+  .flow-dot.flow-left { background: var(--ink-faint); }
+
+  /* ── Doughnut chart ─────────────────────────────────────────── */
+  .chart-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+
+  .chart-expand-btn {
+    flex-shrink: 0;
+    width: 26px; height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--rule);
+    background: var(--paper-card);
+    color: var(--ink-soft);
+    border-radius: 7px;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .chart-expand-btn:hover { color: var(--accent); border-color: var(--accent-light); background: var(--paper-warm); }
+
+  .chart-wrap { position: relative; height: 240px; margin-top: 0.5rem; }
+
+  /* ── Fullscreen chart overlay ───────────────────────────────── */
+  .chart-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    background: color-mix(in srgb, var(--ink) 55%, transparent);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    animation: hb-overlay-in 0.2s ease;
+  }
+  .chart-overlay[hidden] { display: none; }
+
+  .chart-overlay-inner {
+    position: relative;
+    width: min(900px, 100%);
+    height: min(80vh, 760px);
+    display: flex;
+    flex-direction: column;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-md);
+    padding: 1.25rem 1.4rem 1.4rem;
+    animation: hb-rise-in 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .chart-overlay-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+  }
+  .chart-overlay-title { font-family: var(--font-display); font-size: 1.35rem; color: var(--ink); }
+  .chart-overlay-close { width: 30px; height: 30px; font-size: 18px; }
+  .chart-overlay-stage { position: relative; flex: 1; min-height: 0; }
+
+  /* ── Modal (salary submit + history) ────────────────────────── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: color-mix(in srgb, var(--ink) 55%, transparent);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    animation: hb-overlay-in 0.2s ease;
+  }
+  .modal-overlay[hidden] { display: none; }
+
+  .modal-overlay.closing { animation: hb-overlay-out 0.18s ease forwards; }
+  .modal-overlay.closing .modal-card { animation: hb-modal-out 0.18s ease forwards; }
+
+  .modal-card {
+    width: min(440px, 100%);
+    max-height: min(88vh, 720px);
+    display: flex;
+    flex-direction: column;
+    background: var(--paper-card);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-md);
+    animation: hb-rise-in 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 1.1rem 1.3rem 0.9rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  .modal-title { font-family: var(--font-display); font-size: 1.3rem; color: var(--ink); }
+  .modal-close {
+    flex-shrink: 0;
+    width: 30px; height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--rule);
+    background: var(--paper-card);
+    color: var(--ink-soft);
+    border-radius: 8px;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .modal-close:hover { color: var(--accent); border-color: var(--accent-light); background: var(--paper-warm); }
+
+  .modal-body { padding: 1.1rem 1.3rem; overflow-y: auto; }
+  .modal-note { font-size: 12.5px; color: var(--ink-soft); line-height: 1.55; margin-bottom: 1rem; }
+
+  .modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    padding: 0.9rem 1.3rem 1.1rem;
+    border-top: 1px solid var(--rule);
+    flex-wrap: wrap;
+  }
+  .modal-foot-split { justify-content: space-between; align-items: center; }
+  .modal-foot-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .modal-foot-actions .btn { padding: 7px 12px; }
+
+  /* Form fields inside the modal */
+  .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 0.9rem; }
+  .field label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .field-optional { font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--ink-faint); }
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+
+  .salary-preview {
+    margin-top: 0.3rem;
+    padding: 0.7rem 0.85rem;
+    background: var(--accent-faint);
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--rule));
+    border-radius: var(--r-sm);
+    font-size: 13px;
+    color: var(--ink-mid);
+    line-height: 1.4;
+  }
+  .salary-preview strong { color: var(--ink); font-weight: 600; }
+  .salary-preview .pot-transfer-amount { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* Itemised income lists inside the submit modal */
+  .field-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-bottom: 0.5rem;
+  }
+  .salary-income-cols { margin-bottom: 0.9rem; }
+  .salary-income-cols .income-col { padding: 0.75rem 0.75rem 0.6rem; }
+
+  .sal-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 7px; min-width: 0; }
+  .sal-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 6px;
+    align-items: center;
+    min-width: 0;
+  }
+  .sal-row-label { grid-column: 1; font-size: 13px !important; padding: 7px 9px !important; }
+  .sal-row-amount {
+    grid-column: 1;
+    text-align: right;
+    font-size: 13px !important;
+    padding: 7px 9px !important;
+    font-variant-numeric: tabular-nums;
+  }
+  .sal-row-remove {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    width: 26px; height: 26px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--ink-faint);
+    border-radius: 7px;
+    font-size: 17px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+  }
+  .sal-row-remove:hover { color: var(--warn); background: var(--warn-faint); border-color: var(--warn); }
+
+  /* ── Year-so-far summary (above the history list) ───────────── */
+  .year-summary {
+    background: linear-gradient(160deg, var(--accent-faint), var(--paper-warm));
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--rule));
+    border-radius: var(--r-md);
+    padding: 0.75rem 0.9rem 0.85rem;
+    margin-bottom: 0.85rem;
+  }
+  .year-summary-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+  .year-summary-title { font-family: var(--font-display); font-size: 1.1rem; color: var(--ink); }
+  .year-summary-count {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+
+  /* ── Salary history list ────────────────────────────────────── */
+  .history-list { display: flex; flex-direction: column; gap: 0.5rem; }
+  .history-empty { font-size: 13px; color: var(--ink-soft); text-align: center; padding: 1.5rem 0.5rem; line-height: 1.5; }
+
+  .history-item {
+    background: var(--paper-warm);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    overflow: hidden;
+  }
+  .history-head { display: flex; align-items: stretch; }
+  .history-toggle {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.7rem 0.85rem;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    color: var(--ink);
+    text-align: left;
+    transition: background 0.15s;
+  }
+  .history-toggle:hover { background: var(--paper-card); }
+  .history-month { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; margin-right: auto; }
+  .history-amount {
+    font-size: 12.5px;
+    font-weight: 550;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .history-chevron { flex-shrink: 0; color: var(--ink-soft); font-size: 13px; transition: transform 0.18s; }
+  .history-item.open .history-chevron { transform: rotate(180deg); }
+
+  .history-delete {
+    flex-shrink: 0;
+    align-self: center;
+    width: 26px; height: 26px;
+    margin-right: 0.5rem;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--ink-faint);
+    border-radius: 7px;
+    font-size: 17px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+  }
+  .history-delete:hover { color: var(--warn); background: var(--warn-faint); border-color: var(--warn); }
+
+  .history-detail {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.25s ease;
+  }
+  .history-item.open .history-detail { grid-template-rows: 1fr; }
+  .history-detail-inner {
+    overflow: hidden;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .history-item.open .history-detail-inner {
+    padding: 0.55rem 0.85rem 0.8rem;
+    border-top: 1px solid var(--rule);
+  }
+  .detail-row { display: flex; justify-content: space-between; gap: 0.75rem; padding: 3px 0; font-size: 12px; }
+  .detail-label { color: var(--ink-soft); min-width: 0; }
+  .detail-val { color: var(--ink); font-weight: 550; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .detail-subhead {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin-top: 0.55rem;
+    margin-bottom: 1px;
+  }
+  .detail-note { font-size: 12px; color: var(--ink-mid); font-style: italic; margin-top: 2px; line-height: 1.45; }
+
+  /* ── Mobile key-figures bar ─────────────────────────────────── */
+  .mobile-bar {
+    display: none;
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 60;
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+    border-top: 1px solid var(--rule);
+    padding: 10px 1.25rem calc(10px + env(safe-area-inset-bottom));
+  }
+  .mobile-bar-inner { display: flex; justify-content: space-between; gap: 1.5rem; max-width: 480px; margin: 0 auto; }
+  .mobile-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .mobile-stat-label { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
+  .mobile-stat-val { font-family: var(--font-display); font-size: 1.15rem; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
+  .mobile-stat-val.positive { color: var(--accent); }
+  .mobile-stat-val.negative { color: var(--warn); }
+  .mobile-stat:last-child { text-align: right; }
+}
+
+/* Category palette — dark theme */
+[data-theme="dark"] .hb-root {
+  --cat-1: #5fae93;
+  --cat-2: #6fa0d0;
+  --cat-3: #d9ab5a;
+  --cat-4: #bd8ec2;
+  --cat-5: #d98456;
+  --cat-6: #9bbf76;
+  --cat-7: #8a99a8;
+  --cat-8: #d0a878;
+}
+
+/* Lock background scroll while a budget dialog is open (matters on the mobile
+   layout, where the page scrolls). The route toggles .modal-open on <html>. */
+html.modal-open, html.modal-open body { overflow: hidden; }
+
+@keyframes hb-rise-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes hb-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes hb-overlay-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes hb-modal-out { to { opacity: 0; transform: translateY(8px) scale(0.985); } }
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 1080px) {
+  .hb-root .layout { grid-template-columns: 1fr 340px; }
+  .hb-root .inputs-col { padding: 1.5rem 1.5rem 3rem; }
+  .hb-root .summary-col { padding: 1.5rem 1.25rem 3rem; }
+}
+
+@media (max-width: 900px) {
+  /* Relax the viewport lock — the page scrolls normally on mobile. */
+  .hb-root { height: auto; overflow: visible; }
+  .hb-root .layout { grid-template-columns: 1fr; flex: none; height: auto; min-height: auto; }
+  .hb-root .inputs-col { overflow-y: visible; height: auto; padding: 1.25rem 1rem 0.5rem; }
+  .hb-root .summary-col {
+    overflow-y: visible; height: auto;
+    border-left: none; border-top: 1px solid var(--rule);
+    padding: 1.5rem 1rem calc(5.5rem + env(safe-area-inset-bottom));
+    background: transparent;
+  }
+  .hb-root .page-header { position: sticky; top: 0; }
+  .hb-root .section { padding: 1.2rem 1.1rem 1.3rem; }
+  .hb-root .mobile-bar { display: block; }
+}
+
+@media (max-width: 560px) {
+  /* Income + individual columns go full-width; their rows return to a
+     single wide line (label | amount | remove). */
+  .hb-root .income-cols { grid-template-columns: 1fr; }
+  .hb-root .owner-cols { grid-template-columns: 1fr; }
+  .hb-root .income-col .b-row,
+  .hb-root .owner-col .b-row { grid-template-columns: 1fr 110px auto; }
+  .hb-root .income-col .b-row-amount,
+  .hb-root .owner-col .b-row-amount { grid-column: auto; }
+  .hb-root .income-col .b-row-remove,
+  .hb-root .owner-col .b-row-remove { grid-column: auto; grid-row: auto; }
+}
+
+@media (max-width: 480px) {
+  .hb-root .sum-big { font-size: 1.65rem; }
+}

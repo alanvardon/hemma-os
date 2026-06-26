@@ -48,14 +48,12 @@ jobs:
           cp -r web/dist/bk-assets _site/bk-assets
           # Icons and manifest
           cp icon.svg manifest.webmanifest _site/
-          # Vanilla tools not yet migrated to React — served as static HTML alongside
-          # the SPA. Remove each tool's files below once its React route ships.
-          cp calc.js _site/  # shared calc utils used by hushallsbudget
-          cp hushallsbudget.html budget.css budget.js salary-store.js _site/
+          # All tools have now shipped as React routes — nothing vanilla left to copy.
           # bostadskalkyl.html is now the SPA at /#/bostadskalkyl — no vanilla file needed
           # lonevaxling.html is now the SPA at /#/lonevaxling — no vanilla file needed
           # mortgagetracker.html is now the SPA at /#/bolanekoll — no vanilla file needed
           # manadsavslut.html is now the SPA at /#/manadsavslut — no vanilla file needed
+          # hushallsbudget.html is now the SPA at /#/hushallsbudget — no vanilla file needed
 
       - uses: actions/upload-pages-artifact@v3
         with:

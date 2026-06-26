@@ -125,9 +125,9 @@ export default function Home() {
             <span className="app-cta">Open <span className="arrow">→</span></span>
           </Link>
 
-          <a
+          <Link
             className="app-card reveal reveal-5"
-            href="hushallsbudget.html"
+            to="/hushallsbudget"
             onPointerMove={onCardMove}
             onPointerLeave={onCardLeave}
           >
@@ -144,7 +144,7 @@ export default function Home() {
             <span className="app-name">Hushållsbudget</span>
             <span className="app-desc">One pot, split evenly — pool both incomes, share joint costs 50/50 and see what each of you has left over.</span>
             <span className="app-cta">Open <span className="arrow">→</span></span>
-          </a>
+          </Link>
 
           <Link
             className="app-card reveal reveal-6"
