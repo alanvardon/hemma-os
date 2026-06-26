@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { Money, Percent } from '../components/AnimatedNumber'
 import { useTheme } from '../App'
 import {
   type LonevaxlingInputs,
@@ -36,9 +37,6 @@ function curStr(n: number): string { return formatWithSpaces(n) }
 function numStr(n: number): string { return (Math.round(n * 100) / 100).toString().replace('.', ',') }
 function money(n: number): string { return formatWithSpaces(Math.round(n)) + ' kr' }
 function pct0(x: number): string { return Math.round(x) + ' %' }
-function signedPct0(x: number): string {
-  return (x >= 0 ? '+' : '−') + Math.abs(Math.round(x)) + ' %'
-}
 
 function buildWarnings(r: LonevaxlingResult): Array<{ cls: string; text: string }> {
   const items: Array<{ cls: string; text: string }> = []
@@ -235,11 +233,11 @@ export default function Lonevaxling() {
             <div className="mini-readout">
               <div className="mini-stat">
                 <span className="mini-stat-label">Pensionstak / mån</span>
-                <span className="mini-stat-val">{money(result.ceilingMonthly)}</span>
+                <span className="mini-stat-val"><Money value={result.ceilingMonthly} /></span>
               </div>
               <div className="mini-stat">
                 <span className="mini-stat-label">Växla max utan att tappa pension</span>
-                <span className="mini-stat-val">{money(result.maxSafeSacrifice)}/mån</span>
+                <span className="mini-stat-val"><Money value={result.maxSafeSacrifice} suffix="/mån" /></span>
               </div>
             </div>
           </div>
@@ -290,7 +288,7 @@ export default function Lonevaxling() {
               </span>
             </div>
             <div className="hero-label">Hävstång · what you give up vs get</div>
-            <div className="hero-big">{result.leverage > 0 ? signedPct0(result.leveragePct) : '—'}</div>
+            <div className="hero-big">{result.leverage > 0 ? <Percent value={result.leveragePct} decimals={0} space signed /> : '—'}</div>
             <div className="hero-sub">
               {result.netGivenUp > 0
                 ? <>
@@ -303,12 +301,12 @@ export default function Lonevaxling() {
             <div className="hero-flow">
               <div className="flow-stat flow-give">
                 <span className="flow-label">Du avstår netto/mån</span>
-                <span className="flow-val">{money(result.netGivenUp / 12)}</span>
+                <span className="flow-val"><Money value={result.netGivenUp / 12} /></span>
               </div>
               <span className="flow-arrow" aria-hidden="true">→</span>
               <div className="flow-stat flow-get">
                 <span className="flow-label">Till pension netto/mån</span>
-                <span className="flow-val">{money(result.netPensionValue / 12)}</span>
+                <span className="flow-val"><Money value={result.netPensionValue / 12} /></span>
               </div>
             </div>
           </div>
@@ -323,40 +321,40 @@ export default function Lonevaxling() {
             <div className="ledger-group">Nu · varje månad</div>
             <div className="lr lr-strong">
               <span className="lr-label">Löneväxling <span className="lr-en">Gross sacrificed</span></span>
-              <span className="lr-num">{money(result.sacrifice / 12)}</span>
-              <span className="lr-num">{money(result.sacrifice)}</span>
+              <span className="lr-num"><Money value={result.sacrifice / 12} /></span>
+              <span className="lr-num"><Money value={result.sacrifice} /></span>
             </div>
             <div className="lr lr-minus">
               <span className="lr-label">Nettolön du avstår <span className="lr-en">Net salary given up</span></span>
-              <span className="lr-num">{money(result.netGivenUp / 12)}</span>
-              <span className="lr-num">{money(result.netGivenUp)}</span>
+              <span className="lr-num"><Money value={result.netGivenUp / 12} /></span>
+              <span className="lr-num"><Money value={result.netGivenUp} /></span>
             </div>
             <div className="lr lr-plus">
               <span className="lr-label">Skatt du slipper nu <span className="lr-en">Tax saved now</span></span>
-              <span className="lr-num">{money(result.taxSavedNow / 12)}</span>
-              <span className="lr-num">{money(result.taxSavedNow)}</span>
+              <span className="lr-num"><Money value={result.taxSavedNow / 12} /></span>
+              <span className="lr-num"><Money value={result.taxSavedNow} /></span>
             </div>
             <div className="lr lr-rate">
               <span className="lr-label">Marginalskatt nu <span className="lr-en">Marginal rate</span></span>
-              <span className="lr-num lr-num-wide">{pct0(result.marginalRateNow * 100)}</span>
+              <span className="lr-num lr-num-wide"><Percent value={result.marginalRateNow * 100} decimals={0} space /></span>
             </div>
 
             <div className="ledger-group">Till pensionen</div>
             <div className="lr">
               <span className="lr-label">Premie till pension <span className="lr-en">incl. uplift</span></span>
-              <span className="lr-num">{money(result.premiumToPension / 12)}</span>
-              <span className="lr-num">{money(result.premiumToPension)}</span>
+              <span className="lr-num"><Money value={result.premiumToPension / 12} /></span>
+              <span className="lr-num"><Money value={result.premiumToPension} /></span>
             </div>
             <div className="lr lr-muted">
               <span className="lr-label">varav uppräkning <span className="lr-en">Employer uplift</span></span>
-              <span className="lr-num">{money(result.upliftAmount / 12)}</span>
-              <span className="lr-num">{money(result.upliftAmount)}</span>
+              <span className="lr-num"><Money value={result.upliftAmount / 12} /></span>
+              <span className="lr-num"><Money value={result.upliftAmount} /></span>
             </div>
 
             <div className="ledger-group">Vid uttag · today's kronor</div>
             <div className="lr lr-rate">
               <span className="lr-label">Skatt vid uttag <span className="lr-en">Withdrawal tax</span></span>
-              <span className="lr-num lr-num-wide">{pct0(result.withdrawalRate * 100)}</span>
+              <span className="lr-num lr-num-wide"><Percent value={result.withdrawalRate * 100} decimals={0} space /></span>
             </div>
             <div className="lr lr-rate">
               <span className="lr-label">Skatteskillnad <span className="lr-en">Marginal now − payout</span></span>
@@ -364,13 +362,13 @@ export default function Lonevaxling() {
             </div>
             <div className="lr lr-sub lr-good">
               <span className="lr-label">Netto till pension <span className="lr-en">Net pension value</span></span>
-              <span className="lr-num">{money(result.netPensionValue / 12)}</span>
-              <span className="lr-num">{money(result.netPensionValue)}</span>
+              <span className="lr-num"><Money value={result.netPensionValue / 12} /></span>
+              <span className="lr-num"><Money value={result.netPensionValue} /></span>
             </div>
             <div className="lr lr-total">
               <span className="lr-label">Nettovinst vs kontant lön <span className="lr-en">Net gain, today's kronor</span></span>
-              <span className="lr-num">{money(result.netBenefit / 12)}</span>
-              <span className="lr-num">{money(result.netBenefit)}</span>
+              <span className="lr-num"><Money value={result.netBenefit / 12} /></span>
+              <span className="lr-num"><Money value={result.netBenefit} /></span>
             </div>
           </div>
 
@@ -399,12 +397,12 @@ export default function Lonevaxling() {
         <div className="mobile-bar-inner">
           <div className="mobile-stat">
             <span className="mobile-stat-label">Avstår netto/mån</span>
-            <span className="mobile-stat-val">{money(result.netGivenUp / 12)}</span>
+            <span className="mobile-stat-val"><Money value={result.netGivenUp / 12} /></span>
           </div>
           <div className="mobile-stat">
             <span className="mobile-stat-label">Hävstång</span>
             <span className="mobile-stat-val">
-              {result.leverage > 0 ? signedPct0(result.leveragePct) : '—'}
+              {result.leverage > 0 ? <Percent value={result.leveragePct} decimals={0} space signed /> : '—'}
             </span>
           </div>
         </div>

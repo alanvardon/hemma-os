@@ -45,6 +45,8 @@ interface PercentProps {
   decimals?: number
   /** Insert a space before the % sign ("62 %" vs "62%"). */
   space?: boolean
+  /** Render a leading "+"/"-" for positives/negatives (leverage, spread). */
+  signed?: boolean
   /** Locale — default en-US keeps a dot decimal separator like `toFixed`. */
   locale?: string
   className?: string
@@ -53,15 +55,19 @@ interface PercentProps {
 /**
  * Percentage figure. Defaults to the legacy `pct()` output ("21.1%", one
  * decimal, en-US dot, no space) so existing call sites are unchanged; pass
- * `decimals`/`space`/`locale` for tools that format differently (e.g. Konsult's
- * integer "62 %", Bolånekoll's sv-SE two-decimal "3,54 %").
+ * `decimals`/`space`/`locale`/`signed` for tools that format differently (e.g.
+ * Konsult's "62 %", Bolånekoll's "3,54 %", Löneväxling's signed "+12 %").
  */
-export function Percent({ value, decimals = 1, space, locale = 'en-US', className }: PercentProps) {
+export function Percent({ value, decimals = 1, space, signed, locale = 'en-US', className }: PercentProps) {
   return (
     <NumberFlow
       value={value}
       locales={locale}
-      format={{ minimumFractionDigits: decimals, maximumFractionDigits: decimals }}
+      format={{
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+        ...(signed ? { signDisplay: 'exceptZero' as const } : {}),
+      }}
       suffix={(space ? ' ' : '') + '%'}
       className={className}
     />
