@@ -117,6 +117,44 @@
   margin-top: 0.7rem;
 }
 
+/* The heavy chart is mounted only once the open morph settles; until then this
+   placeholder holds the panel's height so the box doesn't collapse mid-morph
+   (and there's no SVG to get scale-distorted by the layout tween). */
+.chart-overlay-placeholder {
+  height: min(52vh, 420px);
+  border-radius: 12px;
+  background: var(--rule);
+  opacity: 0.22;
+  animation: chart-placeholder-pulse 1.2s ease-in-out infinite;
+}
+@keyframes chart-placeholder-pulse {
+  0%,
+  100% {
+    opacity: 0.16;
+  }
+  50% {
+    opacity: 0.32;
+  }
+}
+/* Cross-fade the real chart in once it replaces the placeholder. */
+.chart-overlay-figure {
+  animation: chart-figure-in 0.28s ease both;
+}
+@keyframes chart-figure-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chart-overlay-placeholder,
+  .chart-overlay-figure {
+    animation: none;
+  }
+}
+
 /* ── Legend ────────────────────────────────────────────────────── */
 .chart-legend {
   display: flex;
