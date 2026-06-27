@@ -1,0 +1,29 @@
+/* View Transitions (plan 6) — the Bostadskalkyl tool card morphs into its page.
+   The shared `bk-card` name is applied to the card (on the hub) and the page
+   root (on the dashboard) ONLY while navigating between them, via
+   useViewTransitionState — so at any captured snapshot exactly one element
+   claims the name (the uniqueness rule). React Router wraps the navigation in
+   document.startViewTransition(); browsers without the API just navigate. */
+.bk-vt {
+  view-transition-name: bk-card;
+}
+
+/* Tune the shared-element morph (card box → page box). The rest of the page
+   cross-fades via the default ::view-transition root group. */
+::view-transition-group(bk-card) {
+  animation-duration: 360ms;
+  animation-timing-function: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 280ms;
+}
+
+/* Motion-sensitive users: skip the animation entirely (still navigates). */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

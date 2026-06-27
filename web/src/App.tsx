@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { HashRouter, Routes, Route } from 'react-router-dom'
+import { createHashRouter, RouterProvider } from 'react-router-dom'
 import Home from './routes/Home'
 import ScenariosDashboard from './routes/ScenariosDashboard'
 import Bostadskalkyl from './routes/Bostadskalkyl'
@@ -24,6 +24,21 @@ function getInitialTheme(): Theme {
   return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
 }
 
+// A data router (not <HashRouter>) so React Router's View Transitions —
+// `<Link viewTransition>` + useViewTransitionState — are available (plan 6).
+// Still hash-based for GitHub Pages.
+const router = createHashRouter([
+  { path: '/', element: <Home /> },
+  { path: '/bostadskalkyl', element: <ScenariosDashboard /> },
+  { path: '/bostadskalkyl/new', element: <Bostadskalkyl /> },
+  { path: '/bostadskalkyl/:id', element: <Bostadskalkyl /> },
+  { path: '/konsultkalkyl', element: <Konsultkalkyl /> },
+  { path: '/lonevaxling', element: <Lonevaxling /> },
+  { path: '/bolanekoll', element: <Bolanekoll /> },
+  { path: '/manadsavslut', element: <Manadsavslut /> },
+  { path: '/hushallsbudget', element: <Hushallsbudget /> },
+])
+
 export default function App() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
 
@@ -36,19 +51,7 @@ export default function App() {
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      <HashRouter>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/bostadskalkyl" element={<ScenariosDashboard />} />
-          <Route path="/bostadskalkyl/new" element={<Bostadskalkyl />} />
-          <Route path="/bostadskalkyl/:id" element={<Bostadskalkyl />} />
-          <Route path="/konsultkalkyl" element={<Konsultkalkyl />} />
-          <Route path="/lonevaxling" element={<Lonevaxling />} />
-          <Route path="/bolanekoll" element={<Bolanekoll />} />
-          <Route path="/manadsavslut" element={<Manadsavslut />} />
-          <Route path="/hushallsbudget" element={<Hushallsbudget />} />
-        </Routes>
-      </HashRouter>
+      <RouterProvider router={router} />
     </ThemeContext.Provider>
   )
 }

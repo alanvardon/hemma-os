@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useViewTransitionState } from 'react-router-dom'
 import HeroCanvas from '../components/HeroCanvas'
 import { useTheme } from '../App'
 
@@ -10,6 +10,9 @@ const fineHover =
 
 export default function Home() {
   const { theme, toggleTheme } = useTheme()
+  // True while navigating to/from the Bostadskalkyl page — drives the card→page
+  // morph (plan 6). Scoped to this one card as a proof-of-concept.
+  const bkTransitioning = useViewTransitionState('/bostadskalkyl')
   const [clock, setClock] = useState('')
   const [greeting, setGreeting] = useState('')
   const [dateLine, setDateLine] = useState('')
@@ -105,8 +108,9 @@ export default function Home() {
         <div className="app-grid">
 
           <Link
-            className="app-card reveal reveal-4"
+            className={'app-card reveal reveal-4' + (bkTransitioning ? ' bk-vt' : '')}
             to="/bostadskalkyl"
+            viewTransition
             onPointerMove={onCardMove}
             onPointerLeave={onCardLeave}
           >

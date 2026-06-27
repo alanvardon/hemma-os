@@ -10,6 +10,7 @@ import './styles/bolanekoll.css'
 import './styles/manadsavslut.css'
 import './styles/modals.css'
 import './styles/charts.css'
+import './styles/transitions.css'
 // Imported last: scoped under .hb-root, it overrides the shared generic-name
 // rules (field / sum-card / mobile-bar / chart-overlay) on the budget route.
 import './styles/hushallsbudget.css'

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useViewTransitionState } from 'react-router-dom'
 import { useStore, type DeletedInfo } from '../store/useStore'
 import { useTheme } from '../App'
 import { derive, type Inputs } from '../lib/calc'
@@ -89,12 +89,15 @@ export default function ScenariosDashboard() {
 
   const sorted = [...scenarios].sort((a, b) => +new Date(b.savedAt) - +new Date(a.savedAt))
   const draftFigures = draftInputs ? derive(draftInputs, draftConstants ?? globalConstants) : null
+  // True while navigating to/from this page — the hub card morphs into this root.
+  const bkTransitioning = useViewTransitionState('/bostadskalkyl')
 
   return (
     <>
-      <header className="page-header">
-        <div className="header-brand">
-          <Link className="hub-link" to="/">‹ Hemma</Link>
+      <div className={'bk-page-root' + (bkTransitioning ? ' bk-vt' : '')}>
+        <header className="page-header">
+          <div className="header-brand">
+            <Link className="hub-link" to="/" viewTransition>‹ Hemma</Link>
           <div>
             <h1>Bostadskalkyl</h1>
             <p className="tagline">Your saved scenarios — open one to edit, or start a new calculation</p>
@@ -176,6 +179,7 @@ export default function ScenariosDashboard() {
           </div>
         )}
       </main>
+      </div>
 
       <UndoToast open={undo.open} message={undo.message} onUndo={handleUndo} />
 
