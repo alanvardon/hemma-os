@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { DropdownMenu } from 'radix-ui'
 import { motion, type Variants } from 'motion/react'
 import NumberFlow from '@number-flow/react'
 import type { Inputs, Figures } from '../lib/calc'
 import { fmt, fmtCompact } from '../lib/format'
 
-// One scenario tile on the dashboard. The whole card is the open target; the
-// kebab (saved cards) or the Continue/Discard footer (the draft) carry the rest.
-// Hero = monthly cost, count-up on entrance; the other five figures are compact
-// chips. All motion is gated by the `reduce` flag passed from the page.
+// One scenario as a full-width labelled row. The whole row is the open target;
+// the kebab (saved rows) or the Continue/Discard footer (the draft) carry the
+// rest. Price and monthly cost are the two co-anchors (large); the remaining
+// figures are labelled stat cells that line up column-wise down the list so
+// scenarios can be compared at a glance. Motion is gated by the `reduce` flag.
 
 interface Props {
   name: string
@@ -35,6 +36,28 @@ function ltvTone(ltv: number): 'good' | 'warn' | 'bad' {
   return 'good'
 }
 
+function Stat({
+  label,
+  k,
+  tone,
+  lead,
+  children,
+}: {
+  label: string
+  /** Layout key → .row-stat-<k> min-width class so columns line up down the list. */
+  k: string
+  tone?: 'good' | 'warn' | 'bad'
+  lead?: boolean
+  children: ReactNode
+}) {
+  return (
+    <div className={'row-stat row-stat-' + k + (lead ? ' row-stat-lead' : '')}>
+      <span className="row-stat-label">{label}</span>
+      <span className={'row-stat-val' + (tone ? ' tone-' + tone : '')}>{children}</span>
+    </div>
+  )
+}
+
 export default function ScenarioCard({
   name,
   dateLabel,
@@ -52,11 +75,11 @@ export default function ScenarioCard({
 }: Props) {
   const open = draft ? onContinue ?? onOpen : onOpen
 
-  // Hero count-up: start at 0 and roll to the real value once mounted. Under
+  // Monthly count-up: start at 0 and roll to the real value once mounted. Under
   // reduced motion render the final value straight away (NumberFlow won't roll).
-  const [heroVal, setHeroVal] = useState(reduce ? figures.totalMonthly : 0)
+  const [monthlyVal, setMonthlyVal] = useState(reduce ? figures.totalMonthly : 0)
   useEffect(() => {
-    if (!reduce) setHeroVal(figures.totalMonthly)
+    if (!reduce) setMonthlyVal(figures.totalMonthly)
   }, [reduce, figures.totalMonthly])
 
   // Inline rename, reusing the calculator header's .scenario-title-input pattern.
@@ -83,11 +106,11 @@ export default function ScenarioCard({
     if (next && next !== name) onRename?.(next)
   }
 
-  const exit = reduce ? { opacity: 0 } : { opacity: 0, scale: 0.96, transition: { duration: 0.16 } }
+  const exit = reduce ? { opacity: 0 } : { opacity: 0, scale: 0.98, transition: { duration: 0.16 } }
 
   return (
     <motion.div
-      className={'scenario-card' + (draft ? ' draft-card' : '')}
+      className={'scenario-row' + (draft ? ' draft-row' : '')}
       variants={variants}
       exit={exit}
       role="button"
@@ -104,11 +127,11 @@ export default function ScenarioCard({
         }
       }}
     >
-      <div className="scenario-card-top">
+      <div className="row-id">
         {editing ? (
           <input
             ref={inputRef}
-            className="scenario-title-input scenario-card-rename"
+            className="scenario-title-input scenario-row-rename"
             value={draftName}
             aria-label="Scenario name"
             onClick={(e) => e.stopPropagation()}
@@ -121,79 +144,82 @@ export default function ScenarioCard({
             }}
           />
         ) : (
-          <h3 className="scenario-card-name" title={name || 'Untitled'}>
+          <h3 className="row-name" title={name || 'Untitled'}>
             {name || 'Untitled'}
           </h3>
         )}
+        <span className="row-date">{dateLabel}</span>
+      </div>
 
-        {!draft && (
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              className="scenario-kebab"
-              aria-label="Scenario actions"
+      <div className="row-stats">
+        <Stat label="Price" k="price" lead>
+          {fmtCompact(inputs.newPrice || 0)}
+        </Stat>
+        <Stat label="Monthly" k="monthly" lead>
+          <NumberFlow
+            value={monthlyVal}
+            locales="sv-SE"
+            format={{ style: 'currency', currency: 'SEK', maximumFractionDigits: 0 }}
+            suffix=" / mån"
+          />
+          <span className="row-stat-sub">eff. {fmt(figures.effectiveMonthly)}</span>
+        </Stat>
+        <Stat label="Cash" k="cash" tone={figures.cashBalance >= 0 ? 'good' : 'bad'}>
+          {fmtCompact(figures.cashBalance, true)}
+        </Stat>
+        <Stat label="LTV" k="ltv" tone={ltvTone(figures.ltv)}>
+          {Math.round(figures.ltv)}%
+        </Stat>
+        <Stat label="Req. lön" k="salary">
+          {fmtCompact(figures.reqSalaryMonthly)} / mån
+        </Stat>
+      </div>
+
+      {!draft && (
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            className="scenario-kebab"
+            aria-label="Scenario actions"
+            onClick={(e) => e.stopPropagation()}
+          >
+            ⋯
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              className="kebab-menu"
+              align="end"
+              sideOffset={6}
               onClick={(e) => e.stopPropagation()}
+              onCloseAutoFocus={(e) => {
+                // Rename: keep focus off the trigger so our input keeps it.
+                if (renamePending.current) {
+                  e.preventDefault()
+                  renamePending.current = false
+                }
+              }}
             >
-              ⋯
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                className="kebab-menu"
-                align="end"
-                sideOffset={6}
-                onClick={(e) => e.stopPropagation()}
-                onCloseAutoFocus={(e) => {
-                  // Rename: keep focus off the trigger so our input keeps it.
-                  if (renamePending.current) {
-                    e.preventDefault()
-                    renamePending.current = false
-                  }
+              <DropdownMenu.Item className="kebab-item" onSelect={() => onDuplicate?.()}>
+                Duplicate
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                className="kebab-item"
+                onSelect={() => {
+                  renamePending.current = true
+                  startRename()
                 }}
               >
-                <DropdownMenu.Item className="kebab-item" onSelect={() => onDuplicate?.()}>
-                  Duplicate
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  className="kebab-item"
-                  onSelect={() => {
-                    renamePending.current = true
-                    startRename()
-                  }}
-                >
-                  Rename
-                </DropdownMenu.Item>
-                <DropdownMenu.Item className="kebab-item kebab-danger" onSelect={() => onDelete?.()}>
-                  Delete
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-        )}
-      </div>
-
-      <div className="scenario-card-date">{dateLabel}</div>
-
-      <div className="scenario-hero">
-        <NumberFlow
-          className="scenario-hero-num"
-          value={heroVal}
-          locales="sv-SE"
-          format={{ style: 'currency', currency: 'SEK', maximumFractionDigits: 0 }}
-          suffix=" / mån"
-        />
-        <span className="scenario-hero-sub">eff. {fmt(figures.effectiveMonthly)} efter ränteavdrag</span>
-      </div>
-
-      <div className="scenario-chips">
-        <span className="chip">{fmtCompact(inputs.newPrice || 0)}</span>
-        <span className={'chip chip-' + (figures.cashBalance >= 0 ? 'good' : 'bad')}>
-          {fmtCompact(figures.cashBalance, true)}
-        </span>
-        <span className={'chip chip-' + ltvTone(figures.ltv)}>{Math.round(figures.ltv)}% LTV</span>
-        <span className="chip">lön {fmtCompact(figures.reqSalaryMonthly)}/mån</span>
-      </div>
+                Rename
+              </DropdownMenu.Item>
+              <DropdownMenu.Item className="kebab-item kebab-danger" onSelect={() => onDelete?.()}>
+                Delete
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      )}
 
       {draft && (
-        <div className="scenario-card-footer">
+        <div className="row-footer">
           <button
             className="btn btn-primary"
             onClick={(e) => {

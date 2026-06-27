@@ -158,10 +158,10 @@ export default function ScenariosDashboard() {
             </span>
           </div>
 
-          <motion.div className="dashboard-grid" variants={container} initial="hidden" animate="show">
+          <motion.div className="dashboard-list" variants={container} initial="hidden" animate="show">
             <motion.button
               type="button"
-              className="dashboard-add-tile"
+              className="dashboard-add-row"
               variants={variants}
               onClick={() => navigate('/bostadskalkyl/new')}
             >

@@ -210,3 +210,27 @@ animation), but **touches the same files** as #06 (the dashboard + card markup i
 #06's morph destination). If both are built, do this **first** so #06's View
 Transition lands on the final card design — otherwise #06 will need rework. Own
 branch `ui/bostadskalkyl-dashboard-polish`, base `main`, single PR.
+
+## Revision — card grid → wide rows (during build, PR #175)
+
+After the first card-grid pass shipped to PR #175, feedback reframed two things:
+**price and monthly cost are equally the most important figures** (one hero
+under-weighted price), and **every value must be clearly labelled** (bare chips
+were guessable, and `+2 mnkr` for cash read like equity). That, plus the fact
+that the real job of saving multiple scenarios is to **compare** them, moved the
+layout from a grid of vertical cards to a **vertical list of full-width labelled
+rows** ("wide row cards" — the chosen option over a bare comparison table and
+over refined cards).
+
+Each row: identity (name + date) on the left, then aligned stat columns —
+**Price** and **Monthly** as large serif **co-anchors** (Monthly keeps the
+NumberFlow count-up + an `eff.` sub), then **Cash · LTV · Req. lön** as smaller
+labelled cells with the muted health tones. Every cell carries an uppercase
+label, and fixed per-column min-widths keep the columns lining up down the list
+(verified: price right-edges within 1px across rows). Toolbar sort/search,
+add-row, draft row (Continue/Discard), kebab actions, inline rename, Motion
+stagger/exit and reduced-motion handling all carry over unchanged. Under 720px
+the row stacks: name on top, stats reflow into a 2-col `auto-fit` grid, kebab
+pinned top-right. Class rename `.scenario-card*` → `.scenario-row*`. The #06
+morph is **unaffected** — it targets the page root (`.bk-page-root`), not the
+individual scenario elements, so card-vs-row is free to change.
