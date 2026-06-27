@@ -355,6 +355,55 @@
   }
   .cat-remove:hover { color: var(--warn); background: var(--warn-faint); border-color: var(--warn); }
 
+  /* ── Locked names (pen-to-edit) ─────────────────────────────── */
+  /* Drops into the same slot the name <input> occupied (1fr grid cell / flex:1),
+     with a transparent border so the row height doesn't jump locked↔editing. */
+  .name-display {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    cursor: default;
+  }
+  .name-text {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--ink);
+  }
+  .name-text.is-placeholder { color: var(--ink-faint); }
+
+  .name-edit-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px; height: 22px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--ink-faint);
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
+  }
+  .name-display:hover .name-edit-btn,
+  .name-edit-btn:focus-visible { opacity: 1; }
+  .name-edit-btn:hover { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
+  /* Touch devices have no hover — keep the pen visible. */
+  @media (hover: none) {
+    .name-edit-btn { opacity: 1; }
+  }
+
+  /* Padding / type parity with the inputs they replace, per context. */
+  .b-row .name-display { padding: 7px 9px; font-size: 13px; }
+  .cat-head .name-display { padding: 5px 8px; }
+  .cat-head .name-text { font-size: 12.5px; font-weight: 600; }
+
   .cat-list:empty {
     min-height: 30px;
     border: 1px dashed var(--rule);
