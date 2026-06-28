@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { createHashRouter, RouterProvider } from 'react-router-dom'
+import { createHashRouter, Outlet, RouterProvider, ScrollRestoration } from 'react-router-dom'
 import Home from './routes/Home'
 import ScenariosDashboard from './routes/ScenariosDashboard'
 import Bostadskalkyl from './routes/Bostadskalkyl'
@@ -8,6 +8,15 @@ import Lonevaxling from './routes/Lonevaxling'
 import Bolanekoll from './routes/Bolanekoll'
 import Manadsavslut from './routes/Manadsavslut'
 import Hushallsbudget from './routes/Hushallsbudget'
+
+function Layout() {
+  return (
+    <>
+      <ScrollRestoration />
+      <Outlet />
+    </>
+  )
+}
 
 type Theme = 'light' | 'dark'
 const THEME_KEY = 'bostadskalkyl_theme'
@@ -28,15 +37,20 @@ function getInitialTheme(): Theme {
 // `<Link viewTransition>` + useViewTransitionState — are available (plan 6).
 // Still hash-based for GitHub Pages.
 const router = createHashRouter([
-  { path: '/', element: <Home /> },
-  { path: '/bostadskalkyl', element: <ScenariosDashboard /> },
-  { path: '/bostadskalkyl/new', element: <Bostadskalkyl /> },
-  { path: '/bostadskalkyl/:id', element: <Bostadskalkyl /> },
-  { path: '/konsultkalkyl', element: <Konsultkalkyl /> },
-  { path: '/lonevaxling', element: <Lonevaxling /> },
-  { path: '/bolanekoll', element: <Bolanekoll /> },
-  { path: '/manadsavslut', element: <Manadsavslut /> },
-  { path: '/hushallsbudget', element: <Hushallsbudget /> },
+  {
+    element: <Layout />,
+    children: [
+      { path: '/', element: <Home /> },
+      { path: '/bostadskalkyl', element: <ScenariosDashboard /> },
+      { path: '/bostadskalkyl/new', element: <Bostadskalkyl /> },
+      { path: '/bostadskalkyl/:id', element: <Bostadskalkyl /> },
+      { path: '/konsultkalkyl', element: <Konsultkalkyl /> },
+      { path: '/lonevaxling', element: <Lonevaxling /> },
+      { path: '/bolanekoll', element: <Bolanekoll /> },
+      { path: '/manadsavslut', element: <Manadsavslut /> },
+      { path: '/hushallsbudget', element: <Hushallsbudget /> },
+    ],
+  },
 ])
 
 export default function App() {
