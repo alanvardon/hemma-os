@@ -5,11 +5,11 @@ import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   defaultSettings, otherPerson, parseCsv, parseAmount, autoMapColumns, inferSpendSign,
-  computeOwed, classifyToItemFields, makeItem, flagDuplicates, netBalance, buildSettlement,
+  computeOwed, personalSums, classifyToItemFields, makeItem, flagDuplicates, netBalance, buildSettlement,
   monthKey, monthLabel, monthsWithOpenItems, itemsForMonth,
   spendByCategory, grocerySpendByMonth, fillMonthGaps,
 } from '../lib/manadsavslut'
-import type { Item, Payment, MonthEndSettings, Person, Treatment, CsvResult, ColMapping } from '../lib/manadsavslut'
+import type { Item, Payment, PersonalEntry, MonthEndSettings, Person, Treatment, CsvResult, ColMapping } from '../lib/manadsavslut'
 import * as Store from '../lib/manadsavslut-store'
 import { Money } from '../components/AnimatedNumber'
 import GroceryTrendChart from '../components/charts/GroceryTrendChart'
@@ -89,50 +89,78 @@ function deriveTriage(parsed: CsvResult, mapping: ColMapping, frontedBy: Person,
 }
 
 // ── PersonalOffsetDialog (nested in ItemDialog, Split only) ──────────────────
-// Carves a per-person personal amount out of the transaction before the 50/50.
-// Hands values back to the ItemDialog form on Save; nothing persists here.
+// Build up a list of personal line-items carved out before the 50/50 split. Each
+// is { person, amount, note }. Holds a DRAFT list: "Done" hands it back to the
+// ItemDialog form, "Cancel" discards. Nothing persists until the item is saved.
 
 interface OffsetDlgProps {
   open: boolean; enterAmount: number; frontedBy: Person; aName: string; bName: string
-  initial: { pa: string; pb: string; note: string }
-  onSave: (pa: number, pb: number, note: string) => void; onRemove: () => void; onClose: () => void
+  initial: PersonalEntry[]
+  onSave: (entries: PersonalEntry[]) => void; onClose: () => void
 }
-function PersonalOffsetDialog({ open, enterAmount, frontedBy, aName, bName, initial, onSave, onRemove, onClose }: OffsetDlgProps) {
+function PersonalOffsetDialog({ open, enterAmount, frontedBy, aName, bName, initial, onSave, onClose }: OffsetDlgProps) {
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
-  const [form, setForm] = useState(initial)
-  useEffect(() => { if (open) setForm(initial) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+  const [entries, setEntries] = useState<PersonalEntry[]>(initial)
+  const [draft, setDraft] = useState({ person: frontedBy as Person, amount: '', note: '' })
+  useEffect(() => { if (open) { setEntries(initial); setDraft({ person: frontedBy, amount: '', note: '' }) } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   const nameOf = (p: Person) => p === 'b' ? bName : aName
-  const pa = parseAmount(form.pa) || 0, pb = parseAmount(form.pb) || 0
   const enter = isFinite(enterAmount) ? enterAmount : 0
   const owed = otherPerson(frontedBy)
-  const error = pa < 0 || pb < 0
-    ? 'Personal amounts can’t be negative.'
-    : pa + pb > enter
-      ? 'Personal total (' + fmtMoney(pa + pb) + ') can’t exceed the charge (' + fmtMoney(enter) + ').'
-      : ''
-  const owedShare = computeOwed(enter, true, frontedBy, pa, pb)
-  function save(e: React.FormEvent) { e.preventDefault(); if (error) return; onSave(pa, pb, clean(form.note)) }
+  const sums = personalSums(entries)
+  const remaining = enter - sums.a - sums.b
+  const draftAmt = parseAmount(draft.amount) || 0
+  const canAdd = draftAmt > 0 && draftAmt - remaining <= 0.005
+  const addError = draft.amount.trim() === '' ? ''
+    : draftAmt <= 0 ? 'Enter an amount above 0.'
+      : draftAmt - remaining > 0.005 ? 'Only ' + fmtMoney(remaining) + ' left to carve out of this ' + fmtMoney(enter) + ' charge.'
+        : ''
+  const owedShare = computeOwed(enter, true, frontedBy, sums.a, sums.b)
+  function add() {
+    if (!canAdd) return
+    setEntries(es => [...es, { person: draft.person, amount: Math.round(draftAmt * 100) / 100, note: clean(draft.note) }])
+    setDraft(d => ({ person: d.person, amount: '', note: '' }))
+  }
+  function onDraftKey(e: React.KeyboardEvent) { if (e.key === 'Enter') { e.preventDefault(); add() } }
   return (
     <dialog ref={ref} className="ma-dialog ma-dialog-sm" onClick={e => e.target === e.currentTarget && onClose()}>
-      <form className="dialog-body" onSubmit={save}>
+      <div className="dialog-body">
         <h3 className="dialog-title">Personal items (not shared)</h3>
-        <p className="form-hint">Carve out the part of this {fmtMoney(enter)} charge that’s personal to one person before the 50/50 split — the line itself stays whole.</p>
-        <div className="form-grid">
-          <label className="form-field"><span>Personal to {aName}</span><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={form.pa} onChange={e => setForm(p => ({ ...p, pa: e.target.value }))} /></label>
-          <label className="form-field"><span>Personal to {bName}</span><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={form.pb} onChange={e => setForm(p => ({ ...p, pb: e.target.value }))} /></label>
-          <label className="form-field form-wide"><span>Note (optional)</span><input type="text" autoComplete="off" placeholder="e.g. Alex protein powder, Sam magazine" value={form.note} onChange={e => setForm(p => ({ ...p, note: e.target.value }))} /></label>
+        <p className="form-hint">Add anything in this {fmtMoney(enter)} charge that’s personal to one person — it’s taken out before the 50/50 split, and the line itself stays whole.</p>
+        <div className="personal-add-grid">
+          <label className="form-field"><span>Personal to</span>
+            <select className="select" value={draft.person} onChange={e => setDraft(d => ({ ...d, person: e.target.value as Person }))}>
+              <option value="a">{aName}</option>
+              <option value="b">{bName}</option>
+            </select>
+          </label>
+          <label className="form-field"><span>Amount</span><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={draft.amount} onChange={e => setDraft(d => ({ ...d, amount: e.target.value }))} onKeyDown={onDraftKey} /></label>
+          <label className="form-field"><span>Note (optional)</span><input type="text" autoComplete="off" placeholder="e.g. protein powder" value={draft.note} onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} onKeyDown={onDraftKey} /></label>
+          <button type="button" className="btn btn-ghost personal-add-btn" disabled={!canAdd} onClick={add}>+ Add</button>
         </div>
-        {error
-          ? <p className="form-error">{error}</p>
-          : <p className="form-hint">Shared {fmtMoney(enter - pa - pb)} split · {nameOf(owed)} owes {fmtMoney(owedShare)}</p>}
+        {addError && <p className="form-error">{addError}</p>}
+        {entries.length > 0 && (
+          <ul className="personal-entry-list">
+            {entries.map((e, i) => (
+              <li key={i}>
+                <span className="pe-person">{nameOf(e.person)}</span>
+                <span className="pe-amount num">{fmtMoney(e.amount)}</span>
+                <span className="pe-note">{e.note}</span>
+                <button type="button" className="icon-btn" title="Remove" aria-label="Remove" onClick={() => setEntries(es => es.filter((_, j) => j !== i))}>✕</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="form-hint">{entries.length
+          ? <>Shared {fmtMoney(remaining)} split · {nameOf(owed)} owes {fmtMoney(owedShare)}</>
+          : <>No personal items yet — the full {fmtMoney(enter)} splits 50/50.</>}</p>
         <div className="dialog-actions">
-          <button type="button" className="btn btn-ghost btn-danger" onClick={onRemove}>Remove</button>
+          {entries.length > 0 && <button type="button" className="btn btn-ghost btn-danger" onClick={() => setEntries([])}>Remove all</button>}
           <span style={{ flex: 1 }} />
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={!!error}>Save</button>
+          <button type="button" className="btn btn-primary" onClick={() => onSave(entries)}>Done</button>
         </div>
-      </form>
+      </div>
     </dialog>
   )
 }
@@ -147,29 +175,29 @@ function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const rec = id ? items.find(i => i.id === id) : null
-  const [form, setForm] = useState({ date: todayISO(), desc: '', amount: '', note: '', fronted: 'a' as Person, split: 'split' as 'split' | 'full', pa: '', pb: '', pnote: '' })
+  const [form, setForm] = useState({ date: todayISO(), desc: '', amount: '', note: '', fronted: 'a' as Person, split: 'split' as 'split' | 'full' })
+  const [personalItems, setPersonalItems] = useState<PersonalEntry[]>([])
   const [offsetDlg, setOffsetDlg] = useState(false)
   useEffect(() => {
     if (open) setForm({
       date: rec?.date_purchased || todayISO(), desc: rec?.description || '', amount: rec?.enter_amount != null ? String(rec.enter_amount) : '',
       note: rec?.note || '', fronted: rec ? rec.fronted_by : 'a', split: rec ? (rec.split ? 'split' : 'full') : (defaultClass === 'full' ? 'full' : 'split'),
-      pa: rec?.personal_a ? String(rec.personal_a) : '', pb: rec?.personal_b ? String(rec.personal_b) : '', pnote: rec?.personal_note || '',
     })
   }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (open) setOffsetDlg(false) }, [open, id])
+  useEffect(() => { if (open) { setPersonalItems(rec?.personal_items ?? []); setOffsetDlg(false) } }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
   const aName = settings.person_a_name || 'Alex', bName = settings.person_b_name || 'Sam'
   const nameOf = (p: Person) => p === 'b' ? bName : aName
 
   const amt = parseAmount(form.amount)
   const isSplit = form.split === 'split'
-  const pa = parseAmount(form.pa) || 0, pb = parseAmount(form.pb) || 0
-  const hasOffset = isSplit && (pa > 0 || pb > 0)
+  const sums = personalSums(personalItems)
+  const hasOffset = isSplit && (sums.a > 0 || sums.b > 0)
   const hint = (() => {
     if (!isFinite(amt) || amt === 0) return ''
     const owed = otherPerson(form.fronted)
-    const share = computeOwed(amt, isSplit, form.fronted, pa, pb)
+    const share = computeOwed(amt, isSplit, form.fronted, sums.a, sums.b)
     const verb = amt < 0 ? ' is credited ' : ' will owe '
-    const suffix = isSplit ? (hasOffset ? ' (shared ' + fmtMoney(Math.abs(amt) - pa - pb) + ' split)' : ' (half of ' + fmtMoney(Math.abs(amt)) + ')') : ''
+    const suffix = isSplit ? (hasOffset ? ' (shared ' + fmtMoney(Math.abs(amt) - sums.a - sums.b) + ' split)' : ' (half of ' + fmtMoney(Math.abs(amt)) + ')') : ''
     return nameOf(owed) + verb + fmtMoney(Math.abs(share)) + suffix
   })()
 
@@ -180,8 +208,8 @@ function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }
     onSave(makeItem({
       date_purchased: clean(form.date), description: clean(form.desc) || '(no description)',
       enter_amount: a, split: isSplit, fronted_by: form.fronted, owed_by: otherPerson(form.fronted), note: clean(form.note),
-      // Personal applies under Split only; "Owes all" zeroes it (Decision 3).
-      personal_a: isSplit ? pa : 0, personal_b: isSplit ? pb : 0, personal_note: isSplit ? clean(form.pnote) : '',
+      // Personal applies under Split only; "Owes all" drops it (Decision 3).
+      personal_items: isSplit ? personalItems : [],
     }))
   }
   return (
@@ -206,7 +234,7 @@ function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }
               <div className="form-field form-wide personal-row">
                 {hasOffset ? (
                   <button type="button" className="personal-chip" onClick={() => setOffsetDlg(true)}>
-                    <span>Personal: {pa > 0 && (aName + ' ' + fmtMoney(pa))}{pa > 0 && pb > 0 ? ' · ' : ''}{pb > 0 && (bName + ' ' + fmtMoney(pb))}</span>
+                    <span>Personal: {sums.a > 0 && (aName + ' ' + fmtMoney(sums.a))}{sums.a > 0 && sums.b > 0 ? ' · ' : ''}{sums.b > 0 && (bName + ' ' + fmtMoney(sums.b))} · {personalItems.length} item{personalItems.length === 1 ? '' : 's'}</span>
                     <span className="personal-edit" aria-hidden>✎</span>
                   </button>
                 ) : (
@@ -223,9 +251,8 @@ function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }
         </form>
       </dialog>
       <PersonalOffsetDialog open={offsetDlg} enterAmount={amt} frontedBy={form.fronted} aName={aName} bName={bName}
-        initial={{ pa: form.pa, pb: form.pb, note: form.pnote }}
-        onSave={(npa, npb, nnote) => { setForm(p => ({ ...p, pa: npa ? String(npa) : '', pb: npb ? String(npb) : '', pnote: nnote })); setOffsetDlg(false) }}
-        onRemove={() => { setForm(p => ({ ...p, pa: '', pb: '', pnote: '' })); setOffsetDlg(false) }}
+        initial={personalItems}
+        onSave={entries => { setPersonalItems(entries); setOffsetDlg(false) }}
         onClose={() => setOffsetDlg(false)} />
     </>
   )
@@ -494,7 +521,7 @@ export default function Manadsavslut() {
 
   // ── Handlers ───────────────────────────────────────────────────────────────
   async function handleSaveItem(rec: Omit<Item, 'id' | 'created_at'>) {
-    if (itemDlg.id) await Store.updateItem(itemDlg.id, { date_purchased: rec.date_purchased, description: rec.description, enter_amount: rec.enter_amount, split: rec.split, amount: rec.amount, fronted_by: rec.fronted_by, owed_by: rec.owed_by, note: rec.note, personal_a: rec.personal_a, personal_b: rec.personal_b, personal_note: rec.personal_note })
+    if (itemDlg.id) await Store.updateItem(itemDlg.id, { date_purchased: rec.date_purchased, description: rec.description, enter_amount: rec.enter_amount, split: rec.split, amount: rec.amount, fronted_by: rec.fronted_by, owed_by: rec.owed_by, note: rec.note, personal_items: rec.personal_items, personal_a: rec.personal_a, personal_b: rec.personal_b })
     else await Store.addItem(rec)
     await refresh(); flashSaved(); setItemDlg({ open: false, id: null }); showToast(itemDlg.id ? 'Item updated.' : 'Item added.')
   }
@@ -683,7 +710,7 @@ export default function Manadsavslut() {
                   {filteredItems.map(it => (
                     <tr key={it.id} className={it.paid ? 'is-settled' : it.pending ? 'is-pending' : ''}>
                       <td className="col-date">{it.date_purchased}</td>
-                      <td>{it.description}{it.note && <span className="row-note"> {it.note}</span>}{(it.personal_a > 0 || it.personal_b > 0) && <span className="personal-flag" title="Has a personal carve-out before the split">• personal</span>}</td>
+                      <td>{it.description}{it.note && <span className="row-note"> {it.note}</span>}{it.personal_items?.length > 0 && <span className="personal-flag" title="Has personal items carved out before the split">• personal</span>}</td>
                       <td>{nameOf(it.fronted_by)}</td>
                       <td>{nameOf(it.owed_by)}</td>
                       <td className="col-type">
@@ -783,20 +810,42 @@ export default function Manadsavslut() {
                     <span className="history-meta">{linked.length} item{linked.length === 1 ? '' : 's'} · {fmtMoney(gross)}</span>
                   </summary>
                   <ul className="history-list">
-                    {linked.map(it => (
-                      <li key={it.id}>
-                        <span className="hl-date">{it.date_purchased || when}</span>
-                        <span className="hl-desc">{it.description}</span>
-                        <span className="hl-payer">{nameOf(it.fronted_by)} paid {fmtMoney(it.enter_amount)}</span>
-                        {(it.personal_a > 0 || it.personal_b > 0) && (
-                          <span className="hl-personal">(personal: {it.personal_a > 0 && (nameOf('a') + ' ' + fmtMoney(it.personal_a))}{it.personal_a > 0 && it.personal_b > 0 ? ' · ' : ''}{it.personal_b > 0 && (nameOf('b') + ' ' + fmtMoney(it.personal_b))})</span>
-                        )}
-                        <span className="hl-arrow">→</span>
-                        <span className="hl-amt num">{nameOf(it.owed_by)} owes {fmtMoney(it.amount)}</span>
-                        <span className="hl-type">{it.split ? 'Split' : 'All'}</span>
-                        {it.personal_note && <span className="hl-personal-note">{it.personal_note}</span>}
-                      </li>
-                    ))}
+                    {linked.map(it => {
+                      const entries = it.personal_items || []
+                      const psums = personalSums(entries)
+                      const rowInner = (
+                        <>
+                          <span className="hl-date">{it.date_purchased || when}</span>
+                          <span className="hl-desc">{it.description}</span>
+                          <span className="hl-payer">{nameOf(it.fronted_by)} paid {fmtMoney(it.enter_amount)}</span>
+                          {entries.length > 0 && (
+                            <span className="hl-personal">(personal: {psums.a > 0 && (nameOf('a') + ' ' + fmtMoney(psums.a))}{psums.a > 0 && psums.b > 0 ? ' · ' : ''}{psums.b > 0 && (nameOf('b') + ' ' + fmtMoney(psums.b))})</span>
+                          )}
+                          <span className="hl-arrow">→</span>
+                          <span className="hl-amt num">{nameOf(it.owed_by)} owes {fmtMoney(it.amount)}</span>
+                          <span className="hl-type">{it.split ? 'Split' : 'All'}</span>
+                        </>
+                      )
+                      return entries.length > 0 ? (
+                        // Has a carve-out: collapse to the overview row; click to reveal each entry.
+                        <li key={it.id} className="hl-has-personal">
+                          <details className="hl-item">
+                            <summary className="hl-row">{rowInner}<span className="hl-expand" aria-hidden>▸</span></summary>
+                            <ul className="hl-sub">
+                              {entries.map((e, i) => (
+                                <li key={i}>
+                                  <span className="pe-person">{nameOf(e.person)}</span>
+                                  <span className="pe-amount num">{fmtMoney(e.amount)}</span>
+                                  {e.note && <span className="pe-note">{e.note}</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        </li>
+                      ) : (
+                        <li key={it.id} className="hl-row">{rowInner}</li>
+                      )
+                    })}
                   </ul>
                   {p.note && <p className="history-note">{p.note}</p>}
                   <div className="history-actions"><button type="button" className="link-btn" onClick={() => reopen(p.id)}>Reopen settlement</button></div>

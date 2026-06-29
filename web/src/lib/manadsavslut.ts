@@ -14,6 +14,10 @@ export interface MonthEndSettings {
   default_split: boolean
 }
 
+// One personal line-item carved out of a transaction before the split. The
+// `person` IS the owner; `amount` is their personal portion; `note` is optional.
+export interface PersonalEntry { person: Person; amount: number; note: string }
+
 export interface Item {
   id: string
   created_at: string
@@ -29,12 +33,15 @@ export interface Item {
   pending: boolean
   payment_id: string | null
   note: string
-  // Personal carve-out: amounts within this transaction personal to A / B, taken
-  // out BEFORE the 50/50 split. The line stays whole (enter_amount is untouched);
-  // these only shift the owed share. Default 0 / ''. The field IS the owner.
+  // Personal carve-out: an itemised list of amounts within this transaction that
+  // are personal to one person, taken out BEFORE the 50/50 split. The line stays
+  // whole (enter_amount is untouched); the entries only shift the owed share.
+  // personal_a / personal_b are DERIVED per-person sums (cached on save) so the
+  // split math + the open-list toggle can stay unchanged; personal_items is the
+  // source of truth.
+  personal_items: PersonalEntry[]
   personal_a: number
   personal_b: number
-  personal_note: string
   source: string
 }
 
@@ -165,6 +172,29 @@ export function computeOwed(enterAmount: number, split: boolean, frontedBy: Pers
   return r2(base / 2) + r2(ownedByOther)
 }
 
+// Per-person totals from a personal-entry list — the derived personal_a / personal_b.
+export function personalSums(entries: PersonalEntry[] | null | undefined): { a: number; b: number } {
+  let a = 0, b = 0
+  ;(entries || []).forEach(e => {
+    if (!e) return
+    const amt = Number(e.amount) || 0
+    if (e.person === 'b') b += amt; else a += amt
+  })
+  return { a: r2(a), b: r2(b) }
+}
+
+// Normalize a raw personal-entry list (clamp person, coerce amount, default note).
+export function normalizePersonalEntries(raw: unknown): PersonalEntry[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter(e => e && typeof e === 'object')
+    .map(e => {
+      const r = e as Record<string, unknown>
+      return { person: (r.person === 'b' ? 'b' : 'a') as Person, amount: Number(r.amount) || 0, note: String(r.note == null ? '' : r.note) }
+    })
+    .filter(e => e.amount > 0)
+}
+
 export function classifyToItemFields(classification: Treatment | string, frontedBy: Person): { split: boolean; owed_by: Person; pending?: boolean } | null {
   if (classification === 'split') return { split: true, owed_by: otherPerson(frontedBy) }
   if (classification === 'full') return { split: false, owed_by: otherPerson(frontedBy) }
@@ -181,23 +211,24 @@ export function makeItem(partial: ItemDraft): Omit<Item, 'id' | 'created_at'> {
   const enter = Number(partial.enter_amount) || 0
   const split = partial.split === undefined ? true : !!partial.split
   const fronted: Person = partial.fronted_by === 'b' ? 'b' : 'a'
-  const personalA = Number(partial.personal_a) || 0
-  const personalB = Number(partial.personal_b) || 0
+  // personal_items is the source of truth; the per-person sums are derived from it.
+  const entries = normalizePersonalEntries(partial.personal_items)
+  const sums = personalSums(entries)
   return {
     date_purchased: partial.date_purchased || '',
     description: partial.description || '',
     enter_amount: enter,
     split,
-    amount: partial.amount === undefined ? computeOwed(enter, split, fronted, personalA, personalB) : Number(partial.amount),
+    amount: partial.amount === undefined ? computeOwed(enter, split, fronted, sums.a, sums.b) : Number(partial.amount),
     fronted_by: fronted,
     owed_by: partial.owed_by || otherPerson(fronted),
     paid: !!partial.paid,
     pending: !!partial.pending,
     payment_id: partial.payment_id || null,
     note: partial.note || '',
-    personal_a: personalA,
-    personal_b: personalB,
-    personal_note: partial.personal_note || '',
+    personal_items: entries,
+    personal_a: sums.a,
+    personal_b: sums.b,
     source: partial.source || 'manual',
   }
 }

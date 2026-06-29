@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { classifyToItemFields, makeItem, buildSettlement, computeOwed, netBalance } from './manadsavslut'
+import { classifyToItemFields, makeItem, buildSettlement, computeOwed, netBalance, personalSums } from './manadsavslut'
+import { normalizeItem } from './manadsavslut-store'
 import type { Item } from './manadsavslut'
 
 // A full Item with overridable fields, so settlement tests stay type-safe.
 const item = (over: Partial<Item>): Item => ({
   id: 'x', created_at: '', date_purchased: '', description: '', enter_amount: 0,
   split: true, amount: 0, fronted_by: 'a', owed_by: 'b', paid: false, pending: false,
-  payment_id: null, note: '', personal_a: 0, personal_b: 0, personal_note: '', source: 'manual', ...over,
+  payment_id: null, note: '', personal_items: [], personal_a: 0, personal_b: 0, source: 'manual', ...over,
 })
 
 // ── "ask later" (pending) triage — mirrors the vanilla manadsavslut.test.js ──
@@ -90,21 +91,97 @@ describe('computeOwed — personal offsets (Split only)', () => {
   })
 })
 
-describe('makeItem — personal fields', () => {
-  it('defaults personal fields to 0 / empty when absent', () => {
-    const it = makeItem({ enter_amount: 400, fronted_by: 'a' })
-    expect(it.personal_a).toBe(0)
-    expect(it.personal_b).toBe(0)
-    expect(it.personal_note).toBe('')
-    expect(it.amount).toBe(200) // unchanged from before
+describe('personalSums — per-person totals from the entry list', () => {
+  it('sums an empty list to 0 / 0', () => {
+    expect(personalSums([])).toEqual({ a: 0, b: 0 })
   })
 
-  it('derives amount through computeOwed when personal fields are present', () => {
-    const it = makeItem({ enter_amount: 800, split: true, fronted_by: 'a', personal_a: 100, personal_b: 150, personal_note: 'Alex powder, Sam mag' })
-    expect(it.amount).toBe(425)
+  it('sums multiple entries per person', () => {
+    const sums = personalSums([
+      { person: 'a', amount: 100, note: 'powder' },
+      { person: 'a', amount: 40, note: 'book' },
+      { person: 'b', amount: 150, note: 'magazine' },
+    ])
+    expect(sums).toEqual({ a: 140, b: 150 })
+  })
+})
+
+describe('makeItem — personal_items as the source of truth', () => {
+  it('defaults to an empty list and untouched split when no entries', () => {
+    const it = makeItem({ enter_amount: 400, fronted_by: 'a' })
+    expect(it.personal_items).toEqual([])
+    expect(it.personal_a).toBe(0)
+    expect(it.personal_b).toBe(0)
+    expect(it.amount).toBe(200)
+  })
+
+  it('derives the per-person sums and amount from the entry list', () => {
+    const it = makeItem({
+      enter_amount: 800, split: true, fronted_by: 'a',
+      personal_items: [
+        { person: 'a', amount: 100, note: 'powder' },
+        { person: 'b', amount: 150, note: 'magazine' },
+      ],
+    })
     expect(it.personal_a).toBe(100)
     expect(it.personal_b).toBe(150)
-    expect(it.personal_note).toBe('Alex powder, Sam mag')
+    expect(it.amount).toBe(425) // shared 550 → Sam owes 275 + 150
+    expect(it.personal_items).toHaveLength(2)
+  })
+
+  it('collapses several same-person entries into the derived sum', () => {
+    const it = makeItem({
+      enter_amount: 800, split: true, fronted_by: 'a',
+      personal_items: [
+        { person: 'a', amount: 100, note: 'powder' },
+        { person: 'a', amount: 40, note: 'book' },
+        { person: 'b', amount: 150, note: 'magazine' },
+      ],
+    })
+    expect(it.personal_a).toBe(140)
+    expect(it.personal_b).toBe(150)
+    // shared 510 → Sam owes 255 + 150 = 405
+    expect(it.amount).toBe(405)
+  })
+
+  it('drops zero/negative entries when deriving', () => {
+    const it = makeItem({
+      enter_amount: 800, split: true, fronted_by: 'a',
+      personal_items: [
+        { person: 'a', amount: 100, note: 'powder' },
+        { person: 'a', amount: 0, note: 'free sample' },
+      ],
+    })
+    expect(it.personal_a).toBe(100)
+    expect(it.personal_items).toHaveLength(1)
+  })
+})
+
+describe('normalizeItem — migration & defaults on read', () => {
+  it('gives a pre-personal item an empty list', () => {
+    const raw = { id: 'i1', enter_amount: 400 } as unknown as Item
+    const n = normalizeItem(raw)
+    expect(n.personal_items).toEqual([])
+    expect(n.personal_a).toBe(0)
+    expect(n.personal_b).toBe(0)
+  })
+
+  it('synthesises entries from a v1 item (personal_a/b + single note)', () => {
+    const raw = { id: 'i1', enter_amount: 800, personal_a: 100, personal_b: 150, personal_note: 'Alex powder' } as unknown as Item
+    const n = normalizeItem(raw)
+    expect(n.personal_items).toEqual([
+      { person: 'a', amount: 100, note: 'Alex powder' },
+      { person: 'b', amount: 150, note: '' },
+    ])
+    expect(n.personal_a).toBe(100)
+    expect(n.personal_b).toBe(150)
+  })
+
+  it('re-derives the cached sums from an existing list (idempotent)', () => {
+    const raw = { id: 'i1', personal_items: [{ person: 'a', amount: 100, note: '' }, { person: 'a', amount: 40, note: '' }], personal_a: 0, personal_b: 0 } as unknown as Item
+    const n = normalizeItem(raw)
+    expect(n.personal_a).toBe(140)
+    expect(n.personal_items).toHaveLength(2)
   })
 })
 
