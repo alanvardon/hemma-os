@@ -90,12 +90,6 @@ body::after {
   gap: 14px;
 }
 
-.clock {
-  font-size: 13px;
-  color: var(--ink-soft);
-  font-variant-numeric: tabular-nums;
-}
-
 .site-header .theme-toggle-btn {
   border: 1px solid var(--rule);
   background: var(--paper-card);
@@ -400,7 +394,6 @@ a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
 
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 600px) {
-  .clock { display: none; }
   .app-grid { grid-template-columns: 1fr; }
   .hero { padding-top: 3rem; }
 }

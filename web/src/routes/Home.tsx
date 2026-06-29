@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import HeroCanvas from '../components/HeroCanvas'
+import FlipClock from '../components/FlipClock'
 import { useTheme } from '../App'
 import { markVtTransition } from '../lib/viewTransition'
 import { useToolCardActive } from '../lib/toolTransition'
@@ -62,7 +63,6 @@ export default function Home() {
       )
       .finished.then(() => startWhoosh(path), () => startWhoosh(path))
   }
-  const [clock, setClock] = useState('')
   const [greeting, setGreeting] = useState('')
   const [dateLine, setDateLine] = useState('')
 
@@ -85,7 +85,6 @@ export default function Home() {
       const g = h < 5 ? 'God natt' : h < 10 ? 'God morgon' : h < 18 ? 'God dag' : 'God kväll'
       setGreeting(g + ' —')
       setDateLine(now.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long' }))
-      setClock(now.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' }))
     }
     render()
     const id = setInterval(render, 30000)
@@ -132,7 +131,6 @@ export default function Home() {
     <header className="site-header">
       <a className="wordmark" href="#/">Hemma<span className="dot">.</span></a>
       <div className="header-meta">
-        <span className="clock">{clock}</span>
         <button
           className="theme-toggle-btn"
           title="Toggle dark mode"
@@ -156,10 +154,13 @@ export default function Home() {
           <p className="greeting reveal reveal-1">
             <span>{greeting}</span> <span className="date">{dateLine}</span>
           </p>
-          <h1 className="reveal reveal-2">
+          <div className="flip-clock-wrap reveal reveal-2">
+            <FlipClock reduce={prefersReducedMotion()} instant={viaBack} />
+          </div>
+          <h1 className="reveal reveal-3">
             Everything for the household, <em>in one place.</em>
           </h1>
-          <p className="sub reveal reveal-3">
+          <p className="sub reveal reveal-4">
             The family operating system — calculators, plans and shared tools that grow with us.
             Local-first today, synced everywhere tomorrow.
           </p>

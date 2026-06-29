@@ -1,0 +1,120 @@
+/* ── Solari split-flap clock ─────────────────────────────────────────────
+   Flap background = --ink (dark in light theme, near-white in dark theme).
+   Text = --paper. The horizontal seam + inner shadow do the mechanical work
+   so the board reads as a Solari board within the Nordic editorial palette.   */
+
+.flip-clock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Allow the clock to scale as a unit on narrow viewports */
+  transform-origin: left center;
+}
+
+.flap-group {
+  display: flex;
+  gap: 3px;
+}
+
+/* ── Digit cell ─────────────────────────────────────────────────────────── */
+
+.flap-digit {
+  position: relative;
+  width: 2.2rem;
+  height: 3.2rem;
+  /* perspective on the parent so child rotateX reads as 3D */
+  perspective: 280px;
+}
+
+/* All half-card layers share the same geometry */
+.flap-half {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 50%;  /* 1.6rem */
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ink);
+  border-radius: 4px;
+}
+
+/* ── Layer z-indices ────────────────────────────────────────────────────── */
+
+.flap-next-bot { z-index: 0; bottom: 0; border-radius: 0 0 4px 4px; }
+.flap-bottom   { z-index: 1; bottom: 0; border-radius: 0 0 4px 4px; }
+.flap-top      { z-index: 2; top: 0;    border-radius: 4px 4px 0 0;
+                 border-bottom: 1px solid color-mix(in oklch, var(--ink) 60%, black); }
+.flap-fold     { z-index: 3; top: 0;    border-radius: 4px 4px 0 0;
+                 transform-origin: bottom center;
+                 animation: flap-fall 62ms linear forwards; }
+
+/* ── Digit character ────────────────────────────────────────────────────── */
+
+.flap-char {
+  font-family: var(--font-display);
+  font-size: 2.4rem;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--paper);
+  /* Italics give a tiny Instrument Serif flair without going full italic */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  user-select: none;
+}
+
+/* Shift the char so each half-cell clips the correct half of the glyph.
+   translateY(50%) moves the char's centre to the bottom edge of .flap-top,
+   so the cell clips to the upper half of the digit.
+   translateY(-50%) mirrors this for .flap-bottom. */
+.flap-top    .flap-char { transform: translateY(50%); }
+.flap-bottom .flap-char,
+.flap-next-bot .flap-char { transform: translateY(-50%); }
+
+/* ── Fold animation ─────────────────────────────────────────────────────── */
+
+@keyframes flap-fall {
+  from { transform: rotateX(0deg); }
+  to   { transform: rotateX(-90deg); }
+}
+
+/* ── Colon separator ────────────────────────────────────────────────────── */
+
+.flap-colon {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--ink-soft);
+  align-self: center;
+  padding-bottom: 2px;
+  letter-spacing: -0.03em;
+  user-select: none;
+}
+
+/* ── Hero wrapper ───────────────────────────────────────────────────────── */
+
+.flip-clock-wrap {
+  margin-bottom: 2.2rem;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+  .flip-clock {
+    transform: scale(0.72);
+    /* Keep left-aligned despite the scale */
+    transform-origin: left center;
+  }
+  .flip-clock-wrap {
+    margin-bottom: 1.4rem;
+  }
+}
+
+/* ── Reduced motion — no flip, live text update only ────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .flap-fold { animation: none; }
+}
