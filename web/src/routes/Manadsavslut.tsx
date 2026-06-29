@@ -689,16 +689,24 @@ export default function Manadsavslut() {
             payments.map(p => {
               const linked = itemsByPayment[p.id] || []
               const when = (p.created_at || '').slice(0, 10)
+              const gross = linked.reduce((s, it) => s + (it.enter_amount ?? 0), 0)
               return (
                 <details key={p.id} className="history-item">
                   <summary>
-                    <span className="history-period">{p.period_label || when}</span>
+                    <span className="history-period">{when && p.period_label ? <>{when} · {p.period_label}</> : p.period_label || when}</span>
                     <span className="history-transfer">{p.from_person && p.amount > 0 ? <>{nameOf(p.from_person)} → {nameOf(p.to_person)} · <strong>{fmtMoney(p.amount)}</strong></> : 'Even — no transfer'}</span>
-                    <span className="history-meta">{linked.length} item{linked.length === 1 ? '' : 's'}</span>
+                    <span className="history-meta">{linked.length} item{linked.length === 1 ? '' : 's'} · {fmtMoney(gross)}</span>
                   </summary>
                   <ul className="history-list">
                     {linked.map(it => (
-                      <li key={it.id}><span className="hl-date">{it.date_purchased || when}</span><span className="hl-desc">{it.description}</span><span className="hl-amt num">{fmtMoney(it.amount)}</span></li>
+                      <li key={it.id}>
+                        <span className="hl-date">{it.date_purchased || when}</span>
+                        <span className="hl-desc">{it.description}</span>
+                        <span className="hl-payer">{nameOf(it.fronted_by)} paid {fmtMoney(it.enter_amount)}</span>
+                        <span className="hl-arrow">→</span>
+                        <span className="hl-amt num">{nameOf(it.owed_by)} owes {fmtMoney(it.amount)}</span>
+                        <span className="hl-type">{it.split ? 'Split' : 'All'}</span>
+                      </li>
                     ))}
                   </ul>
                   {p.note && <p className="history-note">{p.note}</p>}
