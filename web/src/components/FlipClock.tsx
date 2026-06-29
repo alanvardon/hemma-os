@@ -56,28 +56,28 @@ function FlipDigit({ value, reduce }: { value: number; reduce: boolean }) {
 
   return (
     <div className="flap-digit">
-      {/* Lower half of next digit — revealed as the fold completes */}
+      {/* Lower half of next digit — sits behind current bottom, revealed by fold */}
       {nc && (
         <div className="flap-half flap-bottom flap-next-bot">
-          <span className="flap-char">{nc}</span>
+          <div className="flap-char-wrap"><span className="flap-char">{nc}</span></div>
         </div>
       )}
       {/* Lower half of current digit — static */}
       <div className="flap-half flap-bottom">
-        <span className="flap-char">{c}</span>
+        <div className="flap-char-wrap"><span className="flap-char">{c}</span></div>
       </div>
-      {/* Upper half of current digit — static, visible beneath the fold */}
+      {/* Upper half of current digit — static, shows beneath the fold */}
       <div className="flap-half flap-top">
-        <span className="flap-char">{c}</span>
+        <div className="flap-char-wrap"><span className="flap-char">{c}</span></div>
       </div>
-      {/* Animated fold: top half of current digit rotates from 0 to -90 deg */}
+      {/* Animated fold: top of current, rotates 0→-90 deg to reveal next bottom */}
       {nc && (
         <div
           key={animNext}
           className="flap-half flap-top flap-fold"
           onAnimationEnd={onFoldEnd}
         >
-          <span className="flap-char">{c}</span>
+          <div className="flap-char-wrap"><span className="flap-char">{c}</span></div>
         </div>
       )}
     </div>
