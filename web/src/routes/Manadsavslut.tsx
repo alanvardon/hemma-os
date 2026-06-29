@@ -307,6 +307,7 @@ export default function Manadsavslut() {
     setItems(its); setPayments(pays); setSettings(sett); setDefaultClass(sett.default_split ? 'split' : 'full')
   }, [])
   useEffect(() => { refresh() }, [refresh])
+  useEffect(() => { document.title = 'Månadsavslut — Hemma·OS' }, [])
 
   // ── Import ───────────────────────────────────────────────────────────────
   async function handleFile(file: File) {

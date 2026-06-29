@@ -1,7 +1,9 @@
-# Hemma / bostadskalkyl
+# Hemma·OS
 
-A local-first family hub. `index.html` is **Hemma**, the homepage that links out to the household tools; more tools will land there over time.
+A local-first family operating system. The React SPA is the hub (`/`) linking out to all household tools — calculators, trackers, and shared utilities — as hash routes.
 
-The first tool is **Bostadskalkyl** (`bostadskalkyl.html`): a web calculator for buying a house in Sweden. Models lagfart, pantbrev, amortisation, ränteavdrag, bank rate comparisons, and driftkostnad — with saved scenarios and payoff charts.
+Live at **https://alanvardon.github.io/bostadskalkyl/** (repo rename to `hemma-os` pending).
 
-No build step — plain HTML/CSS/JS. Storage is localStorage behind the async `App.storage` facade (`storage.js`), ready to swap for Supabase later. Design tokens are duplicated between `styles.css` (calculator) and `home.css` (hub) by design.
+Tools: Bostadskalkyl · Hushållsbudget · Konsultkalkyl · Månadsavslut · Bolånekoll · Löneväxling
+
+Built with React + Vite + TypeScript. Storage is localStorage behind an async facade, ready to swap for Supabase. The `bostadskalkyl_*` localStorage keys and `bk-assets` build directory are intentionally kept with their legacy prefix — renaming them would break live data.

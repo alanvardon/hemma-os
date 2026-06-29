@@ -98,7 +98,7 @@ export default function Home() {
       const paper = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim()
       meta.setAttribute('content', paper)
     }
-    document.title = 'Hemma — family hub'
+    document.title = 'Hemma·OS — family hub'
   }, [theme])
 
   // App-card spotlight + 3-D tilt via CSS custom properties
@@ -129,7 +129,7 @@ export default function Home() {
         via fill:forwards). Kept as a sibling, the header stays pinned chrome and
         is simply covered by the growing dashboard at any scroll position. */}
     <header className="site-header">
-      <a className="wordmark" href="#/">Hemma<span className="dot">.</span></a>
+      <a className="wordmark" href="#/">Hemma<span className="dot">·</span>OS</a>
       <div className="header-meta">
         <div className="flip-clock-header">
           <FlipClock reduce={prefersReducedMotion()} instant={viaBack} />
@@ -347,7 +347,7 @@ export default function Home() {
 
       <footer className="site-footer">
         <span className="footer-badge"><span className="pulse" />Local-first · Supabase-ready</span>
-        <span>Hemma · built by the Vardon family</span>
+        <span>Hemma·OS · built by the Vardon family</span>
       </footer>
     </div>
     </>

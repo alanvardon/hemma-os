@@ -55,7 +55,7 @@ export default function Bostadskalkyl() {
       const paper = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim()
       meta.setAttribute('content', paper)
     }
-    document.title = 'Bostadskalkyl — Hemma'
+    document.title = 'Bostadskalkyl — Hemma·OS'
   }, [theme])
 
   const figures = useMemo(() => derive(inputs, constants), [inputs, constants])

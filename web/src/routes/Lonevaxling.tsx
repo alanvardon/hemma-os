@@ -110,7 +110,7 @@ export default function Lonevaxling() {
       const paper = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim()
       meta.setAttribute('content', paper)
     }
-    document.title = 'Löneväxling — Hemma'
+    document.title = 'Löneväxling — Hemma·OS'
   }, [theme])
 
   const result = useMemo(() => computeLonevaxling(inputs), [inputs])
