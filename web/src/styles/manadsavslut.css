@@ -106,6 +106,9 @@
   .segmented .seg.is-active { background: var(--accent); color: var(--on-accent); }
   .segmented-sm { padding: 2px; }
   .segmented-sm .seg { font-size: 12px; padding: 3px 8px; }
+  .segmented-responsive { flex-wrap: nowrap; }
+  .seg-select { display: none; font-family: var(--font-ui); font-size: 13px; color: var(--ink); background: var(--input-bg); border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 5px 8px; cursor: pointer; width: 100%; }
+  @media (max-width: 640px) { .segmented-responsive { display: none; } .seg-select { display: inline-block; } }
 
   /* ── Tables ─────────────────────────────────────────────────── */
   .table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-md); }
@@ -121,7 +124,7 @@
   .data-table tbody tr:last-child td { border-bottom: none; }
   .data-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .data-table .col-date { white-space: nowrap; color: var(--ink-mid); }
-  .data-table .col-treat { width: 1%; white-space: nowrap; }
+  .data-table .col-treat { min-width: 15rem; white-space: nowrap; }
   .data-table .col-type { white-space: nowrap; }
   .data-table .is-neg { color: var(--warn); }
   .data-table tr.is-excluded td:not(.col-treat) { opacity: 0.4; }

@@ -41,16 +41,24 @@ function defaultPeriodLabel(): string {
 
 // ── Segmented control ────────────────────────────────────────────────────────
 
-function Segmented<T extends string>({ value, options, onChange, small, ariaLabel }: {
-  value: T; options: { v: T; label: string }[]; onChange: (v: T) => void; small?: boolean; ariaLabel?: string
+function Segmented<T extends string>({ value, options, onChange, small, responsive, ariaLabel }: {
+  value: T; options: { v: T; label: string }[]; onChange: (v: T) => void; small?: boolean; responsive?: boolean; ariaLabel?: string
 }) {
   return (
-    <div className={'segmented' + (small ? ' segmented-sm' : '')} role="radiogroup" aria-label={ariaLabel}>
-      {options.map(o => (
-        <button key={o.v} type="button" role="radio" aria-checked={value === o.v}
-          className={'seg' + (value === o.v ? ' is-active' : '')} onClick={() => onChange(o.v)}>{o.label}</button>
-      ))}
-    </div>
+    <>
+      <div className={'segmented' + (small ? ' segmented-sm' : '') + (responsive ? ' segmented-responsive' : '')} role="radiogroup" aria-label={ariaLabel}>
+        {options.map(o => (
+          <button key={o.v} type="button" role="radio" aria-checked={value === o.v}
+            className={'seg' + (value === o.v ? ' is-active' : '')} onClick={() => onChange(o.v)}>{o.label}</button>
+        ))}
+      </div>
+      {responsive && (
+        <select className="seg-select" value={value} aria-label={ariaLabel}
+          onChange={e => onChange(e.target.value as T)}>
+          {options.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+        </select>
+      )}
+    </>
   )
 }
 
@@ -527,7 +535,7 @@ export default function Manadsavslut() {
                 </div>
                 <div className="config-field">
                   <label>Default treatment per row</label>
-                  <Segmented value={defaultClass} onChange={v => { setDefaultClass(v); setAllClass(v) }} options={[{ v: 'split' as Treatment, label: 'Split 50/50' }, { v: 'full' as Treatment, label: 'Owes all' }, { v: 'pending' as Treatment, label: 'Ask later' }, { v: 'exclude' as Treatment, label: 'Exclude' }]} />
+                  <Segmented responsive value={defaultClass} onChange={v => { setDefaultClass(v); setAllClass(v) }} options={[{ v: 'split' as Treatment, label: 'Split 50/50' }, { v: 'full' as Treatment, label: 'Owes all' }, { v: 'pending' as Treatment, label: 'Ask later' }, { v: 'exclude' as Treatment, label: 'Exclude' }]} />
                   <p className="config-note">Set per row below, or change them all at once.</p>
                 </div>
               </div>
@@ -547,7 +555,7 @@ export default function Manadsavslut() {
                         <tr key={i} className={rowClass}>
                           <td className="col-treat">
                             {isAmt ? (
-                              <Segmented small value={t.classification} onChange={v => setImportCfg(cfg => cfg ? { ...cfg, triage: cfg.triage.map((r, j) => j === i ? { ...r, classification: v } : r) } : cfg)}
+                              <Segmented small responsive value={t.classification} onChange={v => setImportCfg(cfg => cfg ? { ...cfg, triage: cfg.triage.map((r, j) => j === i ? { ...r, classification: v } : r) } : cfg)}
                                 options={[{ v: 'split' as Treatment, label: 'Split' }, { v: 'full' as Treatment, label: 'All' }, { v: 'pending' as Treatment, label: 'Ask later' }, { v: 'exclude' as Treatment, label: 'Skip' }]} />
                             ) : <span className="treat-na">no amount</span>}
                           </td>
