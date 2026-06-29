@@ -160,6 +160,7 @@
   .icon-btn[data-del]:hover { color: var(--warn); }
   .row-lock { color: var(--ink-faint); font-size: 12px; }
   .row-note { color: var(--ink-soft); font-size: 12px; font-style: italic; }
+  .personal-flag { margin-left: 0.4rem; color: var(--accent); font-size: 11px; font-weight: 550; white-space: nowrap; }
 
   /* ── Triage bar & actions ───────────────────────────────────── */
   .triage-bar { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin: 0.2rem 0 0.7rem; }
@@ -190,6 +191,8 @@
   .hl-arrow { color: var(--ink-soft); }
   .hl-amt { white-space: nowrap; font-variant-numeric: tabular-nums; }
   .hl-type { color: var(--ink-soft); font-size: 11px; white-space: nowrap; align-self: center; padding: 1px 5px; background: var(--rule); border-radius: 3px; }
+  .hl-personal { color: var(--accent); font-size: 12px; white-space: nowrap; }
+  .hl-personal-note { flex-basis: 100%; color: var(--ink-soft); font-size: 12px; font-style: italic; padding-left: 0.2rem; }
   .history-note { font-size: 12.5px; color: var(--ink-soft); font-style: italic; padding: 0 1rem 0.4rem; }
   .history-actions { padding: 0.3rem 1rem 0.9rem; }
 
@@ -273,6 +276,19 @@ dialog.ma-dialog {
 }
 .ma-dialog .segmented .seg.is-active { background: var(--accent); color: var(--on-accent); }
 .ma-dialog .form-hint { font-size: 12.5px; color: var(--ink-soft); margin-top: 0.7rem; min-height: 1em; }
+.ma-dialog .form-error { font-size: 12.5px; color: var(--warn); margin-top: 0.7rem; min-height: 1em; }
+.ma-dialog.ma-dialog-sm { width: min(440px, calc(100vw - 2rem)); }
+/* Personal-offset row inside the item dialog */
+.personal-row { gap: 0.3rem; }
+.personal-add { align-self: flex-start; font-size: 13px; }
+.personal-chip {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 0.5rem;
+  font: inherit; font-size: 12.5px; font-weight: 550; color: var(--accent);
+  background: var(--accent-faint); border: 1px solid var(--accent-light);
+  border-radius: 999px; padding: 4px 12px; cursor: pointer;
+}
+.personal-chip:hover { border-color: var(--accent); }
+.personal-chip .personal-edit { color: var(--ink-soft); font-size: 11px; }
 .ma-dialog .settle-line { font-size: 15px; color: var(--ink-mid); margin-bottom: 1.1rem; }
 .ma-dialog .settle-pending-note { font-size: 13px; color: var(--copper); margin: -0.7rem 0 1.1rem; }
 .ma-dialog .settings-data-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }

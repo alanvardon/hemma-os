@@ -18,6 +18,12 @@ function genId(prefix: string): string {
   return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
 }
 
+// Normalize a loaded item so pre-offset localStorage data and JSON backups gain
+// the personal carve-out fields with safe defaults (no migration script needed).
+function normalizeItem(it: Item): Item {
+  return { ...it, personal_a: Number(it.personal_a) || 0, personal_b: Number(it.personal_b) || 0, personal_note: it.personal_note || '' }
+}
+
 function read(): Envelope {
   const empty: Envelope = { version: VERSION, items: [], payments: [], settings: defaultSettings() }
   try {
@@ -27,7 +33,7 @@ function read(): Envelope {
     if (!data || typeof data !== 'object') return empty
     return {
       version: VERSION,
-      items: Array.isArray(data.items) ? (data.items as Item[]) : [],
+      items: Array.isArray(data.items) ? (data.items as Item[]).map(normalizeItem) : [],
       payments: Array.isArray(data.payments) ? (data.payments as Payment[]) : [],
       settings: { ...defaultSettings(), ...((data.settings as Partial<MonthEndSettings>) || {}) },
     }

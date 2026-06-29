@@ -29,6 +29,12 @@ export interface Item {
   pending: boolean
   payment_id: string | null
   note: string
+  // Personal carve-out: amounts within this transaction personal to A / B, taken
+  // out BEFORE the 50/50 split. The line stays whole (enter_amount is untouched);
+  // these only shift the owed share. Default 0 / ''. The field IS the owner.
+  personal_a: number
+  personal_b: number
+  personal_note: string
   source: string
 }
 
@@ -143,6 +149,22 @@ export function computeOwedAmount(enterAmount: number, split: boolean): number {
   return Math.round((split ? n / 2 : n) * 100) / 100
 }
 
+// Owed share with personal carve-outs. Under Split, personal items are removed
+// before the 50/50, then the non-payer's own personal is added back to what they
+// owe: owed = round2(shared_base/2) + round2(personal_[owed_by]). "Owes all"
+// (split=false) ignores personal — the other already owes the whole line.
+// Supersedes computeOwedAmount at the item-construction sites; with personal = 0
+// it returns exactly the same figure.
+export function computeOwed(enterAmount: number, split: boolean, frontedBy: Person, personalA = 0, personalB = 0): number {
+  const enter = Number(enterAmount)
+  if (!isFinite(enter)) return 0
+  if (!split) return r2(enter)
+  const pa = Number(personalA) || 0, pb = Number(personalB) || 0
+  const base = enter - pa - pb
+  const ownedByOther = otherPerson(frontedBy) === 'a' ? pa : pb
+  return r2(base / 2) + r2(ownedByOther)
+}
+
 export function classifyToItemFields(classification: Treatment | string, frontedBy: Person): { split: boolean; owed_by: Person; pending?: boolean } | null {
   if (classification === 'split') return { split: true, owed_by: otherPerson(frontedBy) }
   if (classification === 'full') return { split: false, owed_by: otherPerson(frontedBy) }
@@ -159,18 +181,23 @@ export function makeItem(partial: ItemDraft): Omit<Item, 'id' | 'created_at'> {
   const enter = Number(partial.enter_amount) || 0
   const split = partial.split === undefined ? true : !!partial.split
   const fronted: Person = partial.fronted_by === 'b' ? 'b' : 'a'
+  const personalA = Number(partial.personal_a) || 0
+  const personalB = Number(partial.personal_b) || 0
   return {
     date_purchased: partial.date_purchased || '',
     description: partial.description || '',
     enter_amount: enter,
     split,
-    amount: partial.amount === undefined ? computeOwedAmount(enter, split) : Number(partial.amount),
+    amount: partial.amount === undefined ? computeOwed(enter, split, fronted, personalA, personalB) : Number(partial.amount),
     fronted_by: fronted,
     owed_by: partial.owed_by || otherPerson(fronted),
     paid: !!partial.paid,
     pending: !!partial.pending,
     payment_id: partial.payment_id || null,
     note: partial.note || '',
+    personal_a: personalA,
+    personal_b: personalB,
+    personal_note: partial.personal_note || '',
     source: partial.source || 'manual',
   }
 }
