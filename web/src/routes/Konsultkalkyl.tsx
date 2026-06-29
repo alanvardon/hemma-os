@@ -71,7 +71,7 @@ export default function Konsultkalkyl() {
       const paper = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim()
       meta.setAttribute('content', paper)
     }
-    document.title = 'Konsultkalkyl — Hemma'
+    document.title = 'Konsultkalkyl — Hemma·OS'
   }, [theme])
 
   const result = useMemo(() => computeContracting(inputs), [inputs])

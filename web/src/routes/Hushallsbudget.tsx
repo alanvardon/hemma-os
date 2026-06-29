@@ -573,7 +573,7 @@ export default function Hushallsbudget() {
     return () => clearTimeout(t)
   }, [state])
 
-  useEffect(() => { document.title = 'Hushållsbudget — Hemma' }, [])
+  useEffect(() => { document.title = 'Hushållsbudget — Hemma·OS' }, [])
 
   const r = useMemo(() => computeBudget(state), [state])
   const nameA = state.people[0] || 'A', nameB = state.people[1] || 'B'

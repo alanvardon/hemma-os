@@ -465,7 +465,7 @@ export default function Bolanekoll() {
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
-  useEffect(() => { document.title = (settings.property_name || 'Bolånekoll') + ' · Hemma' }, [settings.property_name])
+  useEffect(() => { document.title = (settings.property_name || 'Bolånekoll') + ' · Hemma·OS' }, [settings.property_name])
 
   const nameOf = useCallback((p: Owner) => p === 'b' ? (settings.owner_b_name || 'Sam') : (settings.owner_a_name || 'Alex'), [settings])
 

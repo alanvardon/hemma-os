@@ -57,7 +57,7 @@ export default function ScenariosDashboard() {
     if (meta) {
       meta.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--paper').trim())
     }
-    document.title = 'Bostadskalkyl — Hemma'
+    document.title = 'Bostadskalkyl — Hemma·OS'
   }, [theme])
 
   const [undo, setUndo] = useState<{ open: boolean; message: string; info: DeletedInfo | null }>({

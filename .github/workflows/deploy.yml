@@ -1,6 +1,6 @@
-name: Deploy Hemma to GitHub Pages
+name: Deploy Hemma·OS to GitHub Pages
 
-# Builds the React SPA (web/) and publishes the whole Hemma site to GitHub Pages
+# Builds the React SPA (web/) and publishes the Hemma·OS site to GitHub Pages
 # on every push to main. The SPA is the entry point (index.html): it hosts the
 # hub (/) and all migrated tools as hash routes (/#/bostadskalkyl, etc.).
 # Vanilla tools that haven't yet been migrated to React are served alongside as
@@ -35,12 +35,12 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Build the React app (bostadskalkyl)
+      - name: Build the React app
         run: |
           npm --prefix web ci
           npm --prefix web run build
 
-      - name: Assemble the Hemma site
+      - name: Assemble the Hemma·OS site
         run: |
           mkdir -p _site
           # SPA is the entry point — its index.html IS the hub (/ route).
