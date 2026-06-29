@@ -1,8 +1,12 @@
 /* ── Solari split-flap clock ─────────────────────────────────────────────
-   Visual: site-standard card tokens (paper-card bg, rule border, ink text)
-   so the clock reads as an editorial element rather than a departure board.
-   Geometry: each .flap-half uses an inner .flap-char-wrap of the FULL cell
-   height; overflow:hidden on the half then clips the correct glyph half.    */
+   The perspective container (.flap-digit) must NOT have overflow:hidden —
+   that collapses the CSS 3D coordinate space and makes rotateX render as a
+   flat 2D squash instead of a card flip. Border-radius clipping is done on
+   the individual half-card layers instead.
+
+   Animation is two-beat:
+     fold-out: old top rotates backward  0° → -90°  (ease-in,  60ms)
+     fold-in:  new top swings in forward 90° →   0°  (ease-out, 60ms)          */
 
 .flip-clock {
   display: flex;
@@ -22,61 +26,87 @@
   position: relative;
   width: 2rem;
   height: 3rem;
-  /* perspective must sit on the parent of the transformed element */
-  perspective: 260px;
-  /* Clip the rounded corners across both halves */
-  border-radius: var(--r-sm);
-  overflow: hidden;
-  border: 1px solid var(--rule);
+  /* Perspective for the 3D card flip — must be on the parent of the
+     transformed element, and must NOT carry overflow:hidden */
+  perspective: 200px;
 }
 
 /* ── Half-card layers ───────────────────────────────────────────────────── */
 
+/* overflow:hidden on each HALF is fine — it's not the perspective container */
 .flap-half {
   position: absolute;
   left: 0;
   right: 0;
   width: 100%;
-  height: 50%;   /* 1.5rem */
+  height: 50%;
   overflow: hidden;
   background: var(--paper-card);
+  border: 1px solid var(--rule);
 }
 
-.flap-next-bot { bottom: 0; z-index: 0; }
-.flap-bottom   { bottom: 0; z-index: 1; }
-.flap-top      { top: 0;    z-index: 2; border-bottom: 1px solid var(--rule); }
+/* Corner radii on individual halves (since .flap-digit can't use overflow:hidden) */
+.flap-next-bot {
+  bottom: 0;
+  z-index: 0;
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  border-top: none;
+}
+.flap-bottom {
+  bottom: 0;
+  z-index: 1;
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  border-top: none;
+}
+.flap-top {
+  top: 0;
+  z-index: 2;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  border-bottom: 1px solid var(--rule);
+}
 
-.flap-fold {
+/* Beat 1: old top folds backward (0° → -90°) */
+.flap-fold-out {
   top: 0;
   z-index: 3;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
   border-bottom: 1px solid var(--rule);
   transform-origin: bottom center;
-  animation: flap-fall 65ms ease-in forwards;
+  animation: flap-fall-out 60ms ease-in forwards;
+}
+
+/* Beat 2: new top swings in from front (90° → 0°) */
+.flap-fold-in {
+  top: 0;
+  z-index: 3;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  border-bottom: 1px solid var(--rule);
+  transform-origin: bottom center;
+  animation: flap-fall-in 60ms ease-out forwards;
 }
 
 /* ── Glyph geometry ─────────────────────────────────────────────────────────
-   .flap-char-wrap spans the FULL cell height (3rem) regardless of which
-   half-card it lives inside. The half-card's overflow:hidden clips exactly
-   the right half of the centred glyph.
+   Each .flap-char-wrap spans the FULL cell height (3rem) so overflow:hidden
+   on the parent half-card clips exactly the right half of the centred glyph.
 
-   Top half  → wrap at top:0    → half-card clips to [0, 1.5rem]   = upper half ✓
-   Bottom half→ wrap at top:-100%(= -1.5rem) → visible range [0, 1.5rem]
-               relative to the bottom half = [1.5rem, 3rem] of the wrap = lower half ✓  */
+     Top half:    wrap at top:0      → clips to [0, 1.5rem]   = upper half ✓
+     Bottom half: wrap at top:-100%  → clips to [1.5rem, 3rem] = lower half ✓ */
 
 .flap-char-wrap {
   position: absolute;
   width: 100%;
-  height: 3rem;   /* full cell height */
+  height: 3rem;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .flap-top      .flap-char-wrap,
-.flap-fold     .flap-char-wrap { top: 0; }
+.flap-fold-out .flap-char-wrap,
+.flap-fold-in  .flap-char-wrap { top: 0; }
 
 .flap-bottom   .flap-char-wrap,
-.flap-next-bot .flap-char-wrap { top: -100%; }  /* = -1.5rem */
+.flap-next-bot .flap-char-wrap { top: -100%; }
 
 /* ── Digit character ────────────────────────────────────────────────────── */
 
@@ -91,11 +121,18 @@
   user-select: none;
 }
 
-/* ── Fold animation ─────────────────────────────────────────────────────── */
+/* ── Keyframes ──────────────────────────────────────────────────────────── */
 
-@keyframes flap-fall {
+/* Old top folds away backward */
+@keyframes flap-fall-out {
   from { transform: rotateX(0deg); }
   to   { transform: rotateX(-90deg); }
+}
+
+/* New top swings in from the front */
+@keyframes flap-fall-in {
+  from { transform: rotateX(90deg); }
+  to   { transform: rotateX(0deg); }
 }
 
 /* ── Colon separator ────────────────────────────────────────────────────── */
@@ -129,8 +166,9 @@
   }
 }
 
-/* ── Reduced motion — live text, no fold ────────────────────────────────── */
+/* ── Reduced motion: live text, no flip ──────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
-  .flap-fold { animation: none; }
+  .flap-fold-out,
+  .flap-fold-in { animation: none; }
 }
