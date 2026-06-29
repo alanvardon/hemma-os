@@ -71,12 +71,6 @@ body::after {
   border-bottom: 1px solid var(--rule);
 }
 
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 1.4rem;
-}
-
 .wordmark {
   font-family: var(--font-display);
   font-size: 1.4rem;

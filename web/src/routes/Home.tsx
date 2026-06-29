@@ -129,13 +129,11 @@ export default function Home() {
         via fill:forwards). Kept as a sibling, the header stays pinned chrome and
         is simply covered by the growing dashboard at any scroll position. */}
     <header className="site-header">
-      <div className="header-left">
-        <a className="wordmark" href="#/">Hemma<span className="dot">.</span></a>
+      <a className="wordmark" href="#/">Hemma<span className="dot">.</span></a>
+      <div className="header-meta">
         <div className="flip-clock-header">
           <FlipClock reduce={prefersReducedMotion()} instant={viaBack} />
         </div>
-      </div>
-      <div className="header-meta">
         <button
           className="theme-toggle-btn"
           title="Toggle dark mode"
