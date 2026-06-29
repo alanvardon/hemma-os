@@ -71,6 +71,12 @@ body::after {
   border-bottom: 1px solid var(--rule);
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 1.4rem;
+}
+
 .wordmark {
   font-family: var(--font-display);
   font-size: 1.4rem;
@@ -89,6 +95,20 @@ body::after {
   align-items: center;
   gap: 14px;
 }
+
+/* ── Header flip-clock (small variant) ──────────────────────── */
+.flip-clock-header .flip-clock { gap: 3px; }
+.flip-clock-header .flap-group { gap: 1px; }
+.flip-clock-header .flap-digit {
+  width: 1.2rem;
+  height: 1.8rem;
+  perspective: 120px;
+}
+.flip-clock-header .flap-char-wrap { height: 1.8rem; }
+.flip-clock-header .flap-char { font-size: 1.5rem; }
+.flip-clock-header .flap-colon { font-size: 1.1rem; }
+
+@media (max-width: 500px) { .flip-clock-header { display: none; } }
 
 .site-header .theme-toggle-btn {
   border: 1px solid var(--rule);

@@ -129,7 +129,12 @@ export default function Home() {
         via fill:forwards). Kept as a sibling, the header stays pinned chrome and
         is simply covered by the growing dashboard at any scroll position. */}
     <header className="site-header">
-      <a className="wordmark" href="#/">Hemma<span className="dot">.</span></a>
+      <div className="header-left">
+        <a className="wordmark" href="#/">Hemma<span className="dot">.</span></a>
+        <div className="flip-clock-header">
+          <FlipClock reduce={prefersReducedMotion()} instant={viaBack} />
+        </div>
+      </div>
       <div className="header-meta">
         <button
           className="theme-toggle-btn"
@@ -154,13 +159,10 @@ export default function Home() {
           <p className="greeting reveal reveal-1">
             <span>{greeting}</span> <span className="date">{dateLine}</span>
           </p>
-          <div className="flip-clock-wrap reveal reveal-2">
-            <FlipClock reduce={prefersReducedMotion()} instant={viaBack} />
-          </div>
-          <h1 className="reveal reveal-3">
+          <h1 className="reveal reveal-2">
             Everything for the household, <em>in one place.</em>
           </h1>
-          <p className="sub reveal reveal-4">
+          <p className="sub reveal reveal-3">
             The family operating system — calculators, plans and shared tools that grow with us.
             Local-first today, synced everywhere tomorrow.
           </p>
