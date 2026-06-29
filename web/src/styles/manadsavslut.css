@@ -171,20 +171,23 @@
   /* ── History ────────────────────────────────────────────────── */
   .history-item { border: 1px solid var(--rule); border-radius: var(--r-md); margin-bottom: 0.6rem; overflow: hidden; }
   .history-item:last-child { margin-bottom: 0; }
-  .history-item summary {
+  /* direct-child so the nested per-item <details> summary isn't restyled */
+  .history-item > summary {
     display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
     padding: 0.8rem 1rem; cursor: pointer; list-style: none;
     background: var(--paper-card); transition: background 0.15s;
   }
-  .history-item summary:hover { background: var(--paper-warm); }
-  .history-item summary::-webkit-details-marker { display: none; }
-  .history-item[open] summary { border-bottom: 1px solid var(--rule); }
+  .history-item > summary:hover { background: var(--paper-warm); }
+  .history-item > summary::-webkit-details-marker { display: none; }
+  .history-item[open] > summary { border-bottom: 1px solid var(--rule); }
   .history-period { font-weight: 600; color: var(--ink); }
   .history-transfer { color: var(--ink-mid); font-size: 13.5px; }
   .history-meta { margin-left: auto; font-size: 12px; color: var(--ink-soft); }
   .history-list { list-style: none; padding: 0.5rem 1rem 0.3rem; margin: 0; }
-  .history-list li { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; padding: 4px 0; font-size: 13px; border-bottom: 1px solid var(--rule); }
-  .history-list li:last-child { border-bottom: none; }
+  .history-list > li { padding: 4px 0; font-size: 13px; border-bottom: 1px solid var(--rule); }
+  .history-list > li:last-child { border-bottom: none; }
+  /* the row layout — shared by a plain <li> and the expandable <summary> */
+  .hl-row { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; }
   .hl-date { color: var(--ink-soft); white-space: nowrap; }
   .hl-desc { flex: 1; min-width: 8rem; }
   .hl-payer { white-space: nowrap; color: var(--ink-mid); }
@@ -192,7 +195,13 @@
   .hl-amt { white-space: nowrap; font-variant-numeric: tabular-nums; }
   .hl-type { color: var(--ink-soft); font-size: 11px; white-space: nowrap; align-self: center; padding: 1px 5px; background: var(--rule); border-radius: 3px; }
   .hl-personal { color: var(--accent); font-size: 12px; white-space: nowrap; }
-  .hl-personal-note { flex-basis: 100%; color: var(--ink-soft); font-size: 12px; font-style: italic; padding-left: 0.2rem; }
+  /* expandable item: per-person overview on the row, entries revealed on click */
+  .hl-item > summary { cursor: pointer; list-style: none; }
+  .hl-item > summary::-webkit-details-marker { display: none; }
+  .hl-expand { color: var(--ink-soft); font-size: 10px; transition: transform 0.15s; margin-left: 0.1rem; }
+  .hl-item[open] > summary .hl-expand { transform: rotate(90deg); }
+  .hl-sub { list-style: none; margin: 0.3rem 0 0.2rem; padding: 0 0 0 1.2rem; display: flex; flex-direction: column; gap: 0.2rem; }
+  .hl-sub li { display: flex; gap: 0.6rem; align-items: baseline; font-size: 12.5px; color: var(--ink-mid); }
   .history-note { font-size: 12.5px; color: var(--ink-soft); font-style: italic; padding: 0 1rem 0.4rem; }
   .history-actions { padding: 0.3rem 1rem 0.9rem; }
 
@@ -277,7 +286,18 @@ dialog.ma-dialog {
 .ma-dialog .segmented .seg.is-active { background: var(--accent); color: var(--on-accent); }
 .ma-dialog .form-hint { font-size: 12.5px; color: var(--ink-soft); margin-top: 0.7rem; min-height: 1em; }
 .ma-dialog .form-error { font-size: 12.5px; color: var(--warn); margin-top: 0.7rem; min-height: 1em; }
-.ma-dialog.ma-dialog-sm { width: min(440px, calc(100vw - 2rem)); }
+.ma-dialog.ma-dialog-sm { width: min(460px, calc(100vw - 2rem)); }
+/* Personal-offset modal: add-fields row + the running entry list */
+.personal-add-grid { display: grid; grid-template-columns: minmax(5rem, 0.9fr) minmax(4rem, 0.7fr) 1.4fr auto; gap: 0.5rem; align-items: end; }
+.personal-add-grid .form-field { gap: 0.3rem; }
+.personal-add-btn { white-space: nowrap; height: fit-content; }
+.personal-entry-list { list-style: none; margin: 0.8rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.personal-entry-list li { display: flex; gap: 0.6rem; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--rule); font-size: 13.5px; }
+.personal-entry-list li:last-child { border-bottom: none; }
+.pe-person { white-space: nowrap; font-weight: 550; color: var(--ink-mid); min-width: 3rem; }
+.pe-amount { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink); }
+.pe-note { flex: 1; min-width: 0; color: var(--ink-soft); font-style: italic; }
+.personal-entry-list .icon-btn { margin-left: auto; }
 /* Personal-offset row inside the item dialog */
 .personal-row { gap: 0.3rem; }
 .personal-add { align-self: flex-start; font-size: 13px; }

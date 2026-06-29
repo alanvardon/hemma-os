@@ -4,8 +4,8 @@
 // future Supabase tables (snake_case) and every method returns a Promise, so the
 // Supabase swap is a one-file change here.
 
-import { defaultSettings } from './manadsavslut'
-import type { Item, Payment, MonthEndSettings } from './manadsavslut'
+import { defaultSettings, normalizePersonalEntries, personalSums } from './manadsavslut'
+import type { Item, Payment, MonthEndSettings, PersonalEntry } from './manadsavslut'
 
 export const STORAGE_KEY = 'bostadskalkyl_monthend_v1'
 const VERSION = 1
@@ -18,10 +18,25 @@ function genId(prefix: string): string {
   return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
 }
 
-// Normalize a loaded item so pre-offset localStorage data and JSON backups gain
-// the personal carve-out fields with safe defaults (no migration script needed).
-function normalizeItem(it: Item): Item {
-  return { ...it, personal_a: Number(it.personal_a) || 0, personal_b: Number(it.personal_b) || 0, personal_note: it.personal_note || '' }
+// Normalize a loaded item so older localStorage data and JSON backups gain the
+// personal carve-out fields with safe defaults (no migration script needed):
+//  - pre-personal items (no fields)        → personal_items: []
+//  - v1 items (personal_a/b + one note)    → synthesised into personal_items, the
+//    single note riding the first entry
+//  - current items (personal_items present)→ re-derive the cached sums (idempotent)
+export function normalizeItem(it: Item): Item {
+  const raw = it as unknown as Record<string, unknown>
+  let entries: PersonalEntry[] = normalizePersonalEntries(raw.personal_items)
+  if (!entries.length) {
+    const pa = Number(raw.personal_a) || 0, pb = Number(raw.personal_b) || 0
+    const note = typeof raw.personal_note === 'string' ? raw.personal_note : ''
+    const migrated: PersonalEntry[] = []
+    if (pa > 0) migrated.push({ person: 'a', amount: pa, note })
+    if (pb > 0) migrated.push({ person: 'b', amount: pb, note: pa > 0 ? '' : note })
+    entries = migrated
+  }
+  const sums = personalSums(entries)
+  return { ...it, personal_items: entries, personal_a: sums.a, personal_b: sums.b }
 }
 
 function read(): Envelope {
