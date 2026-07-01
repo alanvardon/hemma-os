@@ -150,18 +150,11 @@ export function autoMapColumns(headers: string[]): ColMapping {
 
 // ── Item math ────────────────────────────────────────────────────────────────
 
-export function computeOwedAmount(enterAmount: number, split: boolean): number {
-  const n = Number(enterAmount)
-  if (!isFinite(n)) return 0
-  return Math.round((split ? n / 2 : n) * 100) / 100
-}
-
 // Owed share with personal carve-outs. Under Split, personal items are removed
 // before the 50/50, then the non-payer's own personal is added back to what they
 // owe: owed = round2(shared_base/2) + round2(personal_[owed_by]). "Owes all"
 // (split=false) ignores personal — the other already owes the whole line.
-// Supersedes computeOwedAmount at the item-construction sites; with personal = 0
-// it returns exactly the same figure.
+// With personal = 0 this is a plain 50/50 split of the whole line.
 export function computeOwed(enterAmount: number, split: boolean, frontedBy: Person, personalA = 0, personalB = 0): number {
   const enter = Number(enterAmount)
   if (!isFinite(enter)) return 0
@@ -245,7 +238,7 @@ export function inferSpendSign(amounts: number[]): number {
   return neg > pos ? -1 : 1
 }
 
-export function itemFingerprint(it: Partial<Item> | null): string {
+function itemFingerprint(it: Partial<Item> | null): string {
   it = it || {}
   const date = String(it.date_purchased == null ? '' : it.date_purchased).trim()
   const desc = String(it.description == null ? '' : it.description).trim().toLowerCase().replace(/\s+/g, ' ')
@@ -351,13 +344,13 @@ const CATEGORIES: Category[] = [
   { key: 'home', label: 'Home & bills', test: /(\bhyra\b|vattenfall|\beon\b|e\.on|ellevio|telia|telenor|\btre\b|comviq|hallon|bredband|fortum|försäkring|forsakring|elnät|elnat|fjärrvärme|sophämtning|\bbrf\b)/ },
 ]
 
-export function categorize(description: string | null | undefined): string {
+function categorize(description: string | null | undefined): string {
   const s = String(description == null ? '' : description).toLowerCase()
   for (let i = 0; i < CATEGORIES.length; i++) { if (CATEGORIES[i].test.test(s)) return CATEGORIES[i].key }
   return 'other'
 }
 
-export function categoryLabel(key: string): string {
+function categoryLabel(key: string): string {
   for (let i = 0; i < CATEGORIES.length; i++) { if (CATEGORIES[i].key === key) return CATEGORIES[i].label }
   return 'Other'
 }

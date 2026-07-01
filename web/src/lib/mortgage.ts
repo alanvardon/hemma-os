@@ -80,7 +80,7 @@ export function otherOwner(p: Owner): Owner { return p === 'a' ? 'b' : 'a' }
 
 // ── CSV parsing ────────────────────────────────────────────────────────────
 
-export function detectDelimiter(text: string): string {
+function detectDelimiter(text: string): string {
   const line = String(text || '').split(/\r?\n/)[0] || ''
   let best = ',', bestCount = -1
   for (const d of [',', ';', '\t']) {
@@ -194,7 +194,7 @@ export function makePayment(p: Partial<Payment> & { specification?: string }): O
 
 // ── Duplicate detection ────────────────────────────────────────────────────
 
-export function paymentFingerprint(p: Partial<Payment>): string {
+function paymentFingerprint(p: Partial<Payment>): string {
   return String(p.date ?? '').trim() + '|' + (p.loan_part_id || '') + '|' +
     (p.kind || '') + '|' + r2(Number(p.amount) || 0)
 }
@@ -250,7 +250,7 @@ export function partBalance(part: LoanPart, payments: Payment[]): number {
     .reduce((s, p) => s + (Number(p.amount) || 0), 0)))
 }
 
-export function partOriginal(part: LoanPart, payments: Payment[]): number {
+function partOriginal(part: LoanPart, payments: Payment[]): number {
   if (Number(part?.start_balance) > 0) return r2(Number(part.start_balance))
   const mine = payments.filter(p => p?.loan_part_id === part?.id)
   const loans = mine.filter(p => p.kind === 'loan')
@@ -265,7 +265,7 @@ export function partOriginal(part: LoanPart, payments: Payment[]): number {
   return partBalance(part, payments)
 }
 
-export function partAmortized(part: LoanPart, payments: Payment[]): number {
+function partAmortized(part: LoanPart, payments: Payment[]): number {
   return Math.max(0, r2(partOriginal(part, payments) - partBalance(part, payments)))
 }
 
@@ -357,15 +357,7 @@ function clamp(pct: number, dflt = 50): number {
   const p = Number(pct); return isFinite(p) ? Math.max(0, Math.min(100, p)) : dflt
 }
 
-export function ownerSplit(eq: number, s: Partial<MortgageSettings>): { a: number; b: number } {
-  const me = s.i_am === 'b' ? 'b' : 'a', pct = clamp(s.my_ownership_pct ?? 50)
-  const mine = r2(eq * pct / 100)
-  const res = { a: 0, b: 0 }
-  res[me] = mine; res[otherOwner(me)] = r2(eq - mine)
-  return res
-}
-
-export function ownerPercents(s: Partial<MortgageSettings>): { a: number; b: number } {
+function ownerPercents(s: Partial<MortgageSettings>): { a: number; b: number } {
   const me = s.i_am === 'b' ? 'b' : 'a', pct = clamp(s.my_ownership_pct ?? 50)
   const res = { a: 0, b: 0 }
   res[me] = pct; res[otherOwner(me)] = r2(100 - pct)
@@ -374,7 +366,7 @@ export function ownerPercents(s: Partial<MortgageSettings>): { a: number; b: num
 
 // ── Month helpers ──────────────────────────────────────────────────────────
 
-export function monthKey(d: string | null | undefined): string {
+function monthKey(d: string | null | undefined): string {
   const s = String(d ?? '').trim()
   let m = /(\d{4})[-/](\d{2})/.exec(s)
   if (m) return m[1] + '-' + m[2]
@@ -382,7 +374,7 @@ export function monthKey(d: string | null | undefined): string {
   return m ? m[3] + '-' + m[2] : ''
 }
 
-export function monthLabel(mk: string): string {
+function monthLabel(mk: string): string {
   if (!mk) return 'Utan datum'
   const m = /^(\d{4})-(\d{2})$/.exec(mk)
   if (!m) return mk
@@ -428,7 +420,7 @@ function partBalAsOfMk(part: LoanPart, payments: Payment[], mk: string): number 
   ).reduce((s, p) => s + (Number(p.amount) || 0), 0)))
 }
 
-export function balanceTimeline(parts: LoanPart[], payments: Payment[]) {
+function balanceTimeline(parts: LoanPart[], payments: Payment[]) {
   const active = parts.filter(p => p && !p.archived)
   return mRange(active, payments).map(mk => ({
     month: mk, label: monthLabel(mk),
@@ -466,7 +458,7 @@ function daysBetween(a: string, b: string): number | null {
 
 // ── Balance as-of date ─────────────────────────────────────────────────────
 
-export function partBalanceAsOf(part: LoanPart, payments: Payment[], asOf?: string): number {
+function partBalanceAsOf(part: LoanPart, payments: Payment[], asOf?: string): number {
   if (!part) return 0
   const mine = payments.filter(p => p?.loan_part_id === part.id && !(asOf && p.date && p.date > asOf))
   const wb = mine.filter(p => p.balance_after != null && p.date)
@@ -483,7 +475,7 @@ export function partBalanceAsOf(part: LoanPart, payments: Payment[], asOf?: stri
   ).reduce((s, p) => s + (Number(p.amount) || 0), 0)))
 }
 
-export function totalBalanceAsOf(parts: LoanPart[], payments: Payment[], asOf?: string): number {
+function totalBalanceAsOf(parts: LoanPart[], payments: Payment[], asOf?: string): number {
   return r2(parts.filter(p => p && !p.archived).reduce((s, p) => s + partBalanceAsOf(p, payments, asOf), 0))
 }
 
@@ -508,7 +500,7 @@ export function monthlyAmortizationRate(parts: LoanPart[], payments: Payment[]):
   return drop > 0 ? r2(drop / (tl.length - 1)) : 0
 }
 
-export function projectBalance(
+function projectBalance(
   parts: LoanPart[], payments: Payment[],
   opts?: { startBalance?: number; monthlyAmortization?: number; extraMonthly?: number; maxMonths?: number }
 ) {
@@ -565,7 +557,7 @@ export function effectiveRatePeriod(part: LoanPart, periods: RatePeriod[], asOf?
   return s[s.length - 1]
 }
 
-export function effectiveRate(part: LoanPart, periods: RatePeriod[], asOf?: string): number | null {
+function effectiveRate(part: LoanPart, periods: RatePeriod[], asOf?: string): number | null {
   const p = effectiveRatePeriod(part, periods, asOf); return p ? Number(p.rate) : null
 }
 
