@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import NumberFlow from '@number-flow/react'
+import { isVtActive, subscribeVtSettled } from '../lib/viewTransition'
 
 // Animated figure components. NumberFlow rolls the digits whenever `value`
 // changes (typing an input, dragging the stress slider, loading a scenario).
@@ -9,12 +10,33 @@ import NumberFlow from '@number-flow/react'
 const prefersReducedMotion = () =>
   typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-// Opt-in mount roll-in: start at 0, animate to `value` on first paint.
-// Skipped under prefers-reduced-motion. When `rollIn` is false (default),
-// returns `value` directly so NumberFlow sees reactive changes as before.
-function useRollIn(value: number, rollIn?: boolean): number {
+// True once no hub-pan whoosh is in flight. While a transition is active,
+// callers pass this to NumberFlow's `animated` prop so entrance figures don't
+// roll underneath/behind it (either an explicit `rollIn`, or a figure whose
+// value just changes as a route's data hydrates) — value changes still land,
+// just silently, then the figure is live for real (typed/dragged) changes
+// once settled. Mirrors the same lifecycle viewTransition.ts already uses to
+// clear `data-vt-dir` (tied to the VT's `.finished`, with a timer fallback for
+// paths with no real VT), so it can't get stuck un-animated.
+function useVtSettled(): boolean {
+  const [settled, setSettled] = useState(() => !isVtActive())
+  useEffect(() => {
+    if (settled) return
+    return subscribeVtSettled(() => setSettled(true))
+  }, [settled])
+  return settled
+}
+
+// Opt-in mount roll-in: start at 0, animate to `value` once settled (see
+// useVtSettled) on first paint. Skipped under prefers-reduced-motion. When
+// `rollIn` is false (default), returns `value` directly so NumberFlow sees
+// reactive changes as before.
+function useRollIn(value: number, rollIn: boolean | undefined, settled: boolean): number {
   const [display, setDisplay] = useState(() => (rollIn && !prefersReducedMotion() ? 0 : value))
-  useEffect(() => { setDisplay(value) }, [value])
+  useEffect(() => {
+    if (rollIn && !settled) return
+    setDisplay(value)
+  }, [value, settled, rollIn])
   return rollIn ? display : value
 }
 
@@ -49,7 +71,8 @@ interface MoneyProps {
  * render an explicit unit (other currencies) instead of the Intl SEK style.
  */
 export function Money({ value, signed, prefix, suffix, currencySuffix, maxDecimals = 0, className, rollIn }: MoneyProps) {
-  const display = useRollIn(value, rollIn)
+  const settled = useVtSettled()
+  const display = useRollIn(value, rollIn, settled)
   const signFmt = signed ? { signDisplay: 'exceptZero' as const } : {}
   if (currencySuffix != null) {
     return (
@@ -60,6 +83,7 @@ export function Money({ value, signed, prefix, suffix, currencySuffix, maxDecima
         prefix={prefix}
         suffix={(suffix ?? '') + ' ' + currencySuffix}
         className={className}
+        animated={settled}
       />
     )
   }
@@ -71,6 +95,7 @@ export function Money({ value, signed, prefix, suffix, currencySuffix, maxDecima
       prefix={prefix}
       suffix={suffix}
       className={className}
+      animated={settled}
     />
   )
 }
@@ -97,7 +122,8 @@ interface PercentProps {
  * Konsult's "62 %", Bolånekoll's "3,54 %", Löneväxling's signed "+12 %").
  */
 export function Percent({ value, decimals = 1, space, signed, locale = 'en-US', className, rollIn }: PercentProps) {
-  const display = useRollIn(value, rollIn)
+  const settled = useVtSettled()
+  const display = useRollIn(value, rollIn, settled)
   return (
     <NumberFlow
       value={display}
@@ -109,6 +135,7 @@ export function Percent({ value, decimals = 1, space, signed, locale = 'en-US', 
       }}
       suffix={(space ? ' ' : '') + '%'}
       className={className}
+      animated={settled}
     />
   )
 }
@@ -132,7 +159,8 @@ interface NumProps {
  * sv-SE grouping matches the legacy `formatWithSpaces`.
  */
 export function Num({ value, decimals = 0, suffix, prefix, locale = 'sv-SE', className, rollIn }: NumProps) {
-  const display = useRollIn(value, rollIn)
+  const settled = useVtSettled()
+  const display = useRollIn(value, rollIn, settled)
   return (
     <NumberFlow
       value={display}
@@ -141,6 +169,7 @@ export function Num({ value, decimals = 0, suffix, prefix, locale = 'sv-SE', cla
       prefix={prefix}
       suffix={suffix}
       className={className}
+      animated={settled}
     />
   )
 }
@@ -159,7 +188,8 @@ interface MoneyCompactProps {
  * Scale is determined by the final `value`; the animated mantissa rolls 0 → final.
  */
 export function MoneyCompact({ value, signed = false, rollIn }: MoneyCompactProps) {
-  const display = useRollIn(value, rollIn)
+  const settled = useVtSettled()
+  const display = useRollIn(value, rollIn, settled)
   const abs = Math.abs(value)
   let divisor: number, suffix: string
   if (abs >= 1_000_000) { divisor = 1_000_000; suffix = ' mnkr' }
@@ -175,6 +205,7 @@ export function MoneyCompact({ value, signed = false, rollIn }: MoneyCompactProp
         ...(signed ? { signDisplay: 'exceptZero' as const } : {}),
       }}
       suffix={suffix}
+      animated={settled}
     />
   )
 }
