@@ -151,6 +151,18 @@ body::after {
   mask-composite: intersect;
 }
 
+/* WebGL terrain layer (HeroScene) — shares .hero-canvas for positioning and
+   the mask vignette (mask-image applies to the R3F wrapper div and clips the
+   canvas inside it). Starts transparent and crossfades in over the 2D layer
+   once its first frame has rendered; the orchestrator unmounts the 2D canvas
+   after the fade lands. */
+.hero-canvas-gl {
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.hero-canvas-gl.is-ready { opacity: 1; }
+
 .hero {
   position: relative;
   z-index: 1;

@@ -1,192 +1,90 @@
-import { useEffect, useRef } from 'react'
+import { Component, lazy, Suspense, useCallback, useRef, useState } from 'react'
+import HeroCanvas2D from './HeroCanvas2D'
+
+/* Hero background orchestrator (plan 28a). Owns the `.hero-wrap` box and
+   decides which terrain layer renders inside it:
+
+   1. ≤600px, reduced motion, WebGL unavailable, or a previous GL failure this
+      session → HeroCanvas2D only (exactly the pre-WebGL experience; the 2D
+      layer already handles reduced-motion with a single static frame).
+   2. Otherwise: HeroCanvas2D paints immediately while the lazy HeroScene
+      chunk loads (first paint is never blocked by three.js), then the WebGL
+      scene crossfades in over its first frames and the 2D layer unmounts.
+
+   The ladder is decided once per mount — a mid-session viewport resize across
+   600px keeps whichever layer it started with (both work at any size; the
+   cutoff only exists so phones never fetch the three.js chunk). */
+
+const HeroScene = lazy(() => import('./HeroScene'))
+
+const GL_FAILED_KEY = 'hemma-hero-gl-failed'
+
+function webglAvailable(): boolean {
+  try {
+    const c = document.createElement('canvas')
+    return !!(c.getContext('webgl2') || c.getContext('webgl'))
+  } catch {
+    return false
+  }
+}
+
+function wantsWebgl(): boolean {
+  if (typeof window === 'undefined') return false
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false
+  if (window.matchMedia('(max-width: 600px)').matches) return false
+  try {
+    if (sessionStorage.getItem(GL_FAILED_KEY)) return false
+  } catch { /* storage blocked — just probe */ }
+  return webglAvailable()
+}
+
+/* A render/creation error inside the lazy scene must degrade to the 2D
+   canvas, never crash the hub. */
+class SceneBoundary extends Component<
+  { onFail: () => void; children: React.ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  componentDidCatch() {
+    this.props.onFail()
+  }
+  render() {
+    return this.state.failed ? null : this.props.children
+  }
+}
 
 export default function HeroCanvas({ children }: { children: React.ReactNode }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const [gl, setGl] = useState(() => wantsWebgl())
+  // Keep the 2D layer mounted under the GL scene until the crossfade lands
+  const [glSettled, setGlSettled] = useState(false)
 
-  useEffect(() => {
-    const canvas = canvasRef.current
-    const wrap = wrapRef.current
-    if (!canvas || !wrap) return
+  const onFail = useCallback(() => {
+    try {
+      sessionStorage.setItem(GL_FAILED_KEY, '1')
+    } catch { /* fine — the state flip below covers this session */ }
+    setGl(false)
+    setGlSettled(false)
+  }, [])
 
-    const ctx = canvas.getContext('2d')!
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-
-    const ROWS = 26
-    const SPAN_X_BASE = 1.3
-    const SPAN_Z = 1.55
-    const FOV = 1.6
-    const CAM = 1.4
-    const BASE_PITCH = -0.55
-    // The hub-pan camera move (Home.tsx) can shift the whole page sideways by
-    // roughly half the viewport width toward a clicked card. Overscan the
-    // canvas horizontally so the terrain still covers the frame once panned —
-    // fraction of the hero box's own (pre-overscan) width, added to each side.
-    const OVERSCAN_X = 0.4
-
-    let W = 0, H = 0, DPR = 1, COLS = 96
-    let SPAN_X = SPAN_X_BASE
-    // Reference (pre-overscan) width — kept separate from the (wider) canvas
-    // width W so the projection's pixel-density stays constant into the
-    // overscan margin instead of the extra width "zooming" the whole scene.
-    let REF_W = 0
-    let raf: number | null = null
-    let t0: number | null = null
-    let targetYaw = 0, targetPitch = 0, yaw = 0, pitchOff = 0
-    let colors = {
-      accent: [46, 93, 62] as [number, number, number],
-      copper: [176, 107, 56] as [number, number, number],
-    }
-
-    function parseToken(style: CSSStyleDeclaration, name: string, fallback: [number, number, number]): [number, number, number] {
-      let v = style.getPropertyValue(name).trim().replace('#', '')
-      if (v.length === 3) v = v[0]+v[0]+v[1]+v[1]+v[2]+v[2]
-      const n = parseInt(v, 16)
-      if (isNaN(n)) return fallback
-      return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
-    }
-
-    function readColors() {
-      const style = getComputedStyle(document.documentElement)
-      // Read the hex alias vars — tokens.css OKLCH values aren't parseable as hex
-      colors.accent = parseToken(style, '--canvas-accent', colors.accent)
-      colors.copper = parseToken(style, '--canvas-copper', colors.copper)
-    }
-
-    function rgba(rgb: [number, number, number], a: number) {
-      return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`
-    }
-
-    function elevation(x: number, z: number, time: number) {
-      return 0.16 * Math.sin(x * 2.1 + time * 0.55)
-           + 0.11 * Math.sin(x * 3.7 - z * 2.3 + time * 0.35)
-           + 0.07 * Math.sin((x + z) * 5.3 + time * 0.7)
-           + 0.05 * Math.sin(z * 4.1 - time * 0.45)
-    }
-
-    function project(x: number, y: number, z: number) {
-      const zc = z - SPAN_Z / 2
-      const cy = Math.cos(yaw), sy = Math.sin(yaw)
-      const x1 = x * cy - zc * sy
-      const z1 = x * sy + zc * cy
-      const pitch = BASE_PITCH + pitchOff
-      const cx = Math.cos(pitch), sx = Math.sin(pitch)
-      const y2 = y * cx - z1 * sx
-      const z2 = y * sx + z1 * cx
-      const s = FOV / (FOV + z2 + CAM)
-      return { x: W * 0.5 + x1 * s * REF_W * 0.55, y: H * 0.55 - y2 * s * H * 0.85, s }
-    }
-
-    function draw(time: number) {
-      ctx.clearRect(0, 0, W, H)
-      for (let r = ROWS - 1; r >= 0; r--) {
-        const z = (r / (ROWS - 1)) * SPAN_Z
-        const isCopper = r % 6 === 3
-        const rgb = isCopper ? colors.copper : colors.accent
-        let first: { x: number; y: number; s: number } | null = null
-        ctx.beginPath()
-        for (let c = 0; c <= COLS; c++) {
-          const x = (c / COLS) * SPAN_X * 2 - SPAN_X
-          const p = project(x, elevation(x, z, time), z)
-          if (c === 0) { ctx.moveTo(p.x, p.y); first = p }
-          else ctx.lineTo(p.x, p.y)
-        }
-        const depth = first!.s
-        ctx.strokeStyle = rgba(rgb, (isCopper ? 0.30 : 0.38) * depth * depth)
-        ctx.lineWidth = 1.1 * depth
-        ctx.stroke()
-        ctx.fillStyle = rgba(rgb, 0.5 * depth * depth)
-        for (let d = 2; d < COLS; d += 4) {
-          const xd = (d / COLS) * SPAN_X * 2 - SPAN_X
-          const pd = project(xd, elevation(xd, z, time), z)
-          ctx.beginPath()
-          ctx.arc(pd.x, pd.y, 1.4 * pd.s, 0, Math.PI * 2)
-          ctx.fill()
-        }
-      }
-    }
-
-    function frame(ts: number) {
-      if (t0 === null) t0 = ts
-      yaw += (targetYaw - yaw) * 0.04
-      pitchOff += (targetPitch - pitchOff) * 0.04
-      draw((ts - t0) * 0.001)
-      raf = requestAnimationFrame(frame)
-    }
-
-    function start() {
-      if (raf === null && !reduceMotion) raf = requestAnimationFrame(frame)
-    }
-
-    function stop() {
-      if (raf !== null) { cancelAnimationFrame(raf); raf = null }
-    }
-
-    function resize() {
-      DPR = Math.min(window.devicePixelRatio || 1, 2)
-      const w0 = wrap!.clientWidth
-      REF_W = w0
-      H = wrap!.clientHeight
-      const marginX = w0 * OVERSCAN_X
-      W = w0 + marginX * 2
-      const spanScale = W / w0
-      SPAN_X = SPAN_X_BASE * spanScale
-      // Grow column count with sqrt(spanScale) rather than 1:1 — keeps the
-      // overscan margin from reading as sparser than the core without paying
-      // for a full linear density match (this runs every animation frame).
-      const baseCols = w0 < 640 ? 64 : 96
-      COLS = Math.round(baseCols * Math.sqrt(spanScale))
-      canvas!.style.left = `${-marginX}px`
-      canvas!.style.width = `${W}px`
-      canvas!.width = W * DPR
-      canvas!.height = H * DPR
-      ctx.setTransform(DPR, 0, 0, DPR, 0, 0)
-      // Re-anchor the horizontal mask fade to where it fell on the original
-      // (un-overscanned) box, so the vignette at the real hero edges is
-      // unchanged — see the .hero-canvas comment in home.css.
-      wrap!.style.setProperty('--hc-fade-in', `${marginX + w0 * 0.07}px`)
-      wrap!.style.setProperty('--hc-fade-out', `${marginX + w0 * 0.93}px`)
-      if (reduceMotion) draw(7.3)
-    }
-
-    const onResize = () => resize()
-    window.addEventListener('resize', onResize)
-
-    if (!reduceMotion) {
-      wrap.addEventListener('pointermove', (e: PointerEvent) => {
-        const rect = wrap.getBoundingClientRect()
-        targetYaw = ((e.clientX - rect.left) / rect.width - 0.5) * 0.14
-        targetPitch = ((e.clientY - rect.top) / rect.height - 0.5) * 0.07
-      })
-      wrap.addEventListener('pointerleave', () => {
-        targetYaw = 0
-        targetPitch = 0
-      })
-      document.addEventListener('visibilitychange', () => {
-        if (document.hidden) stop(); else start()
-      })
-    }
-
-    const observer = new MutationObserver(() => {
-      readColors()
-      if (reduceMotion) draw(7.3)
-    })
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-
-    readColors()
-    resize()
-    start()
-
-    return () => {
-      stop()
-      window.removeEventListener('resize', onResize)
-      observer.disconnect()
-    }
+  const onReady = useCallback(() => {
+    // .hero-canvas-gl fades in over 0.4s (home.css); retire the 2D loop after
+    setTimeout(() => setGlSettled(true), 450)
   }, [])
 
   return (
     <div ref={wrapRef} className="hero-wrap">
-      <canvas ref={canvasRef} className="hero-canvas" aria-hidden="true" />
+      {(!gl || !glSettled) && <HeroCanvas2D wrapRef={wrapRef} />}
+      {gl && (
+        <SceneBoundary onFail={onFail}>
+          <Suspense fallback={null}>
+            <HeroScene wrapRef={wrapRef} onReady={onReady} onFail={onFail} />
+          </Suspense>
+        </SceneBoundary>
+      )}
       {children}
     </div>
   )
