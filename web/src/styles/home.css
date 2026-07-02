@@ -5,11 +5,18 @@
    ════════════════════════════════════════════════════════════════ */
 
 /* ── Ambient background orbs ────────────────────────────────── */
+/* This lives inside .hub-pan (Home.tsx), so the hub-pan camera move (a
+   `transform`) makes it that element's containing block despite `fixed` —
+   the whole orb layer pans along with the page. No overflow:hidden: each
+   .orb is already oversized and offset well past its own edges by design,
+   and clipping this box to exactly the viewport cut that overscan off,
+   giving a hard edge once a pan (e.g. toward a bottom-row card) revealed the
+   area past the box's original bounds — see plan 26. body's own
+   `overflow-x: hidden` still guards against a horizontal scrollbar. */
 .orbs {
   position: fixed;
   inset: 0;
   z-index: -1;
-  overflow: hidden;
   pointer-events: none;
 }
 
@@ -122,15 +129,25 @@ body::after {
 
 .hero-canvas {
   position: absolute;
-  inset: 0;
-  width: 100%;
+  top: 0;
   height: 100%;
+  /* left/width are set inline by HeroCanvas.tsx (JS-computed horizontal
+     overscan, in px) so the terrain still covers the frame once the hub-pan
+     camera move (Home.tsx) shifts the whole page sideways toward a clicked
+     card — without it, the canvas's own edge enters view mid-pan and the
+     pattern visibly "ends". Only the horizontal axis is overscanned: the pan
+     never travels far enough vertically while the hero is still on screen to
+     expose a vertical edge, so top/height stay tied 1:1 to the hero box.
+     The horizontal mask fade positions come from the same JS pass (in px,
+     anchored to where the original 7%/93% stops fell) so the vignette at
+     the real hero edges is unchanged; regular percentages fall back for the
+     first paint before the effect runs. */
   pointer-events: none;
   -webkit-mask-image: linear-gradient(180deg, transparent 0, black 16%, black 84%, transparent),
-                      linear-gradient(90deg, transparent 0, black 7%, black 93%, transparent);
+                      linear-gradient(90deg, transparent 0, black var(--hc-fade-in, 7%), black var(--hc-fade-out, 93%), transparent);
   -webkit-mask-composite: source-in;
   mask-image: linear-gradient(180deg, transparent 0, black 16%, black 84%, transparent),
-              linear-gradient(90deg, transparent 0, black 7%, black 93%, transparent);
+              linear-gradient(90deg, transparent 0, black var(--hc-fade-in, 7%), black var(--hc-fade-out, 93%), transparent);
   mask-composite: intersect;
 }
 
