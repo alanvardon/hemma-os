@@ -5,11 +5,18 @@
    ════════════════════════════════════════════════════════════════ */
 
 /* ── Ambient background orbs ────────────────────────────────── */
+/* This lives inside .hub-pan (Home.tsx), so the hub-pan camera move (a
+   `transform`) makes it that element's containing block despite `fixed` —
+   the whole orb layer pans along with the page. No overflow:hidden: each
+   .orb is already oversized and offset well past its own edges by design,
+   and clipping this box to exactly the viewport cut that overscan off,
+   giving a hard edge once a pan (e.g. toward a bottom-row card) revealed the
+   area past the box's original bounds — see plan 26. body's own
+   `overflow-x: hidden` still guards against a horizontal scrollbar. */
 .orbs {
   position: fixed;
   inset: 0;
   z-index: -1;
-  overflow: hidden;
   pointer-events: none;
 }
 
