@@ -7,12 +7,18 @@
 
 let clearTimer: ReturnType<typeof setTimeout> | undefined
 let patched = false
+let vtActive = false
+const settledListeners = new Set<() => void>()
 
 function clearVtTag(): void {
   if (typeof document === 'undefined') return
   clearTimeout(clearTimer)
   delete document.documentElement.dataset.vtDir
   delete document.documentElement.dataset.vtTool
+  if (vtActive) {
+    vtActive = false
+    settledListeners.forEach((fn) => fn())
+  }
 }
 
 // Patch startViewTransition once so the direction tag is cleared the moment the
@@ -43,6 +49,7 @@ export function markVtTransition(toolPath: string, dir: 'forward' | 'back'): voi
   if (typeof document === 'undefined') return
   document.documentElement.dataset.vtDir = dir
   document.documentElement.dataset.vtTool = toolPath
+  vtActive = true
   ensurePatched()
   // Fallback for browsers without View Transitions / reduced-motion paths where
   // no VT (and thus no `.finished`) ever runs. Animations are already disabled in
@@ -55,6 +62,23 @@ export function markVtTransition(toolPath: string, dir: 'forward' | 'back'): voi
 /** Which tool path is currently whooshing, or null if none. */
 export function activeVtTool(): string | null {
   return typeof document === 'undefined' ? null : (document.documentElement.dataset.vtTool ?? null)
+}
+
+/** True while a whoosh is in flight — mirrors the same lifecycle as the
+ *  `data-vt-dir` tag (cleared one frame past the VT's `.finished`, or by the
+ *  2500ms fallback on paths with no real VT). Entrance figures (AnimatedNumber)
+ *  read this to hold off rolling until the transition has visually settled. */
+export function isVtActive(): boolean {
+  return vtActive
+}
+
+/** Subscribe to be notified once the in-flight whoosh settles. Fires at most
+ *  once per subscription; does nothing if no transition is active — callers
+ *  should check `isVtActive()` first and only subscribe when it's true.
+ *  Returns an unsubscribe function. */
+export function subscribeVtSettled(fn: () => void): () => void {
+  settledListeners.add(fn)
+  return () => settledListeners.delete(fn)
 }
 
 /** @deprecated Use markVtTransition instead. */
