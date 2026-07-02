@@ -21,15 +21,20 @@
 }
 
 /* Tool page root: claims the name AND ensures the snapshot is opaque and
-   full-height. The VT captures only the named element (not the body background
+   card-shaped. The VT captures only the named element (not the body background
    behind it), so without a solid background the snapshot would be see-through.
-   min-height forces a full-page miniature even when the content is short. Both
-   properties are only active during the transition (the class is added via
-   useToolPageActive) so the page's normal look is unchanged. */
+   min-height forces a full-page miniature even when the content is short;
+   max-height + overflow:hidden caps it at one viewport so long pages (Månadsavslut,
+   Bolånekoll) snapshot as a card-shaped box instead of their whole scrollable height
+   squished into the card slot. All properties are only active during the
+   transition (the class is added via useToolPageActive) so the page's normal
+   look/scroll is unchanged. */
 .vt-page {
   view-transition-name: tool-card;
   background: var(--paper);
   min-height: 100svh;
+  max-height: 100svh;
+  overflow: hidden;
 }
 
 /* Pan wrapper around the whole hub — the "camera". A WAAPI transform pans the
