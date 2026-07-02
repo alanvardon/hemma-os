@@ -13,13 +13,23 @@ export default function HeroCanvas({ children }: { children: React.ReactNode }) 
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
     const ROWS = 26
-    const SPAN_X = 1.3
+    const SPAN_X_BASE = 1.3
     const SPAN_Z = 1.55
     const FOV = 1.6
     const CAM = 1.4
     const BASE_PITCH = -0.55
+    // The hub-pan camera move (Home.tsx) can shift the whole page sideways by
+    // roughly half the viewport width toward a clicked card. Overscan the
+    // canvas horizontally so the terrain still covers the frame once panned —
+    // fraction of the hero box's own (pre-overscan) width, added to each side.
+    const OVERSCAN_X = 0.4
 
     let W = 0, H = 0, DPR = 1, COLS = 96
+    let SPAN_X = SPAN_X_BASE
+    // Reference (pre-overscan) width — kept separate from the (wider) canvas
+    // width W so the projection's pixel-density stays constant into the
+    // overscan margin instead of the extra width "zooming" the whole scene.
+    let REF_W = 0
     let raf: number | null = null
     let t0: number | null = null
     let targetYaw = 0, targetPitch = 0, yaw = 0, pitchOff = 0
@@ -64,7 +74,7 @@ export default function HeroCanvas({ children }: { children: React.ReactNode }) 
       const y2 = y * cx - z1 * sx
       const z2 = y * sx + z1 * cx
       const s = FOV / (FOV + z2 + CAM)
-      return { x: W * 0.5 + x1 * s * W * 0.55, y: H * 0.55 - y2 * s * H * 0.85, s }
+      return { x: W * 0.5 + x1 * s * REF_W * 0.55, y: H * 0.55 - y2 * s * H * 0.85, s }
     }
 
     function draw(time: number) {
@@ -114,12 +124,28 @@ export default function HeroCanvas({ children }: { children: React.ReactNode }) 
 
     function resize() {
       DPR = Math.min(window.devicePixelRatio || 1, 2)
-      W = wrap!.clientWidth
+      const w0 = wrap!.clientWidth
+      REF_W = w0
       H = wrap!.clientHeight
-      COLS = W < 640 ? 64 : 96
+      const marginX = w0 * OVERSCAN_X
+      W = w0 + marginX * 2
+      const spanScale = W / w0
+      SPAN_X = SPAN_X_BASE * spanScale
+      // Grow column count with sqrt(spanScale) rather than 1:1 — keeps the
+      // overscan margin from reading as sparser than the core without paying
+      // for a full linear density match (this runs every animation frame).
+      const baseCols = w0 < 640 ? 64 : 96
+      COLS = Math.round(baseCols * Math.sqrt(spanScale))
+      canvas!.style.left = `${-marginX}px`
+      canvas!.style.width = `${W}px`
       canvas!.width = W * DPR
       canvas!.height = H * DPR
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0)
+      // Re-anchor the horizontal mask fade to where it fell on the original
+      // (un-overscanned) box, so the vignette at the real hero edges is
+      // unchanged — see the .hero-canvas comment in home.css.
+      wrap!.style.setProperty('--hc-fade-in', `${marginX + w0 * 0.07}px`)
+      wrap!.style.setProperty('--hc-fade-out', `${marginX + w0 * 0.93}px`)
       if (reduceMotion) draw(7.3)
     }
 
