@@ -114,10 +114,17 @@ const FRAG = /* glsl */ `
   }
 `
 
-/* Aurora curtains (dark theme only) — a quad on the horizon behind the
-   terrain, additive-blended. Three fbm layers drifting at different speeds,
-   shaped by a vertical envelope (brightest just above the horizon) and
-   faint vertical rays. uIntensity caps at 0.35 (lib/heroScene paletteFor). */
+/* Aurora curtains — a quad on the horizon behind the terrain, always on:
+   additive glow in dark theme, a normal-blended pigment veil on the light
+   paper (additive washes out to white there). Built for realism:
+   - large-scale DOMAIN WARP sways the whole curtain like folding drapery
+   - a sharp, undulating LOWER EDGE with a long diffuse fade upward (real
+     aurora physics: the bright oxygen line sits at the curtain's base)
+   - fine vertical RAYS that shear with the sway and flicker
+   - brightness PULSES travelling along the curtain
+   - an altitude COLOR RAMP: emission green at the base rising through the
+     theme copper into violet tops.
+   uIntensity is a hard opacity cap (lib/heroScene AURORA_MAX). */
 const AURORA_VERT = /* glsl */ `
   varying vec2 vUv;
   void main() {
@@ -150,19 +157,45 @@ const AURORA_FRAG = /* glsl */ `
   }
 
   void main() {
-    float glow = 0.0;
-    glow += fbm(vec2(vUv.x * 6.0 + uTime * 0.05, 0.0)) * 0.55;
-    glow += fbm(vec2(vUv.x * 11.0 - uTime * 0.035, 3.7)) * 0.3;
-    glow += fbm(vec2(vUv.x * 19.0 + uTime * 0.02, 8.1)) * 0.15;
-    // Contrast curve + gain: dense curtains with genuinely dark gaps between
-    // them; the min() below keeps uIntensity as a hard opacity cap.
-    glow = smoothstep(0.22, 0.78, glow) * 1.35;
-    // Vertical envelope normalised to peak ~1: banks just above the horizon,
-    // trailing off toward the top of the sky
-    float envelope = smoothstep(0.02, 0.22, vUv.y) * smoothstep(1.0, 0.45, vUv.y);
-    float rays = 0.75 + 0.25 * sin(vUv.x * 90.0 + fbm(vec2(vUv.x * 7.0, uTime * 0.1)) * 6.0);
-    vec3 col = mix(uColor1, uColor2, fbm(vec2(vUv.x * 3.0 - uTime * 0.02, 5.0)) * 0.6);
-    float a = min(glow * rays, 1.0) * envelope * uIntensity;
+    float t = uTime;
+
+    // Folding drapery: two scales of domain warp displace where along the
+    // curtain each fragment samples — the whole sheet sways and creases.
+    float sway = fbm(vec2(vUv.x * 1.6 + t * 0.05, t * 0.035)) - 0.5;
+    float crease = fbm(vec2(vUv.x * 3.4 - t * 0.075, 7.3 + t * 0.025)) - 0.5;
+    float x = vUv.x + sway * 0.34 + crease * 0.12;
+
+    // Curtain density along the warped axis — bands with dark gaps.
+    float bands = 0.0;
+    bands += fbm(vec2(x * 5.0 + t * 0.11, 0.0)) * 0.55;
+    bands += fbm(vec2(x * 9.0 - t * 0.16, 3.7)) * 0.30;
+    bands += fbm(vec2(x * 17.0 + t * 0.06, 8.1)) * 0.15;
+    bands = smoothstep(0.22, 0.68, bands);
+
+    // Fine vertical rays, sheared by the warp, flickering over seconds.
+    float ray = noise(vec2(x * 64.0, t * 0.6));
+    ray = 0.55 + 0.45 * smoothstep(0.3, 0.75, ray);
+
+    // Brightness pulses travelling along the curtain.
+    float pulse = 0.72 + 0.28 * sin(x * 12.0 - t * 0.9 + fbm(vec2(x * 4.0, t * 0.2)) * 4.0);
+
+    // Altitude profile: a sharp lower edge that itself undulates with the
+    // sway, then a long exponential fade toward the top of the sky. The base
+    // sits clear of the terrain ridge so the curtains stand in open sky.
+    float base = 0.26 + sway * 0.15 + bands * 0.05;
+    float up = (vUv.y - base) / max(1.0 - base, 0.001);
+    float profile = smoothstep(-0.02, 0.06, up) * exp(-up * 1.9);
+
+    float curtain = bands * ray * pulse * profile;
+
+    // Altitude color ramp: vivid oxygen-emission green at the base (the
+    // theme accent pushed toward the real 557.7nm line) -> violet tops
+    // (high-altitude aurora reds/purples, warmed slightly by theme copper).
+    vec3 green = mix(uColor1 * 1.25, vec3(0.24, 0.95, 0.52), 0.5);
+    vec3 violet = mix(uColor2, vec3(0.5, 0.3, 0.82), 0.72);
+    vec3 col = mix(green, violet, clamp(up * 1.4, 0.0, 1.0));
+
+    float a = min(curtain * 1.7, 1.0) * uIntensity;
     gl_FragColor = vec4(col, a);
   }
 `
@@ -185,6 +218,8 @@ interface SharedState {
   scroll: number
   /* lerp targets for the time-of-day light (plan 28c) */
   palette: ScenePalette
+  /* the aurora flips blending per theme: additive glow (dark) vs pigment veil (light) */
+  isDark: boolean
 }
 
 function currentTheme(): 'light' | 'dark' {
@@ -192,7 +227,9 @@ function currentTheme(): 'light' | 'dark' {
 }
 
 function readPalette(shared: SharedState) {
-  shared.palette = paletteFor(timeBucket(new Date().getHours()), currentTheme())
+  const theme = currentTheme()
+  shared.isDark = theme === 'dark'
+  shared.palette = paletteFor(timeBucket(new Date().getHours()), theme)
 }
 
 function readTargetColors(shared: SharedState) {
@@ -418,13 +455,17 @@ function Aurora({ shared }: { shared: SharedState }) {
   useFrame((_, delta) => {
     time.current += Math.min(delta, 0.05)
     uniforms.uTime.value = time.current
-    // Slow atmospheric fade (~2s) between themes/buckets; hidden entirely in
-    // light theme (target 0) so the quad costs nothing there.
+    // Slow atmospheric fade (~2s) between themes/buckets.
     intensity.current += (shared.palette.aurora - intensity.current) * (1 - Math.exp(-delta * 1.6))
     uniforms.uIntensity.value = intensity.current
     const k = 1 - Math.exp(-delta * 8)
     uniforms.uColor1.value.lerp(shared.accentTarget, k)
     uniforms.uColor2.value.lerp(shared.copperTarget, k)
+    // Additive light against the dark paper; on the light paper additive
+    // clamps to white and vanishes, so the veil switches to normal blending
+    // (pigment). Blending is pipeline state — no shader recompile.
+    const want = shared.isDark ? THREE.AdditiveBlending : THREE.NormalBlending
+    if (material.blending !== want) material.blending = want
     if (mesh.current) mesh.current.visible = intensity.current > 0.004
   })
 
@@ -475,6 +516,7 @@ export default function HeroScene({ wrapRef, onReady, onFail }: {
       lastMoveAt: -Infinity,
       scroll: 0,
       palette: paletteFor(timeBucket(new Date().getHours()), currentTheme()),
+      isDark: currentTheme() === 'dark',
     }
     // Read colors before the first render so frame one is on-theme, not a lerp from black
     readTargetColors(sharedRef.current)

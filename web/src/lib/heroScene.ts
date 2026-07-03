@@ -121,8 +121,10 @@ export function greetingFor(bucket: TimeBucket): string {
    - alpha is the base dot opacity (dag brightest, natt dimmest)
    - copperWeight warms every dot toward copper (dusk light on the peaks)
    - dotScale scales point size (natt reads sparser)
-   - aurora is the curtain intensity — dark theme only, capped at 0.35,
-     kväll/natt pushed above a dark afternoon */
+   - aurora is the curtain intensity — always on, in BOTH themes: an additive
+     glow against the dark paper, a pigment veil (normal blending) on the
+     light paper. Dark burns brighter than light, night brighter than noon,
+     hard-capped at AURORA_MAX. */
 export interface ScenePalette {
   fogScale: number
   alpha: number
@@ -131,18 +133,24 @@ export interface ScenePalette {
   aurora: number
 }
 
-const AURORA_MAX = 0.35
+export const AURORA_MAX = 0.58
 
-const PALETTES: Record<TimeBucket, ScenePalette> = {
-  morgon: { fogScale: 1.25, alpha: 0.6, copperWeight: 0.06, dotScale: 1, aurora: 0.2 },
-  dag: { fogScale: 0.95, alpha: 0.72, copperWeight: 0, dotScale: 1, aurora: 0.16 },
-  kvall: { fogScale: 1.05, alpha: 0.68, copperWeight: 0.32, dotScale: 1, aurora: 0.3 },
-  natt: { fogScale: 1.15, alpha: 0.55, copperWeight: 0.1, dotScale: 0.88, aurora: AURORA_MAX },
+const PALETTES: Record<TimeBucket, Omit<ScenePalette, 'aurora'>> = {
+  morgon: { fogScale: 1.25, alpha: 0.6, copperWeight: 0.06, dotScale: 1 },
+  dag: { fogScale: 0.95, alpha: 0.72, copperWeight: 0, dotScale: 1 },
+  kvall: { fogScale: 1.05, alpha: 0.68, copperWeight: 0.32, dotScale: 1 },
+  natt: { fogScale: 1.15, alpha: 0.55, copperWeight: 0.1, dotScale: 0.88 },
+}
+
+const AURORA: Record<TimeBucket, { light: number; dark: number }> = {
+  morgon: { light: 0.22, dark: 0.4 },
+  dag: { light: 0.18, dark: 0.32 },
+  kvall: { light: 0.3, dark: 0.5 },
+  natt: { light: 0.38, dark: AURORA_MAX },
 }
 
 export function paletteFor(bucket: TimeBucket, theme: 'light' | 'dark'): ScenePalette {
-  const p = PALETTES[bucket]
-  return { ...p, aurora: theme === 'dark' ? Math.min(p.aurora, AURORA_MAX) : 0 }
+  return { ...PALETTES[bucket], aurora: Math.min(AURORA[bucket][theme], AURORA_MAX) }
 }
 
 /* Target strength from pointer recency: full while the pointer is actively

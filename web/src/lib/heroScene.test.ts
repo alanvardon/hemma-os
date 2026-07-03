@@ -12,6 +12,7 @@ import {
   timeBucket,
   greetingFor,
   paletteFor,
+  AURORA_MAX,
 } from './heroScene'
 
 describe('overscanGeometry', () => {
@@ -169,18 +170,24 @@ describe('greetingFor', () => {
 describe('paletteFor', () => {
   const buckets = ['natt', 'morgon', 'dag', 'kvall'] as const
 
-  it('never shows the aurora in light theme', () => {
-    for (const b of buckets) expect(paletteFor(b, 'light').aurora).toBe(0)
+  it('always shows the aurora, in both themes, hard-capped at AURORA_MAX', () => {
+    for (const b of buckets) {
+      for (const t of ['light', 'dark'] as const) {
+        const a = paletteFor(b, t).aurora
+        expect(a).toBeGreaterThan(0)
+        expect(a).toBeLessThanOrEqual(AURORA_MAX)
+      }
+    }
   })
 
-  it('shows the aurora in dark theme, capped at 0.35, night strongest', () => {
+  it('burns brighter in dark than light, and night brightest of all', () => {
     for (const b of buckets) {
-      const a = paletteFor(b, 'dark').aurora
-      expect(a).toBeGreaterThan(0)
-      expect(a).toBeLessThanOrEqual(0.35)
+      expect(paletteFor(b, 'dark').aurora).toBeGreaterThan(paletteFor(b, 'light').aurora)
     }
-    expect(paletteFor('natt', 'dark').aurora).toBeGreaterThan(paletteFor('dag', 'dark').aurora)
-    expect(paletteFor('kvall', 'dark').aurora).toBeGreaterThan(paletteFor('dag', 'dark').aurora)
+    for (const t of ['light', 'dark'] as const) {
+      expect(paletteFor('natt', t).aurora).toBeGreaterThan(paletteFor('dag', t).aurora)
+      expect(paletteFor('kvall', t).aurora).toBeGreaterThan(paletteFor('dag', t).aurora)
+    }
   })
 
   it('shapes the day: morning mistiest, midday clearest and brightest', () => {
