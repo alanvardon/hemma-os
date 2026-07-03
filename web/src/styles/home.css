@@ -382,15 +382,26 @@ body::after {
    grid. Pure CSS set dressing driven by per-theme tokens (--bleed-a/-b in
    tokens.css) — the scene stays the only owner of the canvas; nothing here
    reads GL state, and nothing animates (the orbs/grain/canvas already move). */
+/* Full-bleed to the viewport, not the 1200px .apps container — otherwise the
+   glow stops short of the screen edges on wide displays and reads as a stray
+   rectangle. body's overflow-x:hidden absorbs the 100vw scrollbar sliver. */
 .apps::before {
   content: '';
   position: absolute;
-  inset: -140px -10% 35%;
+  top: -140px;
+  bottom: 35%;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
   z-index: -1;
   pointer-events: none;
   background:
     radial-gradient(560px 300px at 18% 0%, var(--bleed-a), transparent 70%),
     radial-gradient(640px 320px at 82% 4%, var(--bleed-b), transparent 70%);
+  /* The radials peak at the box's top edge, so without this the clip reads as
+     a hard horizontal line. Fade the top ~240px in so the veil arrives softly. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 240px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 240px);
 }
 
 /* Dark-mode card lift: --paper-card in dark is nearly the page background, so
@@ -574,6 +585,17 @@ a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
 /* ── Living-bento stats (plan 30) ───────────────────────────── */
 /* Wide card = content column + right-aligned stat column. */
 .app-card.wide { flex-direction: row; align-items: stretch; gap: 1.25rem; }
+
+/* The head lives inside the content column, so on a wide card its
+   space-between would strand the Live chip mid-card, just left of the stat
+   block. Pin it to the card's true top-right corner instead (the stat column
+   is bottom-aligned, so there's no collision). */
+.app-card.wide .chip-live {
+  position: absolute;
+  top: 1.5rem;
+  right: 1.5rem;
+  z-index: 1;
+}
 
 .app-card-main {
   display: flex;
