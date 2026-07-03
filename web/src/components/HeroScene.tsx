@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame } from '@react-three/fiber'
-import { overscanGeometry, parseHexColor, isCopperRow, terrainGrid } from '../lib/heroScene'
+import {
+  overscanGeometry,
+  parseHexColor,
+  isCopperRow,
+  terrainGrid,
+  scrollProgress,
+  dollyFor,
+  stepRipple,
+  rippleTarget,
+} from '../lib/heroScene'
+import { isVtActive } from '../lib/viewTransition'
 
 /* WebGL hero terrain (plan 28a) — the same landscape motif as HeroCanvas2D,
    rebuilt as a GPU points field with depth fog. This file is the ONLY module
@@ -21,12 +31,21 @@ const ELEV_Z = 1.55
 const WORLD_X_BASE = 1.78
 const WORLD_Z = 2.2
 const HEIGHT = 0.62
+// Terrain group and camera rest pose — the scroll dolly and the pointer→plane
+// mapping both need these, so they live beside the JSX that uses them.
+const GROUP_Y = -0.12
+const GROUP_Z = -1.35
+const CAM_Y = 0.55
+const CAM_PITCH = -0.35
 
 const VERT = /* glsl */ `
   uniform float uTime;
   uniform float uSpanX;
   uniform float uElevX;
   uniform float uPointScale;
+  uniform float uFogScale;
+  // xy: ripple centre in grid coords (x −1..1, z 0..1), z: strength 0..1
+  uniform vec3 uRipple;
   attribute float aCopper;
   varying float vCopper;
   varying float vFog;
@@ -49,6 +68,12 @@ const VERT = /* glsl */ `
     float ex = position.x * uElevX;
     float ez = position.z * ${ELEV_Z};
     float h = elevation(ex, ez, uTime);
+    // Pointer ripple: a gaussian swell around the cursor's footprint on the
+    // plane, measured in world units so it stays circular despite the grid's
+    // anisotropy. Radius ≈ 15% of the terrain width; height ≈ wave amplitude.
+    float rdx = (position.x - uRipple.x) * uSpanX;
+    float rdz = (position.z - uRipple.y) * ${WORLD_Z};
+    h += uRipple.z * 0.3 * exp(-(rdx * rdx + rdz * rdz) / 0.45);
     vec3 world = vec3(
       position.x * uSpanX,
       h * ${HEIGHT},
@@ -60,7 +85,7 @@ const VERT = /* glsl */ `
     gl_PointSize = clamp(uPointScale / dist, 0.75, 6.5);
     // Depth fade echoing the 2D depth² alpha: far rows dissolve toward the
     // paper, but never fully vanish (the 2D far rows sit ~0.28).
-    vFog = mix(0.3, 1.0, smoothstep(3.6, 0.8, dist));
+    vFog = mix(0.3, 1.0, smoothstep(3.6, 0.8, dist * uFogScale));
     vCopper = aCopper;
   }
 `
@@ -92,6 +117,13 @@ interface SharedState {
   copperTarget: THREE.Color
   spanScale: number
   ready: boolean
+  /* pointer position in the overscanned canvas's NDC, for the ripple raycast */
+  ndcX: number
+  ndcY: number
+  /* performance.now() of the last pointermove; -Infinity once the pointer leaves */
+  lastMoveAt: number
+  /* 0–1 progress of the hero scrolling off toward the Tools grid */
+  scroll: number
 }
 
 function readTargetColors(shared: SharedState) {
@@ -111,6 +143,17 @@ function Terrain({ shared, cols, onFirstFrame }: {
   const group = useRef<THREE.Group>(null)
   const time = useRef(0)
   const rot = useRef({ yaw: 0, pitch: 0 })
+  const rippleStrength = useRef(0)
+  const scrollCur = useRef(0)
+  // Reused per-frame objects for the pointer→terrain-plane mapping (the
+  // terrain's base plane sits at world y = GROUP_Y; small parallax rotations
+  // are ignored — the ripple is a soft gaussian, exactness buys nothing).
+  const pick = useRef({
+    raycaster: new THREE.Raycaster(),
+    plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -GROUP_Y),
+    ndc: new THREE.Vector2(),
+    hit: new THREE.Vector3(),
+  }).current
 
   const rows = 44
   const geometry = useMemo(() => {
@@ -146,6 +189,8 @@ function Terrain({ shared, cols, onFirstFrame }: {
     uSpanX: { value: number }
     uElevX: { value: number }
     uPointScale: { value: number }
+    uFogScale: { value: number }
+    uRipple: { value: THREE.Vector3 }
     uAccent: { value: THREE.Color }
     uCopper: { value: THREE.Color }
   } | null>(null)
@@ -155,13 +200,15 @@ function Terrain({ shared, cols, onFirstFrame }: {
       uSpanX: { value: WORLD_X_BASE * shared.spanScale },
       uElevX: { value: ELEV_X_BASE * shared.spanScale },
       uPointScale: { value: 4.6 },
+      uFogScale: { value: 1 },
+      uRipple: { value: new THREE.Vector3(0, 0.5, 0) },
       uAccent: { value: shared.accentTarget.clone() },
       uCopper: { value: shared.copperTarget.clone() },
     }
   }
   const uniforms = uniformsRef.current
 
-  useFrame(({ gl, size }, delta) => {
+  useFrame(({ gl, size, camera }, delta) => {
     // Clamp so a tab-restore doesn't jump the waves. The 1.35 factor restores
     // the rolling feel of the 2D canvas: dotted rows carry far less contrast
     // per crest than its solid strokes did, so the same wave speeds read
@@ -173,13 +220,41 @@ function Terrain({ shared, cols, onFirstFrame }: {
     // Dot size tracks rendered height like the 2D dots tracked H
     uniforms.uPointScale.value = 4.6 * (size.height / 520) * gl.getPixelRatio()
 
+    // While a View Transition is running, everything eases to neutral so the
+    // frozen snapshot the whoosh grabs is a clean, untilted terrain.
+    const vtActive = isVtActive()
+
     const r = rot.current
-    r.yaw += (shared.targetYaw - r.yaw) * 0.04
-    r.pitch += (shared.targetPitch - r.pitch) * 0.04
+    r.yaw += ((vtActive ? 0 : shared.targetYaw) - r.yaw) * 0.04
+    r.pitch += ((vtActive ? 0 : shared.targetPitch) - r.pitch) * 0.04
     if (group.current) {
       group.current.rotation.y = r.yaw
       group.current.rotation.x = r.pitch
     }
+
+    // Pointer ripple: spring the strength toward full while the pointer is
+    // actively moving, decay once it rests/leaves; the centre keeps tracking
+    // the cursor's footprint on the terrain plane while there's any strength
+    // left, so a fading swell doesn't jump.
+    const msSinceMove = performance.now() - shared.lastMoveAt
+    const target = vtActive ? 0 : rippleTarget(msSinceMove)
+    rippleStrength.current = stepRipple(rippleStrength.current, target, delta)
+    if (rippleStrength.current > 0.001 && Number.isFinite(shared.lastMoveAt)) {
+      pick.ndc.set(shared.ndcX, shared.ndcY)
+      pick.raycaster.setFromCamera(pick.ndc, camera)
+      if (pick.raycaster.ray.intersectPlane(pick.plane, pick.hit)) {
+        uniforms.uRipple.value.x = pick.hit.x / uniforms.uSpanX.value
+        uniforms.uRipple.value.y = 0.5 - (pick.hit.z - GROUP_Z) / WORLD_Z
+      }
+    }
+    uniforms.uRipple.value.z = rippleStrength.current
+
+    // Scroll dolly: descend past the ridge as the Tools grid takes over.
+    scrollCur.current += (shared.scroll - scrollCur.current) * (1 - Math.exp(-delta * 6))
+    const dolly = dollyFor(scrollCur.current)
+    camera.position.y = CAM_Y + dolly.yOffset
+    camera.rotation.x = CAM_PITCH + dolly.pitchOffset
+    uniforms.uFogScale.value = dolly.fogScale
 
     // Ease theme flips (~600ms) instead of snapping
     const k = 1 - Math.exp(-delta * 8)
@@ -193,7 +268,7 @@ function Terrain({ shared, cols, onFirstFrame }: {
   })
 
   return (
-    <group ref={group} position={[0, -0.12, -1.35]}>
+    <group ref={group} position={[0, GROUP_Y, GROUP_Z]}>
       <points geometry={geometry} frustumCulled={false}>
         <shaderMaterial
           ref={material}
@@ -241,6 +316,10 @@ export default function HeroScene({ wrapRef, onReady, onFail }: {
       copperTarget: new THREE.Color(),
       spanScale: overscanGeometry(1200).spanScale,
       ready: false,
+      ndcX: 0,
+      ndcY: 0,
+      lastMoveAt: -Infinity,
+      scroll: 0,
     }
     // Read colors before the first render so frame one is on-theme, not a lerp from black
     readTargetColors(sharedRef.current)
@@ -251,11 +330,17 @@ export default function HeroScene({ wrapRef, onReady, onFail }: {
     const wrap = wrapRef.current
     if (!wrap) return
 
+    // Overscan margin in px, shared between measure() and the pointer→NDC
+    // math (the canvas is wider than the wrap, so NDC must be computed
+    // against the overscanned box, not the hero box).
+    let marginX = 0
+
     const measure = () => {
       const w0 = wrap.clientWidth
       if (w0 === 0) return
       const geo = overscanGeometry(w0)
       shared.spanScale = geo.spanScale
+      marginX = geo.marginX
       setLayout(geo)
       setCols(terrainGrid(w0, geo.spanScale).cols)
       // Same values the 2D layer writes — both anchor the mask vignette to
@@ -269,15 +354,28 @@ export default function HeroScene({ wrapRef, onReady, onFail }: {
 
     const onPointerMove = (e: PointerEvent) => {
       const rect = wrap.getBoundingClientRect()
-      shared.targetYaw = ((e.clientX - rect.left) / rect.width - 0.5) * 0.14
-      shared.targetPitch = ((e.clientY - rect.top) / rect.height - 0.5) * 0.07
+      // Half the 28a parallax — the ripple is the star now (plan 28b).
+      shared.targetYaw = ((e.clientX - rect.left) / rect.width - 0.5) * 0.07
+      shared.targetPitch = ((e.clientY - rect.top) / rect.height - 0.5) * 0.035
+      const canvasW = rect.width + 2 * marginX
+      shared.ndcX = ((e.clientX - rect.left + marginX) / canvasW) * 2 - 1
+      shared.ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1)
+      shared.lastMoveAt = performance.now()
     }
     const onPointerLeave = () => {
       shared.targetYaw = 0
       shared.targetPitch = 0
+      shared.lastMoveAt = -Infinity
     }
     wrap.addEventListener('pointermove', onPointerMove)
     wrap.addEventListener('pointerleave', onPointerLeave)
+
+    // Scroll dolly input — raw progress; the frame loop smooths it.
+    const onScroll = () => {
+      shared.scroll = scrollProgress(window.scrollY, wrap.clientHeight)
+    }
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
 
     // Pause the render loop while the tab is hidden OR the hero is scrolled
     // below the fold — the hub must stay cheap while idle. The last presented
@@ -301,6 +399,7 @@ export default function HeroScene({ wrapRef, onReady, onFail }: {
       mo.disconnect()
       wrap.removeEventListener('pointermove', onPointerMove)
       wrap.removeEventListener('pointerleave', onPointerLeave)
+      window.removeEventListener('scroll', onScroll)
       document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [wrapRef, shared])
@@ -312,7 +411,7 @@ export default function HeroScene({ wrapRef, onReady, onFail }: {
       frameloop={frameloop}
       dpr={[1, 2]}
       gl={{ antialias: false, alpha: true, powerPreference: 'low-power' }}
-      camera={{ fov: 55, near: 0.05, far: 10, position: [0, 0.55, 0.6], rotation: [-0.35, 0, 0] }}
+      camera={{ fov: 55, near: 0.05, far: 10, position: [0, CAM_Y, 0.6], rotation: [CAM_PITCH, 0, 0] }}
       onCreated={({ gl }) => {
         gl.setClearColor(0x000000, 0)
         gl.domElement.addEventListener('webglcontextlost', (e) => {
