@@ -78,6 +78,33 @@ body::after {
   border-bottom: 1px solid var(--rule);
 }
 
+/* Skip link — visually hidden until focused, styled like a .chip-live so
+   the a11y affordance still reads on-brand rather than a UA-default banner. */
+.skip-link {
+  position: fixed;
+  top: 0.9rem;
+  left: 0.9rem;
+  z-index: 100;
+  transform: translateY(-150%);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 8px 14px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-faint);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  text-decoration: none;
+  transition: transform 0.2s ease;
+}
+
+.skip-link:focus-visible {
+  outline: none;
+  transform: translateY(0);
+  box-shadow: var(--ring);
+}
+
 .wordmark {
   font-family: var(--font-display);
   font-size: 1.4rem;
@@ -90,6 +117,12 @@ body::after {
 }
 
 .wordmark .dot { color: var(--accent); }
+
+.wordmark:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: 6px;
+}
 
 .header-meta {
   display: flex;
@@ -122,6 +155,12 @@ body::after {
 .site-header .theme-toggle-btn:hover {
   background: var(--paper-warm);
   transform: rotate(15deg);
+}
+
+.site-header .theme-toggle-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--rule));
 }
 
 /* ── Hero ───────────────────────────────────────────────────── */
@@ -289,6 +328,16 @@ a.app-card:hover {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--rule));
 }
 
+/* Keyboard focus gets the same lift + accent border as pointer hover, plus
+   the --ring token — but never the pointer-only spotlight/sheen (those stay
+   scoped to :hover). */
+a.app-card:focus-visible {
+  outline: none;
+  transform: perspective(700px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg)) translateY(-5px);
+  box-shadow: var(--shadow-lg), var(--ring);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--rule));
+}
+
 /* pointer-tracked spotlight */
 a.app-card::before {
   content: '';
@@ -379,25 +428,6 @@ a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
   color: var(--accent);
   background: var(--accent-faint);
   border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
-}
-
-.chip-soon {
-  color: var(--ink-soft);
-  background: var(--paper-warm);
-  border: 1px solid var(--rule);
-}
-
-.app-card.soon {
-  border-style: dashed;
-  background: transparent;
-  box-shadow: none;
-  opacity: 0.78;
-}
-
-.app-card.soon .app-icon {
-  background: var(--paper-warm);
-  border-color: var(--rule);
-  color: var(--ink-soft);
 }
 
 /* ── Footer ─────────────────────────────────────────────────── */

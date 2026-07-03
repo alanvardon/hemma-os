@@ -459,7 +459,10 @@ input::placeholder { color: var(--ink-faint); }
 }
 
 @media (max-width: 900px) {
-  html, body { overflow: auto; height: auto; }
+  /* html/body scroll-lock release for calc-layout routes already lives,
+     properly scoped, in global.css (`html.calc-layout, html.calc-layout
+     body`) — an unscoped duplicate here was overriding `html`'s
+     `overflow-x: clip` (see global.css) on every route, not just these. */
   body { background: var(--paper); }
   .layout { grid-template-columns: 1fr; flex: none; height: auto; min-height: auto; }
   .inputs-col { overflow-y: visible; height: auto; padding: 1.25rem 1rem 0.5rem; }

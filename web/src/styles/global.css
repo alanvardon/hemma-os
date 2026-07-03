@@ -8,7 +8,10 @@
 /* Default: page scrolls normally (hub, future scrollable routes).
    The .calc-layout class is toggled onto <html> by the Bostadskalkyl route to
    lock the viewport and let each column scroll independently. */
-html { min-height: 100%; }
+/* clip (not hidden) — cannot create a scroll container, so it can't eat
+   scroll gestures or break position:sticky; guards the overscanned hero
+   canvas (see home.css .hero-canvas) at the viewport level. */
+html { min-height: 100%; overflow-x: clip; }
 html.calc-layout, html.calc-layout body { height: 100%; overflow: hidden; }
 
 body {

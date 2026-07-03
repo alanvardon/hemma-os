@@ -131,6 +131,8 @@ export default function Home() {
         the bottom — the pan translates downward and freezes the bar mid-screen
         via fill:forwards). Kept as a sibling, the header stays pinned chrome and
         is simply covered by the growing dashboard at any scroll position. */}
+    <a className="skip-link" href="#tools">Skip to tools</a>
+
     <header className="site-header">
       <a className="wordmark" href="#/">Hemma<span className="dot">·</span>OS</a>
       <div className="header-meta">
@@ -170,7 +172,7 @@ export default function Home() {
         </section>
       </HeroCanvas>
 
-      <main className="apps">
+      <main className="apps" id="tools">
         <p className="apps-label reveal reveal-3">Tools</p>
         <div className="app-grid">
 
@@ -307,49 +309,12 @@ export default function Home() {
             <span className="app-cta">Open <span className="arrow">→</span></span>
           </Link>
 
-          <div
-            className="app-card soon reveal reveal-10"
-            onPointerMove={onCardMove}
-            onPointerLeave={onCardLeave}
-          >
-            <div className="app-card-head">
-              <span className="app-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <rect x="3.5" y="5" width="17" height="16" rx="2.5"/>
-                  <path d="M3.5 10h17"/>
-                  <path d="M8 3v4M16 3v4"/>
-                </svg>
-              </span>
-              <span className="chip chip-soon">Soon</span>
-            </div>
-            <span className="app-name">Kalender</span>
-            <span className="app-desc">The family calendar — school, work, trips and everything in between.</span>
-          </div>
-
-          <div
-            className="app-card soon reveal reveal-11"
-            onPointerMove={onCardMove}
-            onPointerLeave={onCardLeave}
-          >
-            <div className="app-card-head">
-              <span className="app-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M7 3v7a2.5 2.5 0 0 0 5 0V3"/>
-                  <path d="M9.5 13v8"/>
-                  <path d="M17 3c-1.7 1.5-2.5 3.8-2.5 6 0 1.5 1 2.5 2.5 2.5V21"/>
-                </svg>
-              </span>
-              <span className="chip chip-soon">Soon</span>
-            </div>
-            <span className="app-name">Matplan</span>
-            <span className="app-desc">Weekly meal planning and the shared shopping list that writes itself.</span>
-          </div>
-
         </div>
       </main>
 
       <footer className="site-footer">
         <span className="footer-badge"><span className="pulse" />Local-first · Supabase-ready</span>
+        <span className="footer-soon">Kommer snart: Kalender · Matplan</span>
         <span>Hemma·OS · built by the Vardon family</span>
       </footer>
     </div>
