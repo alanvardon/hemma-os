@@ -32,13 +32,16 @@ const VERT = /* glsl */ `
   varying float vFog;
 
   // Port of HeroCanvas2D's elevation(), plus one ridged octave for relief
-  // the 2D strokes could only hint at.
+  // the 2D strokes could only hint at. The ridge is the dominant visual
+  // feature, so it must drift at a clearly perceptible rate — at its original
+  // t*0.12 it crawled and the whole scene read as frozen even though the four
+  // wave octaves were moving underneath it.
   float elevation(float x, float z, float t) {
-    return 0.16 * sin(x * 2.1 + t * 0.55)
+    return 0.17 * sin(x * 2.1 + t * 0.55)
          + 0.11 * sin(x * 3.7 - z * 2.3 + t * 0.35)
          + 0.07 * sin((x + z) * 5.3 + t * 0.7)
          + 0.05 * sin(z * 4.1 - t * 0.45)
-         + 0.08 * (1.0 - abs(sin(x * 1.15 - z * 1.7 - t * 0.12)));
+         + 0.06 * (1.0 - abs(sin(x * 1.15 - z * 1.7 - t * 0.34)));
   }
 
   void main() {
@@ -159,8 +162,11 @@ function Terrain({ shared, cols, onFirstFrame }: {
   const uniforms = uniformsRef.current
 
   useFrame(({ gl, size }, delta) => {
-    // Clamp so a tab-restore doesn't jump the waves
-    time.current += Math.min(delta, 0.05)
+    // Clamp so a tab-restore doesn't jump the waves. The 1.35 factor restores
+    // the rolling feel of the 2D canvas: dotted rows carry far less contrast
+    // per crest than its solid strokes did, so the same wave speeds read
+    // noticeably stiller here.
+    time.current += Math.min(delta, 0.05) * 1.35
     uniforms.uTime.value = time.current
     uniforms.uSpanX.value = WORLD_X_BASE * shared.spanScale
     uniforms.uElevX.value = ELEV_X_BASE * shared.spanScale
