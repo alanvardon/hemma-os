@@ -243,6 +243,24 @@ body::after {
   color: var(--accent);
 }
 
+/* Kinetic entrance (plan 32): each phrase is its own block line so it can
+   mask-reveal independently, staggered — the h1 upgrades from the shared
+   .reveal fade to this dedicated mechanism (greeting/sub keep .reveal). */
+.hero h1 .h1-line { display: block; }
+
+.h1-place { position: relative; display: inline-block; }
+
+.h1-place::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0.06em;
+  width: 100%;
+  height: 2px;
+  background: var(--accent);
+  transform-origin: left center;
+}
+
 .hero .sub {
   margin-top: 1.4rem;
   font-size: clamp(15px, 1.8vw, 17px);
@@ -320,11 +338,35 @@ body::after {
   .reveal-9  { animation-delay: 0.77s; }
   .reveal-10 { animation-delay: 0.86s; }
   .reveal-11 { animation-delay: 0.95s; }
+
+  /* h1 phrase-block mask reveal (plan 32) — same ease as .reveal, ~90ms stagger. */
+  .hero h1 .h1-line {
+    animation: h1-line-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+  .hero h1 .h1-line:nth-child(1) { animation-delay: 0.14s; }
+  .hero h1 .h1-line:nth-child(2) { animation-delay: 0.23s; }
+  .hero h1 .h1-line:nth-child(3) { animation-delay: 0.32s; }
+
+  /* Drawn underline: waits for the last line's mask to land. */
+  .h1-place::after {
+    animation: h1-underline-draw 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: 1.02s;
+  }
 }
 
 @keyframes rise-in-hub {
   from { opacity: 0; transform: translateY(22px); }
   to   { opacity: 1; transform: none; }
+}
+
+@keyframes h1-line-in {
+  from { clip-path: inset(0 0 100% 0); transform: translateY(14px); }
+  to   { clip-path: inset(0 0 0 0); transform: none; }
+}
+
+@keyframes h1-underline-draw {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
 }
 
 /* ── App grid ───────────────────────────────────────────────── */
@@ -466,6 +508,34 @@ a.app-card:hover::after { transform: translateX(110%); }
 }
 
 .app-icon svg { width: 23px; height: 23px; }
+
+/* Icon line-draw on hover (plan 32) — pathLength="1" on every path/rect (see
+   Home.tsx) normalizes the dash math regardless of geometry. Hover only:
+   never on :focus-visible (keyboard focus gets plan 29's ring, not a redraw)
+   and never under reduced-motion (icons stay fully drawn, no static dasharray
+   outside this query so there's nothing to reset). Draws ONCE per hover
+   entry — an animation restarts every time the :hover selector re-matches,
+   so re-entering the card replays it. */
+@media (prefers-reduced-motion: no-preference) {
+  a.app-card:hover .app-icon path,
+  a.app-card:hover .app-icon rect {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: icon-draw 0.55s ease forwards;
+  }
+  /* Multi-stroke icons draw in sequence — nth-child counts path+rect siblings
+     together, so the mixed rect+path icons (Hushållsbudget, Konsultkalkyl)
+     still stagger correctly. The first path's animation `from` matches the
+     static dashoffset above exactly, so there is no flash at hover start. */
+  a.app-card:hover .app-icon :nth-child(2) { animation-delay: 90ms; }
+  a.app-card:hover .app-icon :nth-child(3) { animation-delay: 180ms; }
+  a.app-card:hover .app-icon :nth-child(4) { animation-delay: 270ms; }
+}
+
+@keyframes icon-draw {
+  from { stroke-dashoffset: 1; }
+  to   { stroke-dashoffset: 0; }
+}
 
 .app-card-head {
   display: flex;
