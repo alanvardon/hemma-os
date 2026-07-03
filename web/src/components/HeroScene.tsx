@@ -10,6 +10,9 @@ import {
   dollyFor,
   stepRipple,
   rippleTarget,
+  timeBucket,
+  paletteFor,
+  type ScenePalette,
 } from '../lib/heroScene'
 import { isVtActive } from '../lib/viewTransition'
 
@@ -94,6 +97,8 @@ const FRAG = /* glsl */ `
   precision mediump float;
   uniform vec3 uAccent;
   uniform vec3 uCopper;
+  uniform float uAlpha;
+  uniform float uCopperWeight;
   varying float vCopper;
   varying float vFog;
 
@@ -102,8 +107,62 @@ const FRAG = /* glsl */ `
     float d2 = dot(c, c);
     if (d2 > 0.25) discard;
     float edge = smoothstep(0.25, 0.14, d2);
-    vec3 col = mix(uAccent, uCopper, vCopper);
-    float a = 0.68 * mix(1.0, 0.85, vCopper) * vFog * vFog * edge;
+    // uCopperWeight warms EVERY dot toward copper — dusk light on the peaks
+    vec3 col = mix(uAccent, uCopper, min(vCopper + uCopperWeight, 1.0));
+    float a = uAlpha * mix(1.0, 0.85, vCopper) * vFog * vFog * edge;
+    gl_FragColor = vec4(col, a);
+  }
+`
+
+/* Aurora curtains (dark theme only) — a quad on the horizon behind the
+   terrain, additive-blended. Three fbm layers drifting at different speeds,
+   shaped by a vertical envelope (brightest just above the horizon) and
+   faint vertical rays. uIntensity caps at 0.35 (lib/heroScene paletteFor). */
+const AURORA_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`
+
+const AURORA_FRAG = /* glsl */ `
+  precision mediump float;
+  varying vec2 vUv;
+  uniform float uTime;
+  uniform float uIntensity;
+  uniform vec3 uColor1;
+  uniform vec3 uColor2;
+
+  float hash(float n) { return fract(sin(n) * 43758.5453123); }
+  float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash(i.x + i.y * 57.0);
+    float b = hash(i.x + 1.0 + i.y * 57.0);
+    float c = hash(i.x + (i.y + 1.0) * 57.0);
+    float d = hash(i.x + 1.0 + (i.y + 1.0) * 57.0);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+  float fbm(vec2 p) {
+    return 0.5 * noise(p) + 0.25 * noise(p * 2.1) + 0.125 * noise(p * 4.3);
+  }
+
+  void main() {
+    float glow = 0.0;
+    glow += fbm(vec2(vUv.x * 6.0 + uTime * 0.05, 0.0)) * 0.55;
+    glow += fbm(vec2(vUv.x * 11.0 - uTime * 0.035, 3.7)) * 0.3;
+    glow += fbm(vec2(vUv.x * 19.0 + uTime * 0.02, 8.1)) * 0.15;
+    // Contrast curve + gain: dense curtains with genuinely dark gaps between
+    // them; the min() below keeps uIntensity as a hard opacity cap.
+    glow = smoothstep(0.22, 0.78, glow) * 1.35;
+    // Vertical envelope normalised to peak ~1: banks just above the horizon,
+    // trailing off toward the top of the sky
+    float envelope = smoothstep(0.02, 0.22, vUv.y) * smoothstep(1.0, 0.45, vUv.y);
+    float rays = 0.75 + 0.25 * sin(vUv.x * 90.0 + fbm(vec2(vUv.x * 7.0, uTime * 0.1)) * 6.0);
+    vec3 col = mix(uColor1, uColor2, fbm(vec2(vUv.x * 3.0 - uTime * 0.02, 5.0)) * 0.6);
+    float a = min(glow * rays, 1.0) * envelope * uIntensity;
     gl_FragColor = vec4(col, a);
   }
 `
@@ -124,6 +183,16 @@ interface SharedState {
   lastMoveAt: number
   /* 0–1 progress of the hero scrolling off toward the Tools grid */
   scroll: number
+  /* lerp targets for the time-of-day light (plan 28c) */
+  palette: ScenePalette
+}
+
+function currentTheme(): 'light' | 'dark' {
+  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+}
+
+function readPalette(shared: SharedState) {
+  shared.palette = paletteFor(timeBucket(new Date().getHours()), currentTheme())
 }
 
 function readTargetColors(shared: SharedState) {
@@ -144,6 +213,8 @@ function Terrain({ shared, cols, onFirstFrame }: {
   const rot = useRef({ yaw: 0, pitch: 0 })
   const rippleStrength = useRef(0)
   const scrollCur = useRef(0)
+  // Smoothed time-of-day light, easing toward shared.palette (~1s, atmospheric)
+  const paletteCur = useRef<ScenePalette>({ ...shared.palette })
   // Reused per-frame objects for the pointer→terrain-plane mapping (the
   // terrain's base plane sits at world y = GROUP_Y; small parallax rotations
   // are ignored — the ripple is a soft gaussian, exactness buys nothing).
@@ -190,6 +261,8 @@ function Terrain({ shared, cols, onFirstFrame }: {
     uPointScale: { value: number }
     uFogScale: { value: number }
     uRipple: { value: THREE.Vector3 }
+    uAlpha: { value: number }
+    uCopperWeight: { value: number }
     uAccent: { value: THREE.Color }
     uCopper: { value: THREE.Color }
   } | null>(null)
@@ -199,8 +272,10 @@ function Terrain({ shared, cols, onFirstFrame }: {
       uSpanX: { value: WORLD_X_BASE * shared.spanScale },
       uElevX: { value: ELEV_X_BASE * shared.spanScale },
       uPointScale: { value: 4.6 },
-      uFogScale: { value: 1 },
+      uFogScale: { value: shared.palette.fogScale },
       uRipple: { value: new THREE.Vector3(0, 0.5, 0) },
+      uAlpha: { value: shared.palette.alpha },
+      uCopperWeight: { value: shared.palette.copperWeight },
       uAccent: { value: shared.accentTarget.clone() },
       uCopper: { value: shared.copperTarget.clone() },
     }
@@ -234,8 +309,18 @@ function Terrain({ shared, cols, onFirstFrame }: {
     uniforms.uTime.value = time.current
     uniforms.uSpanX.value = WORLD_X_BASE * shared.spanScale
     uniforms.uElevX.value = ELEV_X_BASE * shared.spanScale
+    // Time-of-day light: ease toward the bucket×theme palette (~1s)
+    const pal = paletteCur.current
+    const kp = 1 - Math.exp(-delta * 3)
+    pal.fogScale += (shared.palette.fogScale - pal.fogScale) * kp
+    pal.alpha += (shared.palette.alpha - pal.alpha) * kp
+    pal.copperWeight += (shared.palette.copperWeight - pal.copperWeight) * kp
+    pal.dotScale += (shared.palette.dotScale - pal.dotScale) * kp
+    uniforms.uAlpha.value = pal.alpha
+    uniforms.uCopperWeight.value = pal.copperWeight
+
     // Dot size tracks rendered height like the 2D dots tracked H
-    uniforms.uPointScale.value = 4.6 * (size.height / 520) * gl.getPixelRatio()
+    uniforms.uPointScale.value = 4.6 * (size.height / 520) * gl.getPixelRatio() * pal.dotScale
 
     // While a View Transition is running, everything eases to neutral so the
     // frozen snapshot the whoosh grabs is a clean, untilted terrain.
@@ -267,11 +352,12 @@ function Terrain({ shared, cols, onFirstFrame }: {
     uniforms.uRipple.value.z = rippleStrength.current
 
     // Scroll dolly: descend past the ridge as the Tools grid takes over.
+    // Fog combines the dolly pull-in with the time-of-day mist.
     scrollCur.current += (shared.scroll - scrollCur.current) * (1 - Math.exp(-delta * 6))
     const dolly = dollyFor(scrollCur.current)
     camera.position.y = CAM_Y + dolly.yOffset
     camera.rotation.x = CAM_PITCH + dolly.pitchOffset
-    uniforms.uFogScale.value = dolly.fogScale
+    uniforms.uFogScale.value = dolly.fogScale * pal.fogScale
 
     // Ease theme flips (~600ms) instead of snapping
     const k = 1 - Math.exp(-delta * 8)
@@ -288,6 +374,67 @@ function Terrain({ shared, cols, onFirstFrame }: {
     <group ref={group} position={[0, GROUP_Y, GROUP_Z]}>
       <points geometry={geometry} material={sceneMaterial} frustumCulled={false} />
     </group>
+  )
+}
+
+function Aurora({ shared }: { shared: SharedState }) {
+  const mesh = useRef<THREE.Mesh>(null)
+  const time = useRef(0)
+  const intensity = useRef(0)
+
+  const uniformsRef = useRef<{
+    uTime: { value: number }
+    uIntensity: { value: number }
+    uColor1: { value: THREE.Color }
+    uColor2: { value: THREE.Color }
+  } | null>(null)
+  if (uniformsRef.current === null) {
+    uniformsRef.current = {
+      uTime: { value: 0 },
+      uIntensity: { value: 0 },
+      uColor1: { value: shared.accentTarget.clone() },
+      uColor2: { value: shared.copperTarget.clone() },
+    }
+  }
+  const uniforms = uniformsRef.current
+
+  // Imperative material — R3F v9 clones a `uniforms` prop (see the terrain
+  // material above / PR #202), so it must be constructed with our object.
+  const materialRef = useRef<THREE.ShaderMaterial | null>(null)
+  if (materialRef.current === null) {
+    materialRef.current = new THREE.ShaderMaterial({
+      vertexShader: AURORA_VERT,
+      fragmentShader: AURORA_FRAG,
+      uniforms,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    })
+  }
+  const material = materialRef.current
+  useEffect(() => () => material.dispose(), [material])
+
+  useFrame((_, delta) => {
+    time.current += Math.min(delta, 0.05)
+    uniforms.uTime.value = time.current
+    // Slow atmospheric fade (~2s) between themes/buckets; hidden entirely in
+    // light theme (target 0) so the quad costs nothing there.
+    intensity.current += (shared.palette.aurora - intensity.current) * (1 - Math.exp(-delta * 1.6))
+    uniforms.uIntensity.value = intensity.current
+    const k = 1 - Math.exp(-delta * 8)
+    uniforms.uColor1.value.lerp(shared.accentTarget, k)
+    uniforms.uColor2.value.lerp(shared.copperTarget, k)
+    if (mesh.current) mesh.current.visible = intensity.current > 0.004
+  })
+
+  return (
+    // Placed in the visible sky band: at z −3.4 the camera frames roughly
+    // y −3 … +1.2, and the terrain silhouette tops out near y 0.2 — so the
+    // quad spans −0.25 … 1.75 with its envelope peak just above the ridge.
+    <mesh ref={mesh} position={[0, 0.75, -3.4]} material={material} renderOrder={-1} frustumCulled={false} visible={false}>
+      <planeGeometry args={[26, 2.0]} />
+    </mesh>
   )
 }
 
@@ -327,6 +474,7 @@ export default function HeroScene({ wrapRef, onReady, onFail }: {
       ndcY: 0,
       lastMoveAt: -Infinity,
       scroll: 0,
+      palette: paletteFor(timeBucket(new Date().getHours()), currentTheme()),
     }
     // Read colors before the first render so frame one is on-theme, not a lerp from black
     readTargetColors(sharedRef.current)
@@ -397,13 +545,21 @@ export default function HeroScene({ wrapRef, onReady, onFail }: {
     const onVisibility = () => applyLoop()
     document.addEventListener('visibilitychange', onVisibility)
 
-    const mo = new MutationObserver(() => readTargetColors(shared))
+    const mo = new MutationObserver(() => {
+      readTargetColors(shared)
+      readPalette(shared)
+    })
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+
+    // The hour can roll into a new bucket mid-session — same cadence as the
+    // hub greeting's 30s re-render (Home.tsx), so text and light stay in step.
+    const paletteTimer = setInterval(() => readPalette(shared), 30_000)
 
     return () => {
       ro.disconnect()
       io.disconnect()
       mo.disconnect()
+      clearInterval(paletteTimer)
       wrap.removeEventListener('pointermove', onPointerMove)
       wrap.removeEventListener('pointerleave', onPointerLeave)
       window.removeEventListener('scroll', onScroll)
@@ -429,6 +585,7 @@ export default function HeroScene({ wrapRef, onReady, onFail }: {
         })
       }}
     >
+      <Aurora shared={shared} />
       <Terrain
         shared={shared}
         cols={cols}

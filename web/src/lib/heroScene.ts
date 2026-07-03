@@ -95,6 +95,56 @@ export function stepRipple(current: number, target: number, dt: number): number 
   return current + (target - current) * (1 - Math.exp(-dt * rate))
 }
 
+/* ── Plan 28c: time-of-day palette + aurora ──────────────────────── */
+
+/* The single source of truth for the hour buckets — the hub greeting
+   (Home.tsx) and the scene lighting both derive from this, so the text can
+   never say "God kväll" while the terrain lights for midday. */
+export type TimeBucket = 'natt' | 'morgon' | 'dag' | 'kvall'
+
+export function timeBucket(hour: number): TimeBucket {
+  return hour < 5 ? 'natt' : hour < 10 ? 'morgon' : hour < 18 ? 'dag' : 'kvall'
+}
+
+export function greetingFor(bucket: TimeBucket): string {
+  switch (bucket) {
+    case 'natt': return 'God natt'
+    case 'morgon': return 'God morgon'
+    case 'dag': return 'God dag'
+    case 'kvall': return 'God kväll'
+  }
+}
+
+/* Scene lighting per (bucket × theme). All values are lerp TARGETS for the
+   render loop:
+   - fogScale multiplies view distance in the fog falloff (>1 = mistier)
+   - alpha is the base dot opacity (dag brightest, natt dimmest)
+   - copperWeight warms every dot toward copper (dusk light on the peaks)
+   - dotScale scales point size (natt reads sparser)
+   - aurora is the curtain intensity — dark theme only, capped at 0.35,
+     kväll/natt pushed above a dark afternoon */
+export interface ScenePalette {
+  fogScale: number
+  alpha: number
+  copperWeight: number
+  dotScale: number
+  aurora: number
+}
+
+const AURORA_MAX = 0.35
+
+const PALETTES: Record<TimeBucket, ScenePalette> = {
+  morgon: { fogScale: 1.25, alpha: 0.6, copperWeight: 0.06, dotScale: 1, aurora: 0.2 },
+  dag: { fogScale: 0.95, alpha: 0.72, copperWeight: 0, dotScale: 1, aurora: 0.16 },
+  kvall: { fogScale: 1.05, alpha: 0.68, copperWeight: 0.32, dotScale: 1, aurora: 0.3 },
+  natt: { fogScale: 1.15, alpha: 0.55, copperWeight: 0.1, dotScale: 0.88, aurora: AURORA_MAX },
+}
+
+export function paletteFor(bucket: TimeBucket, theme: 'light' | 'dark'): ScenePalette {
+  const p = PALETTES[bucket]
+  return { ...p, aurora: theme === 'dark' ? Math.min(p.aurora, AURORA_MAX) : 0 }
+}
+
 /* Target strength from pointer recency: full while the pointer is actively
    moving, zero once it has been still for a beat (the decay above supplies
    the smoothing). */

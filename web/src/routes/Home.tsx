@@ -4,6 +4,7 @@ import HeroCanvas from '../components/HeroCanvas'
 import FlipClock from '../components/FlipClock'
 import { useTheme } from '../App'
 import { markVtTransition } from '../lib/viewTransition'
+import { timeBucket, greetingFor } from '../lib/heroScene'
 import { useToolCardActive } from '../lib/toolTransition'
 import { useStore } from '../store/useStore'
 
@@ -82,8 +83,9 @@ export default function Home() {
   useEffect(() => {
     function render() {
       const now = new Date()
-      const h = now.getHours()
-      const g = h < 5 ? 'God natt' : h < 10 ? 'God morgon' : h < 18 ? 'God dag' : 'God kväll'
+      // Shared bucket (lib/heroScene) — the WebGL scene lights itself from the
+      // same function, so greeting text and terrain light can never disagree.
+      const g = greetingFor(timeBucket(now.getHours()))
       setGreeting(g + ' —')
       setDateLine(now.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long' }))
     }
