@@ -5,6 +5,10 @@ import {
   parseHexColor,
   isCopperRow,
   terrainGrid,
+  scrollProgress,
+  dollyFor,
+  stepRipple,
+  rippleTarget,
 } from './heroScene'
 
 describe('overscanGeometry', () => {
@@ -72,5 +76,67 @@ describe('terrainGrid', () => {
   it('steps column density down below 900px', () => {
     expect(terrainGrid(899, 1).cols).toBe(200)
     expect(terrainGrid(900, 1).cols).toBe(280)
+  })
+})
+
+describe('scrollProgress', () => {
+  it('maps scrollY over the hero height, clamped to 0–1', () => {
+    expect(scrollProgress(0, 600)).toBe(0)
+    expect(scrollProgress(300, 600)).toBe(0.5)
+    expect(scrollProgress(600, 600)).toBe(1)
+    expect(scrollProgress(2400, 600)).toBe(1)
+    expect(scrollProgress(-40, 600)).toBe(0)
+  })
+
+  it('is 0 before layout settles (heroHeight 0)', () => {
+    expect(scrollProgress(500, 0)).toBe(0)
+  })
+})
+
+describe('dollyFor', () => {
+  it('is identity at rest', () => {
+    const d = dollyFor(0)
+    expect(d.yOffset).toBeCloseTo(0)
+    expect(d.pitchOffset).toBeCloseTo(0)
+    expect(d.fogScale).toBe(1)
+  })
+
+  it('descends, pitches down and pulls fog in at full scroll', () => {
+    const d = dollyFor(1)
+    expect(d.yOffset).toBeCloseTo(-0.0825)
+    expect(d.pitchOffset).toBeCloseTo(-0.1)
+    expect(d.fogScale).toBeCloseTo(1.3)
+  })
+})
+
+describe('stepRipple', () => {
+  it('springs up fast: near-full strength within ~a quarter second', () => {
+    let s = 0
+    for (let i = 0; i < 15; i++) s = stepRipple(s, 1, 1 / 60) // 0.25s at 60fps
+    expect(s).toBeGreaterThan(0.9)
+  })
+
+  it('decays slow: still visible at 0.5s, gone (<5%) by ~1.5s', () => {
+    let s = 1
+    for (let i = 0; i < 30; i++) s = stepRipple(s, 0, 1 / 60) // 0.5s
+    expect(s).toBeGreaterThan(0.25)
+    for (let i = 0; i < 60; i++) s = stepRipple(s, 0, 1 / 60) // → 1.5s
+    expect(s).toBeLessThan(0.05)
+  })
+
+  it('is framerate-safe: one 0.5s step lands near thirty 1/60 steps', () => {
+    let fine = 1
+    for (let i = 0; i < 30; i++) fine = stepRipple(fine, 0, 1 / 60)
+    const coarse = stepRipple(1, 0, 0.5)
+    expect(Math.abs(fine - coarse)).toBeLessThan(0.01)
+  })
+})
+
+describe('rippleTarget', () => {
+  it('is full while the pointer moved recently, zero after the threshold', () => {
+    expect(rippleTarget(0)).toBe(1)
+    expect(rippleTarget(249)).toBe(1)
+    expect(rippleTarget(250)).toBe(0)
+    expect(rippleTarget(5000)).toBe(0)
   })
 })

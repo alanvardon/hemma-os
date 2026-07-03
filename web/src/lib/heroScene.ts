@@ -62,3 +62,42 @@ export function terrainGrid(w0: number, spanScale: number): { rows: number; cols
   const baseCols = w0 < 900 ? 200 : 280
   return { rows: 44, cols: Math.round(baseCols * Math.sqrt(spanScale)) }
 }
+
+/* ── Plan 28b: scroll dolly + pointer ripple ─────────────────────── */
+
+/* How far the user has scrolled from the hero toward the Tools grid, 0–1.
+   The dolly maps this to a camera descent, so it must be well-defined even
+   before layout settles (heroHeight 0). */
+export function scrollProgress(scrollY: number, heroHeight: number): number {
+  if (heroHeight <= 0) return 0
+  return Math.min(1, Math.max(0, scrollY / heroHeight))
+}
+
+/* Camera/fog targets for a given scroll progress: descend ~15% of the camera
+   height, pitch down 0.1 rad, and pull the fog in 30% — descending past the
+   ridge, not fading a poster. */
+export function dollyFor(progress: number): {
+  yOffset: number
+  pitchOffset: number
+  fogScale: number
+} {
+  return {
+    yOffset: -0.0825 * progress,
+    pitchOffset: -0.1 * progress,
+    fogScale: 1 + 0.3 * progress,
+  }
+}
+
+/* The ripple strength springs up quickly while the pointer moves and decays
+   over ~1.5s once it stops — asymmetric exponential step, framerate-safe. */
+export function stepRipple(current: number, target: number, dt: number): number {
+  const rate = target > current ? 12 : 2.2
+  return current + (target - current) * (1 - Math.exp(-dt * rate))
+}
+
+/* Target strength from pointer recency: full while the pointer is actively
+   moving, zero once it has been still for a beat (the decay above supplies
+   the smoothing). */
+export function rippleTarget(msSinceMove: number): number {
+  return msSinceMove < 250 ? 1 : 0
+}
