@@ -420,7 +420,7 @@ function partBalAsOfMk(part: LoanPart, payments: Payment[], mk: string): number 
   ).reduce((s, p) => s + (Number(p.amount) || 0), 0)))
 }
 
-function balanceTimeline(parts: LoanPart[], payments: Payment[]) {
+export function balanceTimeline(parts: LoanPart[], payments: Payment[]) {
   const active = parts.filter(p => p && !p.archived)
   return mRange(active, payments).map(mk => ({
     month: mk, label: monthLabel(mk),

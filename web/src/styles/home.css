@@ -299,11 +299,19 @@ body::after {
   background: var(--rule);
 }
 
+/* Bento (plan 30): explicit spans instead of auto-fill — wide stat cards pin
+   their row starts, standard cards fill in. One shelf: wide ≠ taller. */
 .app-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(265px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1.1rem;
 }
+
+@media (max-width: 900px) {
+  .app-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.app-card.wide { grid-column: span 2; }
 
 .app-card {
   position: relative;
@@ -413,6 +421,77 @@ a.app-card:hover::after { transform: translateX(110%); }
 .app-cta .arrow { transition: transform 0.25s; }
 a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
 
+/* ── Living-bento stats (plan 30) ───────────────────────────── */
+/* Wide card = content column + right-aligned stat column. */
+.app-card.wide { flex-direction: row; align-items: stretch; gap: 1.25rem; }
+
+.app-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.card-stat {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 5px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.stat-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.stat-value {
+  font-family: var(--font-display);
+  font-size: 1.55rem;
+  line-height: 1.1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stat-sub {
+  font-size: 12.5px;
+  color: var(--ink-mid);
+  white-space: nowrap;
+}
+
+.hub-spark { display: block; }
+.hub-spark-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+/* Standard card: cta left, one-line stat right, wrapping when tight. */
+.app-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  flex-wrap: wrap;
+}
+
+.stat-line {
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .chip {
   font-size: 10.5px;
   font-weight: 600;
@@ -468,5 +547,15 @@ a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 600px) {
   .app-grid { grid-template-columns: 1fr; }
+  .app-card.wide { grid-column: auto; flex-direction: column; }
+  /* A phone user wants the number, not the pitch: on cards with live stats
+     the stat replaces the prose (tap target unchanged). */
+  .app-card.has-stat .app-desc { display: none; }
+  /* Flatten the wide card's main column so the stat block can slot between
+     the name and the Open cta (flex order), instead of trailing the cta. */
+  .app-card.wide .app-card-main { display: contents; }
+  .app-card.wide .card-stat { order: 1; }
+  .app-card.wide .app-foot { order: 2; }
+  .card-stat { align-items: flex-start; text-align: left; }
   .hero { padding-top: 3rem; }
 }
