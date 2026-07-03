@@ -172,20 +172,12 @@ const AURORA_FRAG = /* glsl */ `
     bands += fbm(vec2(x * 17.0 + t * 0.06, 8.1)) * 0.15;
     bands = smoothstep(0.22, 0.68, bands);
 
-    // Corona perspective: the ray striations RADIATE from a vanishing point
-    // overhead — above the top of the frame, over the viewer's head — so the
-    // curtains lean out of the screen toward you instead of standing flat.
-    // Work in the quad's world proportions (26 × 2) so the fan is
-    // geometrically true; the zenith drifts with the sway.
-    vec2 rd = vec2((vUv.x - 0.5 - sway * 0.04) * 26.0, (vUv.y - 1.55) * 2.0);
-    float ang = atan(rd.x, -rd.y);
-    float ray = noise(vec2(ang * 14.0 + sway * 2.0, t * 0.55));
-    ray = 0.48 + 0.52 * smoothstep(0.28, 0.72, ray);
+    // Fine vertical rays, sheared by the warp, flickering over seconds.
+    float ray = noise(vec2(x * 64.0, t * 0.6));
+    ray = 0.55 + 0.45 * smoothstep(0.3, 0.75, ray);
 
-    // Brightness pulses travelling along the curtain, times a slower surge
-    // POURING DOWN the rays away from the zenith — light falling over us.
-    float pour = 0.85 + 0.15 * sin(length(rd) * 2.2 - t * 1.3);
-    float pulse = (0.72 + 0.28 * sin(x * 12.0 - t * 0.9 + fbm(vec2(x * 4.0, t * 0.2)) * 4.0)) * pour;
+    // Brightness pulses travelling along the curtain.
+    float pulse = 0.72 + 0.28 * sin(x * 12.0 - t * 0.9 + fbm(vec2(x * 4.0, t * 0.2)) * 4.0);
 
     // Altitude profile: a sharp lower edge that itself undulates with the
     // sway, then a long exponential fade toward the top of the sky. The base
