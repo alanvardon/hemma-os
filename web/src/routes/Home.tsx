@@ -129,6 +129,9 @@ interface HubStats {
   budget: BudgetStat | null
 }
 
+// One dismissal of the scroll cue holds for the whole session.
+const CUE_KEY = 'hemma-hero-cue-dismissed'
+
 export default function Home() {
   const { theme, toggleTheme } = useTheme()
   const navigate = useNavigate()
@@ -141,6 +144,13 @@ export default function Home() {
   const [viaBack] = useState(
     () => typeof document !== 'undefined' && document.documentElement.dataset.vtDir === 'back',
   )
+  // Scroll cue (plan 31): never mounts for a returning user — back-whoosh
+  // arrivals need no invitation, and one dismissal holds for the session.
+  const [cueSuppressed] = useState(() => {
+    if (viaBack) return true
+    try { return sessionStorage.getItem(CUE_KEY) === '1' } catch { return false }
+  })
+  const [cueDismissed, setCueDismissed] = useState(false)
   // Each live card claims `tool-card` only while a whoosh to/from its path is
   // active. Hooks must be called unconditionally (rules-of-hooks) — one call per
   // card at the top of the component, regardless of the render order below.
@@ -260,6 +270,30 @@ export default function Home() {
     }
     document.title = 'Hemma·OS — family hub'
   }, [theme])
+
+  // Dismiss the cue the first time the page actually scrolls; the listener
+  // unbinds after firing once (cueDismissed flips → effect cleanup runs).
+  useEffect(() => {
+    if (cueSuppressed || cueDismissed) return
+    const onScroll = () => {
+      if (window.scrollY > 40) {
+        setCueDismissed(true)
+        try { sessionStorage.setItem(CUE_KEY, '1') } catch { /* private mode */ }
+      }
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [cueSuppressed, cueDismissed])
+
+  // Clicking the cue smooth-scrolls to Tools — the plan-28b scroll dolly turns
+  // this into the camera descent. Reduced motion: instant jump, still dismissed
+  // (the scroll listener also fires, but set state directly so a sub-40px page
+  // can't strand a visible cue).
+  const onCueClick = () => {
+    document.getElementById('tools')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
+    setCueDismissed(true)
+    try { sessionStorage.setItem(CUE_KEY, '1') } catch { /* private mode */ }
+  }
 
   // App-card spotlight + 3-D tilt via CSS custom properties
   const cardRef = useRef<EventTarget | null>(null)
@@ -411,6 +445,18 @@ export default function Home() {
             The family operating system — calculators, plans and shared tools that grow with us.
             Local-first today, synced everywhere tomorrow.
           </p>
+          {!cueSuppressed && (
+            <button
+              type="button"
+              className={'hero-cue reveal reveal-3' + (cueDismissed ? ' is-dismissed' : '')}
+              onClick={onCueClick}
+            >
+              Verktyg
+              <svg className="hero-cue-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M6 9.5l6 6 6-6"/>
+              </svg>
+            </button>
+          )}
         </section>
       </HeroCanvas>
 

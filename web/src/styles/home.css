@@ -251,6 +251,61 @@ body::after {
   max-width: 46ch;
 }
 
+/* Scroll cue (plan 31): a whisper at the hero's base inviting the descent.
+   Fades permanently on first scroll (sessionStorage); clicking it rides the
+   plan-28b dolly via smooth scroll. Absent when arriving via the back-whoosh. */
+.hero-cue {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(0.9rem, 3vh, 2rem);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  z-index: 2;
+  transition: opacity 0.45s ease, color 0.2s, visibility 0s linear 0.45s;
+}
+
+.hero-cue:hover { color: var(--ink-mid); }
+
+.hero-cue:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: 10px;
+}
+
+.hero-cue.is-dismissed {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.hero-cue-chevron {
+  width: 16px;
+  height: 16px;
+  animation: cue-bob 2.2s ease-in-out infinite;
+}
+
+@keyframes cue-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(6px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-cue-chevron { animation: none; }
+}
+
 /* Staggered entrance */
 @media (prefers-reduced-motion: no-preference) {
   .reveal { animation: rise-in-hub 0.7s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
@@ -274,10 +329,35 @@ body::after {
 
 /* ── App grid ───────────────────────────────────────────────── */
 .apps {
+  position: relative;
   max-width: 1200px;
   margin: 0 auto;
   width: 100%;
   padding: 0 clamp(1.25rem, 4vw, 3rem) clamp(3rem, 8vh, 5rem);
+}
+
+/* Aurora bleed (plan 31): the hero's light appears to fall onto the Tools
+   grid. Pure CSS set dressing driven by per-theme tokens (--bleed-a/-b in
+   tokens.css) — the scene stays the only owner of the canvas; nothing here
+   reads GL state, and nothing animates (the orbs/grain/canvas already move). */
+.apps::before {
+  content: '';
+  position: absolute;
+  inset: -140px -10% 35%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(560px 300px at 18% 0%, var(--bleed-a), transparent 70%),
+    radial-gradient(640px 320px at 82% 4%, var(--bleed-b), transparent 70%);
+}
+
+/* Dark-mode card lift: --paper-card in dark is nearly the page background, so
+   cards read as holes. An accent-tinted border + a 1px inner top highlight
+   makes them objects under sky-light. (Hover/focus border rules are more
+   specific, so their 45% accent mix still wins.) */
+[data-theme="dark"] .app-card {
+  border-color: color-mix(in srgb, var(--accent) 14%, var(--rule));
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .apps-label {
