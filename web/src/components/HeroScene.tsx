@@ -139,7 +139,6 @@ function Terrain({ shared, cols, onFirstFrame }: {
   cols: number
   onFirstFrame: () => void
 }) {
-  const material = useRef<THREE.ShaderMaterial>(null)
   const group = useRef<THREE.Group>(null)
   const time = useRef(0)
   const rot = useRef({ yaw: 0, pitch: 0 })
@@ -208,6 +207,24 @@ function Terrain({ shared, cols, onFirstFrame }: {
   }
   const uniforms = uniformsRef.current
 
+  // Construct the material imperatively: R3F v9 CLONES a `uniforms` prop when
+  // applying it to a <shaderMaterial>, so the material would render a private
+  // copy frozen at the initial values while useFrame mutates an orphan (the
+  // frozen-waves bug). Built here, `material.uniforms` IS our object.
+  const materialRef = useRef<THREE.ShaderMaterial | null>(null)
+  if (materialRef.current === null) {
+    materialRef.current = new THREE.ShaderMaterial({
+      vertexShader: VERT,
+      fragmentShader: FRAG,
+      uniforms,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+    })
+  }
+  const sceneMaterial = materialRef.current
+  useEffect(() => () => sceneMaterial.dispose(), [sceneMaterial])
+
   useFrame(({ gl, size, camera }, delta) => {
     // Clamp so a tab-restore doesn't jump the waves. The 1.35 factor restores
     // the rolling feel of the 2D canvas: dotted rows carry far less contrast
@@ -269,17 +286,7 @@ function Terrain({ shared, cols, onFirstFrame }: {
 
   return (
     <group ref={group} position={[0, GROUP_Y, GROUP_Z]}>
-      <points geometry={geometry} frustumCulled={false}>
-        <shaderMaterial
-          ref={material}
-          vertexShader={VERT}
-          fragmentShader={FRAG}
-          uniforms={uniforms}
-          transparent
-          depthWrite={false}
-          depthTest={false}
-        />
-      </points>
+      <points geometry={geometry} material={sceneMaterial} frustumCulled={false} />
     </group>
   )
 }
