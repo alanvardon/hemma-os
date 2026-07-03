@@ -51,9 +51,9 @@ const BOLANEKOLL: ToolDef = {
   desc: "Track your mortgage — import the bank's payment CSV, follow each loan part down and watch your equity grow against the bank.",
   icon: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 10.5 12 3l9 7.5"/>
-      <path d="M5.5 9.5V20h13V9.5"/>
-      <path d="M8.5 16.5l2.5-2.5 2 1.5 2.5-3.5"/>
+      <path d="M3 10.5 12 3l9 7.5" pathLength="1"/>
+      <path d="M5.5 9.5V20h13V9.5" pathLength="1"/>
+      <path d="M8.5 16.5l2.5-2.5 2 1.5 2.5-3.5" pathLength="1"/>
     </svg>
   ),
 }
@@ -64,10 +64,10 @@ const MANADSAVSLUT: ToolDef = {
   desc: 'The month-end close — import card statements, split shared spending and settle up who owes whom in one tap.',
   icon: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 5.5h16v13H4z"/>
-      <path d="M4 9.5h16"/>
-      <path d="M8 13h5"/>
-      <path d="M16.5 13.5 18 15l2.5-2.5"/>
+      <path d="M4 5.5h16v13H4z" pathLength="1"/>
+      <path d="M4 9.5h16" pathLength="1"/>
+      <path d="M8 13h5" pathLength="1"/>
+      <path d="M16.5 13.5 18 15l2.5-2.5" pathLength="1"/>
     </svg>
   ),
 }
@@ -79,9 +79,9 @@ const STANDARD_TOOLS: ToolDef[] = [
     desc: 'One pot, split evenly — pool both incomes, share joint costs 50/50 and see what each of you has left over.',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <rect x="3" y="6" width="18" height="13" rx="2.5"/>
-        <path d="M3 10h18"/>
-        <path d="M7 15h4"/>
+        <rect x="3" y="6" width="18" height="13" rx="2.5" pathLength="1"/>
+        <path d="M3 10h18" pathLength="1"/>
+        <path d="M7 15h4" pathLength="1"/>
       </svg>
     ),
   },
@@ -91,9 +91,9 @@ const STANDARD_TOOLS: ToolDef[] = [
     desc: 'House purchase calculator for Sweden — upfront costs, lagfart & pantbrev, bank comparison, stress tests and saved scenarios.',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <path d="M3 10.5 12 3l9 7.5"/>
-        <path d="M5.5 9v11h13V9"/>
-        <path d="M9.5 20v-5.5h5V20"/>
+        <path d="M3 10.5 12 3l9 7.5" pathLength="1"/>
+        <path d="M5.5 9v11h13V9" pathLength="1"/>
+        <path d="M9.5 20v-5.5h5V20" pathLength="1"/>
       </svg>
     ),
   },
@@ -103,10 +103,10 @@ const STANDARD_TOOLS: ToolDef[] = [
     desc: 'What could it pay to go independent? Turn an hourly rate into salary, dividend and the tax in between — Sweden, 2026.',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <rect x="3" y="7.5" width="18" height="12" rx="2.5"/>
-        <path d="M8.5 7.5V6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v1.5"/>
-        <path d="M3 12.5h18"/>
-        <path d="M12 11.5v2"/>
+        <rect x="3" y="7.5" width="18" height="12" rx="2.5" pathLength="1"/>
+        <path d="M8.5 7.5V6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v1.5" pathLength="1"/>
+        <path d="M3 12.5h18" pathLength="1"/>
+        <path d="M12 11.5v2" pathLength="1"/>
       </svg>
     ),
   },
@@ -116,8 +116,8 @@ const STANDARD_TOOLS: ToolDef[] = [
     desc: "Salary sacrifice into pension — at what salary it pays off, the tax you save now and what it's worth net at payout. Sweden, 2026.",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <path d="M4 9h13l-3.5-3.5"/>
-        <path d="M20 15H7l3.5 3.5"/>
+        <path d="M4 9h13l-3.5-3.5" pathLength="1"/>
+        <path d="M20 15H7l3.5 3.5" pathLength="1"/>
       </svg>
     ),
   },
@@ -438,8 +438,10 @@ export default function Home() {
           <p className="greeting reveal reveal-1">
             <span>{greeting}</span> <span className="date">{dateLine}</span>
           </p>
-          <h1 className="reveal reveal-2">
-            Everything for the household, <em>in one place.</em>
+          <h1 className="hero-h1">
+            <span className="h1-line">Everything for the</span>
+            <span className="h1-line">household, <em>in one</em></span>
+            <span className="h1-line"><em className="h1-place">place.</em></span>
           </h1>
           <p className="sub reveal reveal-3">
             The family operating system — calculators, plans and shared tools that grow with us.

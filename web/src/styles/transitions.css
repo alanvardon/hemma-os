@@ -51,6 +51,13 @@
   animation: none !important;
 }
 
+/* The kinetic h1 (plan 32) uses its own animation, not .reveal — kill it the
+   same way so a back-whoosh arrival never catches a half-revealed headline. */
+.hub-pan.no-reveal .hero h1 .h1-line,
+.hub-pan.no-reveal .h1-place::after {
+  animation: none !important;
+}
+
 /* The shared group carries the box morph (card slot ⇄ full screen) both ways. */
 ::view-transition-group(tool-card) {
   animation-duration: var(--vt-dur);
