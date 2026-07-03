@@ -9,6 +9,9 @@ import {
   dollyFor,
   stepRipple,
   rippleTarget,
+  timeBucket,
+  greetingFor,
+  paletteFor,
 } from './heroScene'
 
 describe('overscanGeometry', () => {
@@ -138,5 +141,70 @@ describe('rippleTarget', () => {
     expect(rippleTarget(249)).toBe(1)
     expect(rippleTarget(250)).toBe(0)
     expect(rippleTarget(5000)).toBe(0)
+  })
+})
+
+describe('timeBucket', () => {
+  it('matches the greeting boundaries at 5/10/18', () => {
+    expect(timeBucket(0)).toBe('natt')
+    expect(timeBucket(4)).toBe('natt')
+    expect(timeBucket(5)).toBe('morgon')
+    expect(timeBucket(9)).toBe('morgon')
+    expect(timeBucket(10)).toBe('dag')
+    expect(timeBucket(17)).toBe('dag')
+    expect(timeBucket(18)).toBe('kvall')
+    expect(timeBucket(23)).toBe('kvall')
+  })
+})
+
+describe('greetingFor', () => {
+  it('maps each bucket to the hub greeting text', () => {
+    expect(greetingFor(timeBucket(3))).toBe('God natt')
+    expect(greetingFor(timeBucket(7))).toBe('God morgon')
+    expect(greetingFor(timeBucket(12))).toBe('God dag')
+    expect(greetingFor(timeBucket(21))).toBe('God kväll')
+  })
+})
+
+describe('paletteFor', () => {
+  const buckets = ['natt', 'morgon', 'dag', 'kvall'] as const
+
+  it('never shows the aurora in light theme', () => {
+    for (const b of buckets) expect(paletteFor(b, 'light').aurora).toBe(0)
+  })
+
+  it('shows the aurora in dark theme, capped at 0.35, night strongest', () => {
+    for (const b of buckets) {
+      const a = paletteFor(b, 'dark').aurora
+      expect(a).toBeGreaterThan(0)
+      expect(a).toBeLessThanOrEqual(0.35)
+    }
+    expect(paletteFor('natt', 'dark').aurora).toBeGreaterThan(paletteFor('dag', 'dark').aurora)
+    expect(paletteFor('kvall', 'dark').aurora).toBeGreaterThan(paletteFor('dag', 'dark').aurora)
+  })
+
+  it('shapes the day: morning mistiest, midday clearest and brightest', () => {
+    const morgon = paletteFor('morgon', 'light')
+    const dag = paletteFor('dag', 'light')
+    expect(morgon.fogScale).toBeGreaterThan(dag.fogScale)
+    for (const b of buckets) {
+      expect(dag.alpha).toBeGreaterThanOrEqual(paletteFor(b, 'light').alpha)
+    }
+  })
+
+  it('warms dusk with copper and thins the night', () => {
+    for (const b of buckets) {
+      expect(paletteFor('kvall', 'light').copperWeight)
+        .toBeGreaterThanOrEqual(paletteFor(b, 'light').copperWeight)
+    }
+    expect(paletteFor('natt', 'light').dotScale).toBeLessThan(1)
+  })
+
+  it('is identical across themes apart from the aurora', () => {
+    for (const b of buckets) {
+      const l = paletteFor(b, 'light')
+      const d = paletteFor(b, 'dark')
+      expect({ ...l, aurora: 0 }).toEqual({ ...d, aurora: 0 })
+    }
   })
 })
