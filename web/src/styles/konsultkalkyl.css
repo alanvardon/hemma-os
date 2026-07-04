@@ -49,16 +49,17 @@
 .section-note strong { color: var(--ink-mid); font-weight: 600; }
 
 /* ── Collapsible rates section ───────────────────────────────── */
-.section-rates > summary { cursor: pointer; list-style: none; }
-.section-rates > summary::-webkit-details-marker { display: none; }
+.rates-toggle {
+  width: 100%; background: none; border: none; cursor: pointer; padding: 0;
+  text-align: left; font: inherit; color: inherit;
+}
 .section-label-summary { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
-.section-rates[open] .section-label-summary {
+.section-rates.is-open .section-label-summary {
   margin-bottom: 1rem;
   padding-bottom: 0.85rem;
   border-bottom: 1px solid var(--rule);
 }
-.summary-caret { margin-left: auto; color: var(--ink-soft); font-size: 11px; transition: transform 0.2s; }
-.section-rates[open] .summary-caret { transform: rotate(180deg); }
+.summary-caret { display: inline-block; margin-left: auto; color: var(--ink-soft); font-size: 11px; }
 
 /* ── Fields ─────────────────────────────────────────────────── */
 .field-grid {

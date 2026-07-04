@@ -1311,7 +1311,17 @@ export default function Bolanekoll() {
                       <Fragment key={p.id}>
                         <tr className={(p.is_insats ? 'is-insats' : '') + (isExp ? ' is-expanded' : '')}>
                           <td className="col-date">
-                            {p.is_insats && <button type="button" className="icon-btn expand-btn" title={isExp ? 'Hide allocation' : 'Show allocation'} aria-expanded={isExp} onClick={() => toggleExpandPay(p.id)}>{isExp ? '▾' : '▸'}</button>}
+                            {p.is_insats && (
+                              <motion.button
+                                type="button"
+                                className="icon-btn expand-btn"
+                                title={isExp ? 'Hide allocation' : 'Show allocation'}
+                                aria-expanded={isExp}
+                                onClick={() => toggleExpandPay(p.id)}
+                                animate={{ rotate: isExp ? 90 : 0 }}
+                                transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+                              >▸</motion.button>
+                            )}
                             {p.date || '—'}
                           </td>
                           <td>{partNameById(p.loan_part_id)}</td>
@@ -1327,27 +1337,36 @@ export default function Bolanekoll() {
                             <button type="button" className="icon-btn" data-del-pay title="Delete" onClick={() => { if (confirm('Delete this payment?')) handleDeletePay(p.id) }}>✕</button>
                           </td>
                         </tr>
-                        {p.is_insats && isExp && (
-                          <tr className="pay-detail">
-                            <td colSpan={6}>
-                              <div className="pay-detail-inner">
-                                <span className="pay-detail-label">Insats funded by</span>
-                                {p.paid_split ? (
-                                  <>
-                                    <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(p.paid_split.a)}</span>
-                                    <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(p.paid_split.b)}</span>
-                                  </>
-                                ) : (
-                                  <span className="alloc-chip">{p.paid_by === 'joint'
-                                    ? 'Joint · split by ownership'
-                                    : <><b>{nameOf(p.paid_by === 'b' ? 'b' : 'a')}</b> {fmtMoney(p.amount)}</>}</span>
-                                )}
-                                {!p.paid_split && settings.track_contributions && <button type="button" className="link-btn" onClick={() => setInsatsDlg({ open: true, payment: p })}>allocate…</button>}
-                                {p.description && <span className="pay-detail-note">{p.description}</span>}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
+                        <AnimatePresence initial={false}>
+                          {p.is_insats && isExp && (
+                            <motion.tr
+                              key="detail"
+                              className="pay-detail"
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              exit={{ opacity: 0 }}
+                              transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}
+                            >
+                              <td colSpan={6}>
+                                <div className="pay-detail-inner">
+                                  <span className="pay-detail-label">Insats funded by</span>
+                                  {p.paid_split ? (
+                                    <>
+                                      <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(p.paid_split.a)}</span>
+                                      <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(p.paid_split.b)}</span>
+                                    </>
+                                  ) : (
+                                    <span className="alloc-chip">{p.paid_by === 'joint'
+                                      ? 'Joint · split by ownership'
+                                      : <><b>{nameOf(p.paid_by === 'b' ? 'b' : 'a')}</b> {fmtMoney(p.amount)}</>}</span>
+                                  )}
+                                  {!p.paid_split && settings.track_contributions && <button type="button" className="link-btn" onClick={() => setInsatsDlg({ open: true, payment: p })}>allocate…</button>}
+                                  {p.description && <span className="pay-detail-note">{p.description}</span>}
+                                </div>
+                              </td>
+                            </motion.tr>
+                          )}
+                        </AnimatePresence>
                       </Fragment>
                       )
                     })}

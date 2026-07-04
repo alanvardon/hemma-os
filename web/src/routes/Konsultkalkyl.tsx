@@ -1,11 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { motion, useReducedMotion } from 'motion/react'
 import { computeContracting, defaultInputs, type KonsultInputs } from '../lib/konsult'
 import { Money, Percent, Num } from '../components/AnimatedNumber'
 import { useTheme } from '../App'
 import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
 import { parseFormatted } from '../lib/format'
+import Collapse from '../components/Collapse'
 
 const STORAGE_KEY = 'bostadskalkyl_konsult_v1'
 
@@ -58,6 +60,8 @@ export default function Konsultkalkyl() {
   const [inputs, setInputs] = useState<KonsultInputs>(loadInputs)
   const [saveVisible, setSaveVisible] = useState(false)
   const [resetKey, setResetKey] = useState(0)
+  const [ratesOpen, setRatesOpen] = useState(false)
+  const reduceMotion = useReducedMotion()
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useLayoutEffect(() => {
@@ -212,25 +216,32 @@ export default function Konsultkalkyl() {
             </div>
           </div>
 
-          <details className="section section-rates">
-            <summary className="section-label section-label-summary">
+          <div className={'section section-rates' + (ratesOpen ? ' is-open' : '')}>
+            <button type="button" className="section-label section-label-summary rates-toggle" aria-expanded={ratesOpen} onClick={() => setRatesOpen(v => !v)}>
               <span className="section-num">4</span>
               <span className="section-title">Skattesatser · Rates 2026</span>
-              <span className="summary-caret" aria-hidden="true">▾</span>
-            </summary>
-            <p className="section-note">
-              Pre-filled with the correct 2026 figures. Adjust your <strong>kommunalskatt</strong>
-              to your municipality — the rest rarely change.
-            </p>
-            <div className="field-grid">
-              {field('in-employerFee',       'Arbetsgivaravgift', 'Employer fee',   'employerFeePct',       'num', '%')}
-              {field('in-sarskild',          'Särskild löneskatt','On pension',     'sarskildLoneskattPct', 'num', '%')}
-              {field('in-corpTax',           'Bolagsskatt',       'Corporate',      'corporateTaxPct',      'num', '%')}
-              {field('in-municipalTax',      'Kommunalskatt',     'Municipal',      'municipalTaxPct',      'num', '%')}
-              {field('in-dividendAllowance', 'Gränsbelopp',       '3:12 allowance', 'dividendAllowance',    'cur', 'kr')}
-              {field('in-dividendTax',       'Utdelningsskatt',   'Dividend tax',   'dividendTaxPct',       'num', '%')}
-            </div>
-          </details>
+              <motion.span
+                className="summary-caret"
+                aria-hidden="true"
+                animate={{ rotate: ratesOpen ? 180 : 0 }}
+                transition={{ duration: reduceMotion ? 0 : 0.2 }}
+              >▾</motion.span>
+            </button>
+            <Collapse open={ratesOpen}>
+              <p className="section-note">
+                Pre-filled with the correct 2026 figures. Adjust your <strong>kommunalskatt</strong>
+                to your municipality — the rest rarely change.
+              </p>
+              <div className="field-grid">
+                {field('in-employerFee',       'Arbetsgivaravgift', 'Employer fee',   'employerFeePct',       'num', '%')}
+                {field('in-sarskild',          'Särskild löneskatt','On pension',     'sarskildLoneskattPct', 'num', '%')}
+                {field('in-corpTax',           'Bolagsskatt',       'Corporate',      'corporateTaxPct',      'num', '%')}
+                {field('in-municipalTax',      'Kommunalskatt',     'Municipal',      'municipalTaxPct',      'num', '%')}
+                {field('in-dividendAllowance', 'Gränsbelopp',       '3:12 allowance', 'dividendAllowance',    'cur', 'kr')}
+                {field('in-dividendTax',       'Utdelningsskatt',   'Dividend tax',   'dividendTaxPct',       'num', '%')}
+              </div>
+            </Collapse>
+          </div>
 
         </div>
 
