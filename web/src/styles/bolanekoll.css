@@ -258,13 +258,17 @@
   .insats-extra { margin-top: 1rem; }
   .insats-alloc { font-variant-numeric: tabular-nums; }
   .form-hint.is-warn { color: var(--warn); }
-  /* Expandable insats rows — reveal the per-owner allocation */
+  /* Expandable insats rows — reveal the per-owner allocation.
+     Revealed rows animate height inside each cell (CellReveal): the td keeps
+     zero vertical padding and .cell-pad carries it, so the tween covers the
+     full row height instead of snapping open around a padded cell. */
   .expand-btn { color: var(--accent); margin-left: -4px; margin-right: 2px; }
   .data-table tr.is-expanded.is-insats td { box-shadow: none; }
   .data-table tr.pay-detail td {
     background: var(--paper-warm); box-shadow: inset 2px 0 0 var(--accent);
-    padding-top: 0.45rem; padding-bottom: 0.7rem;
+    padding-top: 0; padding-bottom: 0;
   }
+  .data-table tr.pay-detail .cell-pad { padding: 0.45rem 0 0.7rem; }
   .pay-detail-inner { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.8rem; }
   .pay-detail-label {
     font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
@@ -398,7 +402,7 @@
     width: 100%; background: none; border: none; cursor: pointer; padding: 0;
     text-align: left; font: inherit; color: inherit;
   }
-  .ld-tri { color: var(--ink-soft); font-size: 10px; width: 0.85em; flex-shrink: 0; transition: color 0.15s; }
+  .ld-tri { display: inline-block; color: var(--ink-soft); font-size: 10px; width: 0.85em; flex-shrink: 0; transition: color 0.15s; }
   .ld-disclose:hover .ld-tri { color: var(--accent); }
   .ld-count {
     font-size: 11px; font-weight: 600; color: var(--ink-soft); white-space: nowrap;
@@ -411,6 +415,8 @@
   .lanedelar-table tr.ld-group .ld-rate:not(.is-bunden) { background: var(--paper-card); }
 
   /* Member (child) rows — indented with a tree guide line, rate badge inline */
+  .lanedelar-table tr.ld-member > td { padding-top: 0; padding-bottom: 0; }
+  .lanedelar-table tr.ld-member .cell-pad { padding: 8px 0; }
   .lanedelar-table tr.ld-member > td:first-child { padding-left: 2.2rem; position: relative; }
   .lanedelar-table tr.ld-member > td:first-child::before {
     content: ''; position: absolute; left: 1.15rem; top: -1px; bottom: -1px; width: 1px; background: var(--rule);

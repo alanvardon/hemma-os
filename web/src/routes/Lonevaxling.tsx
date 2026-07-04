@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { motion, useReducedMotion } from 'motion/react'
 import { Money, Percent } from '../components/AnimatedNumber'
 import { useTheme } from '../App'
 import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
+import Collapse from '../components/Collapse'
 import {
   type LonevaxlingInputs,
   type LonevaxlingResult,
@@ -97,6 +99,8 @@ export default function Lonevaxling() {
   const [inputs, setInputs] = useState<LonevaxlingInputs>(loadInputs)
   const [saveVisible, setSaveVisible] = useState(false)
   const [resetKey, setResetKey] = useState(0)
+  const [ratesOpen, setRatesOpen] = useState(false)
+  const reduceMotion = useReducedMotion()
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useLayoutEffect(() => {
@@ -261,12 +265,18 @@ export default function Lonevaxling() {
             </div>
           </div>
 
-          <details className="section section-rates">
-            <summary className="section-label section-label-summary">
+          <div className={'section section-rates' + (ratesOpen ? ' is-open' : '')}>
+            <button type="button" className="section-label section-label-summary rates-toggle" aria-expanded={ratesOpen} onClick={() => setRatesOpen(v => !v)}>
               <span className="section-num">3</span>
               <span className="section-title">Skattesats · Rate 2026</span>
-              <span className="summary-caret" aria-hidden="true">▾</span>
-            </summary>
+              <motion.span
+                className="summary-caret"
+                aria-hidden="true"
+                animate={{ rotate: ratesOpen ? 180 : 0 }}
+                transition={{ duration: reduceMotion ? 0 : 0.2 }}
+              >▾</motion.span>
+            </button>
+            <Collapse open={ratesOpen}>
             <p className="section-note">
               Set your <strong>kommunalskatt</strong> to your municipality. The state tax
               (20{' '}% over the 643{' '}000{' '}kr brytpunkt) is fixed for 2026.
@@ -274,7 +284,8 @@ export default function Lonevaxling() {
             <div className="field-grid">
               {field('in-municipalTax', 'Kommunalskatt', 'Municipal', 'municipalTaxPct', 'num', '%')}
             </div>
-          </details>
+            </Collapse>
+          </div>
 
         </div>
 

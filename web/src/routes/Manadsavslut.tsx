@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTheme } from '../App'
 import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
@@ -15,6 +15,7 @@ import * as Store from '../lib/manadsavslut-store'
 import { todayISO } from '../lib/date'
 import { CURRENCY_SUFFIX } from '../lib/format'
 import Segmented from '../components/Segmented'
+import Collapse from '../components/Collapse'
 import { Money } from '../components/AnimatedNumber'
 import GroceryTrendChart from '../components/charts/GroceryTrendChart'
 
@@ -371,6 +372,14 @@ export default function Manadsavslut() {
   const [defaultClass, setDefaultClass] = useState<Treatment>('split')
   const [currentFilter, setCurrentFilter] = useState<'open' | 'pending' | 'all' | 'a' | 'b'>('open')
   const [insightsPeriod, setInsightsPeriod] = useState<'month' | '3m' | 'all'>('all')
+  const [openSettlements, setOpenSettlements] = useState<Set<string>>(new Set())
+  const [openCarveouts, setOpenCarveouts] = useState<Set<string>>(new Set())
+  function toggleSettlement(id: string) {
+    setOpenSettlements(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
+  }
+  function toggleCarveout(id: string) {
+    setOpenCarveouts(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
+  }
 
   const [isDragging, setIsDragging] = useState(false)
   const [importCfg, setImportCfg] = useState<ImportCfg | null>(null)
@@ -772,20 +781,31 @@ export default function Manadsavslut() {
             <h2>Tidigare avslut <span className="card-en">· History</span></h2>
             <span className="count-pill">{payments.length}</span>
           </div>
-          {!payments.length ? (
-            <p className="empty">No settlements yet. Settle the open items above to close a month.</p>
-          ) : (
-            payments.map(p => {
+          {!payments.length && <p className="empty">No settlements yet. Settle the open items above to close a month.</p>}
+          {/* Settling and reopening add/remove whole entries — animate the row
+              in/out so the section doesn't jump when the list changes. */}
+          <AnimatePresence initial={false}>
+            {payments.map(p => {
               const linked = itemsByPayment[p.id] || []
               const when = (p.created_at || '').slice(0, 10)
               const gross = linked.reduce((s, it) => s + (it.enter_amount ?? 0), 0)
+              const isOpen = openSettlements.has(p.id)
               return (
-                <details key={p.id} className="history-item">
-                  <summary>
+                <motion.div
+                  key={p.id}
+                  className="history-anim"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={reduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                >
+                <div className={'history-item' + (isOpen ? ' is-open' : '')}>
+                  <button type="button" className="history-summary" aria-expanded={isOpen} onClick={() => toggleSettlement(p.id)}>
                     <span className="history-period">{when && p.period_label ? <>{when} · {p.period_label}</> : p.period_label || when}</span>
                     <span className="history-transfer">{p.from_person && p.amount > 0 ? <>{nameOf(p.from_person)} → {nameOf(p.to_person)} · <strong>{fmtMoney(p.amount)}</strong></> : 'Even — no transfer'}</span>
                     <span className="history-meta">{linked.length} item{linked.length === 1 ? '' : 's'} · {fmtMoney(gross)}</span>
-                  </summary>
+                  </button>
+                  <Collapse open={isOpen}>
                   <ul className="history-list">
                     {linked.map(it => {
                       const entries = it.personal_items || []
@@ -803,11 +823,20 @@ export default function Manadsavslut() {
                           <span className="hl-type">{it.split ? 'Split' : 'All'}</span>
                         </>
                       )
+                      const isCarveOpen = openCarveouts.has(it.id)
                       return entries.length > 0 ? (
                         // Has a carve-out: collapse to the overview row; click to reveal each entry.
-                        <li key={it.id} className="hl-has-personal">
-                          <details className="hl-item">
-                            <summary className="hl-row">{rowInner}<span className="hl-expand" aria-hidden>▸</span></summary>
+                        <li key={it.id} className={'hl-has-personal' + (isCarveOpen ? ' is-open' : '')}>
+                          <button type="button" className="hl-row hl-toggle" aria-expanded={isCarveOpen} onClick={() => toggleCarveout(it.id)}>
+                            {rowInner}
+                            <motion.span
+                              className="hl-expand"
+                              aria-hidden
+                              animate={{ rotate: isCarveOpen ? 90 : 0 }}
+                              transition={{ duration: reduceMotion ? 0 : 0.15 }}
+                            >▸</motion.span>
+                          </button>
+                          <Collapse open={isCarveOpen}>
                             <ul className="hl-sub">
                               {entries.map((e, i) => (
                                 <li key={i}>
@@ -817,7 +846,7 @@ export default function Manadsavslut() {
                                 </li>
                               ))}
                             </ul>
-                          </details>
+                          </Collapse>
                         </li>
                       ) : (
                         <li key={it.id} className="hl-row">{rowInner}</li>
@@ -826,10 +855,12 @@ export default function Manadsavslut() {
                   </ul>
                   {p.note && <p className="history-note">{p.note}</p>}
                   <div className="history-actions"><button type="button" className="link-btn" onClick={() => reopen(p.id)}>Reopen settlement</button></div>
-                </details>
+                  </Collapse>
+                </div>
+                </motion.div>
               )
-            })
-          )}
+            })}
+          </AnimatePresence>
         </section>
 
       </main>

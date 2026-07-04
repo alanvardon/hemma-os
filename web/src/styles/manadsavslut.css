@@ -172,25 +172,29 @@
   .import-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.2rem; }
 
   /* ── History ────────────────────────────────────────────────── */
+  /* .history-anim is the enter/exit height wrapper around each settlement.
+     overflow:hidden makes it a BFC, so the item's bottom margin is contained
+     and collapses away with the height tween instead of popping at the end. */
+  .history-anim { overflow: hidden; }
   .history-item { border: 1px solid var(--rule); border-radius: var(--r-md); margin-bottom: 0.6rem; overflow: hidden; }
-  .history-item:last-child { margin-bottom: 0; }
-  /* direct-child so the nested per-item <details> summary isn't restyled */
-  .history-item > summary {
+  .history-anim:last-child .history-item { margin-bottom: 0; }
+  .history-summary {
     display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
-    padding: 0.8rem 1rem; cursor: pointer; list-style: none;
+    width: 100%; padding: 0.8rem 1rem; border: none; cursor: pointer;
     background: var(--paper-card); transition: background 0.15s;
+    text-align: left; font: inherit; color: inherit;
   }
-  .history-item > summary:hover { background: var(--paper-warm); }
-  .history-item > summary::-webkit-details-marker { display: none; }
-  .history-item[open] > summary { border-bottom: 1px solid var(--rule); }
+  .history-summary:hover { background: var(--paper-warm); }
+  .history-item.is-open .history-summary { border-bottom: 1px solid var(--rule); }
   .history-period { font-weight: 600; color: var(--ink); }
   .history-transfer { color: var(--ink-mid); font-size: 13.5px; }
   .history-meta { margin-left: auto; font-size: 12px; color: var(--ink-soft); }
   .history-list { list-style: none; padding: 0.5rem 1rem 0.3rem; margin: 0; }
   .history-list > li { padding: 4px 0; font-size: 13px; border-bottom: 1px solid var(--rule); }
   .history-list > li:last-child { border-bottom: none; }
-  /* the row layout — shared by a plain <li> and the expandable <summary> */
+  /* the row layout — shared by a plain <li> and the expandable toggle button */
   .hl-row { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; }
+  .hl-toggle { width: 100%; background: none; border: none; cursor: pointer; padding: 0; text-align: left; font: inherit; color: inherit; }
   .hl-date { color: var(--ink-soft); white-space: nowrap; }
   .hl-desc { flex: 1; min-width: 8rem; }
   .hl-payer { white-space: nowrap; color: var(--ink-mid); }
@@ -199,10 +203,7 @@
   .hl-type { color: var(--ink-soft); font-size: 11px; white-space: nowrap; align-self: center; padding: 1px 5px; background: var(--rule); border-radius: 3px; }
   .hl-personal { color: var(--accent); font-size: 12px; white-space: nowrap; }
   /* expandable item: per-person overview on the row, entries revealed on click */
-  .hl-item > summary { cursor: pointer; list-style: none; }
-  .hl-item > summary::-webkit-details-marker { display: none; }
-  .hl-expand { color: var(--ink-soft); font-size: 10px; transition: transform 0.15s; margin-left: 0.1rem; }
-  .hl-item[open] > summary .hl-expand { transform: rotate(90deg); }
+  .hl-expand { display: inline-block; color: var(--ink-soft); font-size: 10px; margin-left: 0.1rem; }
   .hl-sub { list-style: none; margin: 0.3rem 0 0.2rem; padding: 0 0 0 1.2rem; display: flex; flex-direction: column; gap: 0.2rem; }
   .hl-sub li { display: flex; gap: 0.6rem; align-items: baseline; font-size: 12.5px; color: var(--ink-mid); }
   .history-note { font-size: 12.5px; color: var(--ink-soft); font-style: italic; padding: 0 1rem 0.4rem; }
