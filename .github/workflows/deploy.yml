@@ -36,6 +36,12 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Build the React app
+        env:
+          # Supabase URL + publishable key — injected into the Vite bundle.
+          # Both are public by design (RLS guards the data); add them under
+          # repo Settings → Secrets and variables → Actions.
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
         run: |
           npm --prefix web ci
           npm --prefix web run build
