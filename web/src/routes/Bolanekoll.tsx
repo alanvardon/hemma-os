@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Money, Percent } from '../components/AnimatedNumber'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import Collapse from '../components/Collapse'
@@ -1161,7 +1161,11 @@ export default function Bolanekoll() {
                         <tr className={'ld-group' + (g.expired ? ' is-expired' : '') + (g.is_catchall ? ' is-catchall' : '') + (isExp ? ' is-open' : '')}>
                           <td>
                             <button type="button" className="ld-disclose" aria-expanded={isExp} title={isExp ? 'Collapse' : 'Expand'} onClick={() => toggleGroup(g.key)}>
-                              <span className="ld-tri">{isExp ? '▾' : '▸'}</span>
+                              <motion.span
+                                className="ld-tri"
+                                animate={{ rotate: isExp ? 90 : 0 }}
+                                transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                              >▸</motion.span>
                               {g.is_catchall
                                 ? <span className="ld-needs">No reprice date set</span>
                                 : <>{repriceMeta(g)}{rateBadge(g.rate, g.rate_type, g.rate_type == null)}</>}
@@ -1172,24 +1176,33 @@ export default function Bolanekoll() {
                           <td className="num ld-sum">{fmtPct(g.share_pct)}</td>
                           <td className="col-act"></td>
                         </tr>
-                        {isExp && g.parts.map(p => {
-                          const bal = partBalance(p, payments)
-                          const share = partsTotal > 0 ? bal / partsTotal * 100 : 0
-                          const per = effectiveRatePeriod(p, periods)
-                          return (
-                            <tr key={p.id} className="ld-member">
-                              <td>
-                                <span className="ld-member-label">
-                                  <span className="ld-name">{p.label || '(no name)'}{p.loan_number && <span className="ld-loanno">#{p.loan_number}</span>}</span>
-                                  {rateBadge(per?.rate ?? null, per?.rate_type ?? null)}
-                                </span>
-                              </td>
-                              <td className="num">{fmtMoney(bal)}</td>
-                              <td className="num">{fmtPct(share)}</td>
-                              <td className="col-act">{partActs(p)}</td>
-                            </tr>
-                          )
-                        })}
+                        <AnimatePresence initial={false}>
+                          {isExp && g.parts.map(p => {
+                            const bal = partBalance(p, payments)
+                            const share = partsTotal > 0 ? bal / partsTotal * 100 : 0
+                            const per = effectiveRatePeriod(p, periods)
+                            return (
+                              <motion.tr
+                                key={p.id}
+                                className="ld-member"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}
+                              >
+                                <td>
+                                  <span className="ld-member-label">
+                                    <span className="ld-name">{p.label || '(no name)'}{p.loan_number && <span className="ld-loanno">#{p.loan_number}</span>}</span>
+                                    {rateBadge(per?.rate ?? null, per?.rate_type ?? null)}
+                                  </span>
+                                </td>
+                                <td className="num">{fmtMoney(bal)}</td>
+                                <td className="num">{fmtPct(share)}</td>
+                                <td className="col-act">{partActs(p)}</td>
+                              </motion.tr>
+                            )
+                          })}
+                        </AnimatePresence>
                       </Fragment>
                     )
                   })}
