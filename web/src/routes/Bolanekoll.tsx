@@ -1,7 +1,9 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { motion, useReducedMotion } from 'motion/react'
 import { Money, Percent } from '../components/AnimatedNumber'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
+import Collapse from '../components/Collapse'
 import { useTheme } from '../App'
 import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
@@ -539,6 +541,7 @@ export default function Bolanekoll() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const groupsSeeded = useRef(false)
   const [avslutadeOpen, setAvslutadeOpen] = useState(false)
+  const reduceMotion = useReducedMotion()
   const [contDlg, setContDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [settingsDlg, setSettingsDlg] = useState(false)
 
@@ -1195,9 +1198,13 @@ export default function Bolanekoll() {
               {archivedParts.length > 0 && (
                 <div className="avslutade-section">
                   <button type="button" className="avslutade-toggle" aria-expanded={avslutadeOpen} onClick={() => setAvslutadeOpen(v => !v)}>
-                    <span className="expand-btn">{avslutadeOpen ? '▾' : '▸'}</span> Avslutade <span className="count-pill">{archivedParts.length}</span>
+                    <motion.span
+                      className="expand-btn"
+                      animate={{ rotate: avslutadeOpen ? 90 : 0 }}
+                      transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                    >▸</motion.span> Avslutade <span className="count-pill">{archivedParts.length}</span>
                   </button>
-                  {avslutadeOpen && (
+                  <Collapse open={avslutadeOpen}>
                     <table className="data-table avslutade-table">
                       <tbody>
                         {archivedParts.map(p => {
@@ -1212,7 +1219,7 @@ export default function Bolanekoll() {
                         })}
                       </tbody>
                     </table>
-                  )}
+                  </Collapse>
                 </div>
               )}
             </div>
@@ -1270,71 +1277,72 @@ export default function Bolanekoll() {
             <h2>Betalningar <span className="card-en">· Payments</span></h2>
             <span className="count-pill">{filteredPayments.length}</span>
             <div className="card-actions">
-              <div className="segmented" role="radiogroup" aria-label="Filter payments">
-                <button type="button" className={'seg' + (paymentFilter === 'all' ? ' is-active' : '')} onClick={() => setPaymentFilter('all')}>All</button>
-                {parts.map(p => <button key={p.id} type="button" className={'seg' + (paymentFilter === p.id ? ' is-active' : '')} onClick={() => setPaymentFilter(p.id)}>{p.label || 'part'}</button>)}
-              </div>
+              <Segmented value={paymentFilter} onChange={setPaymentFilter} ariaLabel="Filter payments"
+                options={[{ v: 'all', label: 'All' }, ...parts.map(p => ({ v: p.id, label: p.label || 'part' }))]} />
               <button type="button" className="btn btn-ghost" onClick={() => setPayDlg({ open: true, id: null })}>+ Add payment</button>
               <button type="button" className="btn btn-ghost btn-danger" disabled={!filteredPayments.length} onClick={clearPayments}>{paymentFilter === 'all' ? 'Delete all' : 'Delete ' + partNameById(paymentFilter)}</button>
             </div>
           </div>
-          {!filteredPayments.length ? (
-            <p className="empty">{payments.length ? 'No payments for this loan part.' : 'No payments yet. Import a statement above, or add one manually.'}</p>
-          ) : (
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead><tr><th className="col-date">Date</th><th>Loan part</th><th>Type</th><th className="num">Amount</th><th className="num">Balance</th><th className="col-act"></th></tr></thead>
-                <tbody>
-                  {shownPayments.map(p => {
-                    const isExp = expandedPays.has(p.id)
-                    return (
-                    <Fragment key={p.id}>
-                      <tr className={(p.is_insats ? 'is-insats' : '') + (isExp ? ' is-expanded' : '')}>
-                        <td className="col-date">
-                          {p.is_insats && <button type="button" className="icon-btn expand-btn" title={isExp ? 'Hide allocation' : 'Show allocation'} aria-expanded={isExp} onClick={() => toggleExpandPay(p.id)}>{isExp ? '▾' : '▸'}</button>}
-                          {p.date || '—'}
-                        </td>
-                        <td>{partNameById(p.loan_part_id)}</td>
-                        <td><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}</td>
-                        <td className="num">{fmtMoney(p.amount)}</td>
-                        <td className="num">{p.balance_after != null ? fmtMoney(p.balance_after) : '—'}</td>
-                        <td className="col-act">
-                          <button type="button" className={'icon-btn' + (p.is_insats ? ' is-on' : '')} title={settings.track_contributions ? (p.is_insats ? 'Edit insats split' : 'Flag as insats & split') : (p.is_insats ? 'Unflag insats' : 'Flag as insats')} onClick={() => handleStarClick(p)}>{p.is_insats ? '★' : '☆'}</button>
-                          <button type="button" className="icon-btn" title="Edit" onClick={() => setPayDlg({ open: true, id: p.id })}>✎</button>
-                          {parts.length > 1 && (
-                            <button type="button" className="icon-btn" title="Copy to parts" onClick={() => setCopyDlg({ open: true, source: p })}>⧉</button>
-                          )}
-                          <button type="button" className="icon-btn" data-del-pay title="Delete" onClick={() => { if (confirm('Delete this payment?')) handleDeletePay(p.id) }}>✕</button>
-                        </td>
-                      </tr>
-                      {p.is_insats && isExp && (
-                        <tr className="pay-detail">
-                          <td colSpan={6}>
-                            <div className="pay-detail-inner">
-                              <span className="pay-detail-label">Insats funded by</span>
-                              {p.paid_split ? (
-                                <>
-                                  <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(p.paid_split.a)}</span>
-                                  <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(p.paid_split.b)}</span>
-                                </>
-                              ) : (
-                                <span className="alloc-chip">{p.paid_by === 'joint'
-                                  ? 'Joint · split by ownership'
-                                  : <><b>{nameOf(p.paid_by === 'b' ? 'b' : 'a')}</b> {fmtMoney(p.amount)}</>}</span>
-                              )}
-                              {!p.paid_split && settings.track_contributions && <button type="button" className="link-btn" onClick={() => setInsatsDlg({ open: true, payment: p })}>allocate…</button>}
-                              {p.description && <span className="pay-detail-note">{p.description}</span>}
-                            </div>
+          <motion.div key={paymentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}>
+            {!filteredPayments.length ? (
+              <p className="empty">{payments.length ? 'No payments for this loan part.' : 'No payments yet. Import a statement above, or add one manually.'}</p>
+            ) : (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th className="col-date">Date</th><th>Loan part</th><th>Type</th><th className="num">Amount</th><th className="num">Balance</th><th className="col-act"></th></tr></thead>
+                  <tbody>
+                    {shownPayments.map(p => {
+                      const isExp = expandedPays.has(p.id)
+                      return (
+                      <Fragment key={p.id}>
+                        <tr className={(p.is_insats ? 'is-insats' : '') + (isExp ? ' is-expanded' : '')}>
+                          <td className="col-date">
+                            {p.is_insats && <button type="button" className="icon-btn expand-btn" title={isExp ? 'Hide allocation' : 'Show allocation'} aria-expanded={isExp} onClick={() => toggleExpandPay(p.id)}>{isExp ? '▾' : '▸'}</button>}
+                            {p.date || '—'}
+                          </td>
+                          <td>{partNameById(p.loan_part_id)}</td>
+                          <td><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}</td>
+                          <td className="num">{fmtMoney(p.amount)}</td>
+                          <td className="num">{p.balance_after != null ? fmtMoney(p.balance_after) : '—'}</td>
+                          <td className="col-act">
+                            <button type="button" className={'icon-btn' + (p.is_insats ? ' is-on' : '')} title={settings.track_contributions ? (p.is_insats ? 'Edit insats split' : 'Flag as insats & split') : (p.is_insats ? 'Unflag insats' : 'Flag as insats')} onClick={() => handleStarClick(p)}>{p.is_insats ? '★' : '☆'}</button>
+                            <button type="button" className="icon-btn" title="Edit" onClick={() => setPayDlg({ open: true, id: p.id })}>✎</button>
+                            {parts.length > 1 && (
+                              <button type="button" className="icon-btn" title="Copy to parts" onClick={() => setCopyDlg({ open: true, source: p })}>⧉</button>
+                            )}
+                            <button type="button" className="icon-btn" data-del-pay title="Delete" onClick={() => { if (confirm('Delete this payment?')) handleDeletePay(p.id) }}>✕</button>
                           </td>
                         </tr>
-                      )}
-                    </Fragment>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                        {p.is_insats && isExp && (
+                          <tr className="pay-detail">
+                            <td colSpan={6}>
+                              <div className="pay-detail-inner">
+                                <span className="pay-detail-label">Insats funded by</span>
+                                {p.paid_split ? (
+                                  <>
+                                    <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(p.paid_split.a)}</span>
+                                    <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(p.paid_split.b)}</span>
+                                  </>
+                                ) : (
+                                  <span className="alloc-chip">{p.paid_by === 'joint'
+                                    ? 'Joint · split by ownership'
+                                    : <><b>{nameOf(p.paid_by === 'b' ? 'b' : 'a')}</b> {fmtMoney(p.amount)}</>}</span>
+                                )}
+                                {!p.paid_split && settings.track_contributions && <button type="button" className="link-btn" onClick={() => setInsatsDlg({ open: true, payment: p })}>allocate…</button>}
+                                {p.description && <span className="pay-detail-note">{p.description}</span>}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </motion.div>
           {(hiddenPayCount > 0 || payVisible > PAY_PAGE) && (
             <div className="table-more">
               {hiddenPayCount > 0 && (

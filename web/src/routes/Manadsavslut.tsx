@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { motion, useReducedMotion } from 'motion/react'
 import { useTheme } from '../App'
 import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
@@ -356,6 +357,7 @@ function SettingsDialog({ open, settings, onSave, onClose, onExport, onImport }:
 export default function Manadsavslut() {
   const { theme, toggleTheme } = useTheme()
   const active = useToolPageActive('/manadsavslut')
+  const reduceMotion = useReducedMotion()
   useLayoutEffect(() => { document.documentElement.classList.remove('calc-layout') }, [])
 
   const [items, setItems] = useState<Item[]>([])
@@ -666,55 +668,55 @@ export default function Manadsavslut() {
             <h2>Poster <span className="card-en">· Items</span></h2>
             <span className="count-pill">{filteredItems.length}</span>
             <div className="card-actions">
-              <div className="segmented" role="radiogroup" aria-label="Filter items">
-                {([['open', 'Open'], ['pending', 'Ask later'], ['all', 'All'], ['a', aName], ['b', bName]] as const).map(([f, lbl]) => (
-                  <button key={f} type="button" role="radio" aria-checked={currentFilter === f} className={'seg' + (currentFilter === f ? ' is-active' : '')} onClick={() => setCurrentFilter(f)}>{lbl}</button>
-                ))}
-              </div>
+              <Segmented value={currentFilter} onChange={setCurrentFilter} ariaLabel="Filter items"
+                options={[{ v: 'open' as const, label: 'Open' }, { v: 'pending' as const, label: 'Ask later' }, { v: 'all' as const, label: 'All' }, { v: 'a' as const, label: aName }, { v: 'b' as const, label: bName }]} />
               <button type="button" className="btn btn-ghost" onClick={() => setItemDlg({ open: true, id: null })}>+ Add item</button>
               <button type="button" className="btn btn-ghost btn-danger" onClick={clearOpen}>Delete all open</button>
             </div>
           </div>
-          {!filteredItems.length ? (
-            <p className="empty">{items.length ? 'No items match this filter.' : 'No items yet. Import a statement above, or add one manually.'}</p>
-          ) : (
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead><tr><th className="col-date">Date</th><th>Item</th><th>Paid by</th><th>Owes</th><th>Type</th><th className="num">Charge</th><th className="num">Owed</th><th>Status</th><th className="col-act"></th></tr></thead>
-                <tbody>
-                  {filteredItems.map(it => (
-                    <tr key={it.id} className={it.paid ? 'is-settled' : it.pending ? 'is-pending' : ''}>
-                      <td className="col-date">{it.date_purchased}</td>
-                      <td>{it.description}{it.note && <span className="row-note"> {it.note}</span>}{it.personal_items?.length > 0 && <span className="personal-flag" title="Has personal items carved out before the split">• personal</span>}</td>
-                      <td>{nameOf(it.fronted_by)}</td>
-                      <td>{nameOf(it.owed_by)}</td>
-                      <td className="col-type">
-                        {it.paid ? (it.split ? 'Split' : 'All') : (
-                          // Pending → toggle shows NEITHER side active (a choice is owed); picking
-                          // either resolves it. A decided open row also gets an ⏰ to re-park it.
-                          <>
-                            <Segmented small value={it.pending ? '' : (it.split ? 'split' : 'full')} onChange={v => toggleType(it, v === 'split')} options={[{ v: 'split' as const, label: 'Split' }, { v: 'full' as const, label: 'All' }]} />
-                            {!it.pending && <button type="button" className="icon-btn ask-btn" title="Ask later" aria-label="Ask later" onClick={() => flagPending(it)}>⏰</button>}
-                          </>
-                        )}
-                      </td>
-                      <td className="num">{fmtMoney(it.enter_amount)}</td>
-                      <td className="num">{fmtMoney(it.amount)}</td>
-                      <td>{it.paid ? <span className="tag tag-settled">Settled</span> : it.pending ? <span className="tag tag-pending">Ask later</span> : <span className="tag tag-open">Open</span>}</td>
-                      <td className="col-act">
-                        {it.paid
-                          ? <span className="row-lock" title="Settled — reopen its settlement to edit">🔒</span>
-                          : <>
-                              <button type="button" className="icon-btn" title="Edit" onClick={() => setItemDlg({ open: true, id: it.id })}>✎</button>
-                              <button type="button" className="icon-btn" data-del title="Delete" onClick={() => deleteItem(it.id)}>✕</button>
-                            </>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <motion.div key={currentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}>
+            {!filteredItems.length ? (
+              <p className="empty">{items.length ? 'No items match this filter.' : 'No items yet. Import a statement above, or add one manually.'}</p>
+            ) : (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead><tr><th className="col-date">Date</th><th>Item</th><th>Paid by</th><th>Owes</th><th>Type</th><th className="num">Charge</th><th className="num">Owed</th><th>Status</th><th className="col-act"></th></tr></thead>
+                  <tbody>
+                    {filteredItems.map(it => (
+                      <tr key={it.id} className={it.paid ? 'is-settled' : it.pending ? 'is-pending' : ''}>
+                        <td className="col-date">{it.date_purchased}</td>
+                        <td>{it.description}{it.note && <span className="row-note"> {it.note}</span>}{it.personal_items?.length > 0 && <span className="personal-flag" title="Has personal items carved out before the split">• personal</span>}</td>
+                        <td>{nameOf(it.fronted_by)}</td>
+                        <td>{nameOf(it.owed_by)}</td>
+                        <td className="col-type">
+                          {it.paid ? (it.split ? 'Split' : 'All') : (
+                            // Pending → toggle shows NEITHER side active (a choice is owed); picking
+                            // either resolves it. A decided open row also gets an ⏰ to re-park it.
+                            <>
+                              <Segmented small value={it.pending ? '' : (it.split ? 'split' : 'full')} onChange={v => toggleType(it, v === 'split')} options={[{ v: 'split' as const, label: 'Split' }, { v: 'full' as const, label: 'All' }]} />
+                              {!it.pending && <button type="button" className="icon-btn ask-btn" title="Ask later" aria-label="Ask later" onClick={() => flagPending(it)}>⏰</button>}
+                            </>
+                          )}
+                        </td>
+                        <td className="num">{fmtMoney(it.enter_amount)}</td>
+                        <td className="num">{fmtMoney(it.amount)}</td>
+                        <td>{it.paid ? <span className="tag tag-settled">Settled</span> : it.pending ? <span className="tag tag-pending">Ask later</span> : <span className="tag tag-open">Open</span>}</td>
+                        <td className="col-act">
+                          {it.paid
+                            ? <span className="row-lock" title="Settled — reopen its settlement to edit">🔒</span>
+                            : <>
+                                <button type="button" className="icon-btn" title="Edit" onClick={() => setItemDlg({ open: true, id: it.id })}>✎</button>
+                                <button type="button" className="icon-btn" data-del title="Delete" onClick={() => deleteItem(it.id)}>✕</button>
+                              </>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </motion.div>
         </section>
 
         {/* ── Insights ── */}

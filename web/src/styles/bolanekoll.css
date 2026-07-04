@@ -202,12 +202,20 @@
     flex-wrap: wrap;
   }
   .segmented .seg {
+    position: relative;
     font-family: var(--font-ui); font-size: 13px; font-weight: 550;
     color: var(--ink-soft); background: none; border: none; cursor: pointer;
-    padding: 6px 12px; border-radius: 6px; transition: background 0.15s, color 0.15s; white-space: nowrap;
+    padding: 6px 12px; border-radius: 6px; transition: color 0.15s; white-space: nowrap;
   }
   .segmented .seg:hover { color: var(--ink-mid); }
-  .segmented .seg.is-active { background: var(--accent); color: var(--on-accent); }
+  .segmented .seg.is-active { color: var(--on-accent); }
+  /* The active fill — a single element Motion slides between segments via a
+     shared layoutId (Segmented.tsx), instead of each button's own background
+     cutting in/out. z-index stacking: absolute elements paint above static
+     siblings regardless of source order, so the label needs its own z-index
+     to stay above the pill. */
+  .seg-pill { position: absolute; inset: 0; z-index: 0; background: var(--accent); border-radius: 6px; }
+  .seg-label { position: relative; z-index: 1; }
   .segmented-sm { padding: 2px; }
   .segmented-sm .seg { font-size: 12px; padding: 3px 8px; }
 
@@ -492,11 +500,14 @@ dialog.bk-dialog {
   border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 3px; gap: 2px; flex-wrap: wrap;
 }
 .bk-dialog .segmented .seg {
+  position: relative;
   font-family: var(--font-ui); font-size: 13px; font-weight: 550;
   color: var(--ink-soft); background: none; border: none; cursor: pointer;
-  padding: 6px 12px; border-radius: 6px; transition: background 0.15s, color 0.15s; white-space: nowrap;
+  padding: 6px 12px; border-radius: 6px; transition: color 0.15s; white-space: nowrap;
 }
-.bk-dialog .segmented .seg.is-active { background: var(--accent); color: var(--on-accent); }
+.bk-dialog .segmented .seg.is-active { color: var(--on-accent); }
+.bk-dialog .seg-pill { position: absolute; inset: 0; z-index: 0; background: var(--accent); border-radius: 6px; }
+.bk-dialog .seg-label { position: relative; z-index: 1; }
 .bk-dialog .form-hint { font-size: 12.5px; color: var(--ink-soft); margin-top: 0.7rem; min-height: 1em; }
 .bk-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.3rem; }
 .bk-dialog .settings-data-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
