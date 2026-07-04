@@ -1,0 +1,95 @@
+/* auth.css — the magic-link login wall (AuthGate, plan 16a). Nordic-editorial
+   to match the rest of Hemma·OS; all colours from the shared token system so it
+   themes with the app. */
+
+.auth-splash {
+  min-height: 100svh;
+  background: var(--paper);
+}
+
+.auth-screen {
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--paper);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: 18px;
+  box-shadow: var(--shadow-md);
+  padding: 40px 32px;
+  text-align: center;
+}
+
+.auth-kicker {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 18px;
+}
+
+.auth-title {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 6vw, 36px);
+  font-weight: 400;
+  line-height: 1.1;
+  color: var(--ink);
+  margin: 0 0 10px;
+}
+
+.auth-lead {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin: 0 0 24px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-input {
+  font-family: var(--font-ui);
+  font-size: 15px;
+  text-align: center;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink);
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+.auth-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-faint);
+}
+
+.auth-submit {
+  justify-content: center;
+  padding: 12px 16px;
+  font-size: 14px;
+}
+
+.auth-error {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: oklch(55% 0.17 25);
+  margin: 14px 0 0;
+}
+
+.auth-reset {
+  margin-top: 22px;
+}

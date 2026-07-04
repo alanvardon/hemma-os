@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { createHashRouter, Outlet, RouterProvider, ScrollRestoration } from 'react-router-dom'
+import { createHashRouter, Navigate, Outlet, RouterProvider, ScrollRestoration } from 'react-router-dom'
+import AuthGate from './components/AuthGate'
 import Home from './routes/Home'
 import ScenariosDashboard from './routes/ScenariosDashboard'
 import Bostadskalkyl from './routes/Bostadskalkyl'
@@ -49,6 +50,10 @@ const router = createHashRouter([
       { path: '/bolanekoll', element: <Bolanekoll /> },
       { path: '/manadsavslut', element: <Manadsavslut /> },
       { path: '/hushallsbudget', element: <Hushallsbudget /> },
+      // Catch-all: unknown hashes (incl. the magic-link `#access_token…`
+      // callback, which supabase-js consumes on load) fall back to the hub
+      // instead of React Router's error page — plan 16a.
+      { path: '*', element: <Navigate to="/" replace /> },
     ],
   },
 ])
@@ -65,7 +70,9 @@ export default function App() {
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      <RouterProvider router={router} />
+      <AuthGate>
+        <RouterProvider router={router} />
+      </AuthGate>
     </ThemeContext.Provider>
   )
 }
