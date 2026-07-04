@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Money, Percent } from '../components/AnimatedNumber'
@@ -22,6 +22,24 @@ import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribut
 import * as Store from '../lib/mortgage-store'
 import { CURRENCY_SUFFIX } from '../lib/format'
 import Segmented from '../components/Segmented'
+
+// A <tr> can't animate its own height, so revealed rows animate it inside each
+// cell instead: the td keeps zero vertical padding (see .cell-pad in CSS) and
+// this wrapper tweens the content 0 ↔ auto, so the whole row genuinely grows
+// and shrinks rather than popping in at full height with only a fade.
+function CellReveal({ reduce, children }: { reduce: boolean | null; children?: ReactNode }) {
+  return (
+    <motion.div
+      style={{ overflow: 'hidden' }}
+      initial={{ height: 0, opacity: 0 }}
+      animate={{ height: 'auto', opacity: 1 }}
+      exit={{ height: 0, opacity: 0 }}
+      transition={reduce ? { duration: 0 } : { duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+    >
+      <div className="cell-pad">{children}</div>
+    </motion.div>
+  )
+}
 
 // ── Formatters (faithful to mortgagetracker.js) ──────────────────────────────
 
@@ -1182,23 +1200,18 @@ export default function Bolanekoll() {
                             const share = partsTotal > 0 ? bal / partsTotal * 100 : 0
                             const per = effectiveRatePeriod(p, periods)
                             return (
-                              <motion.tr
-                                key={p.id}
-                                className="ld-member"
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                exit={{ opacity: 0 }}
-                                transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}
-                              >
+                              <motion.tr key={p.id} className="ld-member">
                                 <td>
-                                  <span className="ld-member-label">
-                                    <span className="ld-name">{p.label || '(no name)'}{p.loan_number && <span className="ld-loanno">#{p.loan_number}</span>}</span>
-                                    {rateBadge(per?.rate ?? null, per?.rate_type ?? null)}
-                                  </span>
+                                  <CellReveal reduce={reduceMotion}>
+                                    <span className="ld-member-label">
+                                      <span className="ld-name">{p.label || '(no name)'}{p.loan_number && <span className="ld-loanno">#{p.loan_number}</span>}</span>
+                                      {rateBadge(per?.rate ?? null, per?.rate_type ?? null)}
+                                    </span>
+                                  </CellReveal>
                                 </td>
-                                <td className="num">{fmtMoney(bal)}</td>
-                                <td className="num">{fmtPct(share)}</td>
-                                <td className="col-act">{partActs(p)}</td>
+                                <td className="num"><CellReveal reduce={reduceMotion}>{fmtMoney(bal)}</CellReveal></td>
+                                <td className="num"><CellReveal reduce={reduceMotion}>{fmtPct(share)}</CellReveal></td>
+                                <td className="col-act"><CellReveal reduce={reduceMotion}>{partActs(p)}</CellReveal></td>
                               </motion.tr>
                             )
                           })}
@@ -1339,15 +1352,9 @@ export default function Bolanekoll() {
                         </tr>
                         <AnimatePresence initial={false}>
                           {p.is_insats && isExp && (
-                            <motion.tr
-                              key="detail"
-                              className="pay-detail"
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              exit={{ opacity: 0 }}
-                              transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}
-                            >
+                            <motion.tr key="detail" className="pay-detail">
                               <td colSpan={6}>
+                                <CellReveal reduce={reduceMotion}>
                                 <div className="pay-detail-inner">
                                   <span className="pay-detail-label">Insats funded by</span>
                                   {p.paid_split ? (
@@ -1363,6 +1370,7 @@ export default function Bolanekoll() {
                                   {!p.paid_split && settings.track_contributions && <button type="button" className="link-btn" onClick={() => setInsatsDlg({ open: true, payment: p })}>allocate…</button>}
                                   {p.description && <span className="pay-detail-note">{p.description}</span>}
                                 </div>
+                                </CellReveal>
                               </td>
                             </motion.tr>
                           )}

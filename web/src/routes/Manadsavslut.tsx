@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useTheme } from '../App'
 import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
@@ -781,16 +781,25 @@ export default function Manadsavslut() {
             <h2>Tidigare avslut <span className="card-en">· History</span></h2>
             <span className="count-pill">{payments.length}</span>
           </div>
-          {!payments.length ? (
-            <p className="empty">No settlements yet. Settle the open items above to close a month.</p>
-          ) : (
-            payments.map(p => {
+          {!payments.length && <p className="empty">No settlements yet. Settle the open items above to close a month.</p>}
+          {/* Settling and reopening add/remove whole entries — animate the row
+              in/out so the section doesn't jump when the list changes. */}
+          <AnimatePresence initial={false}>
+            {payments.map(p => {
               const linked = itemsByPayment[p.id] || []
               const when = (p.created_at || '').slice(0, 10)
               const gross = linked.reduce((s, it) => s + (it.enter_amount ?? 0), 0)
               const isOpen = openSettlements.has(p.id)
               return (
-                <div key={p.id} className={'history-item' + (isOpen ? ' is-open' : '')}>
+                <motion.div
+                  key={p.id}
+                  className="history-anim"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={reduceMotion ? { duration: 0 } : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                >
+                <div className={'history-item' + (isOpen ? ' is-open' : '')}>
                   <button type="button" className="history-summary" aria-expanded={isOpen} onClick={() => toggleSettlement(p.id)}>
                     <span className="history-period">{when && p.period_label ? <>{when} · {p.period_label}</> : p.period_label || when}</span>
                     <span className="history-transfer">{p.from_person && p.amount > 0 ? <>{nameOf(p.from_person)} → {nameOf(p.to_person)} · <strong>{fmtMoney(p.amount)}</strong></> : 'Even — no transfer'}</span>
@@ -848,9 +857,10 @@ export default function Manadsavslut() {
                   <div className="history-actions"><button type="button" className="link-btn" onClick={() => reopen(p.id)}>Reopen settlement</button></div>
                   </Collapse>
                 </div>
+                </motion.div>
               )
-            })
-          )}
+            })}
+          </AnimatePresence>
         </section>
 
       </main>

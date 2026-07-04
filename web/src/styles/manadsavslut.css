@@ -172,8 +172,12 @@
   .import-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.2rem; }
 
   /* ── History ────────────────────────────────────────────────── */
+  /* .history-anim is the enter/exit height wrapper around each settlement.
+     overflow:hidden makes it a BFC, so the item's bottom margin is contained
+     and collapses away with the height tween instead of popping at the end. */
+  .history-anim { overflow: hidden; }
   .history-item { border: 1px solid var(--rule); border-radius: var(--r-md); margin-bottom: 0.6rem; overflow: hidden; }
-  .history-item:last-child { margin-bottom: 0; }
+  .history-anim:last-child .history-item { margin-bottom: 0; }
   .history-summary {
     display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
     width: 100%; padding: 0.8rem 1rem; border: none; cursor: pointer;
