@@ -130,18 +130,36 @@ function _pick(obj: object, cols: readonly string[]): Record<string, unknown> {
   return out
 }
 
-// A full insert row: id + created_at (client-stamped) + the data columns.
-// Drops null/undefined so a NOT-NULL column falls back to its DB default rather
-// than being sent an explicit null (which bypasses the default and violates the
-// constraint). Legacy rows can carry null in NOT-NULL columns — e.g. payments
-// predating `paid_by` — and the table defaults are chosen to match the app's own
-// normalizers (paid_by/owner → 'joint', rate_type → 'rörlig', booleans → false),
-// so the fallback reproduces exactly what the app shows for those rows. Nullable
-// columns simply become null when omitted, so nothing is lost.
+// Concrete fallbacks for every NOT-NULL column, so an insert NEVER depends on
+// the DB column default being present (a table created before the migration can
+// be NOT NULL without the default). Values match the migration defaults AND the
+// app's own normalizers (paid_by/owner → 'joint' via normPaidBy, rate_type →
+// 'rörlig', text → '', numeric → 0, booleans → false), so a filled row shows
+// exactly what the app renders for it. Columns absent here are nullable and are
+// simply omitted when null. Keyed by column name — names are unambiguous across
+// tables (date → '', note → '', amount → 0, …).
+const NOT_NULL_DEFAULTS: Record<string, unknown> = {
+  label: '', loan_number: '', start_balance: 0, start_date: '', archived: false,
+  rate_type: 'rörlig',
+  date: '', kind: 'payment', description: '', amount: 0, paid_by: 'joint', source: '', is_insats: false,
+  value: 0, note: '', is_purchase: false,
+  owner: 'joint',
+}
+
+// A full insert row: id + created_at (client-stamped) + the data columns. A
+// null/undefined value is replaced by its NOT_NULL_DEFAULTS fallback if the
+// column is NOT NULL, else dropped (nullable → null). This means a legacy row
+// with, e.g., paid_by null inserts 'joint' rather than an explicit null, so it
+// works regardless of whether the DB column carries the default.
 function _row(obj: { id?: string; created_at?: string }, cols: readonly string[]): Record<string, unknown> {
   const rec = obj as Record<string, unknown>
   const out: Record<string, unknown> = {}
-  for (const c of ['id', 'created_at', ...cols]) if (rec[c] != null) out[c] = rec[c]
+  if (rec.id != null) out.id = rec.id
+  if (rec.created_at != null) out.created_at = rec.created_at
+  for (const c of cols) {
+    if (rec[c] != null) out[c] = rec[c]
+    else if (c in NOT_NULL_DEFAULTS) out[c] = NOT_NULL_DEFAULTS[c]
+  }
   return out
 }
 
