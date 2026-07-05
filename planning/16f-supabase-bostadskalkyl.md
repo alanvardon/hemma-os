@@ -21,7 +21,7 @@ facade swap like the others, just with one casing quirk (`savedAt`).
 | `loadGlobalConstants` / `saveGlobalConstants`, `loadDriftItems`/`saveDriftItems`, `loadSavingsItems`/`saveSavingsItems` | `tool_state` (`tool='bostadskalkyl-prefs'`, one blob `{ globalConstants, driftItems, savingsItems }`) |
 | `loadSession`/`saveSession`/`clearSession`, `loadDraft`/`saveDraft`/`clearDraft`, `loadDraftConstants`/…, `loadTheme`/`saveTheme`, `loadDriftYearly`/`saveDriftYearly` | **stay localStorage** — scratch buffers + device state |
 
-## The table (SQL Editor; also commit to `supabase/schema.sql`)
+## The table (as a Supabase migration: `migration new` → write SQL → `db push`)
 
 ⚠ `Scenario` is the ONE non-snake_case-ready row type: `savedAt` (camelCase) +
 camelCase keys inside `inputs`/`constants`. Only `savedAt` becomes a real column

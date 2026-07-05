@@ -550,9 +550,10 @@ household, deduped by row id.
 ## Build plan — 8 PRs, in order (one at a time, base=main)
 
 Branch names `ui/supabase-<slug>`. Every PR: `npm run build` + `npx oxlint` +
-`npx vitest run` green in `web/`, plus the listed gate. SQL for each phase is
-run in the dashboard first, and **every statement is also committed to
-`supabase/schema.sql`** in the same PR (the repo's paper trail — see Risks).
+`npx vitest run` green in `web/`, plus the listed gate. Each phase's schema goes
+in as **a Supabase migration** (`migration new` → write the SQL → `db push`),
+committed in the same PR — not pasted into the dashboard (see Risks: migrations
+are the source of truth).
 
 1. **PR 1 `ui/supabase-auth-gate` — project + auth + gate.** Manual: create
    project, auth URLs, household tables + function + grant + policies (schema
@@ -720,17 +721,20 @@ dashboard:
 - Synchronous-store refactor (hushallsbudget) is the riskiest code change —
   it's isolated as its own commit inside PR 4, still on localStorage, so the
   refactor and the cloud swap can't blame each other.
-- **`supabase/schema.sql` is the idempotent source of truth — apply it
-  VERBATIM.** Every statement is `… if not exists` / `create or replace` /
-  `drop policy if exists` + recreate, so pasting the *whole file* into the SQL
-  Editor either sets up or **repairs** the database (re-asserting the correct
-  `for all` policies). **Never hand-edit an object in the dashboard and copy the
-  change back** — that lossy round-trip is exactly how the `for select`-only
-  policy drifted in. New phases append their tables here using the same
-  idempotent shape (`create table if not exists`, `drop policy if exists hh_all
-  … create policy hh_all … for all … with check …`, `create or replace
-  trigger`). Graduating to the Supabase CLI's migration files is the real fix
-  when you want it; the idempotent single file is the v1 stand-in.
+- **Schema is managed by Supabase CLI migrations — this is the source of
+  truth.** (Adopted after 16c; it replaces the earlier "paste `schema.sql`
+  verbatim" approach, which drifted — a hand-copied file let a `for select`-only
+  policy slip in.) The live schema was captured into a baseline migration via
+  `supabase db pull`; every change since is its own file under
+  `supabase/migrations/`. To change the schema: `npx supabase migration new
+  <name>` → write **only the delta** (`create table`, `alter table`, `drop
+  policy … create policy … for all … with check …`) → `npx supabase db push`
+  (applies only un-applied migrations to the linked remote) → commit the file.
+  `npx supabase migration list` shows local-vs-remote status. **Never hand-edit
+  an object in the dashboard** — the migration file must be what runs, or the two
+  desync. (`schema.sql` is retired; `supabase/audit-rls.sql` stays — it validates
+  the *result* regardless of how schema is applied. The SQL Editor is still used
+  for one-off *data* like the household seed and for running the audit query.)
 
 ## Definition of done (per phase)
 

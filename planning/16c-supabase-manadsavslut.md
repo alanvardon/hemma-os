@@ -11,7 +11,7 @@ envelope today (items, payments, settings) → two data tables + one
 `tool_state` blob row. This PR also **introduces the generic `tool_state`
 table** that every later blob (budget, konsult, settings…) reuses.
 
-## The tables (SQL Editor; also commit to `supabase/schema.sql`)
+## The tables (now captured in the baseline migration)
 
 `tool_state` — one jsonb row per household per tool (Decision 9). Created here,
 reused by 16d/16e/16f/16g:

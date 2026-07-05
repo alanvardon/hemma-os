@@ -11,7 +11,7 @@ already-1:1-shaped store) — to prove the entire loop: auth → household → R
 cloud CRUD → local cache → first-login import. This is the pattern every later
 phase copies, so get it clean here.
 
-## The table (SQL Editor; also commit to `supabase/schema.sql`)
+## The table (now captured in the baseline migration)
 
 Mirrors `SalarySubmission` in `hushallsbudget.ts`. **`id` is `text`** (Decision
 7: the store's fallback id isn't a UUID); **`equal_share` is `numeric`**, not a

@@ -97,7 +97,11 @@ trigger needs it):
 create extension if not exists moddatetime schema extensions;
 ```
 
-Commit all of the above verbatim to a new `supabase/schema.sql` in this PR.
+(Historically these ran in the SQL Editor and were kept in `supabase/schema.sql`.
+After 16c the project adopted Supabase CLI migrations: `supabase db pull`
+captured this schema into the baseline migration `supabase/migrations/…_remote_schema.sql`,
+and `schema.sql` was retired. New schema changes are migrations — see the master
+plan's Risks note.)
 
 ## Part 3 — the code
 
