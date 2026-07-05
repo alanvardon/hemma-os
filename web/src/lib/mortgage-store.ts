@@ -120,14 +120,18 @@ function migrateToPeriods(out: StoreEnvelope, raw: Record<string, unknown>): voi
 }
 
 // ── Row projection ───────────────────────────────────────────────────────────
-function _pick(obj: Record<string, unknown>, cols: readonly string[]): Record<string, unknown> {
+// Pick the given columns off any row/patch object. Accepts `object` (not
+// Record<string, unknown>) so the concrete interface types — which have no
+// implicit index signature — pass without a cast at every call site.
+function _pick(obj: object, cols: readonly string[]): Record<string, unknown> {
+  const rec = obj as Record<string, unknown>
   const out: Record<string, unknown> = {}
-  for (const c of cols) if (obj[c] !== undefined) out[c] = obj[c]
+  for (const c of cols) if (rec[c] !== undefined) out[c] = rec[c]
   return out
 }
 
 // A full insert row: id + created_at (client-stamped) + the data columns.
-function _row(obj: { id?: string; created_at?: string } & Record<string, unknown>, cols: readonly string[]): Record<string, unknown> {
+function _row(obj: { id?: string; created_at?: string }, cols: readonly string[]): Record<string, unknown> {
   return { id: obj.id, created_at: obj.created_at, ..._pick(obj, cols) }
 }
 
@@ -463,7 +467,7 @@ async function _mergeInsert<T extends { id?: string; created_at?: string }>(tabl
     seen.add(row.id); toAdd.push(row)
   }
   if (toAdd.length) {
-    const { error } = await supabase.from(table).insert(toAdd.map(r => _row(r as Record<string, unknown>, cols)))
+    const { error } = await supabase.from(table).insert(toAdd.map(r => _row(r, cols)))
     if (error) throw error
   }
   return toAdd
