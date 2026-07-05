@@ -558,7 +558,7 @@ export default function Hushallsbudget() {
   const active = useToolPageActive('/hushallsbudget')
   useLayoutEffect(() => { document.documentElement.classList.remove('calc-layout') }, [])
 
-  const [state, setState] = useState<BudgetState>(() => loadBudget() || defaultState())
+  const [state, setState] = useState<BudgetState>(defaultState)
   const [saved, setSaved] = useState(false)
   const [justAddedId, setJustAddedId] = useState<string | null>(null)
   const [justAddedCatId, setJustAddedCatId] = useState<string | null>(null)
@@ -573,11 +573,28 @@ export default function Hushallsbudget() {
   const savedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   function flashSaved() { setSaved(true); clearTimeout(savedTimer.current); savedTimer.current = setTimeout(() => setSaved(false), 1400) }
 
-  // Persist (debounced) + flash "Saved ✓"; skip the initial mount.
-  const firstRender = useRef(true)
+  // Load the persisted budget once on mount (now async — localStorage today,
+  // cloud after the swap). `loadedRef` holds the exact object we hydrated with
+  // so the save effect below can tell a load apart from a user edit and skip
+  // saving the freshly-loaded (or placeholder default) state straight back.
+  const loadedRef = useRef<BudgetState | null>(null)
   useEffect(() => {
-    if (firstRender.current) { firstRender.current = false; return }
-    const t = setTimeout(() => { saveBudget(state); flashSaved() }, 250)
+    let alive = true
+    loadBudget().then((loaded) => {
+      if (!alive) return
+      // Capture the hydration baseline via the updater (reads `prev`, not a
+      // stale `state` closure) — the placeholder default when nothing's stored,
+      // else the loaded budget. The save effect skips this exact object.
+      setState((prev) => (loadedRef.current = loaded ?? prev))
+    })
+    return () => { alive = false }
+  }, [])
+
+  // Persist (debounced) + flash "Saved ✓". Skip until the initial load lands,
+  // and skip the load-induced render itself (state === the object we loaded).
+  useEffect(() => {
+    if (loadedRef.current === null || state === loadedRef.current) return
+    const t = setTimeout(() => { void saveBudget(state); flashSaved() }, 250)
     return () => clearTimeout(t)
   }, [state])
 
