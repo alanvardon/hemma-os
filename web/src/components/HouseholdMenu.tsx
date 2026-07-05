@@ -120,12 +120,19 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
             <p className="modal-note">Bara du än så länge.</p>
           ) : (
             <ul className="hh-list">
-              {members.map((m) => (
-                <li key={m.user_id} className="hh-list-row">
-                  <span className="hh-role-dot" data-role={m.role} aria-hidden="true" />
-                  <span className="hh-role">{roleLabel(m.role)}</span>
-                </li>
-              ))}
+              {members.map((m) => {
+                const isYou = !!m.email && m.email.toLowerCase() === email?.toLowerCase()
+                return (
+                  <li key={m.user_id} className="hh-list-row">
+                    <span className="hh-role-dot" data-role={m.role} aria-hidden="true" />
+                    <span className="hh-member-email">
+                      {m.email ?? 'Okänd medlem'}
+                      {isYou && <span className="hh-you"> (du)</span>}
+                    </span>
+                    <span className="hh-role">{roleLabel(m.role)}</span>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </section>
