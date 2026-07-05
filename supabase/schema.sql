@@ -32,7 +32,7 @@ as $$
   select household_id from public.household_members
   where user_id = (select auth.uid())
   limit 1;
-
+$$;
 
 grant usage on schema private to authenticated;
 
@@ -51,3 +51,33 @@ create policy hm_read on public.household_members for select to authenticated
 --Enable the moddatetime extension now (every later data table's updated_at trigger needs it):
 
 create extension if not exists moddatetime schema extensions;
+
+
+-- ── 16b — salary_submissions (pilot) ─────────────────────────────────────────
+-- Mirrors SalarySubmission in hushallsbudget.ts. id is TEXT (Decision 7: the
+-- store's fallback id isn't a UUID); equal_share is NUMERIC, not boolean.
+create table public.salary_submissions (
+  id              text primary key default gen_random_uuid()::text,
+  household_id    uuid not null references public.households(id)
+                  default private.current_household(),
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  month           text not null,               -- 'YYYY-MM'
+  person_a_name   text,
+  income_a        numeric,
+  person_b_name   text,
+  income_b        numeric,
+  transfer_from   text,                         -- 'a' | 'b'
+  transfer_to     text,
+  transfer_amount numeric,
+  equal_share     numeric,                      -- NOT boolean
+  note            text,
+  income_items    jsonb                         -- [{owner,label,amount}], never queried
+);
+
+alter table public.salary_submissions enable row level security;
+create policy hh_all on public.salary_submissions for all to authenticated
+  using      (household_id = (select private.current_household()))
+  with check (household_id = (select private.current_household()));
+create trigger set_updated_at before update on public.salary_submissions
+  for each row execute procedure moddatetime (updated_at);
