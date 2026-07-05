@@ -118,6 +118,11 @@ the move is concrete.
 
 ## Verification gate / Definition of done
 
+- **RLS acceptance check (before real data)** — see master §Risks. For **all
+  five** mortgage tables: signed-in member INSERT→201 + reads back; `+test`
+  outsider denied both ways; `supabase/audit-rls.sql` all ✓. (Five new tables =
+  five chances to ship a `for select`-only policy — the audit catches any.)
+
 - Bolånekoll renders **identically from cloud data on a second device**: charts,
   the loan-part grouping (`groupLoanParts`), and the Insatser·Contributions
   section (gated behind the `track_contributions` setting — confirm the setting

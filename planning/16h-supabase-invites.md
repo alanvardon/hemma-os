@@ -69,6 +69,12 @@ A small settings surface (in the household/settings area — new or existing):
 
 ## Verification gate / Definition of done
 
+- **RLS acceptance check** — the new **write** policies on
+  `household_invites` are the surface here: a member can insert an invite for
+  their household and read invites addressed to their email; a non-member can do
+  neither. `supabase/audit-rls.sql` still all ✓ (data tables unchanged; the
+  invite table stays read-mostly with the scoped write policy).
+
 - A **fresh account with a pending invite** self-joins on first sign-in and sees
   the household's data.
 - A **fresh account without an invite** lands in its own empty private

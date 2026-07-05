@@ -96,6 +96,12 @@ real history is on the live Pages site, not localhost.)
 
 ## Verification gate / Definition of done
 
+- **RLS acceptance check (before real data)** — see master §Risks. Signed-in
+  member: INSERT into `salary_submissions` returns 201 **and** reads back;
+  `+test` outsider (no household): SELECT `[]` **and** INSERT rejected (403);
+  `supabase/audit-rls.sql` returns all ✓. The positive round-trip is the part
+  that catches a `for select`-only policy (the monthend bug).
+
 - **RLS both directions, BEFORE real data:** sign in with a third
   `alan.vardon+test@proton.me` alias (a separate `auth.users` user, in no
   household). Confirm it (a) reads zero salary rows and (b) cannot insert one

@@ -73,6 +73,10 @@ Idempotent. (`importJSON`-style dedupe already lives in the store.)
 
 ## Verification gate / Definition of done
 
+- **RLS acceptance check (before real data)** — see master §Risks. For
+  `scenarios`: signed-in member INSERT→201 + reads back; `+test` outsider denied
+  both ways; `supabase/audit-rls.sql` all ✓.
+
 - Saved scenarios list syncs across devices.
 - Draft/session/theme behave **unchanged per device** (they stayed local) —
   verify a draft on one device does NOT appear on the other, by design.

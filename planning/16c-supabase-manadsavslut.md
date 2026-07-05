@@ -113,6 +113,13 @@ not localhost.
 
 ## Verification gate / Definition of done
 
+- **RLS acceptance check (before real data)** — see master §Risks. For **both**
+  `monthend_items` and `monthend_payments`: signed-in member INSERT→201 + reads
+  back; `+test` outsider denied both ways; `supabase/audit-rls.sql` all ✓. (This
+  is the check that was missing — the tables shipped with a `for select`-only
+  policy, so reads worked but every insert 403'd until the policy was fixed to
+  `for all`.)
+
 - Full month-end flow against cloud: CSV import → per-row triage → settle,
   reflected on your partner's device.
 - `settle()` two-write order behaves as specced (interrupt-safe).

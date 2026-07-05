@@ -681,15 +681,23 @@ dashboard:
 
 ## Risks / watch-list
 
-- **RLS correctness is the whole security model** — test that a third user
-  cannot read your household's rows *before* putting real data in (walkthrough
-  step 10). Also test the **write** direction (an outsider's insert must be
-  rejected by `with check`). A table with RLS *enabled but no policy* denies
-  everyone — confusing but safe; a table where you **forgot to enable RLS** is
-  world-readable to anyone with the publishable key — that's the failure mode
-  to fear. The dashboard shows a red "RLS disabled" badge per table; check it
-  after every new table (there are ~10 tables across the phases — the badge
-  check is per-PR, not once).
+- **RLS correctness is the whole security model — and you must test the POSITIVE
+  path, not just the negative.** The **RLS acceptance check** for every new
+  table, run *before* real data goes in:
+  1. **Member insert round-trips:** signed in as a household member, an INSERT
+     returns **201** *and* the row reads back.
+  2. **Outsider is denied both ways:** signed in as the `+test` account (no/other
+     household), SELECT returns `[]` **and** INSERT is rejected (403).
+  3. **`supabase/audit-rls.sql` is all ✓** (paste it into the SQL Editor).
+
+  Why step 1 is non-negotiable: the Månadsavslut bug was a `for select`-only
+  policy. It passed the outsider test (inserts *were* rejected) — but it also
+  silently blocked **you**: reads returned 200, every insert 403. Testing only
+  that "an outsider can't write" gives a false pass. Always confirm a real member
+  *can* write. Failure modes to know: RLS *enabled but no insert-capable policy*
+  → nobody can write (this bug); RLS *disabled* → world-readable to anyone with
+  the publishable key (the dashboard shows a red "RLS disabled" badge — check it
+  per table). `audit-rls.sql` mechanically catches both.
 - **Publishable key in a public bundle** is expected; never ship the **secret
   key** (`sb_secret_…` / legacy "service role").
 - **Free-tier project pausing:** Supabase **pauses free projects after ~1 week
@@ -712,21 +720,32 @@ dashboard:
 - Synchronous-store refactor (hushallsbudget) is the riskiest code change —
   it's isolated as its own commit inside PR 4, still on localStorage, so the
   refactor and the cloud swap can't blame each other.
-- **Schema changes live in the dashboard, not git** (v1 tradeoff). Every SQL
-  statement you run goes verbatim into `supabase/schema.sql` in the same PR as
-  the code that needs it; graduating to the Supabase CLI's migration files is
-  a later nicety, not needed for two users.
+- **`supabase/schema.sql` is the idempotent source of truth — apply it
+  VERBATIM.** Every statement is `… if not exists` / `create or replace` /
+  `drop policy if exists` + recreate, so pasting the *whole file* into the SQL
+  Editor either sets up or **repairs** the database (re-asserting the correct
+  `for all` policies). **Never hand-edit an object in the dashboard and copy the
+  change back** — that lossy round-trip is exactly how the `for select`-only
+  policy drifted in. New phases append their tables here using the same
+  idempotent shape (`create table if not exists`, `drop policy if exists hh_all
+  … create policy hh_all … for all … with check …`, `create or replace
+  trigger`). Graduating to the Supabase CLI's migration files is the real fix
+  when you want it; the idempotent single file is the v1 stand-in.
 
 ## Definition of done (per phase)
 
+Every phase that adds a table passes the **RLS acceptance check** (see Risks:
+member insert→201 + read-back; outsider denied both ways; `audit-rls.sql` all ✓)
+before real data.
+
 - **A (PRs 1–2):** sign in via magic link on two devices; salary log syncs
-  between them; a third user (different email, no/other household) can neither
-  read nor write your rows (RLS verified both directions); existing local
-  salary history imported once (re-running the import adds nothing); offline
-  still renders from cache; magic-link round trip works on localhost **and**
-  the live Pages site.
+  between them; **RLS acceptance check passes** (member can write + read back; a
+  third `+test` user can neither read nor write); existing local salary history
+  imported once (re-running the import adds nothing); offline still renders from
+  cache; magic-link round trip works on localhost **and** the live Pages site.
 - **B (PRs 3–4) / C (PRs 5–7):** each migrated tool reads/writes Supabase,
-  syncs across devices, shares across the two of you; `build`/`oxlint`/`vitest`
+  syncs across devices, shares across the two of you; **RLS acceptance check
+  passes for every new table** (`audit-rls.sql` all ✓); `build`/`oxlint`/`vitest`
   green; offline fallback works; per-PR gates above.
 - **D (PR 8):** partner self-joins via email pre-auth; strangers can't create
   accounts (`shouldCreateUser: false`); (optional) realtime updates.
