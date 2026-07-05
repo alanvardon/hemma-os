@@ -11,7 +11,7 @@ envelope today (items, payments, settings) → two data tables + one
 `tool_state` blob row. This PR also **introduces the generic `tool_state`
 table** that every later blob (budget, konsult, settings…) reuses.
 
-## The tables (SQL Editor; also commit to `supabase/schema.sql`)
+## The tables (now captured in the baseline migration)
 
 `tool_state` — one jsonb row per household per tool (Decision 9). Created here,
 reused by 16d/16e/16f/16g:
@@ -112,6 +112,13 @@ retry. Per-origin/per-device: the real history lives on the live Pages origin,
 not localhost.
 
 ## Verification gate / Definition of done
+
+- **RLS acceptance check (before real data)** — see master §Risks. For **both**
+  `monthend_items` and `monthend_payments`: signed-in member INSERT→201 + reads
+  back; `+test` outsider denied both ways; `supabase/audit-rls.sql` all ✓. (This
+  is the check that was missing — the tables shipped with a `for select`-only
+  policy, so reads worked but every insert 403'd until the policy was fixed to
+  `for all`.)
 
 - Full month-end flow against cloud: CSV import → per-row triage → settle,
   reflected on your partner's device.

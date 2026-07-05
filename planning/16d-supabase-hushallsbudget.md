@@ -64,6 +64,11 @@ once. First member to log in seeds the shared budget (fine for two people).
 
 ## Verification gate / Definition of done
 
+- **RLS acceptance check** — no new table (you write to the existing
+  `tool_state`), but confirm the write path: signed-in member upsert of the
+  `hushallsbudget` blob succeeds + reads back; `+test` outsider denied;
+  `supabase/audit-rls.sql` all ✓ (see master §Risks).
+
 - **Commit 1 shipped/verified independently** (budget page unchanged, still
   local) before commit 2 — this is the whole point of the split.
 - Budget edits sync across both devices.

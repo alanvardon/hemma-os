@@ -28,7 +28,7 @@ Implement as a **Postgres function** (`security definer`, called via
 write `household_members`/`households`, which the client otherwise can't (their
 policies are read-only). This keeps the trust boundary in the DB.
 
-## Invite RLS policies (SQL; commit to `supabase/schema.sql`)
+## Invite RLS policies (as a Supabase migration: `migration new` → `db push`)
 
 The client now needs limited write/read on invites + membership. Add:
 
@@ -58,8 +58,8 @@ A small settings surface (in the household/settings area — new or existing):
   invited partner) can be onboarded via invites — stops strangers creating
   accounts at all. (Was deliberately deferred from 16a because the seed needed
   accounts to pre-exist.)
-- Retire the SQL seed from the docs' "how to onboard" path (keep it in
-  `supabase/schema.sql` history as reference).
+- Retire the SQL seed from the docs' "how to onboard" path (keep it in the
+  migration history / this plan as reference).
 
 ## Optional stretch (same PR or a follow-up)
 
@@ -68,6 +68,12 @@ A small settings surface (in the household/settings area — new or existing):
   partner's edit appears live. Nice-to-have; the couple tools benefit most.
 
 ## Verification gate / Definition of done
+
+- **RLS acceptance check** — the new **write** policies on
+  `household_invites` are the surface here: a member can insert an invite for
+  their household and read invites addressed to their email; a non-member can do
+  neither. `supabase/audit-rls.sql` still all ✓ (data tables unchanged; the
+  invite table stays read-mostly with the scoped write policy).
 
 - A **fresh account with a pending invite** self-joins on first sign-in and sees
   the household's data.

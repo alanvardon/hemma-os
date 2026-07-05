@@ -10,7 +10,7 @@ Migrate the mortgage tracker: five row arrays + a settings blob today → five
 data tables + one `tool_state` row. Biggest table count of any phase, but the
 recipe is identical to 16c — no new mechanics.
 
-## The tables (SQL Editor; also commit to `supabase/schema.sql`)
+## The tables (as a Supabase migration: `migration new` → write SQL → `db push`)
 
 Mirror the five row types in `mortgage.ts`. All ids `text`; all dates `text`
 (Decisions 7 & 8 — the app sorts dates lexicographically and legacy rows carry
@@ -117,6 +117,11 @@ active property + adds the selector UI — all its own plan (a new number), when
 the move is concrete.
 
 ## Verification gate / Definition of done
+
+- **RLS acceptance check (before real data)** — see master §Risks. For **all
+  five** mortgage tables: signed-in member INSERT→201 + reads back; `+test`
+  outsider denied both ways; `supabase/audit-rls.sql` all ✓. (Five new tables =
+  five chances to ship a `for select`-only policy — the audit catches any.)
 
 - Bolånekoll renders **identically from cloud data on a second device**: charts,
   the loan-part grouping (`groupLoanParts`), and the Insatser·Contributions

@@ -57,6 +57,11 @@ Flags `bostadskalkyl_konsult_supabase_imported` /
 
 ## Verification gate / Definition of done
 
+- **RLS acceptance check** — no new table (both blobs live in the existing
+  `tool_state`), but confirm the write path for each: signed-in member upsert
+  succeeds + reads back; `+test` outsider denied; `supabase/audit-rls.sql` all ✓
+  (see master §Risks).
+
 - **Commit 1 shipped/verified independently** (extraction, still local) before
   commit 2.
 - Both tools' inputs persist across devices.
