@@ -465,9 +465,11 @@ export default function Manadsavslut() {
       }))
     })
     if (!drafts.length) { showToast('Nothing selected to add.'); return }
-    const savedRows = await Store.addItems(drafts)
-    cancelImport(); await refresh(); flashSaved()
-    showToast('Added ' + savedRows.length + ' item' + (savedRows.length === 1 ? '' : 's') + '.')
+    try {
+      const savedRows = await Store.addItems(drafts)
+      cancelImport(); await refresh(); flashSaved()
+      showToast('Added ' + savedRows.length + ' item' + (savedRows.length === 1 ? '' : 's') + '.')
+    } catch (err) { saveErr(err) }
   }
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -506,16 +508,23 @@ export default function Manadsavslut() {
   const byMonth = useMemo(() => fillMonthGaps(grocerySpendByMonth(periodItems)), [periodItems])
 
   // ── Handlers ───────────────────────────────────────────────────────────────
-  async function handleSaveItem(rec: Omit<Item, 'id' | 'created_at'>) {
-    if (itemDlg.id) await Store.updateItem(itemDlg.id, { date_purchased: rec.date_purchased, description: rec.description, enter_amount: rec.enter_amount, split: rec.split, amount: rec.amount, fronted_by: rec.fronted_by, owed_by: rec.owed_by, note: rec.note, personal_items: rec.personal_items, personal_a: rec.personal_a, personal_b: rec.personal_b })
-    else await Store.addItem(rec)
-    await refresh(); flashSaved(); setItemDlg({ open: false, id: null }); showToast(itemDlg.id ? 'Item updated.' : 'Item added.')
+  // A failed cloud write now throws (the pre-Supabase store never did); report it
+  // via a toast instead of leaving an unhandled rejection + a half-updated UI.
+  function saveErr(err: unknown) {
+    showToast(err instanceof Error && err.message ? 'Couldn’t save — ' + err.message : 'Couldn’t save — you may be offline.')
   }
-  async function deleteItem(id: string) { if (!confirm('Delete this item?')) return; await Store.removeItem(id); await refresh(); flashSaved(); showToast('Item deleted.') }
+  async function handleSaveItem(rec: Omit<Item, 'id' | 'created_at'>) {
+    try {
+      if (itemDlg.id) await Store.updateItem(itemDlg.id, { date_purchased: rec.date_purchased, description: rec.description, enter_amount: rec.enter_amount, split: rec.split, amount: rec.amount, fronted_by: rec.fronted_by, owed_by: rec.owed_by, note: rec.note, personal_items: rec.personal_items, personal_a: rec.personal_a, personal_b: rec.personal_b })
+      else await Store.addItem(rec)
+      await refresh(); flashSaved(); setItemDlg({ open: false, id: null }); showToast(itemDlg.id ? 'Item updated.' : 'Item added.')
+    } catch (err) { saveErr(err) }
+  }
+  async function deleteItem(id: string) { if (!confirm('Delete this item?')) return; try { await Store.removeItem(id); await refresh(); flashSaved(); showToast('Item deleted.') } catch (err) { saveErr(err) } }
   // Picking a side both sets the type AND resolves any pending flag in one write.
-  async function toggleType(it: Item, split: boolean) { await Store.updateItem(it.id, { split, amount: computeOwed(it.enter_amount, split, it.fronted_by, it.personal_a, it.personal_b), pending: false }); await refresh(); flashSaved() }
+  async function toggleType(it: Item, split: boolean) { try { await Store.updateItem(it.id, { split, amount: computeOwed(it.enter_amount, split, it.fronted_by, it.personal_a, it.personal_b), pending: false }); await refresh(); flashSaved() } catch (err) { saveErr(err) } }
   // Park a decided item as "ask later" (the existing-item flag path).
-  async function flagPending(it: Item) { await Store.updateItem(it.id, { pending: true }); await refresh(); flashSaved() }
+  async function flagPending(it: Item) { try { await Store.updateItem(it.id, { pending: true }); await refresh(); flashSaved() } catch (err) { saveErr(err) } }
   async function clearOpen() {
     const openItems = items.filter(it => !it.paid)
     const openIds = openItems.map(it => it.id)
@@ -523,14 +532,16 @@ export default function Manadsavslut() {
     const pend = openItems.filter(it => it.pending).length
     const pendNote = pend ? ' (including ' + pend + ' “ask later” item' + (pend === 1 ? '' : 's') + ')' : ''
     if (!confirm('Delete all ' + openIds.length + ' open item' + (openIds.length === 1 ? '' : 's') + pendNote + '? Settled items are kept. This can’t be undone.')) return
-    const n = await Store.removeItems(openIds); await refresh(); flashSaved(); showToast('Deleted ' + n + ' open item' + (n === 1 ? '' : 's') + '.')
+    try { const n = await Store.removeItems(openIds); await refresh(); flashSaved(); showToast('Deleted ' + n + ' open item' + (n === 1 ? '' : 's') + '.') } catch (err) { saveErr(err) }
   }
   async function confirmSettle(draft: Omit<Payment, 'id' | 'created_at'>) {
-    const p = await Store.settle(draft); setSettleDlg(false); await refresh(); flashSaved()
-    showToast(p.amount > 0 ? 'Settled — ' + fmtMoney(p.amount) + ' closed.' : 'Items closed.')
+    try {
+      const p = await Store.settle(draft); setSettleDlg(false); await refresh(); flashSaved()
+      showToast(p.amount > 0 ? 'Settled — ' + fmtMoney(p.amount) + ' closed.' : 'Items closed.')
+    } catch (err) { saveErr(err) }
   }
-  async function reopen(id: string) { if (!confirm('Reopen this settlement? Its items become open again.')) return; await Store.removePayment(id); await refresh(); flashSaved(); showToast('Settlement reopened.') }
-  async function handleSaveSettings(patch: Partial<MonthEndSettings>) { await Store.saveSettings(patch); await refresh(); flashSaved(); setSettingsDlg(false); showToast('Settings saved.') }
+  async function reopen(id: string) { if (!confirm('Reopen this settlement? Its items become open again.')) return; try { await Store.removePayment(id); await refresh(); flashSaved(); showToast('Settlement reopened.') } catch (err) { saveErr(err) } }
+  async function handleSaveSettings(patch: Partial<MonthEndSettings>) { try { await Store.saveSettings(patch); await refresh(); flashSaved(); setSettingsDlg(false); showToast('Settings saved.') } catch (err) { saveErr(err) } }
 
   async function handleExport() {
     const text = await Store.exportJSON()

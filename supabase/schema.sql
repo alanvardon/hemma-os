@@ -81,3 +81,71 @@ create policy hh_all on public.salary_submissions for all to authenticated
   with check (household_id = (select private.current_household()));
 create trigger set_updated_at before update on public.salary_submissions
   for each row execute procedure moddatetime (updated_at);
+
+
+
+
+  create table public.tool_state (
+  household_id uuid not null references public.households(id)
+               default private.current_household(),
+  tool         text not null,          -- 'manadsavslut-settings', 'hushallsbudget', …
+  data         jsonb not null,
+  updated_at   timestamptz not null default now(),
+  primary key (household_id, tool)
+);
+alter table public.tool_state enable row level security;
+create policy hh_all on public.tool_state for all to authenticated
+  using      (household_id = (select private.current_household()))
+  with check (household_id = (select private.current_household()));
+create trigger set_updated_at before update on public.tool_state
+  for each row execute procedure moddatetime (updated_at);
+
+
+
+
+
+  create table public.monthend_items (
+  id text primary key default gen_random_uuid()::text,
+  household_id uuid not null references public.households(id) default private.current_household(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  date_purchased text not null default '',
+  description    text not null default '',
+  enter_amount   numeric not null default 0,
+  split          boolean not null default true,
+  amount         numeric not null default 0,
+  fronted_by     text not null default 'a',    -- 'a' | 'b'
+  owed_by        text not null default 'a',
+  paid           boolean not null default false,
+  pending        boolean not null default false,
+  payment_id     text,                          -- text id of the settling payment
+  note           text not null default '',
+  personal_items jsonb not null default '[]',   -- [{person,amount,note}]
+  personal_a     numeric not null default 0,    -- derived sums, store re-derives
+  personal_b     numeric not null default 0
+);
+alter table public.monthend_items enable row level security;
+create policy hh_all on public.monthend_items for all to authenticated
+  using      (household_id = (select private.current_household()))
+  with check (household_id = (select private.current_household()));
+create trigger set_updated_at before update on public.monthend_items
+  for each row execute procedure moddatetime (updated_at);
+
+create table public.monthend_payments (
+  id text primary key default gen_random_uuid()::text,
+  household_id uuid not null references public.households(id) default private.current_household(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  item_ids     jsonb not null default '[]',     -- ["<item id>", …]
+  from_person  text,                            -- 'a' | 'b' | null
+  to_person    text,
+  amount       numeric not null default 0,
+  period_label text not null default '',
+  note         text not null default ''
+);
+alter table public.monthend_payments enable row level security;
+create policy hh_all on public.monthend_payments for all to authenticated
+  using      (household_id = (select private.current_household()))
+  with check (household_id = (select private.current_household()));
+create trigger set_updated_at before update on public.monthend_payments
+  for each row execute procedure moddatetime (updated_at);
