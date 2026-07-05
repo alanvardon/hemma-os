@@ -7,6 +7,10 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { claimHousehold, emailMaySignIn } from '../lib/household'
+import { useTheme } from '../App'
+import auroraMp4 from '../assets/auth/aurora.mp4'
+import auroraPosterAvif from '../assets/auth/aurora-poster.avif'
+import auroraPosterJpg from '../assets/auth/aurora-poster.jpg'
 
 // undefined = still restoring the persisted session (brief); null = signed out.
 type SessionState = Session | null | undefined
@@ -60,7 +64,43 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 
+/* Aurora backdrop (plan 34) — real Lofoten footage behind the login card,
+   dark theme only. Mounted conditionally so light theme never downloads a
+   byte of it. The poster paints first; the video crossfades in once frames
+   are actually flowing (`onPlaying`) — if autoplay is denied (iOS low-power
+   mode) nothing fires and the poster simply stays. prefers-reduced-motion
+   skips the <video> element entirely. */
+function AuroraBackdrop() {
+  const [playing, setPlaying] = useState(false)
+  const reduceMotion = useRef(
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  ).current
+  return (
+    <div className="auth-scene" aria-hidden="true">
+      <picture>
+        <source srcSet={auroraPosterAvif} type="image/avif" />
+        <img className="auth-scene-layer" src={auroraPosterJpg} alt="" />
+      </picture>
+      {!reduceMotion && (
+        <video
+          className="auth-scene-layer auth-scene-video"
+          src={auroraMp4}
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="auto"
+          data-playing={playing || undefined}
+          onPlaying={() => setPlaying(true)}
+        />
+      )}
+      <div className="auth-scene-scrim" />
+    </div>
+  )
+}
+
 function MagicLinkScreen() {
+  const { theme } = useTheme()
   const [email, setEmail] = useState('')
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
   const [error, setError] = useState('')
@@ -93,6 +133,7 @@ function MagicLinkScreen() {
 
   return (
     <div className="auth-screen">
+      {theme === 'dark' && <AuroraBackdrop />}
       <div className="auth-card">
         <p className="auth-kicker">Hemma·OS</p>
         {status === 'sent' ? (
