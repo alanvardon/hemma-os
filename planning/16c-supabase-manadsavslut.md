@@ -80,7 +80,11 @@ statements as 16b, per table).
 
 Keep all exported signatures. Items → `monthend_items`, payments →
 `monthend_payments`, settings → `tool_state` (`tool = 'manadsavslut-settings'`,
-`data` = the whole `MonthEndSettings`). Cache = existing `STORAGE_KEY`.
+`data` = the whole `MonthEndSettings`). **Split the keys** (as in 16b, see the
+master plan's key-split note): `STORAGE_KEY` (`bostadskalkyl_monthend_v1`)
+becomes a **read-only legacy import source + backup**; a **new**
+`bostadskalkyl_monthend_cache_v1` holds the write-through cache. The cache
+mirrors the whole `{ items, payments, settings }` envelope.
 
 - **`normalizeItem` keeps running** on rows loaded from Supabase — it's
   idempotent, so it harmlessly re-derives `personal_a/b`.
@@ -90,10 +94,22 @@ Keep all exported signatures. Items → `monthend_items`, payments →
   settled-but-unpaid. Two round trips; check `error` after each.
 - `addItems` (bulk CSV import) → one `.insert([...])` call.
 
-## First-login import
+## First-login import (one-time, idempotent)
 
-Flag `bostadskalkyl_monthend_supabase_imported`. Upsert items + payments by id;
-upsert the settings `tool_state` row only if none exists yet. Idempotent.
+On the first authenticated load after the household exists, if
+`localStorage['bostadskalkyl_monthend_supabase_imported']` is unset: read the
+legacy `bostadskalkyl_monthend_v1` envelope (the **read-only** key from the
+split, never the cache) and upsert **items → `monthend_items`** + **payments →
+`monthend_payments`** keyed on `id` (so re-running adds nothing), plus the
+**settings → `tool_state`** row **only if no cloud row exists yet** (so a
+partner's already-saved settings aren't clobbered); then set the flag.
+
+Unlike salary (one `list()`), Månadsavslut has three read entry points — gate
+the import at the start of **all three** (`listItems`/`listPayments`/
+`getSettings`) so it fires regardless of which loads first; dedupe concurrent
+calls with a shared in-memory promise; on any error leave the flag unset to
+retry. Per-origin/per-device: the real history lives on the live Pages origin,
+not localhost.
 
 ## Verification gate / Definition of done
 

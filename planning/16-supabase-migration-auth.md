@@ -457,8 +457,18 @@ the jsonb, only `savedAt` becomes a real column). The mapping lives in
 The async Promise-API stores (**salary**, **manadsavslut**, **mortgage**) are
 "swap one file": replace `_read`/`_write` localStorage calls with Supabase
 queries; keep the exported `list/add/remove/update` signatures so **call sites
-don't change**. The localStorage key becomes a write-through **cache** for
-offline. Shape of the swap, using salary as the example:
+don't change**.
+
+**⚠ Split the localStorage keys (data-safety — learned building 16b, applies to
+every store).** The old `STORAGE_KEY` stays as a **read-only legacy import
+source + permanent backup** — never written after the swap — and a **separate
+new cache key** (`…_cache_v1`) holds the write-through offline cache. Do NOT
+reuse one key for both: the cache write (`_writeCache` on the first `list()`
+after deploy) would overwrite the user's real history with cloud data *before*
+the first-login import can read it → silent data loss. With the split, the
+import always reads the untouched original.
+
+Shape of the swap, using salary as the example:
 
 ```ts
 export async function list(): Promise<SalarySubmission[]> {
@@ -527,7 +537,8 @@ Per-store specifics (verified against the code 2026-07-04):
 
 On the first authenticated load *after the household exists*, each migrated
 store checks its own flag key (e.g. `bostadskalkyl_salary_supabase_imported`);
-if unset, it reads the legacy localStorage rows and **upserts** them
+if unset, it reads the legacy localStorage rows (the original `STORAGE_KEY`,
+kept read-only by the key-split above — never the cache key) and **upserts** them
 (`.upsert(rows)` — insert-or-update keyed on `id`; idempotent, so running twice
 adds nothing) then sets the flag. Blob tools upsert their single `tool_state`
 row only if no cloud row exists yet (first household member to log in wins;

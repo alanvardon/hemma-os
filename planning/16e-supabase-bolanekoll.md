@@ -64,7 +64,11 @@ trigger (as in 16b/16c — per table). Columns beyond STD:
 Keep all exported signatures (`listLoanParts/addLoanPart/…/getSettings/
 saveSettings/exportJSON/importJSON`). Five arrays → five tables; `settings` →
 `tool_state` (`tool = 'bolanekoll-settings'`, `data` = the whole
-`MortgageSettings`, including `import_presets`). Cache = existing `STORAGE_KEY`.
+`MortgageSettings`, including `import_presets`). **Split the keys** (as in
+16b/16c, see the master plan's key-split note): `STORAGE_KEY`
+(`bostadskalkyl_mortgage_v1`) becomes a **read-only legacy import source +
+backup**; a **new** `bostadskalkyl_mortgage_cache_v1` holds the write-through
+cache (mirroring the whole five-array + settings envelope).
 
 - The v<4 `migrateToPeriods` migration keeps running against the **cache/import**
   path only — cloud rows are born v4, so it never fires on cloud data.
