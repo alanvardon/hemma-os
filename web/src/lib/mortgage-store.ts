@@ -131,8 +131,18 @@ function _pick(obj: object, cols: readonly string[]): Record<string, unknown> {
 }
 
 // A full insert row: id + created_at (client-stamped) + the data columns.
+// Drops null/undefined so a NOT-NULL column falls back to its DB default rather
+// than being sent an explicit null (which bypasses the default and violates the
+// constraint). Legacy rows can carry null in NOT-NULL columns — e.g. payments
+// predating `paid_by` — and the table defaults are chosen to match the app's own
+// normalizers (paid_by/owner → 'joint', rate_type → 'rörlig', booleans → false),
+// so the fallback reproduces exactly what the app shows for those rows. Nullable
+// columns simply become null when omitted, so nothing is lost.
 function _row(obj: { id?: string; created_at?: string }, cols: readonly string[]): Record<string, unknown> {
-  return { id: obj.id, created_at: obj.created_at, ..._pick(obj, cols) }
+  const rec = obj as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const c of ['id', 'created_at', ...cols]) if (rec[c] != null) out[c] = rec[c]
+  return out
 }
 
 // ── localStorage cache (offline fallback) ────────────────────────────────────
