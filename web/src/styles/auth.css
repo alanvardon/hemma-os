@@ -14,6 +14,8 @@
   justify-content: center;
   padding: 24px;
   background: var(--paper);
+  position: relative;
+  overflow: hidden;
 }
 
 .auth-card {
@@ -25,6 +27,59 @@
   box-shadow: var(--shadow-md);
   padding: 40px 32px;
   text-align: center;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Aurora backdrop (plan 34, dark theme only) ────────────────────────────
+   Layer order: poster <img> (paints immediately) → <video> (crossfades in on
+   first real frame) → scrim (contrast floor for the card). The near-black
+   base color covers the instant before the poster request lands. */
+.auth-scene {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: #060a12;
+}
+
+.auth-scene-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.auth-scene-video {
+  opacity: 0;
+  transition: opacity 1.4s ease;
+}
+.auth-scene-video[data-playing] {
+  opacity: 1;
+}
+
+.auth-scene-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 130% 100% at 50% 115%, rgb(4 7 14 / 0.5), transparent 62%),
+    linear-gradient(rgb(4 7 14 / 0.16), rgb(4 7 14 / 0.16));
+}
+
+/* Frosted card over the footage — the aurora glows through the blur. Only in
+   dark theme, which is the only theme that renders the scene. */
+[data-theme='dark'] .auth-card {
+  background: color-mix(in srgb, var(--paper-card) 55%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
+  backdrop-filter: blur(20px) saturate(1.15);
+  border-color: rgb(255 255 255 / 0.14);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.45);
+}
+[data-theme='dark'] .auth-input {
+  background: color-mix(in srgb, var(--paper) 65%, transparent);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-theme='dark'] .auth-card { background: var(--paper-card); }
 }
 
 .auth-kicker {
