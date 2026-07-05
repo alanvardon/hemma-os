@@ -208,21 +208,21 @@ export default function Home() {
   const [stats, setStats] = useState<HubStats>({ mortgage: null, monthEnd: null, budget: null })
   useEffect(() => {
     useStore.getState().hydrate()
-    const budget = budgetStat(loadBudget())
     let alive = true
     Promise.all([
+      loadBudget(),
       mortgageStore.listLoanParts(),
       mortgageStore.listPayments(),
       mortgageStore.listValuations(),
       monthEndStore.listItems(),
       monthEndStore.listPayments(),
       monthEndStore.getSettings(),
-    ]).then(([parts, mortgagePays, valuations, items, monthEndPays, maSettings]) => {
+    ]).then(([budget, parts, mortgagePays, valuations, items, monthEndPays, maSettings]) => {
       if (!alive) return
       setStats({
         mortgage: mortgageStat(parts, mortgagePays, valuations),
         monthEnd: monthEndStat(items, monthEndPays, maSettings, new Date()),
-        budget,
+        budget: budgetStat(budget),
       })
     })
     return () => { alive = false }
