@@ -299,7 +299,12 @@ function SalaryModal({ open, onClose, people, incomes, flashSaved, onHistoryChan
     const rows = await salaryStore.list()
     const dupe = rows.some((r) => r.month === record.month)
     if (dupe && !confirm('You’ve already logged ' + monthLabel(record.month) + '. Add another entry for it?')) return
-    await salaryStore.add(record)
+    try {
+      await salaryStore.add(record)
+    } catch (err) {
+      alert('Couldn’t save — you may be offline. ' + (err instanceof Error ? err.message : ''))
+      return
+    }
     onClose(); flashSaved(); onHistoryChanged()
   }
 
@@ -406,7 +411,10 @@ function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
   async function del(id: string | undefined) {
     if (!id) return
     if (!confirm('Delete this submission? This can’t be undone.')) return
-    await salaryStore.remove(id); onReload()
+    try { await salaryStore.remove(id) } catch (err) {
+      alert('Couldn’t delete — you may be offline. ' + (err instanceof Error ? err.message : '')); return
+    }
+    onReload()
   }
   function download(filename: string, text: string, type: string) {
     const blob = new Blob([text], { type })
