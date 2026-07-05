@@ -20,6 +20,7 @@ import { supabase } from './supabase'
 // Legacy pre-Supabase envelope — import source + backup (read-only after swap).
 export const STORAGE_KEY = 'bostadskalkyl_monthend_v1'
 const CACHE_KEY = 'bostadskalkyl_monthend_cache_v1'
+const IMPORT_FLAG = 'bostadskalkyl_monthend_supabase_imported'
 const ITEMS = 'monthend_items'
 const PAYMENTS = 'monthend_payments'
 const STATE = 'tool_state'
@@ -132,8 +133,74 @@ function _patchCache(fn: (env: Envelope) => void): void {
   const env = _readCache(); fn(env); _writeCache(env)
 }
 
+// ── First-login import (one-time, idempotent) ───────────────────────────────
+// Read the pre-Supabase envelope from the legacy key — normalised, with
+// id/created_at guaranteed — ready to upsert. Read-only: STORAGE_KEY is never
+// written after the swap, so the original survives even if every upload fails.
+function _readLegacy(): { items: Item[]; payments: Payment[]; settings: MonthEndSettings | null } {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return { items: [], payments: [], settings: null }
+    const d = JSON.parse(raw) as Record<string, unknown>
+    if (!d || typeof d !== 'object') return { items: [], payments: [], settings: null }
+    const items = Array.isArray(d.items) ? (d.items as Item[]).map((r) => {
+      const row = normalizeItem({ ...r })
+      if (!row.id) row.id = genId('item')
+      if (!row.created_at) row.created_at = new Date().toISOString()
+      return row
+    }) : []
+    const payments = Array.isArray(d.payments) ? (d.payments as Payment[]).map((r) => {
+      const row = { ...r }
+      if (!row.id) row.id = genId('pay')
+      if (!row.created_at) row.created_at = new Date().toISOString()
+      return row
+    }) : []
+    const settings = (d.settings && typeof d.settings === 'object')
+      ? { ...defaultSettings(), ...(d.settings as Partial<MonthEndSettings>) } : null
+    return { items, payments, settings }
+  } catch {
+    return { items: [], payments: [], settings: null }
+  }
+}
+
+// On the first authenticated load after the household exists, upsert the legacy
+// localStorage envelope into the cloud (items + payments keyed on id — idempotent;
+// settings only if no cloud row exists yet, so a partner's already-saved settings
+// aren't clobbered) and set a flag. Runs before the read queries below, so
+// imported rows appear in that same call. On any error it leaves the flag unset
+// to retry; `_importOnce` dedupes concurrent calls within a session.
+let _importOnce: Promise<void> | null = null
+function _importLocalOnce(): Promise<void> {
+  if (_importOnce) return _importOnce
+  _importOnce = (async () => {
+    let already = true
+    try { already = localStorage.getItem(IMPORT_FLAG) === '1' } catch { already = false }
+    if (already) return
+    const legacy = _readLegacy()
+    if (legacy.items.length) {
+      const { error } = await supabase.from(ITEMS).upsert(legacy.items.map(_itemRow), { onConflict: 'id' })
+      if (error) { _importOnce = null; return }
+    }
+    if (legacy.payments.length) {
+      const { error } = await supabase.from(PAYMENTS).upsert(legacy.payments.map(_paymentRow), { onConflict: 'id' })
+      if (error) { _importOnce = null; return }
+    }
+    if (legacy.settings) {
+      const { data, error: selErr } = await supabase.from(STATE).select('tool').eq('tool', SETTINGS_TOOL).maybeSingle()
+      if (selErr) { _importOnce = null; return }
+      if (!data) {
+        const { error } = await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data: legacy.settings }, { onConflict: 'household_id,tool' })
+        if (error) { _importOnce = null; return }
+      }
+    }
+    try { localStorage.setItem(IMPORT_FLAG, '1') } catch { /* ignore */ }
+  })()
+  return _importOnce
+}
+
 // ── Items ──────────────────────────────────────────────────────────────────
 export async function listItems(): Promise<Item[]> {
+  await _importLocalOnce()
   const { data, error } = await supabase.from(ITEMS).select('*').order('created_at', { ascending: false })
   if (error || !data) return sortedDesc(_readCache().items)
   const rows = (data as Item[]).map(normalizeItem)
@@ -194,6 +261,7 @@ export async function removeItems(ids: string[]): Promise<number> {
 
 // ── Payments (settlements) ───────────────────────────────────────────────────
 export async function listPayments(): Promise<Payment[]> {
+  await _importLocalOnce()
   const { data, error } = await supabase.from(PAYMENTS).select('*').order('created_at', { ascending: false })
   if (error || !data) return sortedDesc(_readCache().payments)
   const rows = data as Payment[]
@@ -238,6 +306,7 @@ export async function removePayment(id: string): Promise<number> {
 
 // ── Settings (tool_state blob) ───────────────────────────────────────────────
 export async function getSettings(): Promise<MonthEndSettings> {
+  await _importLocalOnce()
   const { data, error } = await supabase.from(STATE).select('data').eq('tool', SETTINGS_TOOL).maybeSingle()
   if (error) return { ...defaultSettings(), ..._readCache().settings }
   const settings = { ...defaultSettings(), ...((data?.data as Partial<MonthEndSettings>) || {}) }
