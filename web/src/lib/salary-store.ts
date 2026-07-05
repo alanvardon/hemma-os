@@ -1,20 +1,26 @@
 /* salary-store.ts — append-only log of monthly salary submissions.
-   Data-access module for the Hushållsbudget pot. Phase 16b: this now reads and
-   writes the Supabase `salary_submissions` table (cloud source-of-truth), with
-   the original localStorage envelope kept as a write-through CACHE so the log
-   still renders offline. Every exported signature is unchanged, so the call
-   sites in Hushallsbudget.tsx don't change. supabase-js never throws — it
-   returns { data, error } — so we check `error` and fall back to the cache on
-   reads / surface it on writes.
+   Data-access module for the Hushållsbudget pot. Phase 16b: reads and writes the
+   Supabase `salary_submissions` table (cloud source-of-truth), with a
+   localStorage write-through CACHE so the log still renders offline. Every
+   exported signature is unchanged, so the call sites in Hushallsbudget.tsx don't
+   change. supabase-js never throws — it returns { data, error } — so we check
+   `error` and fall back to the cache on reads / surface it on writes.
 
-   NOTE: this swap does NOT itself back-fill existing localStorage history into
-   the cloud — that's the separate first-login import step (next section of
-   plan 16b). Until that runs, pre-existing local rows live only in the cache. */
+   Two localStorage keys, deliberately separate (see below):
+   - STORAGE_KEY  — the PRE-Supabase history. Now the one-time import SOURCE and a
+     permanent backup; never written after the swap. Keeping it distinct from the
+     cache is what makes the first-login import safe: the cache write can never
+     clobber the original history before it's uploaded.
+   - CACHE_KEY    — the write-through offline cache of cloud rows. */
 
 import type { SalarySubmission } from './hushallsbudget'
 import { supabase } from './supabase'
 
+// Legacy pre-Supabase history — import source + backup. (Exported name kept for
+// back-compat; it is no longer the cache.)
 export const STORAGE_KEY = 'bostadskalkyl_salary_log_v1'
+const CACHE_KEY = 'bostadskalkyl_salary_cache_v1'
+const IMPORT_FLAG = 'bostadskalkyl_salary_supabase_imported'
 const TABLE = 'salary_submissions'
 const VERSION = 2 // v2 adds income_items (itemised income per person)
 
@@ -33,11 +39,9 @@ function _migrate(row: SalarySubmission): SalarySubmission {
 }
 
 // ── localStorage cache (offline fallback) ───────────────────────────────────
-// Read the cache as { version, submissions }. Tolerates a missing or corrupt
-// key by returning an empty log so the UI never throws.
 function _readCache(): SalarySubmission[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(CACHE_KEY)
     if (!raw) return []
     const data = JSON.parse(raw)
     if (!data || !Array.isArray(data.submissions)) return []
@@ -49,9 +53,31 @@ function _readCache(): SalarySubmission[] {
 
 function _writeCache(submissions: SalarySubmission[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: VERSION, submissions }))
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ version: VERSION, submissions }))
   } catch {
     /* private mode / quota — cache is best-effort */
+  }
+}
+
+// The pre-Supabase history, normalised + guaranteed id/created_at, ready to
+// upsert. Read-only: this key is never written after the swap, so the original
+// data survives even if every cloud write fails.
+function _readLegacy(): SalarySubmission[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return []
+    const data = JSON.parse(raw)
+    const arr: SalarySubmission[] = Array.isArray(data)
+      ? data
+      : (data && Array.isArray(data.submissions)) ? data.submissions : []
+    return arr.map((r) => {
+      const row = _migrate({ ...r })
+      if (!row.id) row.id = _id()
+      if (!row.created_at) row.created_at = new Date().toISOString()
+      return row
+    })
+  } catch {
+    return []
   }
 }
 
@@ -70,11 +96,11 @@ function _sortedDesc(rows: SalarySubmission[]): SalarySubmission[] {
   return rows.slice().sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
 }
 
-// Project a submission down to exactly the table's columns for insert. Crucially
-// this OMITS household_id + updated_at — the column default
+// Project a submission down to exactly the table's columns for insert/upsert.
+// Crucially this OMITS household_id + updated_at — the column default
 // (private.current_household()) and the moddatetime trigger fill those; the
 // client must never send them. created_at is always present by the time we
-// insert (add/importJSON stamp it), so including it preserves original dates.
+// write (callers stamp it), so including it preserves original dates.
 function _row(s: SalarySubmission): Record<string, unknown> {
   return {
     id: s.id,
@@ -93,11 +119,38 @@ function _row(s: SalarySubmission): Record<string, unknown> {
   }
 }
 
+// ── First-login import (one-time, idempotent) ───────────────────────────────
+// On the first authenticated load after the household exists, upsert the legacy
+// localStorage history into the cloud (keyed on id, so re-running adds nothing)
+// and set a flag. Runs per-origin/per-device — the real history lives on the
+// live Pages origin, so this matters there, not on localhost. On any error
+// (offline / RLS not ready) it does NOT set the flag and clears the in-memory
+// guard, so it retries on the next call. `_importOnce` dedupes concurrent calls
+// within a session.
+let _importOnce: Promise<void> | null = null
+function _importLocalOnce(): Promise<void> {
+  if (_importOnce) return _importOnce
+  _importOnce = (async () => {
+    let already = true
+    try { already = localStorage.getItem(IMPORT_FLAG) === '1' } catch { already = false }
+    if (already) return
+    const legacy = _readLegacy()
+    if (legacy.length) {
+      const { error } = await supabase.from(TABLE).upsert(legacy.map(_row), { onConflict: 'id' })
+      if (error) { _importOnce = null; return } // retry next call — don't mark done
+    }
+    try { localStorage.setItem(IMPORT_FLAG, '1') } catch { /* ignore */ }
+  })()
+  return _importOnce
+}
+
 // ── Public API (signatures unchanged) ───────────────────────────────────────
 
-// Every submission, newest first. Cloud is source-of-truth; on any error
-// (offline / RLS / down) serve the last-known cache so the log still renders.
+// Every submission, newest first. Runs the one-time legacy import first (so
+// imported rows appear in this very call), then reads cloud; on any error
+// (offline / RLS / down) serves the last-known cache so the log still renders.
 export async function list(): Promise<SalarySubmission[]> {
+  await _importLocalOnce()
   const { data, error } = await supabase
     .from(TABLE)
     .select('*')
@@ -111,7 +164,7 @@ export async function list(): Promise<SalarySubmission[]> {
 // Append one record. Stamps id + created_at (the DB would default them too),
 // inserts to the cloud, updates the cache optimistically, then resolves the
 // saved row. Throws on a write error so the caller can surface it — NB the
-// pre-Supabase store never rejected here, so double-check the call site copes.
+// pre-Supabase store never rejected here, so the call site guards for it.
 export async function add(record: SalarySubmission): Promise<SalarySubmission> {
   const saved: SalarySubmission = {
     ...record,
