@@ -49,8 +49,11 @@ create trigger set_updated_at before update on public.salary_submissions
 
 Keep every exported signature (`list/add/remove/exportJSON/importJSON/
 exportCSV`) so `Hushallsbudget.tsx` call sites don't change. Replace `_read`/
-`_write` bodies with Supabase queries; the existing `STORAGE_KEY` becomes a
-write-through **cache**.
+`_write` bodies with Supabase queries. **Split the keys** (see the master plan's
+key-split note): `STORAGE_KEY` (`bostadskalkyl_salary_log_v1`) stays a
+**read-only legacy import source + backup**, and a **new**
+`bostadskalkyl_salary_cache_v1` holds the write-through cache. Reusing one key
+would let the cache write clobber the legacy history before the import reads it.
 
 ```ts
 export async function list(): Promise<SalarySubmission[]> {
@@ -81,12 +84,15 @@ export async function add(record: SalarySubmission): Promise<SalarySubmission> {
 
 ## First-login import (one-time, idempotent)
 
-On first authenticated load after the household exists, if
+Run at the start of `list()`, guarded by a flag, so imported rows appear in that
+same call. On first authenticated load after the household exists, if
 `localStorage['bostadskalkyl_salary_supabase_imported']` is unset: read the
-legacy `bostadskalkyl_salary_log_v1` rows and `.upsert(rows)` (keyed on `id`,
-so re-running adds nothing), then set the flag. Runs per-origin, per-device —
-both devices import into the same household, deduped by id. (localStorage is
-per-origin: the real history is on the live Pages site, not localhost.)
+legacy `bostadskalkyl_salary_log_v1` rows (the **read-only** key from the split,
+never the cache) and `.upsert(rows)` (keyed on `id`, so re-running adds nothing),
+then set the flag. On error, leave the flag unset to retry; dedupe concurrent
+calls with an in-memory promise. Runs per-origin, per-device — both devices
+import into the same household, deduped by id. (localStorage is per-origin: the
+real history is on the live Pages site, not localhost.)
 
 ## Verification gate / Definition of done
 

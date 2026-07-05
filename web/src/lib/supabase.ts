@@ -17,4 +17,8 @@ if (!url || !key) {
   )
 }
 
-export const supabase = createClient(url ?? '', key ?? '')
+// Fall back to a syntactically-valid dummy when env is missing so importing this
+// module never throws (createClient rejects empty strings). Prod always has the
+// real CI secrets; this only bites in tests / dev-without-.env.local, where no
+// request is actually made.
+export const supabase = createClient(url || 'http://localhost:54321', key || 'anon-placeholder')
