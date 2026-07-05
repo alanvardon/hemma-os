@@ -93,3 +93,110 @@
 .auth-reset {
   margin-top: 22px;
 }
+
+/* ── Household menu (plan 16h) ─────────────────────────────────────────────── */
+/* The header trigger mirrors .theme-toggle-btn's circular chrome. */
+.household-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rule);
+  background: var(--paper-card);
+  color: var(--ink-mid);
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s, transform 0.18s;
+}
+.household-btn svg { width: 19px; height: 19px; }
+.household-btn:hover { background: var(--paper-warm); transform: translateY(-1px); }
+.household-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--rule));
+}
+
+.hh-section { margin-bottom: 1.5rem; }
+.hh-section:last-child { margin-bottom: 0.25rem; }
+
+.hh-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.hh-email {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hh-signout { font-size: 13px; flex-shrink: 0; }
+
+.hh-list { list-style: none; margin: 0; padding: 0; }
+.hh-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: 14px;
+  color: var(--ink);
+}
+.hh-list-row:last-child { border-bottom: none; }
+
+.hh-role-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  flex-shrink: 0;
+}
+.hh-role-dot[data-role="owner"] { background: var(--accent); }
+.hh-role { color: var(--ink-mid); }
+
+.hh-invite-note { margin: 0 0 0.75rem; }
+
+.hh-invite-form { display: flex; gap: 8px; }
+.hh-invite-input {
+  flex: 1;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink);
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+.hh-invite-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-faint);
+}
+.hh-error { margin: 10px 0 0; }
+
+.hh-invites { margin-top: 1rem; }
+.hh-invite-row { gap: 10px; }
+.hh-invite-email {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hh-pending {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: var(--paper-warm);
+  padding: 2px 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
