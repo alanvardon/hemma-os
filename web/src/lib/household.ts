@@ -9,6 +9,7 @@ import { supabase } from './supabase'
 export interface Member {
   user_id: string
   role: string
+  email: string | null
 }
 
 export interface Invite {
@@ -35,9 +36,10 @@ export async function emailMaySignIn(addr: string): Promise<boolean> {
   return data === true
 }
 
-// The current household's members (RLS scopes this to your household).
+// The current household's members WITH their emails, via the security-definer
+// household_roster RPC (auth.users isn't readable from the client). Owners first.
 export async function listMembers(): Promise<Member[]> {
-  const { data, error } = await supabase.from('household_members').select('user_id, role')
+  const { data, error } = await supabase.rpc('household_roster')
   if (error || !data) return []
   return data as Member[]
 }
