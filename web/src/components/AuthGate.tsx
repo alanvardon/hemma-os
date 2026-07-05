@@ -3,15 +3,21 @@
 // App.tsx, inside ThemeContext so the login screen is themed. Supabase persists
 // the session in localStorage and refreshes it, so this asks for a link roughly
 // once per device.
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
+import { claimHousehold, emailMaySignIn } from '../lib/household'
 
 // undefined = still restoring the persisted session (brief); null = signed out.
 type SessionState = Session | null | undefined
 
 export default function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionState>(undefined)
+  // A signed-in user might not have a household yet (fresh account / invitee).
+  // Gate the app on claim_household so the tool stores never read before one
+  // exists. `ready` flips true once the claim resolves for this user.
+  const [ready, setReady] = useState(false)
+  const claimedFor = useRef<string | null>(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
@@ -19,12 +25,37 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     return () => sub.subscription.unsubscribe()
   }, [])
 
+  useEffect(() => {
+    if (!session) {
+      claimedFor.current = null
+      setReady(false)
+      return
+    }
+    const uid = session.user.id
+    if (claimedFor.current === uid) {
+      setReady(true)
+      return
+    }
+    let alive = true
+    claimHousehold().then((hid) => {
+      if (!alive) return
+      // Cache success so a token refresh doesn't re-claim; on failure leave it
+      // unset (retry next auth event) but still let the app render off cache.
+      if (hid !== null) claimedFor.current = uid
+      setReady(true)
+    })
+    return () => { alive = false }
+  }, [session])
+
   if (session === undefined) {
     // Restoring session — keep it blank rather than flashing the login screen.
     return <div className="auth-splash" aria-hidden="true" />
   }
 
   if (session === null) return <MagicLinkScreen />
+
+  // Session present but the household claim hasn't resolved yet — brief splash.
+  if (!ready) return <div className="auth-splash" aria-hidden="true" />
 
   return <>{children}</>
 }
@@ -39,11 +70,18 @@ function MagicLinkScreen() {
     if (!email.trim()) return
     setStatus('sending')
     setError('')
+    // Hardening (plan 16h): only let an email create a new account if it has a
+    // pending invite. Existing users (the seeded couple) already have accounts,
+    // so GoTrue mails them regardless; strangers with no invite get nothing.
+    const mayCreate = await emailMaySignIn(email.trim())
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
       // Land back on the bare app root (no hash route) so the magic-link tokens
       // don't collide with React Router — plan 16a.
-      options: { emailRedirectTo: window.location.origin + window.location.pathname },
+      options: {
+        emailRedirectTo: window.location.origin + window.location.pathname,
+        shouldCreateUser: mayCreate,
+      },
     })
     if (error) {
       setStatus('error')

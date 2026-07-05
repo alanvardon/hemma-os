@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { Link, useNavigate } from 'react-router-dom'
 import HeroCanvas from '../components/HeroCanvas'
 import FlipClock from '../components/FlipClock'
+import HouseholdMenu from '../components/HouseholdMenu'
 import HubSparkline from '../components/HubSparkline'
 import { Money, MoneyCompact, Num, Percent } from '../components/AnimatedNumber'
 import { useTheme } from '../App'
@@ -415,6 +416,7 @@ export default function Home() {
         <div className="flip-clock-header">
           <FlipClock reduce={prefersReducedMotion()} instant={viaBack} />
         </div>
+        <HouseholdMenu />
         <button
           className="theme-toggle-btn"
           title="Toggle dark mode"
