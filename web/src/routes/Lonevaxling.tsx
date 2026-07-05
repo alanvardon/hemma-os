@@ -12,25 +12,8 @@ import {
   computeLonevaxling,
   defaultInputs,
 } from '../lib/lonevaxling'
+import * as lonevaxlingStore from '../lib/lonevaxling-store'
 import { parseFormatted } from '../lib/format'
-
-const STORAGE_KEY = 'bostadskalkyl_lonevaxling_v1'
-
-function loadInputs(): LonevaxlingInputs {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const saved = JSON.parse(raw) as Record<string, unknown>
-      const d = defaultInputs()
-      for (const k of Object.keys(d) as Array<keyof LonevaxlingInputs>) {
-        if (typeof saved[k] === 'number' && isFinite(saved[k] as number))
-          (d as unknown as Record<string, number>)[k] = saved[k] as number
-      }
-      return d
-    }
-  } catch { /* private mode */ }
-  return defaultInputs()
-}
 
 // NOTE: uses U+202F narrow no-break space (not lib/format's plain space) so
 // amounts in prose don't wrap mid-number.
@@ -96,12 +79,21 @@ function buildWarnings(r: LonevaxlingResult): Array<{ cls: string; text: string 
 export default function Lonevaxling() {
   const { theme, toggleTheme } = useTheme()
   const active = useToolPageActive('/lonevaxling')
-  const [inputs, setInputs] = useState<LonevaxlingInputs>(loadInputs)
+  const [inputs, setInputs] = useState<LonevaxlingInputs>(defaultInputs)
   const [saveVisible, setSaveVisible] = useState(false)
   const [resetKey, setResetKey] = useState(0)
   const [ratesOpen, setRatesOpen] = useState(false)
   const reduceMotion = useReducedMotion()
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Load persisted inputs once on mount (async now — localStorage today, cloud
+  // after the swap). Saves are imperative (in the handlers), so there's no
+  // save-on-change effect to race with this hydrate.
+  useEffect(() => {
+    let alive = true
+    lonevaxlingStore.load().then((saved) => { if (alive && saved) setInputs(saved) })
+    return () => { alive = false }
+  }, [])
 
   useLayoutEffect(() => {
     document.documentElement.classList.add('calc-layout')
@@ -120,7 +112,7 @@ export default function Lonevaxling() {
   const result = useMemo(() => computeLonevaxling(inputs), [inputs])
 
   function saveToStorage(inp: LonevaxlingInputs) {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(inp)) } catch { /* private mode */ }
+    lonevaxlingStore.save(inp)
     setSaveVisible(true)
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => setSaveVisible(false), 1400)
