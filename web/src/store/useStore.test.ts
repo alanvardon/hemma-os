@@ -1,4 +1,20 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// The storage facade is cloud-backed now; the store's fire-and-forget writes go
+// through Supabase. Stub the client so these unit tests never touch the network
+// (and can't hit a local Supabase on :54321). Every terminal resolves cleanly.
+vi.mock('../lib/supabase', () => {
+  const chain: Record<string, unknown> = {}
+  Object.assign(chain, {
+    select: () => chain, insert: () => chain, upsert: () => chain,
+    update: () => chain, delete: () => chain, eq: () => chain,
+    in: () => chain, not: () => chain, order: () => chain,
+    maybeSingle: () => Promise.resolve({ data: null, error: null }),
+    then: (resolve: (v: unknown) => unknown) => resolve({ data: [], error: null }),
+  })
+  return { supabase: { from: () => chain } }
+})
+
 import { useStore } from './useStore'
 import { DEFAULT_INPUTS, DEFAULT_CONSTANTS } from '../lib/calc'
 
