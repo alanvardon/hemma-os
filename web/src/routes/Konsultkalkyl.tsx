@@ -2,14 +2,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion, useReducedMotion } from 'motion/react'
 import { computeContracting, defaultInputs, type KonsultInputs } from '../lib/konsult'
+import * as konsultStore from '../lib/konsult-store'
 import { Money, Percent, Num } from '../components/AnimatedNumber'
 import { useTheme } from '../App'
 import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
 import { parseFormatted } from '../lib/format'
 import Collapse from '../components/Collapse'
-
-const STORAGE_KEY = 'bostadskalkyl_konsult_v1'
 
 // NOTE: uses U+00A0 no-break space (not lib/format's plain space) so amounts
 // don't wrap mid-number; no Math.round — every call site pre-rounds.
@@ -31,33 +30,21 @@ function pct0(x: number) {
   return <Percent value={x} decimals={0} space />
 }
 
-function loadInputs(): KonsultInputs {
-  const d = defaultInputs()
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const saved = JSON.parse(raw) as Record<string, unknown>
-      for (const k of Object.keys(d) as (keyof KonsultInputs)[]) {
-        const v = saved[k]
-        if (typeof v === 'number' && isFinite(v)) d[k] = v
-      }
-    }
-  } catch {
-    // private mode or bad data
-  }
-  return d
-}
-
-function saveInputs(inputs: KonsultInputs) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(inputs)) } catch { /* ignore */ }
-}
-
 type FieldKind = 'cur' | 'num'
 
 export default function Konsultkalkyl() {
   const { theme, toggleTheme } = useTheme()
   const active = useToolPageActive('/konsultkalkyl')
-  const [inputs, setInputs] = useState<KonsultInputs>(loadInputs)
+  const [inputs, setInputs] = useState<KonsultInputs>(defaultInputs)
+
+  // Load persisted inputs once on mount (async now — localStorage today, cloud
+  // after the swap). Saves are imperative (in the handlers), so there's no
+  // save-on-change effect to race with this hydrate.
+  useEffect(() => {
+    let alive = true
+    konsultStore.load().then((saved) => { if (alive && saved) setInputs(saved) })
+    return () => { alive = false }
+  }, [])
   const [saveVisible, setSaveVisible] = useState(false)
   const [resetKey, setResetKey] = useState(0)
   const [ratesOpen, setRatesOpen] = useState(false)
@@ -83,7 +70,7 @@ export default function Konsultkalkyl() {
   function handleChange(key: keyof KonsultInputs, value: string) {
     const next = { ...inputs, [key]: parseFormatted(value) }
     setInputs(next)
-    saveInputs(next)
+    konsultStore.save(next)
     setSaveVisible(true)
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => setSaveVisible(false), 1400)
@@ -96,7 +83,7 @@ export default function Konsultkalkyl() {
   function handleReset() {
     const d = defaultInputs()
     setInputs(d)
-    saveInputs(d)
+    konsultStore.save(d)
     setResetKey((k) => k + 1)
   }
 
