@@ -1,0 +1,32 @@
+name: CI
+
+# Quality gate for pull requests: lint, unit tests, and a real typecheck
+# (tsc -b via the build script — `tsc --noEmit` alone is a no-op here because
+# of project references) all have to pass before a PR can merge.
+
+on:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix web ci
+
+      - name: Lint
+        run: npm --prefix web run lint
+
+      - name: Test
+        run: npm --prefix web run test
+
+      - name: Build (tsc -b + vite build)
+        run: npm --prefix web run build

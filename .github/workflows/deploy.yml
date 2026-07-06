@@ -35,6 +35,14 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Install dependencies
+        run: npm --prefix web ci
+
+      - name: Test + lint
+        run: |
+          npm --prefix web run lint
+          npm --prefix web run test
+
       - name: Build the React app
         env:
           # Supabase URL + publishable key — injected into the Vite bundle.
@@ -42,9 +50,7 @@ jobs:
           # repo Settings → Secrets and variables → Actions.
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-        run: |
-          npm --prefix web ci
-          npm --prefix web run build
+        run: npm --prefix web run build
 
       - name: Assemble the Hemma·OS site
         run: |
