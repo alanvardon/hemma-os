@@ -8,6 +8,7 @@ import { loadBudget, saveBudget } from '../lib/hushallsbudget-store'
 import * as salaryStore from '../lib/salary-store'
 import { Money, Percent } from '../components/AnimatedNumber'
 import BudgetDonutChart, { type DonutSegment } from '../components/charts/BudgetDonutChart'
+import DialogShell from '../components/DialogShell'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { useSaveFlash } from '../components/useSaveFlash'
@@ -74,17 +75,6 @@ function netText(net: number, nameA: string, nameB: string): string {
 }
 function sumItems(list: IncomeItem[]): number {
   return list.reduce((t, it) => t + (it.amount || 0), 0)
-}
-
-// Keep Tab focus inside an open dialog (visible focusables only).
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-function trapTab(container: HTMLElement | null, e: KeyboardEvent) {
-  if (!container || e.key !== 'Tab') return
-  const nodes = Array.prototype.filter.call(container.querySelectorAll(FOCUSABLE), (el: HTMLElement) => el.offsetParent !== null) as HTMLElement[]
-  if (!nodes.length) return
-  const first = nodes[0], last = nodes[nodes.length - 1]
-  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
-  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
 }
 
 // Closest row to insert before, given a list element and a pointer Y (drag-and-drop).
@@ -189,45 +179,17 @@ function EditableRow({ row, draggable, dragging, autoFocusLabel, onLabel, onAmou
   )
 }
 
-// ── Modal shell — overlay, ESC, focus trap, scroll lock, close animation ─────
+// ── Modal shell — a native <dialog> (via DialogShell) holding the salary +
+// history cards. showModal() gives the focus trap, Escape-to-close, background
+// inert-ing and scroll containment; the open/close animation lives in CSS
+// (dialog.hb-modal), matching the tool dialogs. ──────────────────────────────
 function Modal({ open, onClose, ariaLabel, children }: {
   open: boolean; onClose: () => void; ariaLabel: string; children: React.ReactNode
 }) {
-  const [mounted, setMounted] = useState(open)
-  const [closing, setClosing] = useState(false)
-  const cardRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => { if (open) { setMounted(true); setClosing(false) } }, [open])
-  useEffect(() => {
-    if (!open && mounted) {
-      setClosing(true)
-      const t = setTimeout(() => { setMounted(false); setClosing(false) }, 200)
-      return () => clearTimeout(t)
-    }
-  }, [open, mounted])
-
-  useEffect(() => {
-    if (!mounted) return
-    document.documentElement.classList.add('modal-open')
-    return () => { document.documentElement.classList.remove('modal-open') }
-  }, [mounted])
-
-  useEffect(() => {
-    if (!mounted) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') { e.preventDefault(); onClose(); return }
-      trapTab(cardRef.current, e)
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [mounted, onClose])
-
-  if (!mounted) return null
   return (
-    <div className={'modal-overlay' + (closing ? ' closing' : '')} role="dialog" aria-modal="true" aria-label={ariaLabel}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="modal-card" ref={cardRef}>{children}</div>
-    </div>
+    <DialogShell open={open} onClose={onClose} className="hb-modal" ariaLabel={ariaLabel}>
+      {children}
+    </DialogShell>
   )
 }
 

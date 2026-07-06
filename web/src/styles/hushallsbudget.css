@@ -754,35 +754,42 @@
   .chart-overlay-close { width: 30px; height: 30px; font-size: 18px; }
   .chart-overlay-stage { position: relative; flex: 1; min-height: 0; }
 
-  /* ── Modal (salary submit + history) ────────────────────────── */
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 200;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 1.5rem;
-    background: color-mix(in srgb, var(--ink) 55%, transparent);
-    -webkit-backdrop-filter: blur(6px);
-    backdrop-filter: blur(6px);
-    animation: hb-overlay-in 0.2s ease;
-  }
-  .modal-overlay[hidden] { display: none; }
-
-  .modal-overlay.closing { animation: hb-overlay-out 0.18s ease forwards; }
-  .modal-overlay.closing .modal-card { animation: hb-modal-out 0.18s ease forwards; }
-
-  .modal-card {
-    width: min(440px, 100%);
+  /* ── Modal (salary submit + history) — native <dialog> via DialogShell ──── */
+  /* The dialog IS the card (like bk-dialog): native centres it in the top layer
+     and inert-s the page; .modal-head/-body/-foot sit directly inside. Open AND
+     close animate via @starting-style + allow-discrete; browsers without them
+     just appear/vanish. */
+  dialog.hb-modal {
+    width: min(440px, calc(100vw - 2rem));
+    max-width: 100%;
     max-height: min(88vh, 720px);
     display: flex;
     flex-direction: column;
-    background: var(--paper-card);
+    padding: 0;
     border: 1px solid var(--rule);
     border-radius: var(--r-lg);
+    background: var(--paper-card);
+    color: var(--ink);
     box-shadow: var(--shadow-md);
-    animation: hb-rise-in 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  dialog.hb-modal::backdrop {
+    background: color-mix(in srgb, var(--ink) 55%, transparent);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    dialog.hb-modal {
+      transition: opacity 0.22s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+        overlay 0.22s ease allow-discrete, display 0.22s ease allow-discrete;
+    }
+    dialog.hb-modal:not([open]) { opacity: 0; transform: translateY(14px); }
+    @starting-style { dialog.hb-modal[open] { opacity: 0; transform: translateY(14px); } }
+    dialog.hb-modal::backdrop {
+      transition: opacity 0.22s ease, overlay 0.22s ease allow-discrete, display 0.22s ease allow-discrete;
+    }
+    dialog.hb-modal:not([open])::backdrop { opacity: 0; }
+    @starting-style { dialog.hb-modal[open]::backdrop { opacity: 0; } }
   }
 
   .modal-head {
@@ -1036,17 +1043,16 @@
   --cat-8: #d0a878;
 }
 
-/* Lock background scroll while a budget dialog is open (matters on the mobile
-   layout, where the page scrolls). The route toggles .modal-open on <html>. */
-html.modal-open, html.modal-open body { overflow: hidden; }
+/* Lock background scroll while a salary/history dialog is open (matters on the
+   mobile layout, where the page scrolls). showModal() inert-s the background
+   but doesn't stop it scrolling, so gate it on the open dialog itself. */
+html:has(dialog.hb-modal[open]) { overflow: hidden; }
 
 @keyframes hb-rise-in {
   from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: none; }
 }
 @keyframes hb-overlay-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes hb-overlay-out { from { opacity: 1; } to { opacity: 0; } }
-@keyframes hb-modal-out { to { opacity: 0; transform: translateY(8px) scale(0.985); } }
 
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 1080px) {

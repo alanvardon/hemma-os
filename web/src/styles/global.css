@@ -5,6 +5,12 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* The universal reset above zeroes the margin the UA stylesheet uses to centre
+   a modal <dialog> (dialog:modal { margin: auto }), which would otherwise pin
+   every native dialog — bk-dialog, ma-dialog, hb-modal — to the top-left.
+   Restore it. */
+dialog:modal { margin: auto; }
+
 /* Default: page scrolls normally (hub, future scrollable routes).
    The .calc-layout class is toggled onto <html> by the Bostadskalkyl route to
    lock the viewport and let each column scroll independently. */
