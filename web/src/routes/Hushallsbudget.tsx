@@ -1,7 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { useTheme } from '../App'
-import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   defaultState, computeBudget, buildSubmission, formatWithSpaces, parseFormatted, money as fmt,
@@ -11,6 +8,9 @@ import { loadBudget, saveBudget } from '../lib/hushallsbudget-store'
 import * as salaryStore from '../lib/salary-store'
 import { Money, Percent } from '../components/AnimatedNumber'
 import BudgetDonutChart, { type DonutSegment } from '../components/charts/BudgetDonutChart'
+import PageHeader from '../components/PageHeader'
+import ThemeToggle from '../components/ThemeToggle'
+import { useSaveFlash } from '../components/useSaveFlash'
 
 // ── Module helpers (faithful to budget.js) ───────────────────────────────────
 
@@ -552,12 +552,11 @@ function ChartOverlay({ open, onClose, segments, totalIncome }: {
 
 // ── Main component ───────────────────────────────────────────────────────────
 export default function Hushallsbudget() {
-  const { theme, toggleTheme } = useTheme()
   const active = useToolPageActive('/hushallsbudget')
   useLayoutEffect(() => { document.documentElement.classList.remove('calc-layout') }, [])
 
   const [state, setState] = useState<BudgetState>(defaultState)
-  const [saved, setSaved] = useState(false)
+  const { saveVisible, flashSaved } = useSaveFlash()
   const [justAddedId, setJustAddedId] = useState<string | null>(null)
   const [justAddedCatId, setJustAddedCatId] = useState<string | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
@@ -567,9 +566,6 @@ export default function Hushallsbudget() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyRows, setHistoryRows] = useState<SalarySubmission[]>([])
   const [chartOpen, setChartOpen] = useState(false)
-
-  const savedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  function flashSaved() { setSaved(true); clearTimeout(savedTimer.current); savedTimer.current = setTimeout(() => setSaved(false), 1400) }
 
   // Load the persisted budget once on mount (now async — localStorage today,
   // cloud after the swap). `loadedRef` holds the exact object we hydrated with
@@ -594,7 +590,7 @@ export default function Hushallsbudget() {
     if (loadedRef.current === null || state === loadedRef.current) return
     const t = setTimeout(() => { void saveBudget(state); flashSaved() }, 250)
     return () => clearTimeout(t)
-  }, [state])
+  }, [state, flashSaved])
 
   useEffect(() => { document.title = 'Hushållsbudget — Hemma·OS' }, [])
 
@@ -724,20 +720,16 @@ export default function Hushallsbudget() {
 
   return (
     <div className={'hb-root' + (active ? ' vt-page' : '')}>
-      <header className="page-header">
-        <div className="header-brand">
-          <Link className="hub-link" to="/" viewTransition onClick={() => markVtTransition('/hushallsbudget', 'back')}>‹ Hemma</Link>
-          <div>
-            <h1>Hushållsbudget</h1>
-            <p className="tagline">One pot, split evenly — joint &amp; individual costs for two</p>
-          </div>
-        </div>
-        <div className="header-actions">
-          <span className={'save-state' + (saved ? ' show' : '')}>Saved ✓</span>
-          <button className="btn btn-ghost theme-toggle-btn" title="Toggle dark mode" aria-label="Toggle dark mode" onClick={toggleTheme}>{theme === 'dark' ? '☾' : '☀'}</button>
+      <PageHeader
+        backTo="/hushallsbudget"
+        title="Hushållsbudget"
+        tagline={<>One pot, split evenly — joint &amp; individual costs for two</>}
+        saveVisible={saveVisible}
+        actions={<>
+          <ThemeToggle />
           <button className="btn btn-ghost" title="Reset to the example budget" onClick={reset}>Reset</button>
-        </div>
-      </header>
+        </>}
+      />
 
       <div className="layout">
         {/* ── INPUTS ── */}
