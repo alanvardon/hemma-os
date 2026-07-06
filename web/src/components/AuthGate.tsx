@@ -24,7 +24,15 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   const claimedFor = useRef<string | null>(null)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session))
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+      // Dev-only: on localhost against a local Supabase, auto-sign-in a throwaway
+      // test user so we skip the magic-link screen. Gated on DEV + dynamically
+      // imported, so devAuth (and its credentials) are excluded from prod builds.
+      if (import.meta.env.DEV && !data.session) {
+        void import('../lib/devAuth').then((m) => m.maybeDevSignIn())
+      }
+    })
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s))
     return () => sub.subscription.unsubscribe()
   }, [])
