@@ -3,8 +3,11 @@ import { DEFAULT_INPUTS } from './calc'
 
 // In-memory stand-in for the `scenarios` table, capturing what the facade
 // writes so we can assert the casing mapping (savedAt ↔ saved_at) and the
-// upsert-all-then-delete-missing save model.
+// upsert-only save model (plan 43 — saves never delete; deletions are explicit).
 const rows: Record<string, unknown>[] = []
+// Records how delete().in() was called, so a test can assert it passes an ARRAY
+// of ids (supabase-js quotes them) rather than an interpolated string filter.
+let lastDeleteIn: { col: string; ids: unknown } | null = null
 vi.mock('./supabase', () => {
   const makeQuery = () => {
     const q: Record<string, unknown> = {}
@@ -21,13 +24,10 @@ vi.mock('./supabase', () => {
         return Promise.resolve({ data: null, error: null })
       },
       delete: () => ({
-        not: (_col: string, op: string, val: string) => {
-          if (op === 'in') {
-            const keep = new Set(val.replace(/^\(|\)$/g, '').split(',').filter(Boolean))
-            for (let i = rows.length - 1; i >= 0; i--) if (!keep.has(String(rows[i].id))) rows.splice(i, 1)
-          } else {
-            rows.length = 0 // ('id','is',null) → clear all
-          }
+        in: (col: string, ids: string[]) => {
+          lastDeleteIn = { col, ids }
+          const drop = new Set(ids.map(String))
+          for (let i = rows.length - 1; i >= 0; i--) if (drop.has(String(rows[i].id))) rows.splice(i, 1)
           return Promise.resolve({ data: null, error: null })
         },
       }),
@@ -37,11 +37,11 @@ vi.mock('./supabase', () => {
   return { supabase: { from: () => makeQuery() } }
 })
 
-import { loadScenarios, saveScenarios } from './storage'
+import { loadScenarios, saveScenarios, deleteScenarios } from './storage'
 
 // Tests run in the `node` env (no localStorage); storage's internal cache/flag
 // localStorage use safely no-ops there, so we only reset the mocked table.
-beforeEach(() => { rows.length = 0 })
+beforeEach(() => { rows.length = 0; lastDeleteIn = null })
 
 describe('scenarios cloud mapping (savedAt ↔ saved_at)', () => {
   it('writes saved_at (snake) and reads back savedAt (camel)', async () => {
@@ -54,21 +54,65 @@ describe('scenarios cloud mapping (savedAt ↔ saved_at)', () => {
     expect((loaded[0] as unknown as Record<string, unknown>).saved_at).toBeUndefined()
     expect(loaded[0].inputs).toEqual(DEFAULT_INPUTS)
   })
+})
 
-  it('upserts the whole list and deletes rows no longer present', async () => {
+describe('saveScenarios is upsert-only (plan 43 — never deletes)', () => {
+  it('upserts the whole list', async () => {
     await saveScenarios([
       { id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS },
       { id: 'b', name: 'B', savedAt: '2026-03-01', inputs: DEFAULT_INPUTS },
     ])
-    expect(rows).toHaveLength(2)
+    expect(rows.map((r) => r.id).sort()).toEqual(['a', 'b'])
+  })
 
+  it('saving a shorter list does NOT delete the omitted rows', async () => {
+    await saveScenarios([
+      { id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS },
+      { id: 'b', name: 'B', savedAt: '2026-03-01', inputs: DEFAULT_INPUTS },
+    ])
     await saveScenarios([{ id: 'b', name: 'B', savedAt: '2026-03-01', inputs: DEFAULT_INPUTS }])
+    expect(rows.map((r) => r.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('saving an empty list leaves cloud rows untouched', async () => {
+    await saveScenarios([{ id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS }])
+    await saveScenarios([])
+    expect(rows.map((r) => r.id)).toEqual(['a'])
+  })
+
+  // The exact data-loss scenario the plan targets: fresh device, hydrate read
+  // failed → in-memory list is empty → one scenario saved. Pre-existing cloud
+  // rows must survive.
+  it('an empty-cache device saving one scenario preserves the household rows', async () => {
+    // Simulate the household already having rows in the cloud.
+    rows.push({ id: 'a', name: 'A', saved_at: '2026-01-01', inputs: {}, constants: null })
+    rows.push({ id: 'b', name: 'B', saved_at: '2026-02-01', inputs: {}, constants: null })
+    // The empty-cache device saves its single new scenario.
+    await saveScenarios([{ id: 'c', name: 'C', savedAt: '2026-03-01', inputs: DEFAULT_INPUTS }])
+    expect(rows.map((r) => r.id).sort()).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('deleteScenarios (the only path that removes cloud rows)', () => {
+  it('removes exactly the given ids', async () => {
+    await saveScenarios([
+      { id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS },
+      { id: 'b', name: 'B', savedAt: '2026-03-01', inputs: DEFAULT_INPUTS },
+    ])
+    await deleteScenarios(['a'])
     expect(rows.map((r) => r.id)).toEqual(['b'])
   })
 
-  it('clearing the list to empty removes all rows', async () => {
+  it('passes an array to .in() (no interpolated string filter)', async () => {
+    await deleteScenarios(['id,with)chars', 'plain'])
+    expect(lastDeleteIn?.col).toBe('id')
+    expect(lastDeleteIn?.ids).toEqual(['id,with)chars', 'plain'])
+  })
+
+  it('no-ops on an empty id list (never issues a delete)', async () => {
     await saveScenarios([{ id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS }])
-    await saveScenarios([])
-    expect(rows).toHaveLength(0)
+    await deleteScenarios([])
+    expect(lastDeleteIn).toBeNull()
+    expect(rows.map((r) => r.id)).toEqual(['a'])
   })
 })

@@ -216,7 +216,10 @@ export const useStore = create<AppState>((set, get) => ({
     if (!deleted) return null
     const remaining = get().scenarios.filter((s) => s.id !== id)
     set({ scenarios: remaining })
+    // saveScenarios is upsert-only (plan 43), so the removed row must be deleted
+    // explicitly rather than inferred from its absence in the list.
     storage.saveScenarios(remaining)
+    storage.deleteScenarios([id])
     return { deleted }
   },
 
