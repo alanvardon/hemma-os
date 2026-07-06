@@ -111,26 +111,32 @@ export async function loadScenarios(): Promise<Scenario[]> {
   return rows
 }
 
-// The store hands over the WHOLE list each time. Port: upsert all rows, then
-// delete the household's rows that are no longer in the list (a deletion).
+// The store hands over the WHOLE list each time. UPSERT-ONLY: write every row,
+// never delete. Deriving deletions from "whatever isn't in my list" was a
+// data-loss trap — on a fresh device the hydrate read can fail quietly, leaving
+// the list `[]`; the first save would then delete the whole household's cloud
+// scenarios (plan 43 / audit C1). Real deletions go through deleteScenarios().
 // Never rejects — the store fires this and forgets; the optimistic cache holds
 // the latest and the next successful save reconciles cloud.
+//
+// Trade-off: a scenario deleted on device A can be re-upserted by device B
+// holding a stale copy (resurrection). That is strictly safer than the old
+// behaviour, where B would silently delete A's data.
 export async function saveScenarios(scenarios: Scenario[]): Promise<void> {
   _writeScenCache(scenarios)
   try {
     const rows = scenarios.map(toRow)
-    if (rows.length) {
-      const { error } = await supabase.from(SCEN_TABLE).upsert(rows, { onConflict: 'id' })
-      if (error) return
-    }
-    const ids = scenarios.map((s) => s.id).filter(Boolean)
-    // Delete rows not in the list. Empty list → clear all (id is never null →
-    // matches every household row; PostgREST needs a filter for delete).
-    const del = ids.length
-      ? supabase.from(SCEN_TABLE).delete().not('id', 'in', `(${ids.join(',')})`)
-      : supabase.from(SCEN_TABLE).delete().not('id', 'is', null)
-    await del
+    if (rows.length) await supabase.from(SCEN_TABLE).upsert(rows, { onConflict: 'id' })
   } catch { /* offline — cache holds the latest */ }
+}
+
+// Explicit deletion — the ONLY path that removes cloud rows. Array `.in()` filter
+// so supabase-js quotes the ids itself (no string interpolation — a legacy id
+// containing `,` or `)` can't corrupt the filter). Never rejects.
+export async function deleteScenarios(ids: string[]): Promise<void> {
+  const clean = ids.filter(Boolean)
+  if (!clean.length) return
+  try { await supabase.from(SCEN_TABLE).delete().in('id', clean) } catch { /* offline */ }
 }
 
 export function loadSession(): Promise<Session | null> {
