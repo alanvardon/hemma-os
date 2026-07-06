@@ -1,14 +1,15 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { computeContracting, defaultInputs, type KonsultInputs } from '../lib/konsult'
 import * as konsultStore from '../lib/konsult-store'
 import { Money, Percent, Num } from '../components/AnimatedNumber'
 import { useTheme } from '../App'
-import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
 import { parseFormatted } from '../lib/format'
 import Collapse from '../components/Collapse'
+import PageHeader from '../components/PageHeader'
+import ThemeToggle from '../components/ThemeToggle'
+import { useSaveFlash } from '../components/useSaveFlash'
 
 // NOTE: uses U+00A0 no-break space (not lib/format's plain space) so amounts
 // don't wrap mid-number; no Math.round — every call site pre-rounds.
@@ -33,7 +34,7 @@ function pct0(x: number) {
 type FieldKind = 'cur' | 'num'
 
 export default function Konsultkalkyl() {
-  const { theme, toggleTheme } = useTheme()
+  const { theme } = useTheme()
   const active = useToolPageActive('/konsultkalkyl')
   const [inputs, setInputs] = useState<KonsultInputs>(defaultInputs)
 
@@ -45,11 +46,10 @@ export default function Konsultkalkyl() {
     konsultStore.load().then((saved) => { if (alive && saved) setInputs(saved) })
     return () => { alive = false }
   }, [])
-  const [saveVisible, setSaveVisible] = useState(false)
+  const { saveVisible, flashSaved } = useSaveFlash()
   const [resetKey, setResetKey] = useState(0)
   const [ratesOpen, setRatesOpen] = useState(false)
   const reduceMotion = useReducedMotion()
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useLayoutEffect(() => {
     document.documentElement.classList.add('calc-layout')
@@ -71,9 +71,7 @@ export default function Konsultkalkyl() {
     const next = { ...inputs, [key]: parseFormatted(value) }
     setInputs(next)
     konsultStore.save(next)
-    setSaveVisible(true)
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => setSaveVisible(false), 1400)
+    flashSaved()
   }
 
   function handleBlur(e: React.FocusEvent<HTMLInputElement>, key: keyof KonsultInputs, kind: FieldKind) {
@@ -123,27 +121,16 @@ export default function Konsultkalkyl() {
 
   return (
     <div className={'kk-root' + (active ? ' vt-page' : '')}>
-      <header className="page-header">
-        <div className="header-brand">
-          <Link className="hub-link" to="/" viewTransition onClick={() => markVtTransition('/konsultkalkyl', 'back')}>‹ Hemma</Link>
-          <div>
-            <h1>Konsultkalkyl</h1>
-            <p className="tagline">What contracting through your own AB could pay — Sweden, 2026</p>
-          </div>
-        </div>
-        <div className="header-actions">
-          <span className={`save-state${saveVisible ? ' show' : ''}`}>Saved ✓</span>
-          <button
-            className="btn btn-ghost theme-toggle-btn"
-            title="Toggle dark mode"
-            aria-label="Toggle dark mode"
-            onClick={toggleTheme}
-          >
-            {theme === 'dark' ? '☾' : '☀'}
-          </button>
+      <PageHeader
+        backTo="/konsultkalkyl"
+        title="Konsultkalkyl"
+        tagline="What contracting through your own AB could pay — Sweden, 2026"
+        saveVisible={saveVisible}
+        actions={<>
+          <ThemeToggle />
           <button className="btn btn-ghost" onClick={handleReset}>Reset</button>
-        </div>
-      </header>
+        </>}
+      />
 
       <div className="konsult-layout">
 

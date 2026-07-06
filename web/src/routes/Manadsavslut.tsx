@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { useTheme } from '../App'
-import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   defaultSettings, otherPerson, parseCsv, parseAmount, autoMapColumns, inferSpendSign,
@@ -18,6 +15,10 @@ import Segmented from '../components/Segmented'
 import Collapse from '../components/Collapse'
 import { Money } from '../components/AnimatedNumber'
 import GroceryTrendChart from '../components/charts/GroceryTrendChart'
+import PageHeader from '../components/PageHeader'
+import ThemeToggle from '../components/ThemeToggle'
+import { useSaveFlash } from '../components/useSaveFlash'
+import { useToast } from '../components/useToast'
 
 // ── Formatters (faithful to manadsavslut.js) ─────────────────────────────────
 
@@ -356,7 +357,6 @@ function SettingsDialog({ open, settings, onSave, onClose, onExport, onImport }:
 // ── Main component ─────────────────────────────────────────────────────────
 
 export default function Manadsavslut() {
-  const { theme, toggleTheme } = useTheme()
   const active = useToolPageActive('/manadsavslut')
   const reduceMotion = useReducedMotion()
   useLayoutEffect(() => { document.documentElement.classList.remove('calc-layout') }, [])
@@ -365,9 +365,8 @@ export default function Manadsavslut() {
   const [payments, setPayments] = useState<Payment[]>([])
   const [settings, setSettings] = useState<MonthEndSettings>(defaultSettings())
 
-  const [toast, setToast] = useState({ msg: '', show: false })
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const [saved, setSaved] = useState(false)
+  const { toast, showToast } = useToast()
+  const { saveVisible: saved, flashSaved } = useSaveFlash()
 
   const [defaultClass, setDefaultClass] = useState<Treatment>('split')
   const [currentFilter, setCurrentFilter] = useState<'open' | 'pending' | 'all' | 'a' | 'b'>('open')
@@ -393,12 +392,6 @@ export default function Manadsavslut() {
   const aName = settings.person_a_name || 'Alex', bName = settings.person_b_name || 'Sam'
   const nameOf = useCallback((p: Person | null) => p === 'b' ? bName : p === 'a' ? aName : '', [aName, bName])
 
-  function showToast(msg: string) {
-    if (toastTimer.current) clearTimeout(toastTimer.current)
-    setToast({ msg, show: true })
-    toastTimer.current = setTimeout(() => setToast(t => ({ ...t, show: false })), 2600)
-  }
-  function flashSaved() { setSaved(true); setTimeout(() => setSaved(false), 1400) }
 
   const refresh = useCallback(async () => {
     const [its, pays, sett] = await Promise.all([Store.listItems(), Store.listPayments(), Store.getSettings()])
@@ -568,20 +561,16 @@ export default function Manadsavslut() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className={'ma-root' + (active ? ' vt-page' : '')}>
-      <header className="page-header">
-        <div className="header-brand">
-          <Link className="hub-link" to="/" viewTransition onClick={() => markVtTransition('/manadsavslut', 'back')}>‹ Hemma</Link>
-          <div>
-            <h1>Månadsavslut</h1>
-            <p className="tagline">Reconcile shared spending and settle up — the month-end close</p>
-          </div>
-        </div>
-        <div className="header-actions">
-          <span className={'save-state' + (saved ? ' show' : '')}>Saved ✓</span>
+      <PageHeader
+        backTo="/manadsavslut"
+        title="Månadsavslut"
+        tagline="Reconcile shared spending and settle up — the month-end close"
+        saveVisible={saved}
+        actions={<>
           <button className="btn btn-ghost theme-toggle-btn" onClick={() => setSettingsDlg(true)} title="Settings" aria-label="Settings">⚙</button>
-          <button className="btn btn-ghost theme-toggle-btn" onClick={toggleTheme} title="Toggle dark mode" aria-label="Toggle dark mode">{theme === 'dark' ? '☾' : '☀'}</button>
-        </div>
-      </header>
+          <ThemeToggle />
+        </>}
+      />
 
       <main className="wrap">
 

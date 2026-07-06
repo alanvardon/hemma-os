@@ -1,11 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { Money, Percent } from '../components/AnimatedNumber'
 import { useTheme } from '../App'
-import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
 import Collapse from '../components/Collapse'
+import PageHeader from '../components/PageHeader'
+import ThemeToggle from '../components/ThemeToggle'
+import { useSaveFlash } from '../components/useSaveFlash'
 import {
   type LonevaxlingInputs,
   type LonevaxlingResult,
@@ -77,14 +78,13 @@ function buildWarnings(r: LonevaxlingResult): Array<{ cls: string; text: string 
 }
 
 export default function Lonevaxling() {
-  const { theme, toggleTheme } = useTheme()
+  const { theme } = useTheme()
   const active = useToolPageActive('/lonevaxling')
   const [inputs, setInputs] = useState<LonevaxlingInputs>(defaultInputs)
-  const [saveVisible, setSaveVisible] = useState(false)
+  const { saveVisible, flashSaved } = useSaveFlash()
   const [resetKey, setResetKey] = useState(0)
   const [ratesOpen, setRatesOpen] = useState(false)
   const reduceMotion = useReducedMotion()
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Load persisted inputs once on mount (async now — localStorage today, cloud
   // after the swap). Saves are imperative (in the handlers), so there's no
@@ -113,9 +113,7 @@ export default function Lonevaxling() {
 
   function saveToStorage(inp: LonevaxlingInputs) {
     lonevaxlingStore.save(inp)
-    setSaveVisible(true)
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => setSaveVisible(false), 1400)
+    flashSaved()
   }
 
   function handleChange(key: keyof LonevaxlingInputs, raw: string) {
@@ -185,29 +183,18 @@ export default function Lonevaxling() {
 
   return (
     <div className={'lv-root' + (active ? ' vt-page' : '')}>
-      <div className="page-header">
-        <div className="header-brand">
-          <Link className="hub-link" to="/" viewTransition onClick={() => markVtTransition('/lonevaxling', 'back')}>‹ Hemma</Link>
-          <div>
-            <h1>Löneväxling</h1>
-            <p className="tagline">Is it worth swapping salary for pension — and how much? Sweden, 2026</p>
-          </div>
-        </div>
-        <div className="header-actions">
-          <span className={`save-state${saveVisible ? ' show' : ''}`}>Saved ✓</span>
-          <button
-            className="btn btn-ghost theme-toggle-btn"
-            title="Toggle dark mode"
-            aria-label="Toggle dark mode"
-            onClick={toggleTheme}
-          >
-            {theme === 'dark' ? '☾' : '☀'}
-          </button>
+      <PageHeader
+        backTo="/lonevaxling"
+        title="Löneväxling"
+        tagline="Is it worth swapping salary for pension — and how much? Sweden, 2026"
+        saveVisible={saveVisible}
+        actions={<>
+          <ThemeToggle />
           <button className="btn btn-ghost" title="Reset to the example" onClick={handleReset}>
             Reset
           </button>
-        </div>
-      </div>
+        </>}
+      />
 
       <div className="konsult-layout">
         {/* ── INPUTS (left rail) ───────────────────────────────── */}

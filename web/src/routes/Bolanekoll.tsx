@@ -1,11 +1,12 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Money, Percent } from '../components/AnimatedNumber'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import Collapse from '../components/Collapse'
-import { useTheme } from '../App'
-import { markVtTransition } from '../lib/viewTransition'
+import PageHeader from '../components/PageHeader'
+import ThemeToggle from '../components/ThemeToggle'
+import { useSaveFlash } from '../components/useSaveFlash'
+import { useToast } from '../components/useToast'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   defaultSettings, parseCsv, parseAmount, autoMapColumns, classifyKind,
@@ -528,7 +529,6 @@ function P(value: number, rollIn?: boolean) { return <Percent value={value} deci
 // ── Main component ─────────────────────────────────────────────────────────
 
 export default function Bolanekoll() {
-  const { theme, toggleTheme } = useTheme()
   const active = useToolPageActive('/bolanekoll')
   useLayoutEffect(() => { document.documentElement.classList.remove('calc-layout') }, [])
 
@@ -539,9 +539,8 @@ export default function Bolanekoll() {
   const [contributions, setContributions] = useState<Contribution[]>([])
   const [settings, setSettings] = useState<MortgageSettings>(defaultSettings())
 
-  const [toast, setToast] = useState({ msg: '', show: false })
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const [saved, setSaved] = useState(false)
+  const { toast, showToast } = useToast()
+  const { saveVisible: saved, flashSaved } = useSaveFlash()
   const [bridgePeriod, setBridgePeriod] = useState<'ytd' | '12m' | 'all'>('ytd')
   const [extraAmort, setExtraAmort] = useState('')
   const [paymentFilter, setPaymentFilter] = useState('all')
@@ -564,13 +563,6 @@ export default function Bolanekoll() {
   const [settingsDlg, setSettingsDlg] = useState(false)
 
   CURRENT_CURRENCY = settings.currency || 'SEK'
-
-  function showToast(msg: string) {
-    if (toastTimer.current) clearTimeout(toastTimer.current)
-    setToast({ msg, show: true })
-    toastTimer.current = setTimeout(() => setToast(t => ({ ...t, show: false })), 2600)
-  }
-  function flashSaved() { setSaved(true); setTimeout(() => setSaved(false), 1400) }
 
   const refresh = useCallback(async () => {
     const [ps, pays, vals, pers, contribs, sett] = await Promise.all([
@@ -895,20 +887,16 @@ export default function Bolanekoll() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className={'bk-root' + (active ? ' vt-page' : '')}>
-      <header className="page-header">
-        <div className="header-brand">
-          <Link className="hub-link" to="/" viewTransition onClick={() => markVtTransition('/bolanekoll', 'back')}>‹ Hemma</Link>
-          <div>
-            <h1>{settings.property_name || 'Bolånekoll'}</h1>
-            <p className="tagline">Track your mortgage — how much of the home you own vs the bank</p>
-          </div>
-        </div>
-        <div className="header-actions">
-          <span className={'save-state' + (saved ? ' show' : '')}>Saved ✓</span>
+      <PageHeader
+        backTo="/bolanekoll"
+        title={settings.property_name || 'Bolånekoll'}
+        tagline="Track your mortgage — how much of the home you own vs the bank"
+        saveVisible={saved}
+        actions={<>
           <button className="btn btn-ghost theme-toggle-btn" onClick={() => setSettingsDlg(true)} title="Settings" aria-label="Settings">⚙</button>
-          <button className="btn btn-ghost theme-toggle-btn" onClick={toggleTheme} title="Toggle dark mode" aria-label="Toggle dark mode">{theme === 'dark' ? '☾' : '☀'}</button>
-        </div>
-      </header>
+          <ThemeToggle />
+        </>}
+      />
 
       <main className="wrap">
 
