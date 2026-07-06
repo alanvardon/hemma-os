@@ -16,6 +16,7 @@
 import { defaultSettings, makeRatePeriod } from './mortgage'
 import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping } from './mortgage'
 import { supabase } from './supabase'
+import { genId } from './id'
 
 // Legacy pre-Supabase data — import source + backup. (Exported name kept for
 // back-compat; it is no longer the write target.)
@@ -56,12 +57,6 @@ interface StoreEnvelope {
 }
 
 // ── Pure helpers (unchanged from the localStorage store) ─────────────────────
-function genId(prefix: string): string {
-  if (typeof crypto !== 'undefined' && typeof (crypto as Crypto).randomUUID === 'function')
-    return (crypto as Crypto).randomUUID()
-  return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
-}
-
 function dayBefore(iso: string): string | null {
   const d = new Date(iso + 'T00:00:00')
   if (isNaN(d.getTime())) return null

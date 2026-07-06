@@ -76,7 +76,7 @@ export interface BudgetResult {
 }
 
 // ── Formatting ───────────────────────────────────────────────────
-export { formatWithSpaces, parseFormatted } from './format'
+export { formatWithSpaces, parseFormatted, money } from './format'
 
 // ── Defaults & computation ───────────────────────────────────────
 export function defaultState(): BudgetState {
