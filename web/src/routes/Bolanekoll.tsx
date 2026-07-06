@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Money, Percent } from '../components/AnimatedNumber'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import Collapse from '../components/Collapse'
+import DialogShell from '../components/DialogShell'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { useSaveFlash } from '../components/useSaveFlash'
@@ -83,8 +84,6 @@ interface PeriodDlgProps {
   onDelete: (id: string) => void; onClose: () => void
 }
 function PeriodDialog({ open, partId, id, periods, onSave, onDelete, onClose }: PeriodDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const rec = id ? periods.find(p => p.id === id) : null
   const [form, setForm] = useState({ start_date: '', end_date: '', rate: '', rate_type: 'rörlig' as 'rörlig' | 'bunden' })
   useEffect(() => {
@@ -96,7 +95,7 @@ function PeriodDialog({ open, partId, id, periods, onSave, onDelete, onClose }: 
     onSave(makeRatePeriod({ loan_part_id: partId, start_date: form.start_date || todayISO(), end_date: form.end_date || null, rate: parseAmount(form.rate), rate_type: form.rate_type }))
   }
   return (
-    <dialog ref={ref} className="bk-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+    <DialogShell open={open} onClose={onClose} className="bk-dialog">
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">{id ? 'Edit rate period' : 'Add rate period'}</h3>
         <div className="form-grid">
@@ -117,7 +116,7 @@ function PeriodDialog({ open, partId, id, periods, onSave, onDelete, onClose }: 
           <button type="submit" className="btn btn-primary">Save</button>
         </div>
       </form>
-    </dialog>
+    </DialogShell>
   )
 }
 
@@ -131,8 +130,6 @@ interface PartDlgProps {
   onDeletePeriod: (id: string) => void
 }
 function PartDialog({ open, id, parts, periods, payments, onSave, onDelete, onClose, onSavePeriod, onDeletePeriod }: PartDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const rec = id ? parts.find(p => p.id === id) : null
   const [form, setForm] = useState({ label: '', loan_number: '', start_balance: '', start_date: '' })
   const [periodDlg, setPeriodDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
@@ -148,7 +145,7 @@ function PartDialog({ open, id, parts, periods, payments, onSave, onDelete, onCl
   const der = id && rec ? derivedRate(rec, payments) : null
   return (
     <>
-      <dialog ref={ref} className="bk-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+      <DialogShell open={open} onClose={onClose} className="bk-dialog">
         <form className="dialog-body" onSubmit={submit}>
           <h3 className="dialog-title">{id ? 'Edit loan part' : 'Add loan part'}</h3>
           <div className="form-grid">
@@ -192,7 +189,7 @@ function PartDialog({ open, id, parts, periods, payments, onSave, onDelete, onCl
             <button type="submit" className="btn btn-primary">Save</button>
           </div>
         </form>
-      </dialog>
+      </DialogShell>
       <PeriodDialog open={periodDlg.open} partId={id} id={periodDlg.id} periods={periods}
         onSave={data => { onSavePeriod(id!, data, periodDlg.id || undefined); setPeriodDlg({ open: false, id: null }) }}
         onDelete={pid => { onDeletePeriod(pid); setPeriodDlg({ open: false, id: null }) }}
@@ -209,15 +206,13 @@ interface ValDlgProps {
   onDelete: (id: string) => void; onClose: () => void
 }
 function ValuationDialog({ open, id, valuations, onSave, onDelete, onClose }: ValDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const rec = id ? valuations.find(v => v.id === id) : null
   const [form, setForm] = useState({ date: todayISO(), value: '', note: '', is_purchase: false })
   useEffect(() => { if (open) setForm({ date: rec?.date || todayISO(), value: rec?.value ? String(rec.value) : '', note: rec?.note || '', is_purchase: !!rec?.is_purchase }) }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
   const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }))
   function submit(e: React.FormEvent) { e.preventDefault(); onSave({ date: form.date, value: parseAmount(form.value) || 0, note: form.note, is_purchase: form.is_purchase }) }
   return (
-    <dialog ref={ref} className="bk-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+    <DialogShell open={open} onClose={onClose} className="bk-dialog">
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">{id ? 'Edit property value' : 'Add property value'}</h3>
         <div className="form-grid">
@@ -237,7 +232,7 @@ function ValuationDialog({ open, id, valuations, onSave, onDelete, onClose }: Va
           <button type="submit" className="btn btn-primary">Save</button>
         </div>
       </form>
-    </dialog>
+    </DialogShell>
   )
 }
 
@@ -249,8 +244,6 @@ interface PayDlgProps {
   onDelete: (id: string) => void; onClose: () => void
 }
 function PaymentDialog({ open, id, payments, parts, settings, onSave, onDelete, onClose }: PayDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const rec = id ? payments.find(p => p.id === id) : null
   const [form, setForm] = useState({ date: todayISO(), loan_part_id: '', kind: 'interest', amount: '', balance_after: '', paid_by: 'joint', is_insats: false })
   useEffect(() => {
@@ -260,7 +253,7 @@ function PaymentDialog({ open, id, payments, parts, settings, onSave, onDelete, 
   function submit(e: React.FormEvent) { e.preventDefault(); onSave(makePayment({ date: form.date, loan_part_id: form.loan_part_id || null, kind: form.kind as Payment['kind'], amount: parseAmount(form.amount), balance_after: form.balance_after ? parseAmount(form.balance_after) : null, paid_by: normPaidBy(form.paid_by), is_insats: form.is_insats })) }
   const aName = settings.owner_a_name || 'Alex', bName = settings.owner_b_name || 'Sam'
   return (
-    <dialog ref={ref} className="bk-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+    <DialogShell open={open} onClose={onClose} className="bk-dialog">
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">{id ? 'Edit payment' : 'Add payment'}</h3>
         <div className="form-grid">
@@ -303,7 +296,7 @@ function PaymentDialog({ open, id, payments, parts, settings, onSave, onDelete, 
           <button type="submit" className="btn btn-primary">Save</button>
         </div>
       </form>
-    </dialog>
+    </DialogShell>
   )
 }
 
@@ -314,8 +307,6 @@ interface CopyDlgProps {
   onConfirm: (targetIds: string[]) => void; onClose: () => void
 }
 function CopyToPartsDialog({ open, source, parts, onConfirm, onClose }: CopyDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const candidates = source
     ? (source.loan_part_id == null ? parts : parts.filter(p => p.id !== source.loan_part_id))
     : []
@@ -323,7 +314,7 @@ function CopyToPartsDialog({ open, source, parts, onConfirm, onClose }: CopyDlgP
   useEffect(() => { if (open) setChecked(new Set(candidates.map(p => p.id))) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   const toggle = (id: string) => setChecked(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
   return (
-    <dialog ref={ref} className="bk-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+    <DialogShell open={open} onClose={onClose} className="bk-dialog">
       <div className="dialog-body">
         <h3 className="dialog-title">Copy payment to parts</h3>
         <p className="config-note" style={{ marginBottom: '1rem' }}>Copies this payment (same date, amount, type) to each selected part with balance cleared.</p>
@@ -343,7 +334,7 @@ function CopyToPartsDialog({ open, source, parts, onConfirm, onClose }: CopyDlgP
           </button>
         </div>
       </div>
-    </dialog>
+    </DialogShell>
   )
 }
 
@@ -357,8 +348,6 @@ interface InsatsDlgProps {
   onRemove: () => void; onClose: () => void
 }
 function InsatsSplitDialog({ open, payment, settings, onSave, onRemove, onClose }: InsatsDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const amount = payment ? Math.round(Number(payment.amount) || 0) : 0
   const aName = settings.owner_a_name || 'Alex', bName = settings.owner_b_name || 'Sam'
   const [aStr, setAStr] = useState(''); const [bStr, setBStr] = useState('')
@@ -378,7 +367,7 @@ function InsatsSplitDialog({ open, payment, settings, onSave, onRemove, onClose 
   function changeB(v: string) { setBStr(v); const b = Math.max(0, Math.min(amount, parseAmount(v) || 0)); setAStr(String(Math.max(0, amount - b))) }
   function submit(e: React.FormEvent) { e.preventDefault(); onSave({ a: av, b: bv }) }
   return (
-    <dialog ref={ref} className="bk-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+    <DialogShell open={open} onClose={onClose} className="bk-dialog">
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">Allocate insats</h3>
         <p className="config-note" style={{ marginBottom: '1rem' }}>Split this {fmtMoney(amount)} extra payment between {aName} and {bName} — how much each person actually funded. Editing one side fills the other.</p>
@@ -394,7 +383,7 @@ function InsatsSplitDialog({ open, payment, settings, onSave, onRemove, onClose 
           <button type="submit" className="btn btn-primary" disabled={!balanced}>Save</button>
         </div>
       </form>
-    </dialog>
+    </DialogShell>
   )
 }
 
@@ -406,15 +395,13 @@ interface ContDlgProps {
   onDelete: (id: string) => void; onClose: () => void
 }
 function ContribDialog({ open, id, contributions, settings, onSave, onDelete, onClose }: ContDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const rec = id ? contributions.find(c => c.id === id) : null
   const [form, setForm] = useState({ owner: 'a' as Owner, date: todayISO(), amount: '', note: '' })
   useEffect(() => { if (open) setForm({ owner: (rec?.owner as Owner) || 'a', date: rec?.date || todayISO(), amount: rec?.amount ? String(rec.amount) : '', note: rec?.note || '' }) }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
   const aName = settings.owner_a_name || 'Alex', bName = settings.owner_b_name || 'Sam'
   function submit(e: React.FormEvent) { e.preventDefault(); onSave({ owner: form.owner, date: form.date, amount: parseAmount(form.amount) || 0, note: form.note }) }
   return (
-    <dialog ref={ref} className="bk-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+    <DialogShell open={open} onClose={onClose} className="bk-dialog">
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">{id ? 'Edit contribution' : 'Add contribution'}</h3>
         <div className="form-grid">
@@ -435,7 +422,7 @@ function ContribDialog({ open, id, contributions, settings, onSave, onDelete, on
           <button type="submit" className="btn btn-primary">Save</button>
         </div>
       </form>
-    </dialog>
+    </DialogShell>
   )
 }
 
@@ -447,8 +434,6 @@ interface SetDlgProps {
   onExportJSON: () => void; onExportCSV: () => void; onImportJSON: (e: React.ChangeEvent<HTMLInputElement>) => void
 }
 function SettingsDialog({ open, settings, onSave, onClose, onExportJSON, onExportCSV, onImportJSON }: SetDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const [form, setForm] = useState({ ...settings })
   useEffect(() => { if (open) setForm({ ...settings }) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   const f = (k: keyof MortgageSettings) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -458,7 +443,7 @@ function SettingsDialog({ open, settings, onSave, onClose, onExportJSON, onExpor
   function submit(e: React.FormEvent) { e.preventDefault(); onSave({ ...form, my_ownership_pct: Number(form.my_ownership_pct), household_income_yearly: form.household_income_yearly ? Number(form.household_income_yearly) : null }) }
   const aName = form.owner_a_name || 'Alex', bName = form.owner_b_name || 'Sam'
   return (
-    <dialog ref={ref} className="bk-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+    <DialogShell open={open} onClose={onClose} className="bk-dialog">
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">Settings</h3>
         <div className="form-grid">
@@ -504,7 +489,7 @@ function SettingsDialog({ open, settings, onSave, onClose, onExportJSON, onExpor
           <button type="submit" className="btn btn-primary">Save</button>
         </div>
       </form>
-    </dialog>
+    </DialogShell>
   )
 }
 

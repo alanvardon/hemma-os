@@ -13,6 +13,7 @@ import { todayISO } from '../lib/date'
 import { CURRENCY_SUFFIX } from '../lib/format'
 import Segmented from '../components/Segmented'
 import Collapse from '../components/Collapse'
+import DialogShell from '../components/DialogShell'
 import { Money } from '../components/AnimatedNumber'
 import GroceryTrendChart from '../components/charts/GroceryTrendChart'
 import PageHeader from '../components/PageHeader'
@@ -77,8 +78,6 @@ interface OffsetDlgProps {
   onSave: (entries: PersonalEntry[]) => void; onClose: () => void
 }
 function PersonalOffsetDialog({ open, enterAmount, frontedBy, aName, bName, initial, onSave, onClose }: OffsetDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const [entries, setEntries] = useState<PersonalEntry[]>(initial)
   const [draft, setDraft] = useState({ person: frontedBy as Person, amount: '', note: '' })
   useEffect(() => { if (open) { setEntries(initial); setDraft({ person: frontedBy, amount: '', note: '' }) } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -101,7 +100,7 @@ function PersonalOffsetDialog({ open, enterAmount, frontedBy, aName, bName, init
   }
   function onDraftKey(e: React.KeyboardEvent) { if (e.key === 'Enter') { e.preventDefault(); add() } }
   return (
-    <dialog ref={ref} className="ma-dialog ma-dialog-sm" onClick={e => e.target === e.currentTarget && onClose()}>
+    <DialogShell open={open} onClose={onClose} className="ma-dialog ma-dialog-sm">
       <div className="dialog-body">
         <h3 className="dialog-title">Personal items (not shared)</h3>
         <p className="form-hint">Add anything in this {fmtMoney(enter)} charge that’s personal to one person — it’s taken out before the 50/50 split, and the line itself stays whole.</p>
@@ -139,7 +138,7 @@ function PersonalOffsetDialog({ open, enterAmount, frontedBy, aName, bName, init
           <button type="button" className="btn btn-primary" onClick={() => onSave(entries)}>Done</button>
         </div>
       </div>
-    </dialog>
+    </DialogShell>
   )
 }
 
@@ -150,8 +149,6 @@ interface ItemDlgProps {
   onSave: (rec: Omit<Item, 'id' | 'created_at'>) => void; onClose: () => void
 }
 function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }: ItemDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const rec = id ? items.find(i => i.id === id) : null
   const [form, setForm] = useState({ date: todayISO(), desc: '', amount: '', note: '', fronted: 'a' as Person, split: 'split' as 'split' | 'full' })
   const [personalItems, setPersonalItems] = useState<PersonalEntry[]>([])
@@ -192,7 +189,7 @@ function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }
   }
   return (
     <>
-      <dialog ref={ref} className="ma-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+      <DialogShell open={open} onClose={onClose} className="ma-dialog">
         <form className="dialog-body" onSubmit={submit}>
           <h3 className="dialog-title">{id ? 'Edit item' : 'Add item'}</h3>
           <div className="form-grid">
@@ -227,7 +224,7 @@ function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }
             <button type="submit" className="btn btn-primary">Save</button>
           </div>
         </form>
-      </dialog>
+      </DialogShell>
       <PersonalOffsetDialog open={offsetDlg} enterAmount={amt} frontedBy={form.fronted} aName={aName} bName={bName}
         initial={personalItems}
         onSave={entries => { setPersonalItems(entries); setOffsetDlg(false) }}
@@ -243,8 +240,6 @@ interface SettleDlgProps {
   onConfirm: (draft: Omit<Payment, 'id' | 'created_at'>) => void; onClose: () => void
 }
 function SettleDialog({ open, openItems, pendingCount, settings, onConfirm, onClose }: SettleDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const aName = settings.person_a_name || 'Alex', bName = settings.person_b_name || 'Sam'
   const nameOf = (p: Person | null) => p === 'b' ? bName : p === 'a' ? aName : ''
   const months = useMemo(() => monthsWithOpenItems(openItems), [openItems])
@@ -268,7 +263,7 @@ function SettleDialog({ open, openItems, pendingCount, settings, onConfirm, onCl
     ? <>{nameOf(pending.from_person)} → {nameOf(pending.to_person)} · <strong><Money value={pending.amount} currencySuffix={CURRENCY_SUFFIX[CURRENT_CURRENCY] || 'kr'} maxDecimals={2} rollIn /></strong></>
     : <>Even — no transfer</>
   return (
-    <dialog ref={ref} className="ma-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+    <DialogShell open={open} onClose={onClose} className="ma-dialog">
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">Settle up</h3>
         <div className="form-grid">
@@ -297,7 +292,7 @@ function SettleDialog({ open, openItems, pendingCount, settings, onConfirm, onCl
           <button type="submit" className="btn btn-primary" disabled={!pending.item_ids.length}>Confirm settlement</button>
         </div>
       </form>
-    </dialog>
+    </DialogShell>
   )
 }
 
@@ -309,8 +304,6 @@ interface SetDlgProps {
   onExport: () => void; onImport: (e: React.ChangeEvent<HTMLInputElement>) => void
 }
 function SettingsDialog({ open, settings, onSave, onClose, onExport, onImport }: SetDlgProps) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => { if (open) ref.current?.showModal(); else ref.current?.close() }, [open])
   const [form, setForm] = useState({ ...settings })
   useEffect(() => { if (open) setForm({ ...settings }) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   function submit(e: React.FormEvent) {
@@ -318,7 +311,7 @@ function SettingsDialog({ open, settings, onSave, onClose, onExport, onImport }:
     onSave({ person_a_name: clean(form.person_a_name) || 'Alex', person_b_name: clean(form.person_b_name) || 'Sam', currency: form.currency || 'SEK', default_split: !!form.default_split })
   }
   return (
-    <dialog ref={ref} className="ma-dialog" onClick={e => e.target === e.currentTarget && onClose()}>
+    <DialogShell open={open} onClose={onClose} className="ma-dialog">
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">Settings</h3>
         <div className="form-grid">
@@ -350,7 +343,7 @@ function SettingsDialog({ open, settings, onSave, onClose, onExport, onImport }:
           <button type="submit" className="btn btn-primary">Save</button>
         </div>
       </form>
-    </dialog>
+    </DialogShell>
   )
 }
 
