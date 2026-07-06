@@ -3,12 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <script>
-      // Pre-paint theme to avoid a light-mode flash. Shares the key with the
-      // vanilla app (bostadskalkyl_theme) so the choice carries over.
+      // Pre-paint theme to avoid a flash before React mounts. Dark is the app
+      // default now — only an explicit stored 'light' opts out. Shares the key
+      // with the vanilla app (bostadskalkyl_theme) so the choice carries over.
       try {
         document.documentElement.dataset.theme =
-          localStorage.getItem('bostadskalkyl_theme') === 'dark' ? 'dark' : 'light';
-      } catch (_) {}
+          localStorage.getItem('bostadskalkyl_theme') === 'light' ? 'light' : 'dark';
+      } catch (_) {
+        document.documentElement.dataset.theme = 'dark';
+      }
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
