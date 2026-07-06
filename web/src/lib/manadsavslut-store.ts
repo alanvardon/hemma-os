@@ -16,6 +16,7 @@
 import { defaultSettings, normalizePersonalEntries, personalSums } from './manadsavslut'
 import type { Item, Payment, MonthEndSettings, PersonalEntry } from './manadsavslut'
 import { supabase } from './supabase'
+import { genId } from './id'
 
 // Legacy pre-Supabase envelope — import source + backup (read-only after swap).
 export const STORAGE_KEY = 'bostadskalkyl_monthend_v1'
@@ -28,12 +29,6 @@ const SETTINGS_TOOL = 'manadsavslut-settings'
 const VERSION = 1
 
 interface Envelope { version: number; items: Item[]; payments: Payment[]; settings: MonthEndSettings }
-
-function genId(prefix: string): string {
-  if (typeof crypto !== 'undefined' && typeof (crypto as Crypto).randomUUID === 'function')
-    return (crypto as Crypto).randomUUID()
-  return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
-}
 
 // Normalize a loaded item so older localStorage data and JSON backups gain the
 // personal carve-out fields with safe defaults (no migration script needed):

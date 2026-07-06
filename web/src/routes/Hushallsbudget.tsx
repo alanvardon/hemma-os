@@ -4,7 +4,7 @@ import { useTheme } from '../App'
 import { markVtTransition } from '../lib/viewTransition'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
-  defaultState, computeBudget, buildSubmission, formatWithSpaces, parseFormatted,
+  defaultState, computeBudget, buildSubmission, formatWithSpaces, parseFormatted, money as fmt,
 } from '../lib/hushallsbudget'
 import type { BudgetState, BudgetResult, Owner, Row, SalarySubmission, IncomeItem } from '../lib/hushallsbudget'
 import { loadBudget, saveBudget } from '../lib/hushallsbudget-store'
@@ -16,8 +16,6 @@ import BudgetDonutChart, { type DonutSegment } from '../components/charts/Budget
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const CAT_TOKENS = ['--cat-1', '--cat-2', '--cat-3', '--cat-4', '--cat-5', '--cat-6', '--cat-7', '--cat-8']
-
-function fmt(n: number): string { return formatWithSpaces(Math.round(n)) + ' kr' }
 
 // Animated summary figures (NumberFlow). These roll the digits as you edit the
 // budget; the plain fmt()/fmtSigned() strings above stay for prose, modal data

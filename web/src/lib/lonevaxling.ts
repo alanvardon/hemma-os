@@ -1,7 +1,6 @@
-const PBB_2026 = 59200
+import { PBB_2026, STATE_TAX_SKIKTGRANS, STATE_TAX_RATE, grundavdrag, jobbskatteavdrag } from './swedish-tax'
+
 const IBB_2026 = 83400
-const STATE_TAX_SKIKTGRANS = 643000
-const STATE_TAX_RATE = 0.2
 const EMPLOYER_FEE = 31.42
 const SARSKILD_LONESKATT = 24.26
 
@@ -57,37 +56,6 @@ export function defaultInputs(): LonevaxlingInputs {
     withdrawalTaxPct: 32,
     municipalTaxPct: 32.38,
   }
-}
-
-function grundavdrag(income: number): number {
-  const ff = Math.max(0, income)
-  let g: number
-  if (ff <= 0.99 * PBB_2026) g = 0.423 * PBB_2026
-  else if (ff <= 2.72 * PBB_2026) g = 0.423 * PBB_2026 + 0.2 * (ff - 0.99 * PBB_2026)
-  else if (ff <= 3.11 * PBB_2026) g = 0.77 * PBB_2026
-  else if (ff <= 7.88 * PBB_2026) g = 0.77 * PBB_2026 - 0.1 * (ff - 3.11 * PBB_2026)
-  else g = 0.293 * PBB_2026
-  return Math.ceil(g / 100) * 100
-}
-
-function jobbskatteavdrag(arbetsinkomst: number, ga: number, kommunalRate: number): number {
-  const ai = Math.max(0, arbetsinkomst)
-  const PLATEAU = 3.027
-  let base: number
-  if (ai <= 0.91 * PBB_2026) {
-    base = ai
-  } else if (ai <= 3.24 * PBB_2026) {
-    base = 0.91 * PBB_2026 + 0.3874 * (ai - 0.91 * PBB_2026)
-  } else if (ai <= 8.08 * PBB_2026) {
-    const b2end = 0.91 * PBB_2026 + 0.3874 * (3.24 - 0.91) * PBB_2026
-    const slope = (PLATEAU * PBB_2026 - b2end) / ((8.08 - 3.24) * PBB_2026)
-    base = b2end + slope * (ai - 3.24 * PBB_2026)
-  } else if (ai <= 13.54 * PBB_2026) {
-    base = PLATEAU * PBB_2026
-  } else {
-    base = PLATEAU * PBB_2026 - 0.03 * (ai - 13.54 * PBB_2026)
-  }
-  return Math.max(0, (base - ga) * kommunalRate)
 }
 
 function netEmploymentSalary(grossAnnual: number, kommunalRate: number): { net: number } {

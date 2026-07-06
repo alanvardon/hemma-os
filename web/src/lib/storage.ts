@@ -13,6 +13,7 @@
 // the first-login import uploads it (the key-split from 16b/16c/16e).
 import type { Inputs, Constants } from './calc'
 import { supabase } from './supabase'
+import { genId } from './id'
 
 const KEYS = {
   scenarios: 'bostadskalkyl_scenarios_v1',
@@ -84,12 +85,8 @@ export function runMigrations(): void {
 // nested inputs/constants keep their camelCase keys inside jsonb. Mapping lives
 // only here. toRow also coalesces the NOT-NULL columns so a legacy row missing
 // one still inserts (learned from 16e).
-function _scenId(): string {
-  try { if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID() } catch { /* no crypto */ }
-  return 'scen-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-}
 const toRow = (s: Scenario): Record<string, unknown> => ({
-  id: s.id || _scenId(), name: s.name ?? '', saved_at: s.savedAt ?? '',
+  id: s.id || genId('scen'), name: s.name ?? '', saved_at: s.savedAt ?? '',
   inputs: s.inputs ?? {}, constants: s.constants ?? null,
 })
 const fromRow = (r: Record<string, unknown>): Scenario => ({
@@ -324,7 +321,7 @@ function _readLegacyScenarios(): Scenario[] {
     const arr = raw ? JSON.parse(raw) : null
     if (!Array.isArray(arr)) return []
     return arr.map((s: Partial<Scenario>) => ({
-      id: s.id || _scenId(), name: s.name ?? '', savedAt: s.savedAt ?? '',
+      id: s.id || genId('scen'), name: s.name ?? '', savedAt: s.savedAt ?? '',
       inputs: (s.inputs ?? {}) as Inputs, constants: s.constants,
     }))
   } catch { return [] }

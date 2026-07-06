@@ -16,6 +16,11 @@ export function formatWithSpaces(n: number): string {
   return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
 }
 
+/** Rounded amount with space thousands separators + a suffix, e.g. "5 850 000 kr". */
+export function money(n: number, suffix = ' kr'): string {
+  return formatWithSpaces(n) + suffix
+}
+
 /**
  * Compact sv-SE money for the dense scenario chips — uses the Swedish finance
  * abbreviations "tkr" (tusen kronor) and "mnkr" (miljoner kronor) so six figures

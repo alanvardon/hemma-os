@@ -15,6 +15,7 @@
 
 import type { SalarySubmission } from './hushallsbudget'
 import { supabase } from './supabase'
+import { genId } from './id'
 
 // Legacy pre-Supabase history — import source + backup. (Exported name kept for
 // back-compat; it is no longer the cache.)
@@ -72,22 +73,13 @@ function _readLegacy(): SalarySubmission[] {
       : (data && Array.isArray(data.submissions)) ? data.submissions : []
     return arr.map((r) => {
       const row = _migrate({ ...r })
-      if (!row.id) row.id = _id()
+      if (!row.id) row.id = genId('sub')
       if (!row.created_at) row.created_at = new Date().toISOString()
       return row
     })
   } catch {
     return []
   }
-}
-
-// Client-side id. The DB column also defaults to gen_random_uuid()::text, so
-// this is only needed to stamp a row before the optimistic cache write.
-function _id(): string {
-  try {
-    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID()
-  } catch { /* no crypto */ }
-  return 'sub-' + new Date().getTime().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
 }
 
 // Newest first (by created_at). Used for the cache fallback path; the cloud
@@ -168,7 +160,7 @@ export async function list(): Promise<SalarySubmission[]> {
 export async function add(record: SalarySubmission): Promise<SalarySubmission> {
   const saved: SalarySubmission = {
     ...record,
-    id: record.id || _id(),
+    id: record.id || genId('sub'),
     created_at: record.created_at || new Date().toISOString(),
   }
   const { error } = await supabase.from(TABLE).insert(_row(saved))
@@ -214,7 +206,7 @@ export async function importJSON(text: string): Promise<number> {
   incoming.forEach((raw) => {
     if (!raw || typeof raw !== 'object') return
     const row = _migrate({ ...raw })
-    if (!row.id) row.id = _id()
+    if (!row.id) row.id = genId('sub')
     if (seen.has(row.id)) return // already have it — skip (idempotent restore)
     if (!row.created_at) row.created_at = new Date().toISOString()
     seen.add(row.id)
