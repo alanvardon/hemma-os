@@ -4,6 +4,7 @@ import { Money, Percent } from '../components/AnimatedNumber'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import Collapse from '../components/Collapse'
 import DialogShell from '../components/DialogShell'
+import FormField from '../components/FormField'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { useSaveFlash } from '../components/useSaveFlash'
@@ -99,9 +100,9 @@ function PeriodDialog({ open, partId, id, periods, onSave, onDelete, onClose }: 
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">{id ? 'Edit rate period' : 'Add rate period'}</h3>
         <div className="form-grid">
-          <label className="form-field"><span>From (start)</span><input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} /></label>
-          <label className="form-field"><span>Villkorsändringsdag (optional)</span><input type="date" value={form.end_date} onChange={e => set('end_date', e.target.value)} /></label>
-          <label className="form-field"><span>Interest rate %</span><input type="text" inputMode="decimal" placeholder="e.g. 3.54" value={form.rate} onChange={e => set('rate', e.target.value)} /></label>
+          <FormField label="From (start)"><input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} /></FormField>
+          <FormField label="Villkorsändringsdag (optional)"><input type="date" value={form.end_date} onChange={e => set('end_date', e.target.value)} /></FormField>
+          <FormField label="Interest rate %"><input type="text" inputMode="decimal" placeholder="e.g. 3.54" value={form.rate} onChange={e => set('rate', e.target.value)} /></FormField>
           <div className="form-field">
             <span>Rate type</span>
             <Segmented value={form.rate_type} onChange={v => set('rate_type', v)}
@@ -149,10 +150,10 @@ function PartDialog({ open, id, parts, periods, payments, onSave, onDelete, onCl
         <form className="dialog-body" onSubmit={submit}>
           <h3 className="dialog-title">{id ? 'Edit loan part' : 'Add loan part'}</h3>
           <div className="form-grid">
-            <label className="form-field form-wide"><span>Label</span><input type="text" placeholder="e.g. Lånedel 1 (rörlig)" value={form.label} onChange={e => set('label', e.target.value)} /></label>
-            <label className="form-field"><span>Loan # (optional)</span><input type="text" placeholder="e.g. 9021 33 12345" value={form.loan_number} onChange={e => set('loan_number', e.target.value)} /></label>
-            <label className="form-field"><span>Start balance</span><input type="text" inputMode="decimal" placeholder="0" value={form.start_balance} onChange={e => set('start_balance', e.target.value)} /></label>
-            <label className="form-field"><span>As of date</span><input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} /></label>
+            <FormField label="Label" wide><input type="text" placeholder="e.g. Lånedel 1 (rörlig)" value={form.label} onChange={e => set('label', e.target.value)} /></FormField>
+            <FormField label="Loan # (optional)"><input type="text" placeholder="e.g. 9021 33 12345" value={form.loan_number} onChange={e => set('loan_number', e.target.value)} /></FormField>
+            <FormField label="Start balance"><input type="text" inputMode="decimal" placeholder="0" value={form.start_balance} onChange={e => set('start_balance', e.target.value)} /></FormField>
+            <FormField label="As of date"><input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} /></FormField>
           </div>
           <p className="form-hint">The start balance is the part's debt on the "as of" date. The interest rate is set per period below.</p>
           {id && (
@@ -216,9 +217,9 @@ function ValuationDialog({ open, id, valuations, onSave, onDelete, onClose }: Va
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">{id ? 'Edit property value' : 'Add property value'}</h3>
         <div className="form-grid">
-          <label className="form-field"><span>Date</span><input type="date" value={form.date} onChange={e => set('date', e.target.value)} /></label>
-          <label className="form-field"><span>Value</span><input type="text" inputMode="decimal" placeholder="0" value={form.value} onChange={e => set('value', e.target.value)} /></label>
-          <label className="form-field form-wide"><span>Note (optional)</span><input type="text" placeholder="e.g. Booli estimate" value={form.note} onChange={e => set('note', e.target.value)} /></label>
+          <FormField label="Date"><input type="date" value={form.date} onChange={e => set('date', e.target.value)} /></FormField>
+          <FormField label="Value"><input type="text" inputMode="decimal" placeholder="0" value={form.value} onChange={e => set('value', e.target.value)} /></FormField>
+          <FormField label="Note (optional)" wide><input type="text" placeholder="e.g. Booli estimate" value={form.note} onChange={e => set('note', e.target.value)} /></FormField>
           <label className="form-field checkbox-field form-wide">
             <input type="checkbox" checked={form.is_purchase} onChange={e => setForm(p => ({ ...p, is_purchase: e.target.checked }))} />
             <span>This is the original purchase price (köpeskilling) — anchors cost-basis equity</span>
@@ -257,13 +258,13 @@ function PaymentDialog({ open, id, payments, parts, settings, onSave, onDelete, 
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">{id ? 'Edit payment' : 'Add payment'}</h3>
         <div className="form-grid">
-          <label className="form-field form-wide"><span>Loan part</span>
+          <FormField label="Loan part" wide>
             <select className="select" value={form.loan_part_id} onChange={e => set('loan_part_id', e.target.value)}>
               {parts.map(p => <option key={p.id} value={p.id}>{p.label || p.id}</option>)}
             </select>
-          </label>
-          <label className="form-field"><span>Date</span><input type="date" value={form.date} onChange={e => set('date', e.target.value)} /></label>
-          <label className="form-field"><span>Type</span>
+          </FormField>
+          <FormField label="Date"><input type="date" value={form.date} onChange={e => set('date', e.target.value)} /></FormField>
+          <FormField label="Type">
             <select className="select" value={form.kind} onChange={e => set('kind', e.target.value)}>
               <option value="interest">Ränta · Interest</option>
               <option value="amortization">Amortering · Principal</option>
@@ -272,17 +273,17 @@ function PaymentDialog({ open, id, payments, parts, settings, onSave, onDelete, 
               <option value="fee">Avgift · Fee</option>
               <option value="other">Övrigt · Other</option>
             </select>
-          </label>
-          <label className="form-field"><span>Amount (Belopp)</span><input type="text" inputMode="decimal" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} /></label>
-          <label className="form-field"><span>Balance after (Saldo, optional)</span><input type="text" inputMode="decimal" placeholder="0" value={form.balance_after} onChange={e => set('balance_after', e.target.value)} /></label>
+          </FormField>
+          <FormField label="Amount (Belopp)"><input type="text" inputMode="decimal" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} /></FormField>
+          <FormField label="Balance after (Saldo, optional)"><input type="text" inputMode="decimal" placeholder="0" value={form.balance_after} onChange={e => set('balance_after', e.target.value)} /></FormField>
           {settings.track_contributions && (
-            <label className="form-field form-wide"><span>Paid by</span>
+            <FormField label="Paid by" wide>
               <select className="select" value={form.paid_by} onChange={e => set('paid_by', e.target.value)}>
                 <option value="joint">Joint · split by ownership</option>
                 <option value="a">{aName}</option>
                 <option value="b">{bName}</option>
               </select>
-            </label>
+            </FormField>
           )}
           <label className="form-field checkbox-field form-wide">
             <input type="checkbox" checked={form.is_insats} onChange={e => setForm(p => ({ ...p, is_insats: e.target.checked }))} />
@@ -372,8 +373,8 @@ function InsatsSplitDialog({ open, payment, settings, onSave, onRemove, onClose 
         <h3 className="dialog-title">Allocate insats</h3>
         <p className="config-note" style={{ marginBottom: '1rem' }}>Split this {fmtMoney(amount)} extra payment between {aName} and {bName} — how much each person actually funded. Editing one side fills the other.</p>
         <div className="form-grid">
-          <label className="form-field"><span>{aName}</span><input type="text" inputMode="decimal" value={aStr} onChange={e => changeA(e.target.value)} /></label>
-          <label className="form-field"><span>{bName}</span><input type="text" inputMode="decimal" value={bStr} onChange={e => changeB(e.target.value)} /></label>
+          <FormField label={aName}><input type="text" inputMode="decimal" value={aStr} onChange={e => changeA(e.target.value)} /></FormField>
+          <FormField label={bName}><input type="text" inputMode="decimal" value={bStr} onChange={e => changeB(e.target.value)} /></FormField>
         </div>
         <p className={'form-hint' + (balanced ? '' : ' is-warn')}>{fmtMoney(av)} + {fmtMoney(bv)} = {fmtMoney(av + bv)}{balanced ? '' : ' · should equal ' + fmtMoney(amount)}</p>
         <div className="dialog-actions">
@@ -410,9 +411,9 @@ function ContribDialog({ open, id, contributions, settings, onSave, onDelete, on
             <Segmented value={form.owner} onChange={v => setForm(p => ({ ...p, owner: v }))}
               options={[{ v: 'a' as Owner, label: aName }, { v: 'b' as Owner, label: bName }]} />
           </div>
-          <label className="form-field"><span>Date</span><input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} /></label>
-          <label className="form-field"><span>Amount</span><input type="text" inputMode="decimal" placeholder="0" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} /></label>
-          <label className="form-field form-wide"><span>Note (optional)</span><input type="text" placeholder="e.g. Down payment" value={form.note} onChange={e => setForm(p => ({ ...p, note: e.target.value }))} /></label>
+          <FormField label="Date"><input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} /></FormField>
+          <FormField label="Amount"><input type="text" inputMode="decimal" placeholder="0" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} /></FormField>
+          <FormField label="Note (optional)" wide><input type="text" placeholder="e.g. Down payment" value={form.note} onChange={e => setForm(p => ({ ...p, note: e.target.value }))} /></FormField>
         </div>
         <p className="form-hint">A lump sum one owner put in — down payment or extra amortering — beyond the shared split.</p>
         <div className="dialog-actions">
@@ -447,22 +448,22 @@ function SettingsDialog({ open, settings, onSave, onClose, onExportJSON, onExpor
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">Settings</h3>
         <div className="form-grid">
-          <label className="form-field form-wide"><span>Property name (optional)</span><input type="text" placeholder="e.g. Storgatan 4" value={form.property_name} onChange={f('property_name')} /></label>
-          <label className="form-field"><span>Owner A name</span><input type="text" value={form.owner_a_name} onChange={f('owner_a_name')} /></label>
-          <label className="form-field"><span>Owner B name</span><input type="text" value={form.owner_b_name} onChange={f('owner_b_name')} /></label>
-          <label className="form-field"><span>My ownership %</span><input type="text" inputMode="decimal" placeholder="50" value={form.my_ownership_pct} onChange={f('my_ownership_pct')} /></label>
+          <FormField label="Property name (optional)" wide><input type="text" placeholder="e.g. Storgatan 4" value={form.property_name} onChange={f('property_name')} /></FormField>
+          <FormField label="Owner A name"><input type="text" value={form.owner_a_name} onChange={f('owner_a_name')} /></FormField>
+          <FormField label="Owner B name"><input type="text" value={form.owner_b_name} onChange={f('owner_b_name')} /></FormField>
+          <FormField label="My ownership %"><input type="text" inputMode="decimal" placeholder="50" value={form.my_ownership_pct} onChange={f('my_ownership_pct')} /></FormField>
           <div className="form-field">
             <span>Which owner am I?</span>
             <Segmented value={(form.i_am as Owner) || 'a'} onChange={v => setForm(p => ({ ...p, i_am: v }))}
               options={[{ v: 'a' as Owner, label: aName }, { v: 'b' as Owner, label: bName }]} />
           </div>
-          <label className="form-field"><span>Currency</span>
+          <FormField label="Currency">
             <select className="select" value={form.currency} onChange={f('currency')}>
               <option value="SEK">SEK · kr</option><option value="NOK">NOK · kr</option><option value="DKK">DKK · kr</option>
               <option value="EUR">EUR · €</option><option value="USD">USD · $</option><option value="GBP">GBP · £</option>
             </select>
-          </label>
-          <label className="form-field"><span>Household income / year (optional)</span><input type="text" inputMode="decimal" placeholder="e.g. 720000" value={form.household_income_yearly ?? ''} onChange={f('household_income_yearly')} /></label>
+          </FormField>
+          <FormField label="Household income / year (optional)"><input type="text" inputMode="decimal" placeholder="e.g. 720000" value={form.household_income_yearly ?? ''} onChange={f('household_income_yearly')} /></FormField>
           <label className="form-field checkbox-field form-wide">
             <input type="checkbox" checked={form.ranteavdrag} onChange={f('ranteavdrag')} />
             <span>Show estimated ränteavdrag (interest tax deduction)</span>

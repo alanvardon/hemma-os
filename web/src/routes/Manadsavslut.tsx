@@ -14,6 +14,7 @@ import { CURRENCY_SUFFIX } from '../lib/format'
 import Segmented from '../components/Segmented'
 import Collapse from '../components/Collapse'
 import DialogShell from '../components/DialogShell'
+import FormField from '../components/FormField'
 import { Money } from '../components/AnimatedNumber'
 import GroceryTrendChart from '../components/charts/GroceryTrendChart'
 import PageHeader from '../components/PageHeader'
@@ -105,14 +106,14 @@ function PersonalOffsetDialog({ open, enterAmount, frontedBy, aName, bName, init
         <h3 className="dialog-title">Personal items (not shared)</h3>
         <p className="form-hint">Add anything in this {fmtMoney(enter)} charge that’s personal to one person — it’s taken out before the 50/50 split, and the line itself stays whole.</p>
         <div className="personal-add-grid">
-          <label className="form-field"><span>Personal to</span>
+          <FormField label="Personal to">
             <select className="select" value={draft.person} onChange={e => setDraft(d => ({ ...d, person: e.target.value as Person }))}>
               <option value="a">{aName}</option>
               <option value="b">{bName}</option>
             </select>
-          </label>
-          <label className="form-field"><span>Amount</span><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={draft.amount} onChange={e => setDraft(d => ({ ...d, amount: e.target.value }))} onKeyDown={onDraftKey} /></label>
-          <label className="form-field"><span>Note (optional)</span><input type="text" autoComplete="off" placeholder="e.g. protein powder" value={draft.note} onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} onKeyDown={onDraftKey} /></label>
+          </FormField>
+          <FormField label="Amount"><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={draft.amount} onChange={e => setDraft(d => ({ ...d, amount: e.target.value }))} onKeyDown={onDraftKey} /></FormField>
+          <FormField label="Note (optional)"><input type="text" autoComplete="off" placeholder="e.g. protein powder" value={draft.note} onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} onKeyDown={onDraftKey} /></FormField>
           <button type="button" className="btn btn-ghost personal-add-btn" disabled={!canAdd} onClick={add}>+ Add</button>
         </div>
         {addError && <p className="form-error">{addError}</p>}
@@ -193,9 +194,9 @@ function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }
         <form className="dialog-body" onSubmit={submit}>
           <h3 className="dialog-title">{id ? 'Edit item' : 'Add item'}</h3>
           <div className="form-grid">
-            <label className="form-field"><span>Date</span><input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} /></label>
-            <label className="form-field form-wide"><span>Description</span><input type="text" autoComplete="off" placeholder="e.g. Groceries" value={form.desc} onChange={e => setForm(p => ({ ...p, desc: e.target.value }))} /></label>
-            <label className="form-field"><span>Charge — minus for a refund</span><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} /></label>
+            <FormField label="Date"><input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} /></FormField>
+            <FormField label="Description" wide><input type="text" autoComplete="off" placeholder="e.g. Groceries" value={form.desc} onChange={e => setForm(p => ({ ...p, desc: e.target.value }))} /></FormField>
+            <FormField label="Charge — minus for a refund"><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} /></FormField>
             <div className="form-field">
               <span>Paid by</span>
               <Segmented value={form.fronted} onChange={v => setForm(p => ({ ...p, fronted: v }))} options={[{ v: 'a' as Person, label: aName }, { v: 'b' as Person, label: bName }]} />
@@ -204,7 +205,7 @@ function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }
               <span>Treatment</span>
               <Segmented value={form.split} onChange={v => setForm(p => ({ ...p, split: v }))} options={[{ v: 'split' as const, label: 'Split 50/50' }, { v: 'full' as const, label: 'Owes all' }]} />
             </div>
-            <label className="form-field form-wide"><span>Note (optional)</span><input type="text" autoComplete="off" value={form.note} onChange={e => setForm(p => ({ ...p, note: e.target.value }))} /></label>
+            <FormField label="Note (optional)" wide><input type="text" autoComplete="off" value={form.note} onChange={e => setForm(p => ({ ...p, note: e.target.value }))} /></FormField>
             {isSplit && (
               <div className="form-field form-wide personal-row">
                 {hasOffset ? (
@@ -267,12 +268,12 @@ function SettleDialog({ open, openItems, pendingCount, settings, onConfirm, onCl
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">Settle up</h3>
         <div className="form-grid">
-          <label className="form-field form-wide"><span>Settle which month?</span>
+          <FormField label="Settle which month?" wide>
             <select className="select" value={month} onChange={e => onMonthChange(e.target.value)}>
               {months.map(mk => <option key={mk} value={mk}>{monthLabel(mk)} ({itemsForMonth(openItems, mk).length})</option>)}
               <option value="__all__">All open items ({openItems.length})</option>
             </select>
-          </label>
+          </FormField>
         </div>
         <p className="settle-line">
           {pending.item_ids.length
@@ -283,8 +284,8 @@ function SettleDialog({ open, openItems, pendingCount, settings, onConfirm, onCl
           <p className="settle-pending-note">{pendingCount} item{pendingCount === 1 ? '' : 's'} still “ask later” — not included. Resolve them in the list first if you want them in.</p>
         )}
         <div className="form-grid">
-          <label className="form-field form-wide"><span>Period label</span><input type="text" autoComplete="off" placeholder="e.g. Juni 2026" value={period} onChange={e => setPeriod(e.target.value)} /></label>
-          <label className="form-field form-wide"><span>Note (optional)</span><input type="text" autoComplete="off" value={note} onChange={e => setNote(e.target.value)} /></label>
+          <FormField label="Period label" wide><input type="text" autoComplete="off" placeholder="e.g. Juni 2026" value={period} onChange={e => setPeriod(e.target.value)} /></FormField>
+          <FormField label="Note (optional)" wide><input type="text" autoComplete="off" value={note} onChange={e => setNote(e.target.value)} /></FormField>
         </div>
         <p className="form-hint">Closes just the chosen month's open items under one payment — a true month-end. Pick “All open items” to settle everything. Reopen later from History.</p>
         <div className="dialog-actions">
@@ -315,18 +316,18 @@ function SettingsDialog({ open, settings, onSave, onClose, onExport, onImport }:
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">Settings</h3>
         <div className="form-grid">
-          <label className="form-field"><span>Name A</span><input type="text" autoComplete="off" value={form.person_a_name} onChange={e => setForm(p => ({ ...p, person_a_name: e.target.value }))} /></label>
-          <label className="form-field"><span>Name B</span><input type="text" autoComplete="off" value={form.person_b_name} onChange={e => setForm(p => ({ ...p, person_b_name: e.target.value }))} /></label>
+          <FormField label="Name A"><input type="text" autoComplete="off" value={form.person_a_name} onChange={e => setForm(p => ({ ...p, person_a_name: e.target.value }))} /></FormField>
+          <FormField label="Name B"><input type="text" autoComplete="off" value={form.person_b_name} onChange={e => setForm(p => ({ ...p, person_b_name: e.target.value }))} /></FormField>
           <div className="form-field form-wide">
             <span>Default treatment for new / imported rows</span>
             <Segmented value={form.default_split ? 'split' : 'full'} onChange={v => setForm(p => ({ ...p, default_split: v === 'split' }))} options={[{ v: 'split' as const, label: 'Split 50/50' }, { v: 'full' as const, label: 'Owes all' }]} />
           </div>
-          <label className="form-field form-wide"><span>Currency</span>
+          <FormField label="Currency" wide>
             <select className="select" value={form.currency} onChange={e => setForm(p => ({ ...p, currency: e.target.value }))}>
               <option value="SEK">SEK · kr</option><option value="NOK">NOK · kr</option><option value="DKK">DKK · kr</option>
               <option value="EUR">EUR · €</option><option value="USD">USD · $</option><option value="GBP">GBP · £</option>
             </select>
-          </label>
+          </FormField>
           <div className="form-field form-wide">
             <span>Backup</span>
             <div className="settings-data-row">
