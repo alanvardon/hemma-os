@@ -1,6 +1,9 @@
 # Plan 55 — Dedupe the first-login-import skeleton across stores
 
-**Status:** plan · **Severity: LOW (L4)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Sonnet-suitable (behavior-preserving
+extraction with the plan-49 tests as a red/green harness; the judgment call —
+what NOT to unify — is already made in the plan) ·
+**Severity: LOW (L4)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 13 of the audit batch · **Sequencing:** AFTER plans 47/49 (don't
 refactor untested code; 47 also rewrites the same functions) ·
 Touches `web/src/lib/tool-store.ts`, `mortgage-store.ts`,

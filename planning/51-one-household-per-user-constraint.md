@@ -1,6 +1,9 @@
 # Plan 51 — Enforce one household per user (index + claim race)
 
-**Status:** plan · **Severity: MEDIUM (M5)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Sonnet-suitable (exact SQL is in the plan,
+incl. the pre-flight query; the concurrency reasoning is already done — the
+job is careful transcription + running the pre-flight before applying) ·
+**Severity: MEDIUM (M5)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 9 of the audit batch · **Do before or with plan 50** ·
 Touches one new `supabase/migrations/` file. No web/ change.
 

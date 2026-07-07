@@ -1,6 +1,10 @@
 # Plan 54 — CSP meta tag + self-hosted fonts
 
-**Status:** plan · **Severity: LOW (L3)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Opus (not conceptually hard, but
+verification-heavy: hashing the inline theme script, a dev/prod CSP split, and
+chasing violations from motion/visx/R3F across every route in a real Pages
+build — a weaker model will ship a policy that breaks something quietly) ·
+**Severity: LOW (L3)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 12 of the audit batch ·
 Touches `web/index.html` (+ font files under `web/src/assets/` or
 `web/public/`).

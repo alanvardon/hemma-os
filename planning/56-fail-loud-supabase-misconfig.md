@@ -1,6 +1,9 @@
 # Plan 56 — Fail loud when Supabase env is missing in a prod build
 
-**Status:** plan · **Severity: LOW (L5)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Haiku-suitable (two guard snippets, both
+written out in the plan; smallest change in the batch — just confirm the test
+suite stays green without env vars) ·
+**Severity: LOW (L5)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 14 of the audit batch (smallest — good gap-filler PR) ·
 Touches `web/src/lib/supabase.ts` (+ optionally `.github/workflows/deploy.yml`).
 

@@ -1,6 +1,9 @@
 # Plan 45 — Case-insensitive invite email matching
 
-**Status:** plan · **Severity: HIGH (H3)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Sonnet-suitable (the exact SQL is in the
+plan; the one care point is copying claim_household's FULL body into the new
+migration — verify against the 16h migration, don't retype from memory) ·
+**Severity: HIGH (H3)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 3 of the audit batch ·
 Touches a new `supabase/migrations/` file + `web/src/lib/household.ts`.
 

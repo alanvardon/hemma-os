@@ -1,6 +1,10 @@
 # Plan 48 — Månadsavslut: atomic settle/unsettle via RPC
 
-**Status:** plan · **Severity: MEDIUM (M2)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Opus (security-definer SQL bypasses RLS —
+every statement must be re-pinned to the household by hand; a missed predicate
+is a cross-tenant write. The draft SQL needs adversarial review, not just
+transcription) ·
+**Severity: MEDIUM (M2)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 6 of the audit batch ·
 Touches a new `supabase/migrations/` file + `web/src/lib/manadsavslut-store.ts`.
 

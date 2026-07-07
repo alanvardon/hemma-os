@@ -1,6 +1,10 @@
 # Plan 46 — Enforce invite-only signup server-side (before-user-created hook)
 
-**Status:** plan · **Severity: HIGH (H1)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Opus (security boundary; must verify the
+current hook event-payload shape against live Supabase docs (Context7) rather
+than trust the draft, and the failure mode of getting it wrong is locking the
+couple out or reopening the bypass; includes a manual dashboard step) ·
+**Severity: HIGH (H1)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 4 of the audit batch ·
 Touches a new `supabase/migrations/` file + a Supabase **dashboard** step
 (Auth → Hooks). No web/ code change required.

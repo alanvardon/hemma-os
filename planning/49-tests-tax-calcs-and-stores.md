@@ -1,6 +1,10 @@
 # Plan 49 — Tests for the tax calculators and the Supabase store layer
 
-**Status:** plan · **Severity: MEDIUM (M3)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Opus for the tax golden values + the
+supabase mock harness design (wrong expected kronor = a test that certifies a
+bug; the fluent-chain mock is the one reusable design decision). Sonnet can
+fan out the per-store test files once the harness + first example exist ·
+**Severity: MEDIUM (M3)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 7 of the audit batch · **Sequencing:** ideally BEFORE plans 47/48 land
 (they refactor the very code this covers); at minimum land the store-mock
 harness together with 47 ·
