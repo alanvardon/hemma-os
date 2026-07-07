@@ -53,3 +53,66 @@ Each remains its own branch + PR (`ui/<slug>`), base `main`, landed one at a tim
 - Extending the card-expand animation to the **other 5 tools** (deliberately scoped to Bostadskalkyl first as a proof-of-concept).
 - Moving drift/savings line items from session-global to per-scenario (currently session-level by design).
 - SHA-pinning GitHub Actions (considered in 01, deferred).
+
+---
+
+# Design-review batch — 2026-07-07 (plans 57–69) + mobile addendum (73–75)
+
+Senior-designer Playwright walkthrough of all seven surfaces (tools first,
+then homepage, then a dedicated 390 px mobile pass). Numbers = build order
+within each group. Plans 70–72 (ideas batch) are unrelated and documented in
+their own files.
+
+| File | Scope | Summary | Owner model | Effort |
+|------|-------|---------|-------------|--------|
+| [57-field-label-clipping.md](57-field-label-clipping.md) | tools | Bilingual field labels ellipsize mid-word everywhere; never-clip rule | Sonnet | S |
+| [58-konsult-sticky-ledger-header.md](58-konsult-sticky-ledger-header.md) | tools | Sticky ledger header overlaps rows mid-scroll | Sonnet | XS |
+| [59-page-background-seam.md](59-page-background-seam.md) | tools | Fixed-size body gradient ends in a visible full-width band | Sonnet | XS–S |
+| [60-icon-system.md](60-icon-system.md) | tools | Text glyphs (⚙ ✎ ✕ ☆…) → lucide-react + real hit areas | Sonnet | S |
+| [61-button-hierarchy-destructive.md](61-button-hierarchy-destructive.md) | tools | Demote Delete-all from headers; one danger variant; disable impossible CTAs | Sonnet | S |
+| [62-empty-states-first-run.md](62-empty-states-first-run.md) | tools | First-run = one hero CTA, not 2 300 px of empty cards | Opus | M |
+| [63-dataviz-palette-legends.md](63-dataviz-palette-legends.md) | tools | Tokenized 8-slot green/copper ramp; donut legend rework (after plan 41) | Opus | M |
+| [64-bolanekoll-hero-hierarchy.md](64-bolanekoll-hero-hierarchy.md) | tools | One hero, ≤4 KPI chips, kill the focus-mimicking outline | Opus | M |
+| [65-dashboard-card-language-numbers.md](65-dashboard-card-language-numbers.md) | tools | Scenario-card stat labels/formats; hero whole-kr rule | Sonnet | S |
+| [66-skip-link-fixed-positioning.md](66-skip-link-fixed-positioning.md) | home | Skip-link visible mid-page (transform breaks position:fixed) | Sonnet | XS |
+| [67-homepage-copy-truth-pass.md](67-homepage-copy-truth-pass.md) | home | "Synced tomorrow"/"Supabase-ready" stale; Live chips = noise; wordmark | Sonnet | XS–S |
+| [68-bento-card-anatomy.md](68-bento-card-anatomy.md) | home | Labeled stats, one mobile card shape, data-driven wide slots | Opus | M |
+| [69-hero-readability-light-theme.md](69-hero-readability-light-theme.md) | home | Subline scrim, aurora banding probe, real light-mode treatment | Opus | M–L |
+| [73-mobile-tables-to-cards.md](73-mobile-tables-to-cards.md) | mobile | Tables are 2.4× viewport with invisible scroll; rows become cards ≤600 px | Opus (pattern) + Sonnet (fan-out) | M |
+| [74-mobile-text-starvation.md](74-mobile-text-starvation.md) | mobile | Row names/CTAs clip ("Submit this month's sal…"); text gets priority | Sonnet | S |
+| [75-ios-input-zoom.md](75-ios-input-zoom.md) | mobile | 12–14 px inputs → iOS focus-zoom; 16 px on coarse pointers | Sonnet | XS–S |
+
+## Sequencing notes
+
+- **57 → 74 → 75** share the "nothing readable ever clips" thread: 57 fixes
+  field labels, 74 extends the rule to row names/CTAs, 75's font bump then
+  reflows the fixed layouts — build in that order.
+- **41 → 63**: the chart-theme hook consolidation lands first so 63 changes
+  colors in one place.
+- **61 vs 73**: both touch the Månadsavslut/Bolånekoll section headers and
+  row actions — land one before starting the other.
+- **69** ends in a user taste decision (day-tuned scene vs static editorial
+  header in light mode) — prototype both, get sign-off before merging.
+- Each plan = own branch (`ui/<slug>`) + PR, base `main`, one at a time.
+
+## Out of scope / parked (raised during review, not planned)
+
+- Data-freshness chip on hub cards ("Uppdaterad idag") — only worthwhile
+  successor to the deleted Live chip; revisit after 68.
+- Lönevaxling mobile: headline result sits 2+ viewports down (sticky bar
+  mitigates) — reassess after 73–75 land.
+- Homepage `More Plans.md` items and plans 70–72 (ideas batch) — separate
+  thread.
+
+---
+
+# Infra — 2026-07-07 (standalone)
+
+| File | Scope | Summary | Owner model | Effort |
+|------|-------|---------|-------------|--------|
+| [81-custom-se-domain.md](81-custom-se-domain.md) | hosting | Move Hemma·OS onto a custom `.se` domain while keeping GitHub Pages as the host — DNS + Pages custom-domain + Supabase Auth allow-list; the only repo change is a one-line `CNAME` echo in `deploy.yml` | Human-led (Haiku for the workflow edit) | S |
+
+Standalone; not blocked by and does not block any other batch. **Do the GitHub
+Pages custom-domain step and the Supabase Auth allow-list step in one sitting** —
+the gap between them is exactly when magic-link login silently breaks. Written
+pedagogically (mental model + the two non-obvious gotchas) at the user's request.

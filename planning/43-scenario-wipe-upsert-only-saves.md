@@ -1,6 +1,6 @@
 # Plan 43 — Stop `saveScenarios` from wiping the household's cloud scenarios
 
-**Status:** plan · **Owner model:** Opus (small diff, but data-loss semantics —
+**Status:** shipped (PR #236) · **Owner model:** Opus (small diff, but data-loss semantics —
 the delete/upsert trade-off and the useStore call-site audit must be reasoned,
 not pattern-matched; highest-stakes change in the batch) ·
 **Severity: CRITICAL (C1)** · **Source:** repo audit 2026-07-06 ·
