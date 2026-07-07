@@ -2,350 +2,27 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
-  defaultSettings, otherPerson, parseCsv, parseAmount, autoMapColumns, inferSpendSign,
-  computeOwed, personalSums, classifyToItemFields, makeItem, flagDuplicates, netBalance, buildSettlement,
-  monthKey, monthLabel, monthsWithOpenItems, itemsForMonth,
+  defaultSettings, otherPerson, parseCsv, autoMapColumns,
+  computeOwed, personalSums, classifyToItemFields, makeItem, netBalance,
+  monthKey,
   spendByCategory, grocerySpendByMonth, fillMonthGaps,
 } from '../lib/manadsavslut'
-import type { Item, Payment, PersonalEntry, MonthEndSettings, Person, Treatment, CsvResult, ColMapping } from '../lib/manadsavslut'
+import type { Item, Payment, MonthEndSettings, Person, Treatment, ColMapping } from '../lib/manadsavslut'
 import * as Store from '../lib/manadsavslut-store'
 import { todayISO } from '../lib/date'
-import { CURRENCY_SUFFIX } from '../lib/format'
 import Segmented from '../components/Segmented'
 import Collapse from '../components/Collapse'
-import DialogShell from '../components/DialogShell'
-import FormField from '../components/FormField'
-import { Money } from '../components/AnimatedNumber'
+import FileDropzone from '../components/FileDropzone'
 import GroceryTrendChart from '../components/charts/GroceryTrendChart'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { usePersonNames } from '../components/usePersonNames'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
-
-// ── Formatters (faithful to manadsavslut.js) ─────────────────────────────────
-
-let CURRENT_CURRENCY = 'SEK'
-function fmtMoney(n: number): string {
-  const num = Number(n) || 0
-  const hasOre = Math.abs(num - Math.round(num)) > 0.005
-  const suffix = CURRENCY_SUFFIX[CURRENT_CURRENCY] || 'kr'
-  return num.toLocaleString('sv-SE', { minimumFractionDigits: hasOre ? 2 : 0, maximumFractionDigits: 2 }) + ' ' + suffix
-}
-// Animated equivalent for the SUMMARY figures (balance headline, insight amount,
-// category bar values). Data tables, the triage and prose keep fmtMoney above.
-function M(value: number) {
-  return <Money value={value} currencySuffix={CURRENCY_SUFFIX[CURRENT_CURRENCY] || 'kr'} maxDecimals={2} />
-}
-const clean = (v: unknown) => String(v == null ? '' : v).trim()
-const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100
-function defaultPeriodLabel(): string {
-  try { const s = new Date().toLocaleDateString('sv-SE', { month: 'long', year: 'numeric' }); return s.charAt(0).toUpperCase() + s.slice(1) } catch { return '' }
-}
-
-// ── Triage (import) ──────────────────────────────────────────────────────────
-
-interface TriageRow { classification: Treatment; kind: 'charge' | 'refund' | 'noamount'; charge: number; duplicate: boolean }
-interface ImportCfg { file: File; parsed: CsvResult; mapping: ColMapping; frontedBy: Person; triage: TriageRow[] }
-
-function cellAt(row: string[], idx: number | null): string { return idx == null ? '' : (row[idx] == null ? '' : row[idx]) }
-
-// Derive { kind, charge, duplicate } for each parsed row against the current
-// mapping + chosen card. Classification is preserved by the caller.
-function deriveTriage(parsed: CsvResult, mapping: ColMapping, frontedBy: Person, existing: Item[]): Omit<TriageRow, 'classification'>[] {
-  const amounts = parsed.rows.map(r => mapping.enter_amount == null ? NaN : parseAmount(r[mapping.enter_amount]))
-  const spendSign = inferSpendSign(amounts)
-  const candidates = parsed.rows.map((r, i) => {
-    const amt = amounts[i]
-    const charge = isFinite(amt) ? round2(amt * spendSign) : NaN
-    if (!isFinite(charge) || charge === 0) return { kind: 'noamount' as const, charge: 0, cand: null }
-    return {
-      kind: (charge < 0 ? 'refund' : 'charge') as 'charge' | 'refund',
-      charge,
-      cand: { date_purchased: clean(cellAt(r, mapping.date_purchased)), description: clean(cellAt(r, mapping.description)), enter_amount: charge, fronted_by: frontedBy },
-    }
-  })
-  const dups = flagDuplicates(existing, candidates.map(c => c.cand))
-  return candidates.map((c, i) => ({ kind: c.kind, charge: c.charge, duplicate: !!dups[i] }))
-}
-
-// ── PersonalOffsetDialog (nested in ItemDialog, Split only) ──────────────────
-// Build up a list of personal line-items carved out before the 50/50 split. Each
-// is { person, amount, note }. Holds a DRAFT list: "Done" hands it back to the
-// ItemDialog form, "Cancel" discards. Nothing persists until the item is saved.
-
-interface OffsetDlgProps {
-  open: boolean; enterAmount: number; frontedBy: Person; aName: string; bName: string
-  initial: PersonalEntry[]
-  onSave: (entries: PersonalEntry[]) => void; onClose: () => void
-}
-function PersonalOffsetDialog({ open, enterAmount, frontedBy, aName, bName, initial, onSave, onClose }: OffsetDlgProps) {
-  const [entries, setEntries] = useState<PersonalEntry[]>(initial)
-  const [draft, setDraft] = useState({ person: frontedBy as Person, amount: '', note: '' })
-  useEffect(() => { if (open) { setEntries(initial); setDraft({ person: frontedBy, amount: '', note: '' }) } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
-  const { nameOf } = usePersonNames(aName, bName)
-  const enter = isFinite(enterAmount) ? enterAmount : 0
-  const owed = otherPerson(frontedBy)
-  const sums = personalSums(entries)
-  const remaining = enter - sums.a - sums.b
-  const draftAmt = parseAmount(draft.amount) || 0
-  const canAdd = draftAmt > 0 && draftAmt - remaining <= 0.005
-  const addError = draft.amount.trim() === '' ? ''
-    : draftAmt <= 0 ? 'Enter an amount above 0.'
-      : draftAmt - remaining > 0.005 ? 'Only ' + fmtMoney(remaining) + ' left to carve out of this ' + fmtMoney(enter) + ' charge.'
-        : ''
-  const owedShare = computeOwed(enter, true, frontedBy, sums.a, sums.b)
-  function add() {
-    if (!canAdd) return
-    setEntries(es => [...es, { person: draft.person, amount: Math.round(draftAmt * 100) / 100, note: clean(draft.note) }])
-    setDraft(d => ({ person: d.person, amount: '', note: '' }))
-  }
-  function onDraftKey(e: React.KeyboardEvent) { if (e.key === 'Enter') { e.preventDefault(); add() } }
-  return (
-    <DialogShell open={open} onClose={onClose} className="ma-dialog ma-dialog-sm">
-      <div className="dialog-body">
-        <h3 className="dialog-title">Personal items (not shared)</h3>
-        <p className="form-hint">Add anything in this {fmtMoney(enter)} charge that’s personal to one person — it’s taken out before the 50/50 split, and the line itself stays whole.</p>
-        <div className="personal-add-grid">
-          <FormField label="Personal to">
-            <select className="select" value={draft.person} onChange={e => setDraft(d => ({ ...d, person: e.target.value as Person }))}>
-              <option value="a">{aName}</option>
-              <option value="b">{bName}</option>
-            </select>
-          </FormField>
-          <FormField label="Amount"><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={draft.amount} onChange={e => setDraft(d => ({ ...d, amount: e.target.value }))} onKeyDown={onDraftKey} /></FormField>
-          <FormField label="Note (optional)"><input type="text" autoComplete="off" placeholder="e.g. protein powder" value={draft.note} onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} onKeyDown={onDraftKey} /></FormField>
-          <button type="button" className="btn btn-ghost personal-add-btn" disabled={!canAdd} onClick={add}>+ Add</button>
-        </div>
-        {addError && <p className="form-error">{addError}</p>}
-        {entries.length > 0 && (
-          <ul className="personal-entry-list">
-            {entries.map((e, i) => (
-              <li key={i}>
-                <span className="pe-person">{nameOf(e.person)}</span>
-                <span className="pe-amount num">{fmtMoney(e.amount)}</span>
-                <span className="pe-note">{e.note}</span>
-                <button type="button" className="icon-btn" title="Remove" aria-label="Remove" onClick={() => setEntries(es => es.filter((_, j) => j !== i))}>✕</button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="form-hint">{entries.length
-          ? <>Shared {fmtMoney(remaining)} split · {nameOf(owed)} owes {fmtMoney(owedShare)}</>
-          : <>No personal items yet — the full {fmtMoney(enter)} splits 50/50.</>}</p>
-        <div className="dialog-actions">
-          {entries.length > 0 && <button type="button" className="btn btn-ghost btn-danger" onClick={() => setEntries([])}>Remove all</button>}
-          <span style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" onClick={() => onSave(entries)}>Done</button>
-        </div>
-      </div>
-    </DialogShell>
-  )
-}
-
-// ── ItemDialog ───────────────────────────────────────────────────────────────
-
-interface ItemDlgProps {
-  open: boolean; id: string | null; items: Item[]; settings: MonthEndSettings; defaultClass: Treatment
-  onSave: (rec: Omit<Item, 'id' | 'created_at'>) => void; onClose: () => void
-}
-function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }: ItemDlgProps) {
-  const rec = id ? items.find(i => i.id === id) : null
-  const [form, setForm] = useState({ date: todayISO(), desc: '', amount: '', note: '', fronted: 'a' as Person, split: 'split' as 'split' | 'full' })
-  const [personalItems, setPersonalItems] = useState<PersonalEntry[]>([])
-  const [offsetDlg, setOffsetDlg] = useState(false)
-  useEffect(() => {
-    if (open) setForm({
-      date: rec?.date_purchased || todayISO(), desc: rec?.description || '', amount: rec?.enter_amount != null ? String(rec.enter_amount) : '',
-      note: rec?.note || '', fronted: rec ? rec.fronted_by : 'a', split: rec ? (rec.split ? 'split' : 'full') : (defaultClass === 'full' ? 'full' : 'split'),
-    })
-  }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (open) { setPersonalItems(rec?.personal_items ?? []); setOffsetDlg(false) } }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const { a: aName, b: bName, nameOf } = usePersonNames(settings.person_a_name, settings.person_b_name)
-
-  const amt = parseAmount(form.amount)
-  const isSplit = form.split === 'split'
-  const sums = personalSums(personalItems)
-  const hasOffset = isSplit && (sums.a > 0 || sums.b > 0)
-  const hint = (() => {
-    if (!isFinite(amt) || amt === 0) return ''
-    const owed = otherPerson(form.fronted)
-    const share = computeOwed(amt, isSplit, form.fronted, sums.a, sums.b)
-    const verb = amt < 0 ? ' is credited ' : ' will owe '
-    const suffix = isSplit ? (hasOffset ? ' (shared ' + fmtMoney(Math.abs(amt) - sums.a - sums.b) + ' split)' : ' (half of ' + fmtMoney(Math.abs(amt)) + ')') : ''
-    return nameOf(owed) + verb + fmtMoney(Math.abs(share)) + suffix
-  })()
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault()
-    const a = parseAmount(form.amount)
-    if (!isFinite(a) || a === 0) return
-    onSave(makeItem({
-      date_purchased: clean(form.date), description: clean(form.desc) || '(no description)',
-      enter_amount: a, split: isSplit, fronted_by: form.fronted, owed_by: otherPerson(form.fronted), note: clean(form.note),
-      // Personal applies under Split only; "Owes all" drops it (Decision 3).
-      personal_items: isSplit ? personalItems : [],
-    }))
-  }
-  return (
-    <>
-      <DialogShell open={open} onClose={onClose} className="ma-dialog">
-        <form className="dialog-body" onSubmit={submit}>
-          <h3 className="dialog-title">{id ? 'Edit item' : 'Add item'}</h3>
-          <div className="form-grid">
-            <FormField label="Date"><input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} /></FormField>
-            <FormField label="Description" wide><input type="text" autoComplete="off" placeholder="e.g. Groceries" value={form.desc} onChange={e => setForm(p => ({ ...p, desc: e.target.value }))} /></FormField>
-            <FormField label="Charge — minus for a refund"><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} /></FormField>
-            <div className="form-field">
-              <span>Paid by</span>
-              <Segmented value={form.fronted} onChange={v => setForm(p => ({ ...p, fronted: v }))} options={[{ v: 'a' as Person, label: aName }, { v: 'b' as Person, label: bName }]} />
-            </div>
-            <div className="form-field">
-              <span>Treatment</span>
-              <Segmented value={form.split} onChange={v => setForm(p => ({ ...p, split: v }))} options={[{ v: 'split' as const, label: 'Split 50/50' }, { v: 'full' as const, label: 'Owes all' }]} />
-            </div>
-            <FormField label="Note (optional)" wide><input type="text" autoComplete="off" value={form.note} onChange={e => setForm(p => ({ ...p, note: e.target.value }))} /></FormField>
-            {isSplit && (
-              <div className="form-field form-wide personal-row">
-                {hasOffset ? (
-                  <button type="button" className="personal-chip" onClick={() => setOffsetDlg(true)}>
-                    <span>Personal: {sums.a > 0 && (aName + ' ' + fmtMoney(sums.a))}{sums.a > 0 && sums.b > 0 ? ' · ' : ''}{sums.b > 0 && (bName + ' ' + fmtMoney(sums.b))} · {personalItems.length} item{personalItems.length === 1 ? '' : 's'}</span>
-                    <span className="personal-edit" aria-hidden>✎</span>
-                  </button>
-                ) : (
-                  <button type="button" className="link-btn personal-add" onClick={() => setOffsetDlg(true)}>+ Add personal items (not shared)</button>
-                )}
-              </div>
-            )}
-          </div>
-          <p className="form-hint">{hint}</p>
-          <div className="dialog-actions">
-            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary">Save</button>
-          </div>
-        </form>
-      </DialogShell>
-      <PersonalOffsetDialog open={offsetDlg} enterAmount={amt} frontedBy={form.fronted} aName={aName} bName={bName}
-        initial={personalItems}
-        onSave={entries => { setPersonalItems(entries); setOffsetDlg(false) }}
-        onClose={() => setOffsetDlg(false)} />
-    </>
-  )
-}
-
-// ── SettleDialog ───────────────────────────────────────────────────────────
-
-interface SettleDlgProps {
-  open: boolean; openItems: Item[]; pendingCount: number; settings: MonthEndSettings
-  onConfirm: (draft: Omit<Payment, 'id' | 'created_at'>) => void; onClose: () => void
-}
-function SettleDialog({ open, openItems, pendingCount, settings, onConfirm, onClose }: SettleDlgProps) {
-  const { nameOf } = usePersonNames(settings.person_a_name, settings.person_b_name)
-  const months = useMemo(() => monthsWithOpenItems(openItems), [openItems])
-  const [month, setMonth] = useState<string>('')
-  const [period, setPeriod] = useState('')
-  const [note, setNote] = useState('')
-  useEffect(() => {
-    if (open) { const m = months[0] ?? '__all__'; setMonth(m); setNote(''); setPeriod(m === '__all__' ? defaultPeriodLabel() : monthLabel(m)) }
-  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const scope = month === '__all__' ? openItems : itemsForMonth(openItems, month)
-  const pending = useMemo(() => buildSettlement(scope, {}), [scope])
-
-  function onMonthChange(m: string) { setMonth(m); setPeriod(m === '__all__' ? defaultPeriodLabel() : monthLabel(m)) }
-  function submit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!pending.item_ids.length) return
-    onConfirm({ ...pending, period_label: clean(period), note: clean(note) })
-  }
-  const transfer = pending.from_person && pending.amount > 0
-    ? <>{nameOf(pending.from_person)} → {nameOf(pending.to_person)} · <strong><Money value={pending.amount} currencySuffix={CURRENCY_SUFFIX[CURRENT_CURRENCY] || 'kr'} maxDecimals={2} rollIn /></strong></>
-    : <>Even — no transfer</>
-  return (
-    <DialogShell open={open} onClose={onClose} className="ma-dialog">
-      <form className="dialog-body" onSubmit={submit}>
-        <h3 className="dialog-title">Settle up</h3>
-        <div className="form-grid">
-          <FormField label="Settle which month?" wide>
-            <select className="select" value={month} onChange={e => onMonthChange(e.target.value)}>
-              {months.map(mk => <option key={mk} value={mk}>{monthLabel(mk)} ({itemsForMonth(openItems, mk).length})</option>)}
-              <option value="__all__">All open items ({openItems.length})</option>
-            </select>
-          </FormField>
-        </div>
-        <p className="settle-line">
-          {pending.item_ids.length
-            ? <>{transfer} — closing {pending.item_ids.length} item{pending.item_ids.length === 1 ? '' : 's'}.</>
-            : 'No open items in this period.'}
-        </p>
-        {pendingCount > 0 && (
-          <p className="settle-pending-note">{pendingCount} item{pendingCount === 1 ? '' : 's'} still “ask later” — not included. Resolve them in the list first if you want them in.</p>
-        )}
-        <div className="form-grid">
-          <FormField label="Period label" wide><input type="text" autoComplete="off" placeholder="e.g. Juni 2026" value={period} onChange={e => setPeriod(e.target.value)} /></FormField>
-          <FormField label="Note (optional)" wide><input type="text" autoComplete="off" value={note} onChange={e => setNote(e.target.value)} /></FormField>
-        </div>
-        <p className="form-hint">Closes just the chosen month's open items under one payment — a true month-end. Pick “All open items” to settle everything. Reopen later from History.</p>
-        <div className="dialog-actions">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={!pending.item_ids.length}>Confirm settlement</button>
-        </div>
-      </form>
-    </DialogShell>
-  )
-}
-
-// ── SettingsDialog ───────────────────────────────────────────────────────────
-
-interface SetDlgProps {
-  open: boolean; settings: MonthEndSettings
-  onSave: (patch: Partial<MonthEndSettings>) => void; onClose: () => void
-  onExport: () => void; onImport: (e: React.ChangeEvent<HTMLInputElement>) => void
-}
-function SettingsDialog({ open, settings, onSave, onClose, onExport, onImport }: SetDlgProps) {
-  const [form, setForm] = useState({ ...settings })
-  useEffect(() => { if (open) setForm({ ...settings }) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
-  function submit(e: React.FormEvent) {
-    e.preventDefault()
-    onSave({ person_a_name: clean(form.person_a_name) || 'Alex', person_b_name: clean(form.person_b_name) || 'Sam', currency: form.currency || 'SEK', default_split: !!form.default_split })
-  }
-  return (
-    <DialogShell open={open} onClose={onClose} className="ma-dialog">
-      <form className="dialog-body" onSubmit={submit}>
-        <h3 className="dialog-title">Settings</h3>
-        <div className="form-grid">
-          <FormField label="Name A"><input type="text" autoComplete="off" value={form.person_a_name} onChange={e => setForm(p => ({ ...p, person_a_name: e.target.value }))} /></FormField>
-          <FormField label="Name B"><input type="text" autoComplete="off" value={form.person_b_name} onChange={e => setForm(p => ({ ...p, person_b_name: e.target.value }))} /></FormField>
-          <div className="form-field form-wide">
-            <span>Default treatment for new / imported rows</span>
-            <Segmented value={form.default_split ? 'split' : 'full'} onChange={v => setForm(p => ({ ...p, default_split: v === 'split' }))} options={[{ v: 'split' as const, label: 'Split 50/50' }, { v: 'full' as const, label: 'Owes all' }]} />
-          </div>
-          <FormField label="Currency" wide>
-            <select className="select" value={form.currency} onChange={e => setForm(p => ({ ...p, currency: e.target.value }))}>
-              <option value="SEK">SEK · kr</option><option value="NOK">NOK · kr</option><option value="DKK">DKK · kr</option>
-              <option value="EUR">EUR · €</option><option value="USD">USD · $</option><option value="GBP">GBP · £</option>
-            </select>
-          </FormField>
-          <div className="form-field form-wide">
-            <span>Backup</span>
-            <div className="settings-data-row">
-              <button type="button" className="btn btn-ghost" onClick={onExport}>Export JSON</button>
-              <label className="btn btn-ghost" style={{ cursor: 'pointer' }}>Import JSON
-                <input type="file" accept=".json,application/json" hidden onChange={onImport} />
-              </label>
-            </div>
-            <p className="config-note">Download everything — items, settlements and settings — or restore a backup (merges by id, so re-importing is safe).</p>
-          </div>
-        </div>
-        <div className="dialog-actions">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary">Save</button>
-        </div>
-      </form>
-    </DialogShell>
-  )
-}
+import ItemDialog from './manadsavslut/ItemDialog'
+import SettleDialog from './manadsavslut/SettleDialog'
+import SettingsDialog from './manadsavslut/SettingsDialog'
+import { fmtMoney, M, clean, cellAt, deriveTriage, currencyState, type TriageRow, type ImportCfg } from './manadsavslut/shared'
 
 // ── Main component ─────────────────────────────────────────────────────────
 
@@ -381,7 +58,7 @@ export default function Manadsavslut() {
   const [settleDlg, setSettleDlg] = useState(false)
   const [settingsDlg, setSettingsDlg] = useState(false)
 
-  CURRENT_CURRENCY = settings.currency || 'SEK'
+  currencyState.current = settings.currency || 'SEK'
   const { a: aName, b: bName, nameOf } = usePersonNames(settings.person_a_name, settings.person_b_name)
 
 
@@ -580,18 +257,11 @@ export default function Manadsavslut() {
         <section className="card import-card">
           <div className="card-head"><h2>Importera kontoutdrag <span className="card-en">· Import a statement</span></h2></div>
           {!importCfg ? (
-            <div className={'dropzone' + (isDragging ? ' is-drag' : '')}
-              onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={e => { e.preventDefault(); setIsDragging(false); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]) }}
-              onClick={() => fileInputRef.current?.click()}>
-              <input ref={fileInputRef} type="file" accept=".csv,text/csv,text/plain" hidden onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
-              <div className="dropzone-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4" /><path d="m7 9 5-5 5 5" /><path d="M5 20h14" /></svg>
-              </div>
+            <FileDropzone isDragging={isDragging} onDragChange={setIsDragging} inputRef={fileInputRef}
+              onFiles={files => { if (files[0]) handleFile(files[0]) }} accept=".csv,text/csv,text/plain">
               <p className="dropzone-lead">Drop a card-statement <strong>.csv</strong> here, or <span className="link-btn">browse</span>.</p>
               <p className="dropzone-hint">Swedish or English headers · comma or semicolon · we map the columns for you.</p>
-            </div>
+            </FileDropzone>
           ) : (
             <div className="import-config">
               <div className="import-filebar">

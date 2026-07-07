@@ -1,517 +1,36 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { Money, Percent } from '../components/AnimatedNumber'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import Collapse from '../components/Collapse'
-import DialogShell from '../components/DialogShell'
-import FormField from '../components/FormField'
+import FileDropzone from '../components/FileDropzone'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
+import Segmented from '../components/Segmented'
 import { usePersonNames } from '../components/usePersonNames'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   defaultSettings, parseCsv, parseAmount, autoMapColumns, classifyKind,
-  makeLoanPart, makeRatePeriod, makePayment, flagDuplicates, assignPaymentsToPart,
+  makePayment, flagDuplicates, assignPaymentsToPart,
   partBalance, totalBalance, totalAmortized, totalInterest, ranteavdrag,
   propertyValue, equity, loanToValue, otherOwner,
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit, insatsPayments,
-  effectiveRatePeriod, bindingStatus, groupLoanParts, weightedAvgRate, derivedRate, amorteringskravStatus,
+  effectiveRatePeriod, bindingStatus, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
-  contributionSplit, settlement, todayISO, normPaidBy,
+  contributionSplit, settlement, todayISO,
 } from '../lib/mortgage'
 import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, PaidBy } from '../lib/mortgage'
 import * as Store from '../lib/mortgage-store'
-import { CURRENCY_SUFFIX } from '../lib/format'
-import Segmented from '../components/Segmented'
-
-// A <tr> can't animate its own height, so revealed rows animate it inside each
-// cell instead: the td keeps zero vertical padding (see .cell-pad in CSS) and
-// this wrapper tweens the content 0 ↔ auto, so the whole row genuinely grows
-// and shrinks rather than popping in at full height with only a fade.
-function CellReveal({ reduce, children }: { reduce: boolean | null; children?: ReactNode }) {
-  return (
-    <motion.div
-      style={{ overflow: 'hidden' }}
-      initial={{ height: 0, opacity: 0 }}
-      animate={{ height: 'auto', opacity: 1 }}
-      exit={{ height: 0, opacity: 0 }}
-      transition={reduce ? { duration: 0 } : { duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
-    >
-      <div className="cell-pad">{children}</div>
-    </motion.div>
-  )
-}
-
-// ── Formatters (faithful to mortgagetracker.js) ──────────────────────────────
-
-const KIND_LABELS: Record<string, string> = { interest: 'Ränta', amortization: 'Amortering', payment: 'Betalning', loan: 'Lån', fee: 'Avgift', other: 'Övrigt' }
-function kindLabel(k: string): string { return KIND_LABELS[k] || k || '—' }
-// Payments ledger paginates: show the most recent PAY_PAGE, reveal more on click.
-const PAY_PAGE = 20
-
-function periodFrom(period: string): string | null {
-  const d = new Date(), p = (n: number) => (n < 10 ? '0' : '') + n
-  if (period === 'ytd') return d.getFullYear() + '-01-01'
-  if (period === '12m') { d.setFullYear(d.getFullYear() - 1); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) }
-  return null
-}
-function monthsToWhen(months: number | null): string {
-  if (months == null) return '—'
-  if (months <= 0) return 'nu · now'
-  const d = new Date(); d.setMonth(d.getMonth() + months)
-  const s = d.toLocaleDateString('sv-SE', { month: 'short', year: 'numeric' })
-  return s.charAt(0).toUpperCase() + s.slice(1)
-}
-
-// ── Sub-types ────────────────────────────────────────────────────────────────
-
-interface TriageRow {
-  classification: 'include' | 'skip'
-  specText: string; kind: Payment['kind']; amount: number; balance_after: number | null
-  hasAmount: boolean; loan_part_id: string | null; partMatched: boolean; duplicate: boolean
-}
-interface ImportCfg {
-  file: File; parsed: CsvResult; mapping: ColMapping; importPart: string
-  triage: TriageRow[]; queue: File[]; qIdx: number
-}
-
-// ── PeriodDialog ───────────────────────────────────────────────────────────
-
-interface PeriodDlgProps {
-  open: boolean; partId: string | null; id: string | null; periods: RatePeriod[]
-  onSave: (data: Omit<RatePeriod, 'id' | 'created_at'>) => void
-  onDelete: (id: string) => void; onClose: () => void
-}
-function PeriodDialog({ open, partId, id, periods, onSave, onDelete, onClose }: PeriodDlgProps) {
-  const rec = id ? periods.find(p => p.id === id) : null
-  const [form, setForm] = useState({ start_date: '', end_date: '', rate: '', rate_type: 'rörlig' as 'rörlig' | 'bunden' })
-  useEffect(() => {
-    if (open) setForm({ start_date: rec?.start_date || todayISO(), end_date: rec?.end_date || '', rate: rec?.rate != null ? String(rec.rate) : '', rate_type: rec?.rate_type || 'rörlig' })
-  }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }))
-  function submit(e: React.FormEvent) {
-    e.preventDefault()
-    onSave(makeRatePeriod({ loan_part_id: partId, start_date: form.start_date || todayISO(), end_date: form.end_date || null, rate: parseAmount(form.rate), rate_type: form.rate_type }))
-  }
-  return (
-    <DialogShell open={open} onClose={onClose} className="bk-dialog">
-      <form className="dialog-body" onSubmit={submit}>
-        <h3 className="dialog-title">{id ? 'Edit rate period' : 'Add rate period'}</h3>
-        <div className="form-grid">
-          <FormField label="From (start)"><input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} /></FormField>
-          <FormField label="Villkorsändringsdag (optional)"><input type="date" value={form.end_date} onChange={e => set('end_date', e.target.value)} /></FormField>
-          <FormField label="Interest rate %"><input type="text" inputMode="decimal" placeholder="e.g. 3.54" value={form.rate} onChange={e => set('rate', e.target.value)} /></FormField>
-          <div className="form-field">
-            <span>Rate type</span>
-            <Segmented value={form.rate_type} onChange={v => set('rate_type', v)}
-              options={[{ v: 'rörlig', label: 'Rörlig' }, { v: 'bunden', label: 'Bunden' }]} />
-          </div>
-        </div>
-        <p className="form-hint">Nästa ränteändring — bankens datum. Rörlig is a rolling 3-month binding, so it has one too; leave blank for an ongoing rate with no known date.</p>
-        <div className="dialog-actions">
-          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={() => { if (confirm('Delete this rate period?')) onDelete(id) }}>Delete</button>}
-          <span style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary">Save</button>
-        </div>
-      </form>
-    </DialogShell>
-  )
-}
-
-// ── PartDialog ─────────────────────────────────────────────────────────────
-
-interface PartDlgProps {
-  open: boolean; id: string | null; parts: LoanPart[]; periods: RatePeriod[]; payments: Payment[]
-  onSave: (data: Omit<LoanPart, 'id' | 'created_at'>) => void
-  onDelete: (id: string) => void; onClose: () => void
-  onSavePeriod: (partId: string, data: Omit<RatePeriod, 'id' | 'created_at'>, existingId?: string) => void
-  onDeletePeriod: (id: string) => void
-}
-function PartDialog({ open, id, parts, periods, payments, onSave, onDelete, onClose, onSavePeriod, onDeletePeriod }: PartDlgProps) {
-  const rec = id ? parts.find(p => p.id === id) : null
-  const [form, setForm] = useState({ label: '', loan_number: '', start_balance: '', start_date: '' })
-  const [periodDlg, setPeriodDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
-  useEffect(() => {
-    if (open) setForm({ label: rec?.label || '', loan_number: rec?.loan_number || '', start_balance: rec?.start_balance ? String(rec.start_balance) : '', start_date: rec?.start_date || todayISO() })
-  }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const myPeriods = periods.filter(p => p.loan_part_id === id).sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)))
-  const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }))
-  function submit(e: React.FormEvent) {
-    e.preventDefault()
-    onSave(makeLoanPart({ label: form.label.trim() || 'Lånedel', loan_number: form.loan_number.trim(), start_balance: form.start_balance.trim() === '' ? 0 : parseAmount(form.start_balance), start_date: form.start_date.trim() }))
-  }
-  const der = id && rec ? derivedRate(rec, payments) : null
-  return (
-    <>
-      <DialogShell open={open} onClose={onClose} className="bk-dialog">
-        <form className="dialog-body" onSubmit={submit}>
-          <h3 className="dialog-title">{id ? 'Edit loan part' : 'Add loan part'}</h3>
-          <div className="form-grid">
-            <FormField label="Label" wide><input type="text" placeholder="e.g. Lånedel 1 (rörlig)" value={form.label} onChange={e => set('label', e.target.value)} /></FormField>
-            <FormField label="Loan # (optional)"><input type="text" placeholder="e.g. 9021 33 12345" value={form.loan_number} onChange={e => set('loan_number', e.target.value)} /></FormField>
-            <FormField label="Start balance"><input type="text" inputMode="decimal" placeholder="0" value={form.start_balance} onChange={e => set('start_balance', e.target.value)} /></FormField>
-            <FormField label="As of date"><input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} /></FormField>
-          </div>
-          <p className="form-hint">The start balance is the part's debt on the "as of" date. The interest rate is set per period below.</p>
-          {id && (
-            <div className="rate-history">
-              <div className="rate-history-head">
-                <span>Rate periods</span>
-                <span className="rate-derived">{der != null ? 'Ledger ≈ ' + fmtPct(der) : ''}</span>
-              </div>
-              {myPeriods.length ? (
-                <ul className="rate-list">
-                  {myPeriods.map(r => {
-                    const bunden = r.rate_type === 'bunden'
-                    return (
-                      <li key={r.id}>
-                        <span className="rate-when">{r.start_date || '—'} → {r.end_date || 'nu · now'}</span>
-                        <span className="rate-pct">{r.rate != null ? fmtPct(r.rate) : '—'}</span>
-                        <span className={'rate-type' + (bunden ? ' is-bunden' : '')}>{bunden ? 'Bunden' : 'Rörlig'}</span>
-                        <span className="rate-acts">
-                          <button type="button" className="icon-btn" title="Edit" onClick={() => setPeriodDlg({ open: true, id: r.id })}>✎</button>
-                          <button type="button" className="icon-btn" title="Delete" onClick={() => { if (confirm('Delete this rate period?')) onDeletePeriod(r.id) }}>✕</button>
-                        </span>
-                      </li>
-                    )
-                  })}
-                </ul>
-              ) : <ul className="rate-list"><li className="rate-empty">No rate periods yet — add one to set this part’s rate.</li></ul>}
-              <button type="button" className="btn btn-ghost" id="p-rate-add" onClick={() => setPeriodDlg({ open: true, id: null })}>+ Add rate period</button>
-            </div>
-          )}
-          <div className="dialog-actions">
-            {id && <button type="button" className="btn btn-ghost btn-danger" onClick={() => { if (confirm('Delete this loan part and all its payments? This can’t be undone.')) onDelete(id) }}>Delete</button>}
-            <span style={{ flex: 1 }} />
-            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary">Save</button>
-          </div>
-        </form>
-      </DialogShell>
-      <PeriodDialog open={periodDlg.open} partId={id} id={periodDlg.id} periods={periods}
-        onSave={data => { onSavePeriod(id!, data, periodDlg.id || undefined); setPeriodDlg({ open: false, id: null }) }}
-        onDelete={pid => { onDeletePeriod(pid); setPeriodDlg({ open: false, id: null }) }}
-        onClose={() => setPeriodDlg({ open: false, id: null })} />
-    </>
-  )
-}
-
-// ── ValuationDialog ────────────────────────────────────────────────────────
-
-interface ValDlgProps {
-  open: boolean; id: string | null; valuations: Valuation[]
-  onSave: (data: Omit<Valuation, 'id' | 'created_at'>) => void
-  onDelete: (id: string) => void; onClose: () => void
-}
-function ValuationDialog({ open, id, valuations, onSave, onDelete, onClose }: ValDlgProps) {
-  const rec = id ? valuations.find(v => v.id === id) : null
-  const [form, setForm] = useState({ date: todayISO(), value: '', note: '', is_purchase: false })
-  useEffect(() => { if (open) setForm({ date: rec?.date || todayISO(), value: rec?.value ? String(rec.value) : '', note: rec?.note || '', is_purchase: !!rec?.is_purchase }) }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }))
-  function submit(e: React.FormEvent) { e.preventDefault(); onSave({ date: form.date, value: parseAmount(form.value) || 0, note: form.note, is_purchase: form.is_purchase }) }
-  return (
-    <DialogShell open={open} onClose={onClose} className="bk-dialog">
-      <form className="dialog-body" onSubmit={submit}>
-        <h3 className="dialog-title">{id ? 'Edit property value' : 'Add property value'}</h3>
-        <div className="form-grid">
-          <FormField label="Date"><input type="date" value={form.date} onChange={e => set('date', e.target.value)} /></FormField>
-          <FormField label="Value"><input type="text" inputMode="decimal" placeholder="0" value={form.value} onChange={e => set('value', e.target.value)} /></FormField>
-          <FormField label="Note (optional)" wide><input type="text" placeholder="e.g. Booli estimate" value={form.note} onChange={e => set('note', e.target.value)} /></FormField>
-          <label className="form-field checkbox-field form-wide">
-            <input type="checkbox" checked={form.is_purchase} onChange={e => setForm(p => ({ ...p, is_purchase: e.target.checked }))} />
-            <span>This is the original purchase price (köpeskilling) — anchors cost-basis equity</span>
-          </label>
-        </div>
-        <p className="form-hint">Equity is this value minus the outstanding debt. Add a new one whenever you re-value. Flag the purchase date’s value as the köpeskilling to power the cost-basis hero.</p>
-        <div className="dialog-actions">
-          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={() => { if (confirm('Delete this valuation?')) onDelete(id) }}>Delete</button>}
-          <span style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary">Save</button>
-        </div>
-      </form>
-    </DialogShell>
-  )
-}
-
-// ── PaymentDialog ──────────────────────────────────────────────────────────
-
-interface PayDlgProps {
-  open: boolean; id: string | null; payments: Payment[]; parts: LoanPart[]; settings: MortgageSettings
-  onSave: (data: Omit<Payment, 'id' | 'created_at'>) => void
-  onDelete: (id: string) => void; onClose: () => void
-}
-function PaymentDialog({ open, id, payments, parts, settings, onSave, onDelete, onClose }: PayDlgProps) {
-  const rec = id ? payments.find(p => p.id === id) : null
-  const [form, setForm] = useState({ date: todayISO(), loan_part_id: '', kind: 'interest', amount: '', balance_after: '', paid_by: 'joint', is_insats: false })
-  useEffect(() => {
-    if (open) setForm({ date: rec?.date || todayISO(), loan_part_id: rec?.loan_part_id || (parts[0]?.id || ''), kind: rec?.kind || 'interest', amount: rec?.amount ? String(rec.amount) : '', balance_after: rec?.balance_after != null ? String(rec.balance_after) : '', paid_by: rec?.paid_by || 'joint', is_insats: !!rec?.is_insats })
-  }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }))
-  function submit(e: React.FormEvent) { e.preventDefault(); onSave(makePayment({ date: form.date, loan_part_id: form.loan_part_id || null, kind: form.kind as Payment['kind'], amount: parseAmount(form.amount), balance_after: form.balance_after ? parseAmount(form.balance_after) : null, paid_by: normPaidBy(form.paid_by), is_insats: form.is_insats })) }
-  const { a: aName, b: bName } = usePersonNames(settings.owner_a_name, settings.owner_b_name)
-  return (
-    <DialogShell open={open} onClose={onClose} className="bk-dialog">
-      <form className="dialog-body" onSubmit={submit}>
-        <h3 className="dialog-title">{id ? 'Edit payment' : 'Add payment'}</h3>
-        <div className="form-grid">
-          <FormField label="Loan part" wide>
-            <select className="select" value={form.loan_part_id} onChange={e => set('loan_part_id', e.target.value)}>
-              {parts.map(p => <option key={p.id} value={p.id}>{p.label || p.id}</option>)}
-            </select>
-          </FormField>
-          <FormField label="Date"><input type="date" value={form.date} onChange={e => set('date', e.target.value)} /></FormField>
-          <FormField label="Type">
-            <select className="select" value={form.kind} onChange={e => set('kind', e.target.value)}>
-              <option value="interest">Ränta · Interest</option>
-              <option value="amortization">Amortering · Principal</option>
-              <option value="payment">Betalning · Payment</option>
-              <option value="loan">Lån · Disbursement</option>
-              <option value="fee">Avgift · Fee</option>
-              <option value="other">Övrigt · Other</option>
-            </select>
-          </FormField>
-          <FormField label="Amount (Belopp)"><input type="text" inputMode="decimal" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} /></FormField>
-          <FormField label="Balance after (Saldo, optional)"><input type="text" inputMode="decimal" placeholder="0" value={form.balance_after} onChange={e => set('balance_after', e.target.value)} /></FormField>
-          {settings.track_contributions && (
-            <FormField label="Paid by" wide>
-              <select className="select" value={form.paid_by} onChange={e => set('paid_by', e.target.value)}>
-                <option value="joint">Joint · split by ownership</option>
-                <option value="a">{aName}</option>
-                <option value="b">{bName}</option>
-              </select>
-            </FormField>
-          )}
-          <label className="form-field checkbox-field form-wide">
-            <input type="checkbox" checked={form.is_insats} onChange={e => setForm(p => ({ ...p, is_insats: e.target.checked }))} />
-            <span>Flag as insats — an extra amortering you chose to make (lists it under Insatser)</span>
-          </label>
-        </div>
-        <div className="dialog-actions">
-          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={() => { if (confirm('Delete this payment?')) onDelete(id) }}>Delete</button>}
-          <span style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary">Save</button>
-        </div>
-      </form>
-    </DialogShell>
-  )
-}
-
-// ── CopyToPartsDialog ─────────────────────────────────────────────────────
-
-interface CopyDlgProps {
-  open: boolean; source: Payment | null; parts: LoanPart[]
-  onConfirm: (targetIds: string[]) => void; onClose: () => void
-}
-function CopyToPartsDialog({ open, source, parts, onConfirm, onClose }: CopyDlgProps) {
-  const candidates = source
-    ? (source.loan_part_id == null ? parts : parts.filter(p => p.id !== source.loan_part_id))
-    : []
-  const [checked, setChecked] = useState<Set<string>>(new Set())
-  useEffect(() => { if (open) setChecked(new Set(candidates.map(p => p.id))) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
-  const toggle = (id: string) => setChecked(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
-  return (
-    <DialogShell open={open} onClose={onClose} className="bk-dialog">
-      <div className="dialog-body">
-        <h3 className="dialog-title">Copy payment to parts</h3>
-        <p className="config-note" style={{ marginBottom: '1rem' }}>Copies this payment (same date, amount, type) to each selected part with balance cleared.</p>
-        <div className="copy-parts-list">
-          {candidates.map(pt => (
-            <label key={pt.id} className="copy-part-row">
-              <input type="checkbox" checked={checked.has(pt.id)} onChange={() => toggle(pt.id)} />
-              <span>{pt.label || pt.id}</span>
-            </label>
-          ))}
-        </div>
-        <div className="dialog-actions">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={checked.size === 0}
-            onClick={() => onConfirm([...checked])}>
-            Copy to {checked.size} part{checked.size === 1 ? '' : 's'}
-          </button>
-        </div>
-      </div>
-    </DialogShell>
-  )
-}
-
-// ── InsatsSplitDialog ──────────────────────────────────────────────────────
-// Opened from the ledger ★. Splits one extra-payment line between the two
-// owners (a co-funded insats), or removes the insats flag entirely.
-
-interface InsatsDlgProps {
-  open: boolean; payment: Payment | null; settings: MortgageSettings
-  onSave: (split: { a: number; b: number }) => void
-  onRemove: () => void; onClose: () => void
-}
-function InsatsSplitDialog({ open, payment, settings, onSave, onRemove, onClose }: InsatsDlgProps) {
-  const amount = payment ? Math.round(Number(payment.amount) || 0) : 0
-  const { a: aName, b: bName } = usePersonNames(settings.owner_a_name, settings.owner_b_name)
-  const [aStr, setAStr] = useState(''); const [bStr, setBStr] = useState('')
-  useEffect(() => {
-    if (!open || !payment) return
-    let a: number
-    if (payment.paid_split) a = Math.round(Number(payment.paid_split.a) || 0)
-    else if (payment.paid_by === 'a') a = amount
-    else if (payment.paid_by === 'b') a = 0
-    else { const pct = Number(settings.my_ownership_pct); const ap = settings.i_am === 'b' ? 100 - pct : pct; a = Math.round(amount * (isFinite(ap) ? ap : 50) / 100) }
-    setAStr(String(a)); setBStr(String(Math.max(0, amount - a)))
-  }, [open, payment?.id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const av = Math.max(0, Math.min(amount, parseAmount(aStr) || 0))
-  const bv = Math.max(0, Math.min(amount, parseAmount(bStr) || 0))
-  const balanced = av + bv === amount
-  function changeA(v: string) { setAStr(v); const a = Math.max(0, Math.min(amount, parseAmount(v) || 0)); setBStr(String(Math.max(0, amount - a))) }
-  function changeB(v: string) { setBStr(v); const b = Math.max(0, Math.min(amount, parseAmount(v) || 0)); setAStr(String(Math.max(0, amount - b))) }
-  function submit(e: React.FormEvent) { e.preventDefault(); onSave({ a: av, b: bv }) }
-  return (
-    <DialogShell open={open} onClose={onClose} className="bk-dialog">
-      <form className="dialog-body" onSubmit={submit}>
-        <h3 className="dialog-title">Allocate insats</h3>
-        <p className="config-note" style={{ marginBottom: '1rem' }}>Split this {fmtMoney(amount)} extra payment between {aName} and {bName} — how much each person actually funded. Editing one side fills the other.</p>
-        <div className="form-grid">
-          <FormField label={aName}><input type="text" inputMode="decimal" value={aStr} onChange={e => changeA(e.target.value)} /></FormField>
-          <FormField label={bName}><input type="text" inputMode="decimal" value={bStr} onChange={e => changeB(e.target.value)} /></FormField>
-        </div>
-        <p className={'form-hint' + (balanced ? '' : ' is-warn')}>{fmtMoney(av)} + {fmtMoney(bv)} = {fmtMoney(av + bv)}{balanced ? '' : ' · should equal ' + fmtMoney(amount)}</p>
-        <div className="dialog-actions">
-          {payment?.is_insats && <button type="button" className="btn btn-ghost btn-danger" onClick={onRemove}>Remove insats</button>}
-          <span style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={!balanced}>Save</button>
-        </div>
-      </form>
-    </DialogShell>
-  )
-}
-
-// ── ContribDialog ──────────────────────────────────────────────────────────
-
-interface ContDlgProps {
-  open: boolean; id: string | null; contributions: Contribution[]; settings: MortgageSettings
-  onSave: (data: Omit<Contribution, 'id' | 'created_at'>) => void
-  onDelete: (id: string) => void; onClose: () => void
-}
-function ContribDialog({ open, id, contributions, settings, onSave, onDelete, onClose }: ContDlgProps) {
-  const rec = id ? contributions.find(c => c.id === id) : null
-  const [form, setForm] = useState({ owner: 'a' as Owner, date: todayISO(), amount: '', note: '' })
-  useEffect(() => { if (open) setForm({ owner: (rec?.owner as Owner) || 'a', date: rec?.date || todayISO(), amount: rec?.amount ? String(rec.amount) : '', note: rec?.note || '' }) }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const { a: aName, b: bName } = usePersonNames(settings.owner_a_name, settings.owner_b_name)
-  function submit(e: React.FormEvent) { e.preventDefault(); onSave({ owner: form.owner, date: form.date, amount: parseAmount(form.amount) || 0, note: form.note }) }
-  return (
-    <DialogShell open={open} onClose={onClose} className="bk-dialog">
-      <form className="dialog-body" onSubmit={submit}>
-        <h3 className="dialog-title">{id ? 'Edit contribution' : 'Add contribution'}</h3>
-        <div className="form-grid">
-          <div className="form-field">
-            <span>Who paid</span>
-            <Segmented value={form.owner} onChange={v => setForm(p => ({ ...p, owner: v }))}
-              options={[{ v: 'a' as Owner, label: aName }, { v: 'b' as Owner, label: bName }]} />
-          </div>
-          <FormField label="Date"><input type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} /></FormField>
-          <FormField label="Amount"><input type="text" inputMode="decimal" placeholder="0" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} /></FormField>
-          <FormField label="Note (optional)" wide><input type="text" placeholder="e.g. Down payment" value={form.note} onChange={e => setForm(p => ({ ...p, note: e.target.value }))} /></FormField>
-        </div>
-        <p className="form-hint">A lump sum one owner put in — down payment or extra amortering — beyond the shared split.</p>
-        <div className="dialog-actions">
-          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={() => { if (confirm('Delete this contribution?')) onDelete(id) }}>Delete</button>}
-          <span style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary">Save</button>
-        </div>
-      </form>
-    </DialogShell>
-  )
-}
-
-// ── SettingsDialog ─────────────────────────────────────────────────────────
-
-interface SetDlgProps {
-  open: boolean; settings: MortgageSettings
-  onSave: (patch: Partial<MortgageSettings>) => void; onClose: () => void
-  onExportJSON: () => void; onExportCSV: () => void; onImportJSON: (e: React.ChangeEvent<HTMLInputElement>) => void
-}
-function SettingsDialog({ open, settings, onSave, onClose, onExportJSON, onExportCSV, onImportJSON }: SetDlgProps) {
-  const [form, setForm] = useState({ ...settings })
-  useEffect(() => { if (open) setForm({ ...settings }) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
-  const f = (k: keyof MortgageSettings) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const v = e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value
-    setForm(p => ({ ...p, [k]: v }))
-  }
-  function submit(e: React.FormEvent) { e.preventDefault(); onSave({ ...form, my_ownership_pct: Number(form.my_ownership_pct), household_income_yearly: form.household_income_yearly ? Number(form.household_income_yearly) : null }) }
-  const { a: aName, b: bName } = usePersonNames(form.owner_a_name, form.owner_b_name)
-  return (
-    <DialogShell open={open} onClose={onClose} className="bk-dialog">
-      <form className="dialog-body" onSubmit={submit}>
-        <h3 className="dialog-title">Settings</h3>
-        <div className="form-grid">
-          <FormField label="Property name (optional)" wide><input type="text" placeholder="e.g. Storgatan 4" value={form.property_name} onChange={f('property_name')} /></FormField>
-          <FormField label="Owner A name"><input type="text" value={form.owner_a_name} onChange={f('owner_a_name')} /></FormField>
-          <FormField label="Owner B name"><input type="text" value={form.owner_b_name} onChange={f('owner_b_name')} /></FormField>
-          <FormField label="My ownership %"><input type="text" inputMode="decimal" placeholder="50" value={form.my_ownership_pct} onChange={f('my_ownership_pct')} /></FormField>
-          <div className="form-field">
-            <span>Which owner am I?</span>
-            <Segmented value={(form.i_am as Owner) || 'a'} onChange={v => setForm(p => ({ ...p, i_am: v }))}
-              options={[{ v: 'a' as Owner, label: aName }, { v: 'b' as Owner, label: bName }]} />
-          </div>
-          <FormField label="Currency">
-            <select className="select" value={form.currency} onChange={f('currency')}>
-              <option value="SEK">SEK · kr</option><option value="NOK">NOK · kr</option><option value="DKK">DKK · kr</option>
-              <option value="EUR">EUR · €</option><option value="USD">USD · $</option><option value="GBP">GBP · £</option>
-            </select>
-          </FormField>
-          <FormField label="Household income / year (optional)"><input type="text" inputMode="decimal" placeholder="e.g. 720000" value={form.household_income_yearly ?? ''} onChange={f('household_income_yearly')} /></FormField>
-          <label className="form-field checkbox-field form-wide">
-            <input type="checkbox" checked={form.ranteavdrag} onChange={f('ranteavdrag')} />
-            <span>Show estimated ränteavdrag (interest tax deduction)</span>
-          </label>
-          <label className="form-field checkbox-field form-wide">
-            <input type="checkbox" checked={form.track_contributions} onChange={f('track_contributions')} />
-            <span>Track contributions — per-owner amortering &amp; lump sums for contribution-based ownership</span>
-          </label>
-          <div className="form-field form-wide">
-            <span>Backup</span>
-            <div className="settings-data-row">
-              <button type="button" className="btn btn-ghost" onClick={onExportJSON}>Export JSON</button>
-              <button type="button" className="btn btn-ghost" onClick={onExportCSV}>Export CSV</button>
-              <label className="btn btn-ghost" style={{ cursor: 'pointer' }}>Import JSON
-                <input type="file" accept=".json,application/json" hidden onChange={onImportJSON} />
-              </label>
-            </div>
-            <p className="config-note">Download everything as JSON — loan parts, payments, valuations and settings — or restore a backup (merges by id, so re-importing is safe). Export CSV writes the payment ledger for Excel/Sheets or your tax return.</p>
-          </div>
-        </div>
-        <div className="dialog-actions">
-          <span style={{ flex: 1 }} />
-          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary">Save</button>
-        </div>
-      </form>
-    </DialogShell>
-  )
-}
-
-// ── Money formatter bound to currency at module scope via a mutable ref ──────
-// (formatMoney needs the active currency; keep a module-level setter updated by
-// the component so plain helpers can format without threading currency through.)
-let CURRENT_CURRENCY = 'SEK'
-function fmtMoney(n: number): string {
-  const suffix = CURRENCY_SUFFIX[CURRENT_CURRENCY] || 'kr'
-  return (Math.round(Number(n) || 0)).toLocaleString('sv-SE', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' ' + suffix
-}
-function fmtPct(n: number): string { return (Number(n) || 0).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' %' }
-
-// Animated equivalents for the SUMMARY figures (dashboard, bridge, insights).
-// Data-table cells, the import triage and prose keep the plain string formatters
-// above (long ledgers shouldn't roll on every keystroke).
-function M(value: number, signed?: boolean, rollIn?: boolean) {
-  return <Money value={value} currencySuffix={CURRENCY_SUFFIX[CURRENT_CURRENCY] || 'kr'} signed={signed} rollIn={rollIn} />
-}
-function P(value: number, rollIn?: boolean) { return <Percent value={value} decimals={2} space locale="sv-SE" rollIn={rollIn} /> }
+import PartDialog from './bolanekoll/PartDialog'
+import ValuationDialog from './bolanekoll/ValuationDialog'
+import PaymentDialog from './bolanekoll/PaymentDialog'
+import CopyToPartsDialog from './bolanekoll/CopyToPartsDialog'
+import InsatsSplitDialog from './bolanekoll/InsatsSplitDialog'
+import ContribDialog from './bolanekoll/ContribDialog'
+import SettingsDialog from './bolanekoll/SettingsDialog'
+import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
 
 // ── Main component ─────────────────────────────────────────────────────────
 
@@ -559,7 +78,7 @@ export default function Bolanekoll() {
   const [contDlg, setContDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [settingsDlg, setSettingsDlg] = useState(false)
 
-  CURRENT_CURRENCY = settings.currency || 'SEK'
+  currencyState.current = settings.currency || 'SEK'
 
   const refresh = useCallback(async () => {
     const [ps, pays, vals, pers, contribs, sett] = await Promise.all([
@@ -1091,18 +610,11 @@ export default function Bolanekoll() {
               <button type="button" className="btn btn-primary" onClick={() => setPartDlg({ open: true, id: null })}>+ Add loan part</button>
             </div>
           ) : !importCfg ? (
-            <div className={'dropzone' + (isDragging ? ' is-drag' : '')}
-              onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={e => { e.preventDefault(); setIsDragging(false); handleFiles(e.dataTransfer.files) }}
-              onClick={() => fileInputRef.current?.click()}>
-              <input ref={fileInputRef} type="file" accept=".csv,text/csv,text/plain" hidden multiple onChange={e => e.target.files && handleFiles(e.target.files)} />
-              <div className="dropzone-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4" /><path d="m7 9 5-5 5 5" /><path d="M5 20h14" /></svg>
-              </div>
+            <FileDropzone isDragging={isDragging} onDragChange={setIsDragging} inputRef={fileInputRef}
+              onFiles={handleFiles} accept=".csv,text/csv,text/plain" multiple>
               <p className="dropzone-lead">Drop one or more mortgage <strong>.csv</strong> files here, or <span className="link-btn">browse</span>.</p>
               <p className="dropzone-hint">One file per loan part · we map the columns and step through them one at a time.</p>
-            </div>
+            </FileDropzone>
           ) : (
             <div className="import-config">
               <div className="import-filebar">
