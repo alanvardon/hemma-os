@@ -19,6 +19,7 @@ import { Money } from '../components/AnimatedNumber'
 import GroceryTrendChart from '../components/charts/GroceryTrendChart'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
+import { usePersonNames } from '../components/usePersonNames'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
 
@@ -82,7 +83,7 @@ function PersonalOffsetDialog({ open, enterAmount, frontedBy, aName, bName, init
   const [entries, setEntries] = useState<PersonalEntry[]>(initial)
   const [draft, setDraft] = useState({ person: frontedBy as Person, amount: '', note: '' })
   useEffect(() => { if (open) { setEntries(initial); setDraft({ person: frontedBy, amount: '', note: '' }) } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
-  const nameOf = (p: Person) => p === 'b' ? bName : aName
+  const { nameOf } = usePersonNames(aName, bName)
   const enter = isFinite(enterAmount) ? enterAmount : 0
   const owed = otherPerson(frontedBy)
   const sums = personalSums(entries)
@@ -161,8 +162,7 @@ function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }
     })
   }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (open) { setPersonalItems(rec?.personal_items ?? []); setOffsetDlg(false) } }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const aName = settings.person_a_name || 'Alex', bName = settings.person_b_name || 'Sam'
-  const nameOf = (p: Person) => p === 'b' ? bName : aName
+  const { a: aName, b: bName, nameOf } = usePersonNames(settings.person_a_name, settings.person_b_name)
 
   const amt = parseAmount(form.amount)
   const isSplit = form.split === 'split'
@@ -241,8 +241,7 @@ interface SettleDlgProps {
   onConfirm: (draft: Omit<Payment, 'id' | 'created_at'>) => void; onClose: () => void
 }
 function SettleDialog({ open, openItems, pendingCount, settings, onConfirm, onClose }: SettleDlgProps) {
-  const aName = settings.person_a_name || 'Alex', bName = settings.person_b_name || 'Sam'
-  const nameOf = (p: Person | null) => p === 'b' ? bName : p === 'a' ? aName : ''
+  const { nameOf } = usePersonNames(settings.person_a_name, settings.person_b_name)
   const months = useMemo(() => monthsWithOpenItems(openItems), [openItems])
   const [month, setMonth] = useState<string>('')
   const [period, setPeriod] = useState('')
@@ -383,8 +382,7 @@ export default function Manadsavslut() {
   const [settingsDlg, setSettingsDlg] = useState(false)
 
   CURRENT_CURRENCY = settings.currency || 'SEK'
-  const aName = settings.person_a_name || 'Alex', bName = settings.person_b_name || 'Sam'
-  const nameOf = useCallback((p: Person | null) => p === 'b' ? bName : p === 'a' ? aName : '', [aName, bName])
+  const { a: aName, b: bName, nameOf } = usePersonNames(settings.person_a_name, settings.person_b_name)
 
 
   const refresh = useCallback(async () => {
