@@ -25,3 +25,6 @@ dist/
 bk-*.png
 hub-*.png
 react-*.png
+
+# Claude Code per-session runtime lock (not versioned)
+.claude/scheduled_tasks.lock
