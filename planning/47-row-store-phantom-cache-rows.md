@@ -1,6 +1,9 @@
 # Plan 47 — Row stores: no phantom cache rows on failed writes
 
-**Status:** plan · **Severity: MEDIUM (M1)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Sonnet-suitable (repetitive reorder across
+~25 functions with one fixed rule: throw before cache patch; plan-49 tests are
+the net — do NOT run this without them or without plan 44 landed) ·
+**Severity: MEDIUM (M1)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 5 of the audit batch · **Depends on:** plan 44 (routes must surface
 errors first, or this change makes failures LOOK like lost input) ·
 Touches `web/src/lib/mortgage-store.ts`, `manadsavslut-store.ts`,

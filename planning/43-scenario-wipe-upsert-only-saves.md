@@ -1,6 +1,9 @@
 # Plan 43 — Stop `saveScenarios` from wiping the household's cloud scenarios
 
-**Status:** plan · **Severity: CRITICAL (C1)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Opus (small diff, but data-loss semantics —
+the delete/upsert trade-off and the useStore call-site audit must be reasoned,
+not pattern-matched; highest-stakes change in the batch) ·
+**Severity: CRITICAL (C1)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 1 of the audit batch (build order 43→44→45→46→47→48→49→50→51→52–56) ·
 Touches `web/src/lib/storage.ts` + `web/src/store/useStore.ts` only.
 

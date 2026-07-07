@@ -1,6 +1,9 @@
 # Plan 44 — Bolånekoll: stop swallowing save failures
 
-**Status:** plan · **Severity: HIGH (H2)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Sonnet-suitable (mechanical try/catch sweep;
+the target pattern already exists verbatim in Manadsavslut.tsx — the only skill
+needed is not missing a handler) ·
+**Severity: HIGH (H2)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 2 of the audit batch ·
 Touches `web/src/routes/Bolanekoll.tsx` only (store-side half lives in plan 47).
 

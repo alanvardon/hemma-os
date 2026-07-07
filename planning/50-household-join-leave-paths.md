@@ -1,6 +1,10 @@
 # Plan 50 — Household lifecycle: join-when-already-provisioned + leave
 
-**Status:** plan · **Severity: MEDIUM (M4)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Opus (two new security-definer RPCs that
+move memberships — the most consequential auth-layer change in the batch; also
+carries an unresolved product decision that must be settled with the user
+before any code) ·
+**Severity: MEDIUM (M4)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 8 of the audit batch · **Depends on:** plan 51 (unique membership
 index) simplifies this — do 51 first or together ·
 Touches new `supabase/migrations/` + `web/src/lib/household.ts` +

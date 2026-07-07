@@ -1,6 +1,9 @@
 # Plan 53 — Invite hygiene: expiry, cap, server-side validation
 
-**Status:** plan · **Severity: LOW (L2)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Sonnet-suitable (constraint + policy SQL is
+drafted in the plan; the touch points in the three consumer functions are
+enumerated — run the pre-flight cleanup query first) ·
+**Severity: LOW (L2)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 11 of the audit batch · Natural companion to plans 45/46/52 — batch
 the SQL into one migration PR if convenient ·
 Touches one new `supabase/migrations/` file (+ optional tiny copy change in

@@ -1,6 +1,9 @@
 # Plan 52 — Blunt invite-email enumeration via `email_may_sign_in`
 
-**Status:** plan · **Severity: LOW (L1)** · **Source:** repo audit 2026-07-06 ·
+**Status:** plan · **Owner model:** Sonnet-suitable (one revoke + deleting a
+now-dead client path + rewiring AuthGate's error message to the hook's 403;
+small surface, and plan 46 will already have proven the hook behavior) ·
+**Severity: LOW (L1)** · **Source:** repo audit 2026-07-06 ·
 **Req:** 10 of the audit batch · **Depends on:** plan 46 — if the
 before-user-created hook lands, this function stops being load-bearing, which
 is what makes this cheap ·
