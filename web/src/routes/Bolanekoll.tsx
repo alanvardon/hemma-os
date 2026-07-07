@@ -7,6 +7,7 @@ import DialogShell from '../components/DialogShell'
 import FormField from '../components/FormField'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
+import { usePersonNames } from '../components/usePersonNames'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
 import { useToolPageActive } from '../lib/toolTransition'
@@ -252,7 +253,7 @@ function PaymentDialog({ open, id, payments, parts, settings, onSave, onDelete, 
   }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
   const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }))
   function submit(e: React.FormEvent) { e.preventDefault(); onSave(makePayment({ date: form.date, loan_part_id: form.loan_part_id || null, kind: form.kind as Payment['kind'], amount: parseAmount(form.amount), balance_after: form.balance_after ? parseAmount(form.balance_after) : null, paid_by: normPaidBy(form.paid_by), is_insats: form.is_insats })) }
-  const aName = settings.owner_a_name || 'Alex', bName = settings.owner_b_name || 'Sam'
+  const { a: aName, b: bName } = usePersonNames(settings.owner_a_name, settings.owner_b_name)
   return (
     <DialogShell open={open} onClose={onClose} className="bk-dialog">
       <form className="dialog-body" onSubmit={submit}>
@@ -350,7 +351,7 @@ interface InsatsDlgProps {
 }
 function InsatsSplitDialog({ open, payment, settings, onSave, onRemove, onClose }: InsatsDlgProps) {
   const amount = payment ? Math.round(Number(payment.amount) || 0) : 0
-  const aName = settings.owner_a_name || 'Alex', bName = settings.owner_b_name || 'Sam'
+  const { a: aName, b: bName } = usePersonNames(settings.owner_a_name, settings.owner_b_name)
   const [aStr, setAStr] = useState(''); const [bStr, setBStr] = useState('')
   useEffect(() => {
     if (!open || !payment) return
@@ -399,7 +400,7 @@ function ContribDialog({ open, id, contributions, settings, onSave, onDelete, on
   const rec = id ? contributions.find(c => c.id === id) : null
   const [form, setForm] = useState({ owner: 'a' as Owner, date: todayISO(), amount: '', note: '' })
   useEffect(() => { if (open) setForm({ owner: (rec?.owner as Owner) || 'a', date: rec?.date || todayISO(), amount: rec?.amount ? String(rec.amount) : '', note: rec?.note || '' }) }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const aName = settings.owner_a_name || 'Alex', bName = settings.owner_b_name || 'Sam'
+  const { a: aName, b: bName } = usePersonNames(settings.owner_a_name, settings.owner_b_name)
   function submit(e: React.FormEvent) { e.preventDefault(); onSave({ owner: form.owner, date: form.date, amount: parseAmount(form.amount) || 0, note: form.note }) }
   return (
     <DialogShell open={open} onClose={onClose} className="bk-dialog">
@@ -442,7 +443,7 @@ function SettingsDialog({ open, settings, onSave, onClose, onExportJSON, onExpor
     setForm(p => ({ ...p, [k]: v }))
   }
   function submit(e: React.FormEvent) { e.preventDefault(); onSave({ ...form, my_ownership_pct: Number(form.my_ownership_pct), household_income_yearly: form.household_income_yearly ? Number(form.household_income_yearly) : null }) }
-  const aName = form.owner_a_name || 'Alex', bName = form.owner_b_name || 'Sam'
+  const { a: aName, b: bName } = usePersonNames(form.owner_a_name, form.owner_b_name)
   return (
     <DialogShell open={open} onClose={onClose} className="bk-dialog">
       <form className="dialog-body" onSubmit={submit}>
@@ -573,7 +574,7 @@ export default function Bolanekoll() {
   // Collapse the ledger back to the first page whenever the part filter changes.
   useEffect(() => { setPayVisible(PAY_PAGE) }, [paymentFilter])
 
-  const nameOf = useCallback((p: Owner) => p === 'b' ? (settings.owner_b_name || 'Sam') : (settings.owner_a_name || 'Alex'), [settings])
+  const { nameOf } = usePersonNames(settings.owner_a_name, settings.owner_b_name)
 
   // ── Derived data ───────────────────────────────────────────────────────────
   const today = todayISO()
