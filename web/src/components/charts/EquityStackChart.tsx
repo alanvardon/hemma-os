@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import { Group } from '@visx/group'
 import { scaleLinear } from '@visx/scale'
 import { Area, LinePath, Line, Bar } from '@visx/shape'
@@ -8,6 +8,7 @@ import { curveMonotoneX } from '@visx/curve'
 import { useTooltip } from '@visx/tooltip'
 import { localPoint } from '@visx/event'
 import { ParentSize } from '@visx/responsive'
+import { useChartTokens } from './useChartTheme'
 
 // Stacked-area equivalent of the old Chart.js "ownership vs bank over time"
 // chart: my equity (bottom) → partner's equity → the bank (top), so the upper
@@ -255,42 +256,29 @@ function StackSvg({
   )
 }
 
-interface BkChartTheme {
-  grid: string
-  tick: string
-  inkMid: string
-  paperCard: string
-  mine: string
-  partner: string
-  bank: string
+type BkChartTheme = Record<keyof typeof BK_TOKENS, string>
+
+// The --chart-* tokens live on the `.bk-root` scope, not :root.
+const BK_TOKENS = {
+  grid: '--rule',
+  tick: '--ink-soft',
+  inkMid: '--ink-mid',
+  paperCard: '--paper-card',
+  mine: '--chart-mine',
+  partner: '--chart-partner',
+  bank: '--chart-bank',
 }
 
-// Read the chart palette off the `.bk-root` scope (the --chart-* tokens live
-// there) and re-read after mount + on every data-theme flip.
+const BK_FALLBACKS: BkChartTheme = {
+  grid: '#e7e2d9',
+  tick: '#8a8175',
+  inkMid: '#5b5347',
+  paperCard: '#ffffff',
+  mine: '#357a4c',
+  partner: '#3d7e94',
+  bank: '#c08a44',
+}
+
 function useBkChartTheme(): BkChartTheme {
-  const [tick, setTick] = useState(0)
-  useEffect(() => {
-    const id = requestAnimationFrame(() => setTick((t) => t + 1))
-    const observer = new MutationObserver(() => setTick((t) => t + 1))
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-    return () => {
-      cancelAnimationFrame(id)
-      observer.disconnect()
-    }
-  }, [])
-  return useMemo(() => {
-    const root = document.querySelector('.bk-root') || document.documentElement
-    const cs = getComputedStyle(root)
-    const g = (token: string, fallback: string) => cs.getPropertyValue(token).trim() || fallback
-    return {
-      grid: g('--rule', '#e7e2d9'),
-      tick: g('--ink-soft', '#8a8175'),
-      inkMid: g('--ink-mid', '#5b5347'),
-      paperCard: g('--paper-card', '#ffffff'),
-      mine: g('--chart-mine', '#357a4c'),
-      partner: g('--chart-partner', '#3d7e94'),
-      bank: g('--chart-bank', '#c08a44'),
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick])
+  return useChartTokens(BK_TOKENS, { scope: '.bk-root', fallback: BK_FALLBACKS })
 }

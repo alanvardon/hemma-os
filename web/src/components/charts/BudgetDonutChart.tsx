@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Pie } from '@visx/shape'
 import { Group } from '@visx/group'
 import { ParentSize } from '@visx/responsive'
+import { useChartTokens } from './useChartTheme'
 
 // Editorial donut for "where the pot goes" — the visx replacement for the old
 // Chart.js doughnut. Segment colours come from the budget's own palette
@@ -27,20 +28,23 @@ export default function BudgetDonutChart({
   centerLabel: string
   centerValue: number
 }) {
-  const tick = useThemeTick()
   const [active, setActive] = useState<number | null>(null)
 
-  // Resolve each slice's colour + the slice stroke (paper) off the .hb-root
-  // scope. `tick` re-reads after mount and on every data-theme flip.
-  const colors = useMemo(() => {
-    const root = document.querySelector('.hb-root') || document.documentElement
-    const cs = getComputedStyle(root)
-    return {
-      seg: segments.map((s) => cs.getPropertyValue(s.token).trim() || 'var(--ink-faint)'),
-      paper: cs.getPropertyValue('--paper-card').trim() || '#fff',
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segments, tick])
+  // Segment colours + the slice stroke (paper) live on the `.hb-root` scope,
+  // not :root — resolve them via each segment's own token.
+  const tokens = useMemo(() => {
+    const map: Record<string, string> = { paper: '--paper-card' }
+    segments.forEach((s, i) => (map[`seg${i}`] = s.token))
+    return map
+  }, [segments])
+  const resolved = useChartTokens(tokens, { scope: '.hb-root' })
+  const colors = useMemo(
+    () => ({
+      seg: segments.map((_, i) => resolved[`seg${i}`] || 'var(--ink-faint)'),
+      paper: resolved.paper || '#fff',
+    }),
+    [segments, resolved],
+  )
 
   const total = segments.reduce((t, s) => t + s.value, 0)
   const hovered = active != null ? segments[active] : null
@@ -144,20 +148,4 @@ export default function BudgetDonutChart({
       </div>
     </div>
   )
-}
-
-// Bump a counter once after mount (so the first colour read happens after the
-// theme's data-theme attribute is applied) and on every subsequent theme flip.
-function useThemeTick(): number {
-  const [tick, setTick] = useState(0)
-  useEffect(() => {
-    const id = requestAnimationFrame(() => setTick((t) => t + 1))
-    const observer = new MutationObserver(() => setTick((t) => t + 1))
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-    return () => {
-      cancelAnimationFrame(id)
-      observer.disconnect()
-    }
-  }, [])
-  return tick
 }
