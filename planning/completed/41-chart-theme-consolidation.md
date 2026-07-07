@@ -1,6 +1,6 @@
 # Plan 41 — Chart theme consolidation: one theme hook, not three observers
 
-**Status:** plan · **Owner model:** Sonnet-suitable (one hook, three call
+**Status:** shipped (PR #244) · **Owner model:** Sonnet-suitable (one hook, three call
 sites) · **Req:** 6 (build order 36→…→42; independent of 38-40, just avoid
 parallel branches) · **Relationship:** small isolated cleanup inside
 `web/src/components/charts/`.
