@@ -1,6 +1,6 @@
 # Plan 44 — Bolånekoll: stop swallowing save failures
 
-**Status:** plan · **Owner model:** Sonnet-suitable (mechanical try/catch sweep;
+**Status:** shipped (PR #237) · **Owner model:** Sonnet-suitable (mechanical try/catch sweep;
 the target pattern already exists verbatim in Manadsavslut.tsx — the only skill
 needed is not missing a handler) ·
 **Severity: HIGH (H2)** · **Source:** repo audit 2026-07-06 ·

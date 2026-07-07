@@ -31,7 +31,7 @@ export async function claimHousehold(): Promise<string | null> {
 // strangers can't sign up while invited partners still self-onboard. Defaults to
 // false on error (fail closed).
 export async function emailMaySignIn(addr: string): Promise<boolean> {
-  const { data, error } = await supabase.rpc('email_may_sign_in', { addr })
+  const { data, error } = await supabase.rpc('email_may_sign_in', { addr: addr.trim().toLowerCase() })
   if (error) return false
   return data === true
 }
