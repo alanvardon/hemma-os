@@ -7,14 +7,6 @@
    tokens.css; header + base buttons come from global.css/components.css. */
 
 .ma-root {
-  /* ── Header save-state ──────────────────────────────────────── */
-  .save-state {
-    font-size: 12px; font-weight: 550; color: var(--accent);
-    opacity: 0; transform: translateY(-2px);
-    transition: opacity 0.2s, transform 0.2s; white-space: nowrap;
-  }
-  .save-state.show { opacity: 1; transform: none; }
-
   /* ── Buttons not provided by the shared global stylesheet ───── */
   .btn-danger { color: var(--warn); }
   .btn-danger:hover:not(:disabled) { background: var(--warn-faint); border-color: var(--warn-light); color: var(--warn); }

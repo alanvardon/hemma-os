@@ -423,6 +423,19 @@ input::placeholder { color: var(--ink-faint); }
 }
 .save-indicator { color: var(--accent); font-weight: 550; }
 
+/* Header save badge, rendered by the shared PageHeader on every tool route.
+   One definition here replaces the identical per-tool copies. */
+.save-state {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--accent);
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.2s, transform 0.2s;
+  white-space: nowrap;
+}
+.save-state.show { opacity: 1; transform: none; }
+
 /* ── Mobile key-figures bar ─────────────────────────────────── */
 .mobile-bar {
   display: none;

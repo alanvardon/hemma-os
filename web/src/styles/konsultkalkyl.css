@@ -2,18 +2,6 @@
    Tokens, reset, shared components (.page-header, .btn, .section, etc.)
    are in tokens.css / global.css / components.css. */
 
-/* ── Save badge ─────────────────────────────────────────────── */
-.save-state {
-  font-size: 12px;
-  font-weight: 550;
-  color: var(--accent);
-  opacity: 0;
-  transform: translateY(-2px);
-  transition: opacity 0.2s, transform 0.2s;
-  white-space: nowrap;
-}
-.save-state.show { opacity: 1; transform: none; }
-
 /* ── Two-column layout (fixed inputs rail + expanding ledger) ── */
 .konsult-layout {
   display: grid;

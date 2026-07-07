@@ -28,18 +28,6 @@
   height: 100svh;
   overflow: hidden;
 
-  /* ── Header save-state ──────────────────────────────────────── */
-  .save-state {
-    font-size: 12px;
-    font-weight: 550;
-    color: var(--accent);
-    opacity: 0;
-    transform: translateY(-2px);
-    transition: opacity 0.2s, transform 0.2s;
-    white-space: nowrap;
-  }
-  .save-state.show { opacity: 1; transform: none; }
-
   /* ── Layout ─────────────────────────────────────────────────── */
   .layout {
     display: grid;
