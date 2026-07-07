@@ -526,6 +526,16 @@ export default function Bolanekoll() {
 
   const { toast, showToast } = useToast()
   const { saveVisible: saved, flashSaved } = useSaveFlash()
+  // mortgage-store.ts throws on write errors so the UI can react — every
+  // mutation below must catch and surface it, or a failed save looks
+  // successful (optimistic cache) until the next cloud read silently drops it.
+  function saveErr(err: unknown) {
+    // supabase-js throws plain {message, ...} objects (not Error instances) for
+    // Postgrest/network errors, so read .message directly rather than gating on
+    // `instanceof Error` — that check is false for them and prints "[object Object]".
+    const message = (err as { message?: string } | null)?.message
+    showToast('Kunde inte spara — ' + (message || String(err)))
+  }
   const [bridgePeriod, setBridgePeriod] = useState<'ytd' | '12m' | 'all'>('ytd')
   const [extraAmort, setExtraAmort] = useState('')
   const [paymentFilter, setPaymentFilter] = useState('all')
@@ -729,13 +739,15 @@ export default function Bolanekoll() {
         return makePayment({ loan_part_id: t.loan_part_id, date: (importCfg.mapping.date != null ? row[importCfg.mapping.date] : '')?.trim() || '', kind: t.kind, description: t.specText, amount: t.amount, balance_after: t.balance_after, source: 'import:' + importCfg.file.name })
       })
     if (!drafts.length) { showToast('Nothing selected to add.'); return }
-    const sig = headerSignature(importCfg.parsed.headers)
-    await Store.saveSettings({ import_presets: { ...settings.import_presets, [sig]: mappingToNames(importCfg.parsed.headers, importCfg.mapping) } })
-    const savedRows = await Store.addPayments(drafts)
-    await refresh(); flashSaved()
-    showToast('Added ' + savedRows.length + ' row' + (savedRows.length === 1 ? '' : 's') + ' from “' + importCfg.file.name + '”.')
-    if (importCfg.queue.length) { const cfg = await loadFile(importCfg.queue[0]); setImportCfg({ ...cfg, queue: importCfg.queue.slice(1), qIdx: importCfg.qIdx + 1 }) }
-    else setImportCfg(null)
+    try {
+      const sig = headerSignature(importCfg.parsed.headers)
+      await Store.saveSettings({ import_presets: { ...settings.import_presets, [sig]: mappingToNames(importCfg.parsed.headers, importCfg.mapping) } })
+      const savedRows = await Store.addPayments(drafts)
+      await refresh(); flashSaved()
+      showToast('Added ' + savedRows.length + ' row' + (savedRows.length === 1 ? '' : 's') + ' from “' + importCfg.file.name + '”.')
+      if (importCfg.queue.length) { const cfg = await loadFile(importCfg.queue[0]); setImportCfg({ ...cfg, queue: importCfg.queue.slice(1), qIdx: importCfg.qIdx + 1 }) }
+      else setImportCfg(null)
+    } catch (err) { saveErr(err) }
   }
   const triageSummary = useMemo(() => {
     if (!importCfg) return ''
@@ -756,35 +768,52 @@ export default function Bolanekoll() {
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   async function handleSavePart(data: Omit<LoanPart, 'id' | 'created_at'>) {
-    if (partDlg.id) await Store.updateLoanPart(partDlg.id, data); else await Store.addLoanPart(data)
-    await refresh(); flashSaved(); setPartDlg({ open: false, id: null }); showToast(partDlg.id ? 'Loan part updated.' : 'Loan part added.')
+    try {
+      if (partDlg.id) await Store.updateLoanPart(partDlg.id, data); else await Store.addLoanPart(data)
+      await refresh(); flashSaved(); setPartDlg({ open: false, id: null }); showToast(partDlg.id ? 'Loan part updated.' : 'Loan part added.')
+    } catch (err) { saveErr(err) }
   }
-  async function handleDeletePart(id: string) { await Store.removeLoanPart(id); await refresh(); flashSaved(); setPartDlg({ open: false, id: null }); showToast('Loan part deleted.') }
+  async function handleDeletePart(id: string) {
+    try { await Store.removeLoanPart(id); await refresh(); flashSaved(); setPartDlg({ open: false, id: null }); showToast('Loan part deleted.') }
+    catch (err) { saveErr(err) }
+  }
   async function handleSavePeriod(partId: string, data: Omit<RatePeriod, 'id' | 'created_at'>, existingId?: string) {
-    if (existingId) await Store.updateRatePeriod(existingId, data); else await Store.addRatePeriod({ ...data, loan_part_id: partId })
-    await refresh(); flashSaved(); showToast(existingId ? 'Rate period updated.' : 'Rate period added.')
+    try {
+      if (existingId) await Store.updateRatePeriod(existingId, data); else await Store.addRatePeriod({ ...data, loan_part_id: partId })
+      await refresh(); flashSaved(); showToast(existingId ? 'Rate period updated.' : 'Rate period added.')
+    } catch (err) { saveErr(err) }
   }
-  async function handleDeletePeriod(id: string) { await Store.removeRatePeriod(id); await refresh(); flashSaved() }
+  async function handleDeletePeriod(id: string) {
+    try { await Store.removeRatePeriod(id); await refresh(); flashSaved() }
+    catch (err) { saveErr(err) }
+  }
   // Offer to switch on contribution tracking the first time the user records an
   // insats / contribution — never flip it silently.
   async function maybeEnableContributions(msg: string) {
     if (settings.track_contributions) return
-    if (confirm(msg)) await Store.saveSettings({ track_contributions: true })
+    if (confirm(msg)) {
+      try { await Store.saveSettings({ track_contributions: true }) }
+      catch (err) { saveErr(err) }
+    }
   }
   async function handleSaveVal(data: Omit<Valuation, 'id' | 'created_at'>) {
-    let savedId = valDlg.id
-    if (valDlg.id) await Store.updateValuation(valDlg.id, data)
-    else { const v = await Store.addValuation(data); savedId = v.id }
-    // Only one valuation can be the köpeskilling — clear the flag on the rest.
-    if (data.is_purchase && savedId) {
-      for (const v of valuations) if (v.id !== savedId && v.is_purchase) await Store.updateValuation(v.id, { is_purchase: false })
-    }
-    await refresh(); flashSaved(); setValDlg({ open: false, id: null }); showToast(data.is_purchase ? 'Köpeskilling set.' : 'Valuation saved.')
+    try {
+      let savedId = valDlg.id
+      if (valDlg.id) await Store.updateValuation(valDlg.id, data)
+      else { const v = await Store.addValuation(data); savedId = v.id }
+      // Only one valuation can be the köpeskilling — clear the flag on the rest.
+      if (data.is_purchase && savedId) {
+        for (const v of valuations) if (v.id !== savedId && v.is_purchase) await Store.updateValuation(v.id, { is_purchase: false })
+      }
+      await refresh(); flashSaved(); setValDlg({ open: false, id: null }); showToast(data.is_purchase ? 'Köpeskilling set.' : 'Valuation saved.')
+    } catch (err) { saveErr(err) }
   }
   async function handleToggleInsats(p: Payment) {
-    await Store.updatePayment(p.id, { is_insats: !p.is_insats, ...(p.is_insats ? { paid_split: null } : {}) })
-    await refresh(); flashSaved()
-    if (!p.is_insats) await maybeEnableContributions('Flagged as insats. Turn on contribution tracking to see per-owner insatser and the funded split?')
+    try {
+      await Store.updatePayment(p.id, { is_insats: !p.is_insats, ...(p.is_insats ? { paid_split: null } : {}) })
+      await refresh(); flashSaved()
+      if (!p.is_insats) await maybeEnableContributions('Flagged as insats. Turn on contribution tracking to see per-owner insatser and the funded split?')
+    } catch (err) { saveErr(err) }
   }
   // With contributions tracked, the ★ opens the split dialog instead of a plain toggle.
   function handleStarClick(p: Payment) {
@@ -792,42 +821,66 @@ export default function Bolanekoll() {
     else handleToggleInsats(p)
   }
   async function handleSaveInsatsSplit(payment: Payment, split: { a: number; b: number }) {
-    const paid_by: PaidBy = split.a > 0 && split.b > 0 ? 'joint' : split.a > 0 ? 'a' : split.b > 0 ? 'b' : payment.paid_by
-    await Store.updatePayment(payment.id, { is_insats: true, paid_split: split, paid_by })
-    await refresh(); flashSaved(); setInsatsDlg({ open: false, payment: null }); showToast('Insats allocation saved.')
+    try {
+      const paid_by: PaidBy = split.a > 0 && split.b > 0 ? 'joint' : split.a > 0 ? 'a' : split.b > 0 ? 'b' : payment.paid_by
+      await Store.updatePayment(payment.id, { is_insats: true, paid_split: split, paid_by })
+      await refresh(); flashSaved(); setInsatsDlg({ open: false, payment: null }); showToast('Insats allocation saved.')
+    } catch (err) { saveErr(err) }
   }
   async function handleRemoveInsats(payment: Payment) {
-    await Store.updatePayment(payment.id, { is_insats: false, paid_split: null })
-    await refresh(); flashSaved(); setInsatsDlg({ open: false, payment: null }); showToast('Insats flag removed.')
+    try {
+      await Store.updatePayment(payment.id, { is_insats: false, paid_split: null })
+      await refresh(); flashSaved(); setInsatsDlg({ open: false, payment: null }); showToast('Insats flag removed.')
+    } catch (err) { saveErr(err) }
   }
   function toggleExpandPay(id: string) {
     setExpandedPays(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
   }
-  async function handleDeleteVal(id: string) { await Store.removeValuation(id); await refresh(); flashSaved(); setValDlg({ open: false, id: null }); showToast('Valuation deleted.') }
-  async function handleSavePay(data: Omit<Payment, 'id' | 'created_at'>) {
-    if (payDlg.id) await Store.updatePayment(payDlg.id, data); else await Store.addPayment(data)
-    await refresh(); flashSaved(); setPayDlg({ open: false, id: null }); showToast('Payment saved.')
-    if (data.is_insats) await maybeEnableContributions('Saved as insats. Turn on contribution tracking to see per-owner insatser and the funded split?')
+  async function handleDeleteVal(id: string) {
+    try { await Store.removeValuation(id); await refresh(); flashSaved(); setValDlg({ open: false, id: null }); showToast('Valuation deleted.') }
+    catch (err) { saveErr(err) }
   }
-  async function handleDeletePay(id: string) { await Store.removePayment(id); await refresh(); flashSaved(); setPayDlg({ open: false, id: null }); showToast('Payment deleted.') }
+  async function handleSavePay(data: Omit<Payment, 'id' | 'created_at'>) {
+    try {
+      if (payDlg.id) await Store.updatePayment(payDlg.id, data); else await Store.addPayment(data)
+      await refresh(); flashSaved(); setPayDlg({ open: false, id: null }); showToast('Payment saved.')
+      if (data.is_insats) await maybeEnableContributions('Saved as insats. Turn on contribution tracking to see per-owner insatser and the funded split?')
+    } catch (err) { saveErr(err) }
+  }
+  async function handleDeletePay(id: string) {
+    try { await Store.removePayment(id); await refresh(); flashSaved(); setPayDlg({ open: false, id: null }); showToast('Payment deleted.') }
+    catch (err) { saveErr(err) }
+  }
   async function handleCopyToParts(source: Payment, targetIds: string[]) {
-    await Store.addPayments(targetIds.map(partId => makePayment({ ...source, loan_part_id: partId, balance_after: null })))
-    await refresh(); flashSaved(); setCopyDlg({ open: false, source: null })
-    showToast(`Copied to ${targetIds.length} part${targetIds.length === 1 ? '' : 's'}.`)
+    try {
+      await Store.addPayments(targetIds.map(partId => makePayment({ ...source, loan_part_id: partId, balance_after: null })))
+      await refresh(); flashSaved(); setCopyDlg({ open: false, source: null })
+      showToast(`Copied to ${targetIds.length} part${targetIds.length === 1 ? '' : 's'}.`)
+    } catch (err) { saveErr(err) }
   }
   async function handleSaveCont(data: Omit<Contribution, 'id' | 'created_at'>) {
-    if (contDlg.id) await Store.updateContribution(contDlg.id, data); else await Store.addContribution(data)
-    await refresh(); flashSaved(); setContDlg({ open: false, id: null }); showToast('Contribution saved.')
+    try {
+      if (contDlg.id) await Store.updateContribution(contDlg.id, data); else await Store.addContribution(data)
+      await refresh(); flashSaved(); setContDlg({ open: false, id: null }); showToast('Contribution saved.')
+    } catch (err) { saveErr(err) }
   }
-  async function handleDeleteCont(id: string) { await Store.removeContribution(id); await refresh(); flashSaved(); setContDlg({ open: false, id: null }); showToast('Contribution deleted.') }
-  async function handleSaveSettings(patch: Partial<MortgageSettings>) { await Store.saveSettings(patch); await refresh(); flashSaved(); setSettingsDlg(false); showToast('Settings saved.') }
+  async function handleDeleteCont(id: string) {
+    try { await Store.removeContribution(id); await refresh(); flashSaved(); setContDlg({ open: false, id: null }); showToast('Contribution deleted.') }
+    catch (err) { saveErr(err) }
+  }
+  async function handleSaveSettings(patch: Partial<MortgageSettings>) {
+    try { await Store.saveSettings(patch); await refresh(); flashSaved(); setSettingsDlg(false); showToast('Settings saved.') }
+    catch (err) { saveErr(err) }
+  }
 
   async function clearPayments() {
     const scoped = paymentFilter === 'all' ? payments : payments.filter(p => p.loan_part_id === paymentFilter)
     if (!scoped.length) return
     if (!confirm('Delete ' + scoped.length + ' payment' + (scoped.length === 1 ? '' : 's') + '? This can’t be undone.')) return
-    for (const p of scoped) await Store.removePayment(p.id)
-    await refresh(); flashSaved(); showToast('Payments deleted.')
+    try {
+      for (const p of scoped) await Store.removePayment(p.id)
+      await refresh(); flashSaved(); showToast('Payments deleted.')
+    } catch (err) { saveErr(err) }
   }
 
   function handleExportCSV() {
@@ -843,7 +896,7 @@ export default function Bolanekoll() {
   async function handleImportJSON(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]; if (!file) return
     try { const added = await Store.importJSON(await file.text()); await refresh(); flashSaved(); showToast('Restored ' + Object.values(added).reduce((a, b) => a + b, 0) + ' rows.') }
-    catch (err) { alert(String(err)) }
+    catch (err) { saveErr(err) }
     e.target.value = ''
   }
 
