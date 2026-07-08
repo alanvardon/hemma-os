@@ -68,6 +68,41 @@ export async function removeInvite(email: string): Promise<string | null> {
   return error ? error.message : null
 }
 
+// Is there a pending invite addressed to ME, for a household I'm NOT already in?
+// This is the "signed in before being invited" case (plan 50): claim_household
+// won't touch me because I already have a household, so the invite sits pending
+// until I accept it explicitly. Uses the inv_read_own policy (invites to my
+// email) and hh_read (my own household row) — both RLS-scoped to me.
+export async function pendingInviteToJoin(): Promise<boolean> {
+  const { data: me } = await supabase.auth.getUser()
+  const email = me.user?.email?.toLowerCase()
+  if (!email) return false
+  const [{ data: hh }, { data: inv, error }] = await Promise.all([
+    supabase.from('households').select('id'),
+    supabase.from('household_invites').select('household_id').ilike('email', email),
+  ])
+  if (error || !inv) return false
+  const mine = new Set((hh ?? []).map((h) => h.id as string))
+  return inv.some((i) => !mine.has(i.household_id as string))
+}
+
+// Move me into the household that invited my email (accept_invite RPC). The old
+// household is abandoned in place, not purged. Returns an error message on
+// failure, or null on success — callers should then fully reload so every store
+// re-reads under the new household.
+export async function acceptInvite(): Promise<string | null> {
+  const { error } = await supabase.rpc('accept_invite')
+  return error ? error.message : null
+}
+
+// Leave my current household (leave_household RPC). Refused for the last member.
+// Returns an error message on failure, or null on success; on next sign-in
+// claim_household provisions a fresh private household.
+export async function leaveHousehold(): Promise<string | null> {
+  const { error } = await supabase.rpc('leave_household')
+  return error ? error.message : null
+}
+
 export async function signOut(): Promise<void> {
   try { await supabase.auth.signOut() } catch { /* already gone */ }
 }

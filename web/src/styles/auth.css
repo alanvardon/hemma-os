@@ -273,3 +273,48 @@
   border-radius: 999px;
   flex-shrink: 0;
 }
+
+/* "You're invited to another household" banner (plan 50). */
+.hh-invite-banner {
+  padding: 0.9rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--rule));
+  border-radius: 12px;
+  background: var(--accent-faint);
+}
+.hh-banner-title {
+  margin: 0 0 0.25rem;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.hh-banner-note { margin: 0 0 0.75rem; }
+
+/* Leave-household section (plan 50). */
+.hh-leave-section { border-top: 1px solid var(--rule); padding-top: 1.25rem; }
+.hh-leave-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.hh-leave-copy { min-width: 0; }
+.hh-leave-title {
+  margin: 0 0 0.25rem;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.hh-leave-note { margin: 0; }
+.hh-leave-btn { flex-shrink: 0; }
+/* Confirm state — warn palette (btn-danger is scoped to the tool shells). */
+.hh-leave-btn[data-confirm="true"] {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--rule));
+  background: var(--warn-faint);
+}
+.hh-leave-btn[data-confirm="true"]:hover:not(:disabled) {
+  border-color: var(--warn-light);
+  color: var(--warn);
+}
