@@ -43,6 +43,11 @@ jobs:
           npm --prefix web run lint
           npm --prefix web run test
 
+      - name: Require Supabase env
+        run: |
+          test -n "${{ secrets.SUPABASE_URL }}" || { echo '::error::SUPABASE_URL secret is unset'; exit 1; }
+          test -n "${{ secrets.SUPABASE_PUBLISHABLE_KEY }}" || { echo '::error::SUPABASE_PUBLISHABLE_KEY secret is unset'; exit 1; }
+
       - name: Build the React app
         env:
           # Supabase URL + publishable key — injected into the Vite bundle.
