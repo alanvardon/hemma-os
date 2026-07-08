@@ -154,8 +154,9 @@ export async function list(): Promise<SalarySubmission[]> {
 }
 
 // Append one record. Stamps id + created_at (the DB would default them too),
-// inserts to the cloud, updates the cache optimistically, then resolves the
-// saved row. Throws on a write error so the caller can surface it — NB the
+// inserts to the cloud, and — only once the write succeeded — patches the cache,
+// then resolves the saved row. A failed write throws WITHOUT touching the cache
+// (plan 47: no phantom cached rows), so the caller can surface it — NB the
 // pre-Supabase store never rejected here, so the call site guards for it.
 export async function add(record: SalarySubmission): Promise<SalarySubmission> {
   const saved: SalarySubmission = {
@@ -164,17 +165,17 @@ export async function add(record: SalarySubmission): Promise<SalarySubmission> {
     created_at: record.created_at || new Date().toISOString(),
   }
   const { error } = await supabase.from(TABLE).insert(_row(saved))
-  _writeCache([saved, ..._readCache().filter((r) => r.id !== saved.id)])
   if (error) throw error
+  _writeCache([saved, ..._readCache().filter((r) => r.id !== saved.id)])
   return saved
 }
 
 // Drop one record by id; resolves the remaining (cached) count.
 export async function remove(id: string): Promise<number> {
   const { error } = await supabase.from(TABLE).delete().eq('id', id)
+  if (error) throw error
   const rows = _readCache().filter((r) => r.id !== id)
   _writeCache(rows)
-  if (error) throw error
   return rows.length
 }
 

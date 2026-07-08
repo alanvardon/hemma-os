@@ -79,11 +79,7 @@ describe('write path', () => {
     await expect(store.addLoanPart({ label: 'Bolån', loan_number: '1', start_balance: 500000, start_date: '2024-01-01', archived: false })).rejects.toBeTruthy()
   })
 
-  // TODO(plan 47): un-skip once mortgage-store.ts reorders every mutation to
-  // patch the cache only after the error check. Today addLoanPart (and its
-  // siblings) patch the cache BEFORE checking `error`, so a failed insert
-  // still leaves a phantom row in the cache — the exact bug plan 47 fixes.
-  it.skip('addLoanPart: cloud error leaves the cache untouched', async () => {
+  it('addLoanPart: cloud error leaves the cache untouched', async () => {
     mock().control.failing.add('mortgage_loan_parts')
     await expect(store.addLoanPart({ label: 'Bolån', loan_number: '1', start_balance: 500000, start_date: '2024-01-01', archived: false })).rejects.toBeTruthy()
     expect((cache().loan_parts as unknown[] | undefined) || []).toHaveLength(0)
