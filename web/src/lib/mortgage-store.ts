@@ -17,6 +17,7 @@ import { defaultSettings, makeRatePeriod } from './mortgage'
 import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping } from './mortgage'
 import { supabase } from './supabase'
 import { genId } from './id'
+import { makeImportOnce, stamp } from './store-helpers'
 
 // Legacy pre-Supabase data — import source + backup. (Exported name kept for
 // back-compat; it is no longer the write target.)
@@ -63,11 +64,6 @@ function dayBefore(iso: string): string | null {
   d.setDate(d.getDate() - 1)
   const p = (n: number) => String(n).padStart(2, '0')
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
-}
-
-function stamp<T extends object>(record: T, prefix: string): T & { id: string; created_at: string } {
-  const r = record as Record<string, unknown>
-  return { ...record, id: (r.id as string) || genId(prefix), created_at: (r.created_at as string) || new Date().toISOString() } as T & { id: string; created_at: string }
 }
 
 function byDateDesc<T extends { date?: string; created_at?: string }>(rows: T[]): T[] {
@@ -218,41 +214,30 @@ function _readLegacy(): StoreEnvelope | null {
 // On the first authenticated load after the household exists, upsert the legacy
 // localStorage data into the five tables (keyed on id, so re-running adds
 // nothing) + seed the settings tool_state row only if none exists yet (so a
-// partner's saved settings aren't clobbered), then set a flag. On any error
-// (offline / RLS not ready) it does NOT set the flag and clears the in-memory
-// guard, so it retries next call. `_importOnce` dedupes concurrent calls.
-let _importOnce: Promise<void> | null = null
-function _importLocalOnce(): Promise<void> {
-  if (_importOnce) return _importOnce
-  _importOnce = (async () => {
-    let already = true
-    try { already = localStorage.getItem(IMPORT_FLAG) === '1' } catch { already = false }
-    if (already) return
-    const legacy = _readLegacy()
-    if (legacy) {
-      const jobs: Array<[string, Record<string, unknown>[]]> = [
-        [T.parts, legacy.loan_parts.map(r => _row(r, COLS.parts))],
-        [T.periods, legacy.rate_periods.map(r => _row(r, COLS.periods))],
-        [T.payments, legacy.payments.map(r => _row(r, COLS.payments))],
-        [T.valuations, legacy.valuations.map(r => _row(r, COLS.valuations))],
-        [T.contributions, legacy.contributions.map(r => _row(r, COLS.contributions))],
-      ]
-      for (const [table, rows] of jobs) {
-        if (!rows.length) continue
-        const { error } = await supabase.from(table).upsert(rows, { onConflict: 'id' })
-        if (error) { _importOnce = null; return } // retry next call — don't mark done
-      }
-      const { data, error: selErr } = await supabase.from(STATE).select('tool').eq('tool', SETTINGS_TOOL).maybeSingle()
-      if (selErr) { _importOnce = null; return }
-      if (!data) {
-        const { error } = await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data: legacy.settings }, { onConflict: 'household_id,tool' })
-        if (error) { _importOnce = null; return }
-      }
-    }
-    try { localStorage.setItem(IMPORT_FLAG, '1') } catch { /* ignore */ }
-  })()
-  return _importOnce
-}
+// partner's saved settings aren't clobbered).
+const _importLocalOnce = makeImportOnce(IMPORT_FLAG, async () => {
+  const legacy = _readLegacy()
+  if (!legacy) return true
+  const jobs: Array<[string, Record<string, unknown>[]]> = [
+    [T.parts, legacy.loan_parts.map(r => _row(r, COLS.parts))],
+    [T.periods, legacy.rate_periods.map(r => _row(r, COLS.periods))],
+    [T.payments, legacy.payments.map(r => _row(r, COLS.payments))],
+    [T.valuations, legacy.valuations.map(r => _row(r, COLS.valuations))],
+    [T.contributions, legacy.contributions.map(r => _row(r, COLS.contributions))],
+  ]
+  for (const [table, rows] of jobs) {
+    if (!rows.length) continue
+    const { error } = await supabase.from(table).upsert(rows, { onConflict: 'id' })
+    if (error) return false // retry next call — don't mark done
+  }
+  const { data, error: selErr } = await supabase.from(STATE).select('tool').eq('tool', SETTINGS_TOOL).maybeSingle()
+  if (selErr) return false
+  if (!data) {
+    const { error } = await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data: legacy.settings }, { onConflict: 'household_id,tool' })
+    if (error) return false
+  }
+  return true
+})
 
 // ── Loan parts ───────────────────────────────────────────────────────────────
 export async function listLoanParts(): Promise<LoanPart[]> {

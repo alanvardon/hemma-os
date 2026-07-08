@@ -17,6 +17,7 @@ import { defaultSettings, normalizePersonalEntries, personalSums } from './manad
 import type { Item, Payment, MonthEndSettings, PersonalEntry } from './manadsavslut'
 import { supabase } from './supabase'
 import { genId } from './id'
+import { makeImportOnce, stamp } from './store-helpers'
 
 // Legacy pre-Supabase envelope — import source + backup (read-only after swap).
 export const STORAGE_KEY = 'bostadskalkyl_monthend_v1'
@@ -54,11 +55,6 @@ export function normalizeItem(it: Item): Item {
 
 function sortedDesc<T extends { created_at?: string }>(rows: T[]): T[] {
   return rows.slice().sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
-}
-
-function stamp<T extends object>(record: T, prefix: string): T & { id: string; created_at: string } {
-  const r = record as Record<string, unknown>
-  return { ...record, id: (r.id as string) || genId(prefix), created_at: (r.created_at as string) || new Date().toISOString() } as T & { id: string; created_at: string }
 }
 
 // ── Column projectors — send exactly the table columns; OMIT household_id +
@@ -161,37 +157,28 @@ function _readLegacy(): { items: Item[]; payments: Payment[]; settings: MonthEnd
 // On the first authenticated load after the household exists, upsert the legacy
 // localStorage envelope into the cloud (items + payments keyed on id — idempotent;
 // settings only if no cloud row exists yet, so a partner's already-saved settings
-// aren't clobbered) and set a flag. Runs before the read queries below, so
-// imported rows appear in that same call. On any error it leaves the flag unset
-// to retry; `_importOnce` dedupes concurrent calls within a session.
-let _importOnce: Promise<void> | null = null
-function _importLocalOnce(): Promise<void> {
-  if (_importOnce) return _importOnce
-  _importOnce = (async () => {
-    let already = true
-    try { already = localStorage.getItem(IMPORT_FLAG) === '1' } catch { already = false }
-    if (already) return
-    const legacy = _readLegacy()
-    if (legacy.items.length) {
-      const { error } = await supabase.from(ITEMS).upsert(legacy.items.map(_itemRow), { onConflict: 'id' })
-      if (error) { _importOnce = null; return }
+// aren't clobbered). Runs before the read queries below, so imported rows appear
+// in that same call.
+const _importLocalOnce = makeImportOnce(IMPORT_FLAG, async () => {
+  const legacy = _readLegacy()
+  if (legacy.items.length) {
+    const { error } = await supabase.from(ITEMS).upsert(legacy.items.map(_itemRow), { onConflict: 'id' })
+    if (error) return false
+  }
+  if (legacy.payments.length) {
+    const { error } = await supabase.from(PAYMENTS).upsert(legacy.payments.map(_paymentRow), { onConflict: 'id' })
+    if (error) return false
+  }
+  if (legacy.settings) {
+    const { data, error: selErr } = await supabase.from(STATE).select('tool').eq('tool', SETTINGS_TOOL).maybeSingle()
+    if (selErr) return false
+    if (!data) {
+      const { error } = await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data: legacy.settings }, { onConflict: 'household_id,tool' })
+      if (error) return false
     }
-    if (legacy.payments.length) {
-      const { error } = await supabase.from(PAYMENTS).upsert(legacy.payments.map(_paymentRow), { onConflict: 'id' })
-      if (error) { _importOnce = null; return }
-    }
-    if (legacy.settings) {
-      const { data, error: selErr } = await supabase.from(STATE).select('tool').eq('tool', SETTINGS_TOOL).maybeSingle()
-      if (selErr) { _importOnce = null; return }
-      if (!data) {
-        const { error } = await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data: legacy.settings }, { onConflict: 'household_id,tool' })
-        if (error) { _importOnce = null; return }
-      }
-    }
-    try { localStorage.setItem(IMPORT_FLAG, '1') } catch { /* ignore */ }
-  })()
-  return _importOnce
-}
+  }
+  return true
+})
 
 // ── Items ──────────────────────────────────────────────────────────────────
 export async function listItems(): Promise<Item[]> {

@@ -16,6 +16,7 @@
    models differ enough that forcing them through here would obscure both. */
 
 import { supabase } from './supabase'
+import { makeImportOnce } from './store-helpers'
 
 export interface ToolStateStoreConfig<T> {
   /** `tool_state.tool` discriminator, e.g. 'konsultkalkyl'. */
@@ -59,29 +60,18 @@ export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolState
 
   // First-login import (one-time, idempotent): seed the tool_state blob from the
   // legacy localStorage blob, but ONLY if no cloud row exists yet (so a
-  // partner's saved state is never clobbered). On error, leave the flag unset
-  // and clear the in-memory guard so it retries next call. `importOnce` dedupes
-  // concurrent calls within a session.
-  let importOnce: Promise<void> | null = null
-  function importLocalOnce(): Promise<void> {
-    if (importOnce) return importOnce
-    importOnce = (async () => {
-      let already = true
-      try { already = localStorage.getItem(importFlag) === '1' } catch { already = false }
-      if (already) return
-      const legacy = readLegacy()
-      if (legacy) {
-        const { data, error: selErr } = await supabase.from(table).select('tool').eq('tool', tool).maybeSingle()
-        if (selErr) { importOnce = null; return } // retry next call — don't mark done
-        if (!data) {
-          const { error } = await supabase.from(table).upsert({ tool, data: legacy }, { onConflict: 'household_id,tool' })
-          if (error) { importOnce = null; return } // retry next call
-        }
-      }
-      try { localStorage.setItem(importFlag, '1') } catch { /* ignore */ }
-    })()
-    return importOnce
-  }
+  // partner's saved state is never clobbered).
+  const importLocalOnce = makeImportOnce(importFlag, async () => {
+    const legacy = readLegacy()
+    if (!legacy) return true
+    const { data, error: selErr } = await supabase.from(table).select('tool').eq('tool', tool).maybeSingle()
+    if (selErr) return false
+    if (!data) {
+      const { error } = await supabase.from(table).upsert({ tool, data: legacy }, { onConflict: 'household_id,tool' })
+      if (error) return false
+    }
+    return true
+  })
 
   // Read the persisted blob. Runs the one-time import first (so a seeded blob
   // appears in this very call), then reads cloud; on error serves the cache.
