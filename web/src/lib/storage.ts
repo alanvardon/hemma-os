@@ -14,6 +14,7 @@
 import type { Inputs, Constants } from './calc'
 import { supabase } from './supabase'
 import { genId } from './id'
+import { makeImportOnce } from './store-helpers'
 
 const KEYS = {
   scenarios: 'bostadskalkyl_scenarios_v1',
@@ -349,33 +350,23 @@ function _readLegacyPrefs(): Prefs | null {
   } catch { return null }
 }
 
-let _importOnce: Promise<void> | null = null
-function _importLocalOnce(): Promise<void> {
-  if (_importOnce) return _importOnce
-  _importOnce = (async () => {
-    let already = true
-    try { already = localStorage.getItem(IMPORT_FLAG) === '1' } catch { already = false }
-    if (already) return
-    try {
-      const legacyScen = _readLegacyScenarios()
-      if (legacyScen.length) {
-        const { error } = await supabase.from(SCEN_TABLE).upsert(legacyScen.map(toRow), { onConflict: 'id' })
-        if (error) { _importOnce = null; return }
-      }
-      const legacyPrefs = _readLegacyPrefs()
-      if (legacyPrefs) {
-        const { data, error: selErr } = await supabase.from(STATE).select('tool').eq('tool', PREFS_TOOL).maybeSingle()
-        if (selErr) { _importOnce = null; return }
-        if (!data) {
-          const { error } = await supabase.from(STATE).upsert({ tool: PREFS_TOOL, data: legacyPrefs }, { onConflict: 'household_id,tool' })
-          if (error) { _importOnce = null; return }
-        }
-      }
-    } catch { _importOnce = null; return }
-    try { localStorage.setItem(IMPORT_FLAG, '1') } catch { /* ignore */ }
-  })()
-  return _importOnce
-}
+const _importLocalOnce = makeImportOnce(IMPORT_FLAG, async () => {
+  const legacyScen = _readLegacyScenarios()
+  if (legacyScen.length) {
+    const { error } = await supabase.from(SCEN_TABLE).upsert(legacyScen.map(toRow), { onConflict: 'id' })
+    if (error) return false
+  }
+  const legacyPrefs = _readLegacyPrefs()
+  if (legacyPrefs) {
+    const { data, error: selErr } = await supabase.from(STATE).select('tool').eq('tool', PREFS_TOOL).maybeSingle()
+    if (selErr) return false
+    if (!data) {
+      const { error } = await supabase.from(STATE).upsert({ tool: PREFS_TOOL, data: legacyPrefs }, { onConflict: 'household_id,tool' })
+      if (error) return false
+    }
+  }
+  return true
+})
 
 export function loadDriftYearly(): Promise<boolean> {
   try {

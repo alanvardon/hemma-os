@@ -16,6 +16,7 @@
 import type { SalarySubmission } from './hushallsbudget'
 import { supabase } from './supabase'
 import { genId } from './id'
+import { makeImportOnce } from './store-helpers'
 
 // Legacy pre-Supabase history — import source + backup. (Exported name kept for
 // back-compat; it is no longer the cache.)
@@ -113,28 +114,17 @@ function _row(s: SalarySubmission): Record<string, unknown> {
 
 // ── First-login import (one-time, idempotent) ───────────────────────────────
 // On the first authenticated load after the household exists, upsert the legacy
-// localStorage history into the cloud (keyed on id, so re-running adds nothing)
-// and set a flag. Runs per-origin/per-device — the real history lives on the
-// live Pages origin, so this matters there, not on localhost. On any error
-// (offline / RLS not ready) it does NOT set the flag and clears the in-memory
-// guard, so it retries on the next call. `_importOnce` dedupes concurrent calls
-// within a session.
-let _importOnce: Promise<void> | null = null
-function _importLocalOnce(): Promise<void> {
-  if (_importOnce) return _importOnce
-  _importOnce = (async () => {
-    let already = true
-    try { already = localStorage.getItem(IMPORT_FLAG) === '1' } catch { already = false }
-    if (already) return
-    const legacy = _readLegacy()
-    if (legacy.length) {
-      const { error } = await supabase.from(TABLE).upsert(legacy.map(_row), { onConflict: 'id' })
-      if (error) { _importOnce = null; return } // retry next call — don't mark done
-    }
-    try { localStorage.setItem(IMPORT_FLAG, '1') } catch { /* ignore */ }
-  })()
-  return _importOnce
-}
+// localStorage history into the cloud (keyed on id, so re-running adds nothing).
+// Runs per-origin/per-device — the real history lives on the live Pages origin,
+// so this matters there, not on localhost.
+const _importLocalOnce = makeImportOnce(IMPORT_FLAG, async () => {
+  const legacy = _readLegacy()
+  if (legacy.length) {
+    const { error } = await supabase.from(TABLE).upsert(legacy.map(_row), { onConflict: 'id' })
+    if (error) return false
+  }
+  return true
+})
 
 // ── Public API (signatures unchanged) ───────────────────────────────────────
 
