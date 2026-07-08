@@ -26,16 +26,6 @@ export async function claimHousehold(): Promise<string | null> {
   return (data as string | null) ?? null
 }
 
-// Anon-callable gate: may this email create an account? True only when it has a
-// pending invite. Drives `shouldCreateUser` on the magic-link request so
-// strangers can't sign up while invited partners still self-onboard. Defaults to
-// false on error (fail closed).
-export async function emailMaySignIn(addr: string): Promise<boolean> {
-  const { data, error } = await supabase.rpc('email_may_sign_in', { addr: addr.trim().toLowerCase() })
-  if (error) return false
-  return data === true
-}
-
 // The current household's members WITH their emails, via the security-definer
 // household_roster RPC (auth.users isn't readable from the client). Owners first.
 export async function listMembers(): Promise<Member[]> {
