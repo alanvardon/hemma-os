@@ -398,6 +398,109 @@ input::placeholder { color: var(--ink-faint); }
 .toggle input:checked + .toggle-slider::before { transform: translateX(17px); }
 .toggle input:focus-visible + .toggle-slider { box-shadow: var(--ring); }
 
+/* ── Shared tool shell: Bolånekoll + Månadsavslut ───────────────
+   Both routes are faithful ports of standalone apps that share one design
+   language, and both scope generic class names under their route root
+   (.bk-root / .ma-root) to avoid leaking. These primitives were identical in
+   both stylesheets; hoisted here as one declaration per selector, still
+   root-scoped (same specificity, no leak). Tool-specific variants (table row
+   modifiers, dialog chrome, toasts) stay in each route's own file. */
+.bk-root .btn-danger, .ma-root .btn-danger { color: var(--warn); }
+.bk-root .btn-danger:hover:not(:disabled),
+.ma-root .btn-danger:hover:not(:disabled) { background: var(--warn-faint); border-color: var(--warn-light); color: var(--warn); }
+.bk-root .link-btn, .ma-root .link-btn {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--accent); font: inherit; font-weight: 550; text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.bk-root .link-btn:hover, .ma-root .link-btn:hover { color: var(--accent-light); }
+
+.bk-root .wrap, .ma-root .wrap {
+  max-width: 1080px; width: 100%;
+  margin: 0 auto; padding: 2rem 2.5rem 4rem;
+  display: flex; flex-direction: column; gap: 1.5rem;
+}
+.bk-root .card, .ma-root .card {
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 1.5rem 1.6rem;
+}
+.bk-root .card-head, .ma-root .card-head { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 1.1rem; flex-wrap: wrap; }
+.bk-root .card-head h2, .ma-root .card-head h2 {
+  font-family: var(--font-display); font-weight: 400;
+  font-size: 1.4rem; letter-spacing: -0.01em; color: var(--ink); margin: 0;
+}
+.bk-root .card-en, .ma-root .card-en { color: var(--ink-soft); font-family: var(--font-ui); font-size: 0.95rem; font-weight: 400; }
+.bk-root .count-pill, .ma-root .count-pill {
+  font-size: 12px; font-weight: 600;
+  color: var(--ink-mid); background: var(--paper-warm);
+  border: 1px solid var(--rule); border-radius: 999px; padding: 2px 11px;
+}
+.bk-root .card-actions, .ma-root .card-actions { margin-left: auto; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.bk-root .empty, .ma-root .empty { color: var(--ink-soft); font-size: 14px; padding: 1.2rem 0.2rem; text-align: center; }
+
+/* Import-config grid + native <select> */
+.bk-root .config-grid, .ma-root .config-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 1rem 1.2rem; margin-bottom: 1.2rem;
+}
+.bk-root .config-field, .ma-root .config-field { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+.bk-root .config-field > label, .ma-root .config-field > label {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--ink-soft); text-transform: uppercase;
+}
+.bk-root .config-note, .ma-root .config-note { font-size: 12px; color: var(--ink-soft); }
+.bk-root .select, .ma-root .select {
+  font-family: var(--font-ui); font-size: 14px; color: var(--ink);
+  background: var(--input-bg); border: 1px solid var(--rule);
+  border-radius: var(--r-sm); padding: 8px 10px; width: 100%; cursor: pointer;
+}
+.bk-root .select:focus, .ma-root .select:focus { outline: none; border-color: var(--accent-light); box-shadow: var(--ring); background: var(--input-focus-bg); }
+
+/* Segmented control */
+.bk-root .segmented, .ma-root .segmented {
+  display: inline-flex; background: var(--input-bg);
+  border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 3px; gap: 2px;
+  flex-wrap: wrap;
+}
+.bk-root .segmented .seg, .ma-root .segmented .seg {
+  position: relative;
+  font-family: var(--font-ui); font-size: 13px; font-weight: 550;
+  color: var(--ink-soft); background: none; border: none; cursor: pointer;
+  padding: 6px 12px; border-radius: 6px; transition: color 0.15s; white-space: nowrap;
+}
+.bk-root .segmented .seg:hover, .ma-root .segmented .seg:hover { color: var(--ink-mid); }
+.bk-root .segmented .seg.is-active, .ma-root .segmented .seg.is-active { color: var(--on-accent); }
+.bk-root .seg-pill, .ma-root .seg-pill { position: absolute; inset: 0; z-index: 0; background: var(--accent); border-radius: 6px; }
+.bk-root .seg-label, .ma-root .seg-label { position: relative; z-index: 1; }
+.bk-root .segmented-sm, .ma-root .segmented-sm { padding: 2px; }
+.bk-root .segmented-sm .seg, .ma-root .segmented-sm .seg { font-size: 12px; padding: 3px 8px; }
+
+/* Tables */
+.bk-root .table-wrap, .ma-root .table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-md); }
+.bk-root .data-table, .ma-root .data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.bk-root .data-table th, .ma-root .data-table th {
+  position: sticky; top: 0; z-index: 1;
+  text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: 0.03em;
+  text-transform: uppercase; color: var(--ink-soft);
+  background: var(--paper-warm); padding: 9px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap;
+}
+.bk-root .data-table td, .ma-root .data-table td { padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: middle; color: var(--ink-mid); }
+.bk-root .data-table tbody tr:last-child td, .ma-root .data-table tbody tr:last-child td { border-bottom: none; }
+.bk-root .data-table .num, .ma-root .data-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bk-root .data-table .col-date, .ma-root .data-table .col-date { white-space: nowrap; color: var(--ink-mid); }
+
+/* Icon button (base; per-tool delete-hover variants stay in each file) */
+.bk-root .icon-btn, .ma-root .icon-btn {
+  background: none; border: 1px solid transparent; cursor: pointer;
+  color: var(--ink-soft); font-size: 13px; line-height: 1;
+  padding: 4px 7px; border-radius: 6px; margin-left: 2px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.bk-root .icon-btn:hover, .ma-root .icon-btn:hover { background: var(--paper-warm); color: var(--ink); border-color: var(--rule); }
+
 /* Scenarios-dashboard layout (grid, toolbar, cards) lives in dashboard.css. */
 
 /* Inline-editable scenario title in the calculator header — looks like the h1
