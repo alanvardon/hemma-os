@@ -264,18 +264,24 @@ export async function listPayments(): Promise<Payment[]> {
   return rows
 }
 
-// Insert the payment FIRST, then flip the settled items to paid. If the item
-// update fails mid-way, the items are left unsettled (retryable) rather than
-// settled-but-with-no-payment — the deliberate ordering from plan 16c.
+// Insert the payment AND flip its items to paid in ONE transaction, via the
+// `settle_items` security-definer RPC (plan 48). The two writes commit or roll
+// back together, so a crash/network drop can no longer leave a settlement whose
+// items are half-flipped. Cache is patched only after the RPC succeeds (plan 47).
 export async function settle(draft: Omit<Payment, 'id' | 'created_at'>): Promise<Payment> {
   const payment = stamp(draft || {}, 'pay') as Payment
-  const { error: pErr } = await supabase.from(PAYMENTS).insert(_paymentRow(payment))
-  if (pErr) throw pErr
   const itemIds = payment.item_ids || []
-  if (itemIds.length) {
-    const { error: iErr } = await supabase.from(ITEMS).update({ paid: true, payment_id: payment.id }).in('id', itemIds)
-    if (iErr) throw iErr
-  }
+  const { error } = await supabase.rpc('settle_items', {
+    p_id: payment.id,
+    p_item_ids: itemIds,
+    p_from: payment.from_person ?? null,
+    p_to: payment.to_person ?? null,
+    p_amount: payment.amount ?? 0,
+    p_period_label: payment.period_label ?? '',
+    p_note: payment.note ?? '',
+    p_created_at: payment.created_at,
+  })
+  if (error) throw error
   _patchCache((e) => {
     e.payments = [payment, ...e.payments.filter((p) => p.id !== payment.id)]
     const ids = new Set(itemIds)
@@ -284,13 +290,11 @@ export async function settle(draft: Omit<Payment, 'id' | 'created_at'>): Promise
   return payment
 }
 
-// Un-settle the items FIRST, then delete the payment — so a failed delete leaves
-// items un-paid (retryable) rather than pointing at a deleted payment.
+// Un-flip the items AND delete the payment in ONE transaction, via the
+// `unsettle_payment` RPC — the atomic mirror of settle (plan 48).
 export async function removePayment(id: string): Promise<number> {
-  const { error: iErr } = await supabase.from(ITEMS).update({ paid: false, payment_id: null }).eq('payment_id', id)
-  if (iErr) throw iErr
-  const { error: pErr } = await supabase.from(PAYMENTS).delete().eq('id', id)
-  if (pErr) throw pErr
+  const { error } = await supabase.rpc('unsettle_payment', { p_id: id })
+  if (error) throw error
   let n = 0
   _patchCache((e) => {
     e.payments = e.payments.filter((p) => p.id !== id); n = e.payments.length
