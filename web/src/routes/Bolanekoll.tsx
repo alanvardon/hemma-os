@@ -566,9 +566,9 @@ export default function Bolanekoll() {
                 </div>
               </div>
               <div className="metric-row">
-                {lastCost && <div className="metric-chip"><span className="metric-label">{settings.ranteavdrag ? 'Latest mo · net cost' : 'Latest mo · cost'}</span><span className="metric-val">{M(lastCost.net)}</span></div>}
+                {lastCost && <div className="metric-chip"><span className="metric-label">{settings.ranteavdrag ? 'Latest mo · net' : 'Latest mo'}</span><span className="metric-val">{M(lastCost.net)}</span></div>}
                 {blended > 0 && <div className="metric-chip is-accent"><span className="metric-label">Blended rate</span><span className="metric-val">{P(blended)}</span></div>}
-                {krav.has_value && <div className="metric-chip"><span className="metric-label">Amorteringskrav (est.)</span><span className="metric-val">{krav.exempt ? 'None · LTV ≤ 50 %' : krav.required_pct + ' % · ' + fmtMoney(krav.required_annual) + '/år'}</span></div>}
+                {krav.has_value && <div className="metric-chip"><span className="metric-label">Amort.krav (est.)</span><span className="metric-val">{krav.exempt ? 'None · LTV ≤ 50 %' : krav.required_pct + ' % · ' + fmtMoney(krav.required_annual) + '/år'}</span></div>}
               </div>
             </>
           )}
