@@ -9,6 +9,11 @@ const url = import.meta.env.VITE_SUPABASE_URL
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 
 if (!url || !key) {
+  if (import.meta.env.PROD) {
+    throw new Error(
+      '[supabase] VITE_SUPABASE_URL / VITE_SUPABASE_PUBLISHABLE_KEY missing from the build',
+    )
+  }
   // Loud in dev if .env.local is missing/incomplete; harmless in prod where the
   // CI secrets are always set.
   console.warn(
