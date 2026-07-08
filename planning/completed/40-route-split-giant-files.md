@@ -1,6 +1,6 @@
 # Plan 40 — Split the giant routes: Bolånekoll 1,493 → modular files
 
-**Status:** plan · **Owner model:** Opus-suitable (large mechanical move,
+**Status:** shipped (PR #243) · **Owner model:** Opus-suitable (large mechanical move,
 needs discipline to not "improve" while moving) · **Req:** 5 (build order
 36→…→42, after 39 — dialogs must already sit on DialogShell/useDialog so
 what moves is small) · **Relationship:** pure file reorganization; behavior

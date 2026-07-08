@@ -1,10 +1,18 @@
 # Plan 39 — Shared UI primitives: dialog lifecycle, save-flash/toast, PageHeader, person names
 
-**Status:** plan · **Owner model:** Opus-suitable (touches all 5 tool routes;
-mechanical but wide) · **Req:** 4 (build order 36→…→42, after 37) ·
-**Relationship:** extracts the cross-route scaffolding so plan 40's file
-split moves small dialogs, not copy-pasted boilerplate. Touches
-`web/src/components/` (new hooks/components) + all tool routes.
+**Status:** shipped, across 5 PRs (one per sub-item below) · **Owner model:**
+Opus-suitable (touches all 5 tool routes; mechanical but wide) · **Req:** 4
+(build order 36→…→42, after 37) · **Relationship:** extracts the cross-route
+scaffolding so plan 40's file split moves small dialogs, not copy-pasted
+boilerplate. Touches `web/src/components/` (new hooks/components) + all tool
+routes.
+
+> Shipped as: A (dialog lifecycle) → PR #233 `ui/dialog-shell`, plus the
+> Hushållsbudget overlay→DialogShell conversion → PR #234
+> `ui/hushallsbudget-dialog`; B+C (`useSaveFlash`/`useToast`/`PageHeader`) →
+> PR #232 `ui/shared-primitives`; D (`usePersonNames`, tracked informally as
+> "39e") → PR #242 `ui/use-person-names`; E (field reuse in dialog forms,
+> tracked informally as "39d") → PR #240 `ui/shared-form-field`.
 
 ## Goal
 

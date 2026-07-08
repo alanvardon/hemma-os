@@ -1,6 +1,6 @@
 # Plan 36 — CI quality gate: run tests + lint before anything deploys
 
-**Status:** plan · **Owner model:** Sonnet-suitable (YAML only, no app code) ·
+**Status:** shipped (PR #229) · **Owner model:** Sonnet-suitable (YAML only, no app code) ·
 **Req:** 1 (of the code-quality batch, build order 36→37→38→39→40→41→42) ·
 **Relationship:** first of the batch ON PURPOSE — every later refactor PR
 (37–42) is behavior-preserving and needs a red/green signal on the PR itself.

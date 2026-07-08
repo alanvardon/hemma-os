@@ -1,6 +1,6 @@
 # Plan 37 — lib dedupe: one genId, one money formatter, one Swedish tax module
 
-**Status:** plan · **Owner model:** Sonnet-suitable (mechanical extraction +
+**Status:** shipped (PR #230) · **Owner model:** Sonnet-suitable (mechanical extraction +
 characterization tests) · **Req:** 2 (build order 36→…→42, needs 36's CI gate
 merged) · **Relationship:** foundation for plans 38–40 — the shared helpers
 land here so the store factory and route refactors can import them. Touches

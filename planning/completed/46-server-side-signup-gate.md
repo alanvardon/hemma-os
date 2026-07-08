@@ -1,6 +1,6 @@
 # Plan 46 — Enforce invite-only signup server-side (before-user-created hook)
 
-**Status:** plan · **Owner model:** Opus (security boundary; must verify the
+**Status:** shipped (PR #239) · **Owner model:** Opus (security boundary; must verify the
 current hook event-payload shape against live Supabase docs (Context7) rather
 than trust the draft, and the failure mode of getting it wrong is locking the
 couple out or reopening the bypass; includes a manual dashboard step) ·

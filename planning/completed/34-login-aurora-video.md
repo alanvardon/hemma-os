@@ -1,6 +1,6 @@
 # Plan 34 — Photographic aurora video behind the login screen
 
-**Status:** plan (grilled 2026-07-05) · **Owner model:** Sonnet-suitable
+**Status:** shipped (PR #226) · **Owner model:** Sonnet-suitable
 (video sourcing/encode + CSS + small component change; no shader work) ·
 **Relationship:** dresses the plan-16a magic-link wall; deliberately does NOT
 reuse the plan-28c stylized hero aurora — the brief is *photographic*, and

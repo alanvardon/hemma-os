@@ -1,6 +1,6 @@
 # Plan 38 — Supabase tool-store factory: stop copy-pasting the persistence skeleton
 
-**Status:** plan · **Owner model:** Opus-suitable (needs judgment about where
+**Status:** shipped (PR #231) · **Owner model:** Opus-suitable (needs judgment about where
 the abstraction stops) · **Req:** 3 (build order 36→…→42, after 37) ·
 **Relationship:** the sixth time this pattern was pasted (16b–16g each cloned
 the previous store); the seventh tool should get persistence in ~10 lines.
