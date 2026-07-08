@@ -72,9 +72,7 @@ describe('write path', () => {
     await expect(store.addItem(itemDraft() as never)).rejects.toBeTruthy()
   })
 
-  // TODO(plan 47): un-skip once addItem patches the cache only after the
-  // error check (currently it patches first, then checks `error`).
-  it.skip('addItem: cloud error leaves the cache untouched', async () => {
+  it('addItem: cloud error leaves the cache untouched', async () => {
     mock().control.failing.add('monthend_items')
     await expect(store.addItem(itemDraft() as never)).rejects.toBeTruthy()
     expect((cache().items as unknown[] | undefined) || []).toHaveLength(0)

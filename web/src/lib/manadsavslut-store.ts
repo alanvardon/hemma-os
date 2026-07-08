@@ -206,8 +206,8 @@ export async function listItems(): Promise<Item[]> {
 export async function addItem(record: Omit<Item, 'id' | 'created_at'>): Promise<Item> {
   const saved = normalizeItem(stamp(record, 'item') as Item)
   const { error } = await supabase.from(ITEMS).insert(_itemRow(saved))
-  _patchCache((e) => { e.items = [saved, ...e.items.filter((i) => i.id !== saved.id)] })
   if (error) throw error
+  _patchCache((e) => { e.items = [saved, ...e.items.filter((i) => i.id !== saved.id)] })
   return saved
 }
 
@@ -215,11 +215,11 @@ export async function addItems(records: Omit<Item, 'id' | 'created_at'>[]): Prom
   const saved = (records || []).map((r) => normalizeItem(stamp(r, 'item') as Item))
   if (!saved.length) return []
   const { error } = await supabase.from(ITEMS).insert(saved.map(_itemRow))
+  if (error) throw error
   _patchCache((e) => {
     const ids = new Set(saved.map((s) => s.id))
     e.items = [...saved, ...e.items.filter((i) => !ids.has(i.id))]
   })
-  if (error) throw error
   return saved
 }
 
@@ -234,15 +234,16 @@ export async function updateItem(id: string, patch: Partial<Item>): Promise<Item
 
 export async function removeItem(id: string): Promise<number> {
   const { error } = await supabase.from(ITEMS).delete().eq('id', id)
+  if (error) throw error
   let n = 0
   _patchCache((e) => { e.items = e.items.filter((i) => i.id !== id); n = e.items.length })
-  if (error) throw error
   return n
 }
 
 export async function removeItems(ids: string[]): Promise<number> {
   if (!ids || !ids.length) return 0
   const { error } = await supabase.from(ITEMS).delete().in('id', ids)
+  if (error) throw error
   let removed = 0
   _patchCache((e) => {
     const drop = new Set(ids)
@@ -250,7 +251,6 @@ export async function removeItems(ids: string[]): Promise<number> {
     e.items = e.items.filter((i) => !drop.has(i.id))
     removed = before - e.items.length
   })
-  if (error) throw error
   return removed
 }
 
@@ -313,8 +313,8 @@ export async function saveSettings(patch: Partial<MonthEndSettings>): Promise<Mo
   const current = await getSettings()
   const merged = { ...defaultSettings(), ...current, ...(patch || {}) }
   const { error } = await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data: merged }, { onConflict: 'household_id,tool' })
-  _patchCache((e) => { e.settings = merged })
   if (error) throw error
+  _patchCache((e) => { e.settings = merged })
   return merged
 }
 
