@@ -16,20 +16,27 @@ export interface SupabaseMockControl {
   failing: Set<string>
   /** Scripted return values for `.rpc(name, args)`, keyed by rpc name. */
   rpcHandlers: Record<string, (args: unknown) => unknown>
+  /** The signed-in user returned by `auth.getUser()`; null when signed out. */
+  user: { id?: string; email?: string } | null
 }
 
 type Row = Record<string, unknown>
-type Filter = { type: 'eq' | 'in'; col: string; val: unknown }
+type Filter = { type: 'eq' | 'in' | 'ilike'; col: string; val: unknown }
 
 function matchRow(row: Row, filters: Filter[]): boolean {
-  return filters.every((f) =>
-    f.type === 'eq' ? row[f.col] === f.val : Array.isArray(f.val) && (f.val as unknown[]).includes(row[f.col]),
-  )
+  return filters.every((f) => {
+    if (f.type === 'in') return Array.isArray(f.val) && (f.val as unknown[]).includes(row[f.col])
+    if (f.type === 'ilike') {
+      // No-wildcard ilike is case-insensitive equality (all we use it for).
+      return String(row[f.col]).toLowerCase() === String(f.val).toLowerCase()
+    }
+    return row[f.col] === f.val
+  })
 }
 
 export function createSupabaseMock() {
   const tables: Record<string, Row[]> = {}
-  const control: SupabaseMockControl = { fail: false, failing: new Set(), rpcHandlers: {} }
+  const control: SupabaseMockControl = { fail: false, failing: new Set(), rpcHandlers: {}, user: null }
 
   function rowsOf(table: string): Row[] {
     if (!tables[table]) tables[table] = []
@@ -114,6 +121,7 @@ export function createSupabaseMock() {
       delete() { op = 'delete'; return builder },
       eq(col: string, val: unknown) { filters.push({ type: 'eq', col, val }); return builder },
       in(col: string, vals: unknown[]) { filters.push({ type: 'in', col, val: vals }); return builder },
+      ilike(col: string, val: unknown) { filters.push({ type: 'ilike', col, val }); return builder },
       order(col: string, opts?: { ascending?: boolean }) {
         orderCol = col; orderAsc = opts?.ascending !== false; return builder
       },
@@ -134,6 +142,13 @@ export function createSupabaseMock() {
     return Promise.resolve({ data: handler ? handler(args) : null, error: null })
   }
 
-  const supabase = { from, rpc, auth: { signOut: async () => {} } }
+  const supabase = {
+    from,
+    rpc,
+    auth: {
+      signOut: async () => {},
+      getUser: async () => ({ data: { user: control.user }, error: null }),
+    },
+  }
   return { supabase, tables, control }
 }

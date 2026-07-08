@@ -19,6 +19,7 @@ beforeEach(async () => {
   mock().control.fail = false
   mock().control.failing.clear()
   mock().control.rpcHandlers = {}
+  mock().control.user = null
 })
 
 describe('claimHousehold', () => {
@@ -101,5 +102,68 @@ describe('createInvite / removeInvite', () => {
   it('removeInvite: cloud error returns the error message', async () => {
     mock().control.failing.add('household_invites')
     expect(await store.removeInvite('a@x.com')).toBe('mock: household_invites delete failed')
+  })
+})
+
+describe('pendingInviteToJoin', () => {
+  it('true when an invite to my email is for a household I am NOT in', async () => {
+    mock().control.user = { id: 'me', email: 'Me@Example.com' }
+    mock().tables.households = [{ id: 'hh-mine' }]
+    mock().tables.household_invites = [{ household_id: 'hh-other', email: 'me@example.com' }]
+    expect(await store.pendingInviteToJoin()).toBe(true)
+  })
+
+  it('false when the only invite to my email is for the household I am already in', async () => {
+    mock().control.user = { id: 'me', email: 'me@example.com' }
+    mock().tables.households = [{ id: 'hh-mine' }]
+    mock().tables.household_invites = [{ household_id: 'hh-mine', email: 'me@example.com' }]
+    expect(await store.pendingInviteToJoin()).toBe(false)
+  })
+
+  it('matches the invite email case-insensitively', async () => {
+    mock().control.user = { id: 'me', email: 'me@example.com' }
+    mock().tables.households = [{ id: 'hh-mine' }]
+    mock().tables.household_invites = [{ household_id: 'hh-other', email: 'ME@Example.com' }]
+    expect(await store.pendingInviteToJoin()).toBe(true)
+  })
+
+  it('false when there is no invite to my email', async () => {
+    mock().control.user = { id: 'me', email: 'me@example.com' }
+    mock().tables.households = [{ id: 'hh-mine' }]
+    mock().tables.household_invites = [{ household_id: 'hh-other', email: 'someone@else.com' }]
+    expect(await store.pendingInviteToJoin()).toBe(false)
+  })
+
+  it('false when signed out (no email)', async () => {
+    mock().control.user = null
+    expect(await store.pendingInviteToJoin()).toBe(false)
+  })
+
+  it('fails closed to false on a cloud error', async () => {
+    mock().control.user = { id: 'me', email: 'me@example.com' }
+    mock().control.failing.add('household_invites')
+    expect(await store.pendingInviteToJoin()).toBe(false)
+  })
+})
+
+describe('acceptInvite', () => {
+  it('success returns null (no error)', async () => {
+    expect(await store.acceptInvite()).toBeNull()
+  })
+
+  it('cloud error returns the error message (does not throw)', async () => {
+    mock().control.failing.add('accept_invite')
+    expect(await store.acceptInvite()).toBe('mock: rpc accept_invite failed')
+  })
+})
+
+describe('leaveHousehold', () => {
+  it('success returns null (no error)', async () => {
+    expect(await store.leaveHousehold()).toBeNull()
+  })
+
+  it('cloud error returns the error message (does not throw)', async () => {
+    mock().control.failing.add('leave_household')
+    expect(await store.leaveHousehold()).toBe('mock: rpc leave_household failed')
   })
 })

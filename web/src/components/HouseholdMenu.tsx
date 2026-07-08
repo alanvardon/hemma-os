@@ -1,16 +1,21 @@
 // HouseholdMenu — the household / account surface (plan 16h). A small header
 // button opens a dialog to see who's in the household, invite a partner by email
 // (a pending household_invites row they auto-join on first sign-in), withdraw a
-// pending invite, and sign out. All data access goes through lib/household.ts,
-// which is RLS-scoped to the caller's household.
+// pending invite, and sign out. Plan 50 adds the two lifecycle paths for someone
+// who was already provisioned: an "accept invite to another household" banner and
+// a "leave household" action, both via security-definer RPCs. All data access
+// goes through lib/household.ts, which is RLS-scoped to the caller's household.
 import { useEffect, useState } from 'react'
 import AnimatedDialog from './AnimatedDialog'
 import { supabase } from '../lib/supabase'
 import {
+  acceptInvite,
   claimHousehold,
   createInvite,
+  leaveHousehold,
   listInvites,
   listMembers,
+  pendingInviteToJoin,
   removeInvite,
   signOut,
   type Invite,
@@ -53,22 +58,59 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
   const [email, setEmail] = useState<string | null>(null)
   const [members, setMembers] = useState<Member[]>([])
   const [invites, setInvites] = useState<Invite[]>([])
+  const [invitedElsewhere, setInvitedElsewhere] = useState(false)
   const [invite, setInvite] = useState('')
+  const [confirmLeave, setConfirmLeave] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [actionError, setActionError] = useState('')
 
   // Load the current user + household state each time the dialog opens.
   useEffect(() => {
     if (!open) return
     let alive = true
+    setConfirmLeave(false)
+    setError('')
+    setActionError('')
     supabase.auth.getUser().then(({ data }) => { if (alive) setEmail(data.user?.email ?? null) })
-    Promise.all([listMembers(), listInvites()]).then(([m, i]) => {
+    Promise.all([listMembers(), listInvites(), pendingInviteToJoin()]).then(([m, i, pending]) => {
       if (!alive) return
       setMembers(m)
       setInvites(i)
+      setInvitedElsewhere(pending)
     })
     return () => { alive = false }
   }, [open])
+
+  // Accept an invite to another household, then fully reload so every store
+  // re-reads under the new household. See lib/household.acceptInvite.
+  async function onAccept() {
+    setBusy(true)
+    setActionError('')
+    const err = await acceptInvite()
+    if (err) { setBusy(false); setActionError('Kunde inte gå med — försök igen.'); return }
+    window.location.reload()
+  }
+
+  // Leave the current household (two-step confirm). Reloads on success so the
+  // stores fall back to the fresh household claim_household provisions next.
+  async function onLeave() {
+    if (!confirmLeave) { setConfirmLeave(true); setActionError(''); return }
+    setBusy(true)
+    setActionError('')
+    const err = await leaveHousehold()
+    if (err) {
+      setBusy(false)
+      setConfirmLeave(false)
+      setActionError(
+        err.includes('last member')
+          ? 'Du är ensam i hushållet och kan inte lämna det.'
+          : 'Kunde inte lämna hushållet — försök igen.',
+      )
+      return
+    }
+    window.location.reload()
+  }
 
   async function refreshInvites() {
     setInvites(await listInvites())
@@ -106,6 +148,19 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
         <button type="button" className="modal-close" aria-label="Stäng" onClick={onClose}>×</button>
       </div>
       <div className="modal-body">
+        {invitedElsewhere && (
+          <section className="hh-section hh-invite-banner">
+            <p className="hh-banner-title">Du är inbjuden till ett annat hushåll</p>
+            <p className="modal-note hh-banner-note">
+              Gå med för att dela data med hushållet som bjöd in dig. Ditt nuvarande
+              hushåll lämnas orört.
+            </p>
+            <button type="button" className="btn btn-primary" onClick={onAccept} disabled={busy}>
+              Gå med i hushållet
+            </button>
+            {actionError && <p className="auth-error hh-error">{actionError}</p>}
+          </section>
+        )}
         <section className="hh-section">
           <p className="const-group-title">Inloggad</p>
           <div className="hh-account-row">
@@ -175,6 +230,30 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
                 </li>
               ))}
             </ul>
+          )}
+        </section>
+
+        <section className="hh-section hh-leave-section">
+          <div className="hh-leave-row">
+            <div className="hh-leave-copy">
+              <p className="hh-leave-title">Lämna hushåll</p>
+              <p className="modal-note hh-leave-note">
+                Du tas bort från hushållet. Ett nytt, tomt hushåll skapas åt dig
+                nästa gång du loggar in.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost hh-leave-btn"
+              data-confirm={confirmLeave}
+              onClick={onLeave}
+              disabled={busy}
+            >
+              {confirmLeave ? 'Bekräfta' : 'Lämna'}
+            </button>
+          </div>
+          {!invitedElsewhere && actionError && (
+            <p className="auth-error hh-error">{actionError}</p>
           )}
         </section>
       </div>
