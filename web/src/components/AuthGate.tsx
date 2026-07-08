@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
-import { claimHousehold, emailMaySignIn } from '../lib/household'
+import { claimHousehold } from '../lib/household'
 import { useTheme } from '../App'
 import auroraMp4 from '../assets/auth/aurora.mp4'
 import auroraPosterAvif from '../assets/auth/aurora-poster.avif'
@@ -118,17 +118,19 @@ function MagicLinkScreen() {
     if (!email.trim()) return
     setStatus('sending')
     setError('')
-    // Hardening (plan 16h): only let an email create a new account if it has a
-    // pending invite. Existing users (the seeded couple) already have accounts,
-    // so GoTrue mails them regardless; strangers with no invite get nothing.
-    const mayCreate = await emailMaySignIn(email.trim())
+    // Hardening (plan 46): the server-side hook_before_user_created is the real
+    // signup gate now — it rejects new accounts with no pending invite and
+    // returns a friendly Swedish 403 message, which surfaces below via
+    // error.message. Always requesting shouldCreateUser: true is safe: existing
+    // users (the seeded couple) sign in as normal, invited partners self-onboard,
+    // and strangers get the hook's rejection instead of a silent no-op email.
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
       // Land back on the bare app root (no hash route) so the magic-link tokens
       // don't collide with React Router — plan 16a.
       options: {
         emailRedirectTo: window.location.origin + window.location.pathname,
-        shouldCreateUser: mayCreate,
+        shouldCreateUser: true,
       },
     })
     if (error) {

@@ -1,0 +1,12 @@
+-- Plan 52 — close the invite-email enumeration surface now that plan 46's
+-- Before User Created hook is the real signup gate.
+--
+-- email_may_sign_in(addr) is security definer and was granted to anon so
+-- AuthGate could pre-flight shouldCreateUser. But it let anyone with the
+-- publishable key probe arbitrary addresses and learn which ones have a
+-- pending household invite. Now that hook_before_user_created enforces the
+-- gate server-side (20260705210000), the anon RPC is no longer load-bearing —
+-- AuthGate always requests shouldCreateUser: true and surfaces the hook's own
+-- 403 message. Revoke from anon (closes the enumeration surface) and
+-- authenticated (the client no longer calls it from either context).
+revoke execute on function public.email_may_sign_in(text) from anon, authenticated;

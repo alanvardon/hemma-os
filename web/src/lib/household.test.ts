@@ -34,25 +34,6 @@ describe('claimHousehold', () => {
   })
 })
 
-describe('emailMaySignIn', () => {
-  it('trims and lowercases the address before calling the RPC', async () => {
-    let receivedArgs: unknown = null
-    mock().control.rpcHandlers.email_may_sign_in = (args) => { receivedArgs = args; return true }
-    expect(await store.emailMaySignIn('  Foo@Example.com  ')).toBe(true)
-    expect(receivedArgs).toEqual({ addr: 'foo@example.com' })
-  })
-
-  it('fails closed to false on an RPC error (strangers cannot sign up)', async () => {
-    mock().control.failing.add('email_may_sign_in')
-    expect(await store.emailMaySignIn('foo@example.com')).toBe(false)
-  })
-
-  it('fails closed to false when the RPC returns anything but true', async () => {
-    mock().control.rpcHandlers.email_may_sign_in = () => null
-    expect(await store.emailMaySignIn('foo@example.com')).toBe(false)
-  })
-})
-
 describe('listMembers', () => {
   it('resolves the roster from the RPC', async () => {
     const roster = [{ user_id: 'u1', role: 'owner', email: 'a@x.com' }]
