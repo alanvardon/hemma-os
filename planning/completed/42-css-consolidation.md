@@ -1,10 +1,20 @@
 # Plan 42 — CSS consolidation: shared buttons/inputs/cards instead of per-tool restyles
 
-**Status:** plan · **Owner model:** Opus-suitable (highest visual-regression
+**Status:** shipped (PR #245) · **Owner model:** Opus-suitable (highest visual-regression
 risk of the batch; needs per-tool eyeballing, both themes) · **Req:** 7
 (build order 36→…→42, LAST on purpose — plans 39/40 settle which class names
 the shared components emit) · **Relationship:** touches `web/src/styles/`
 only; markup should already be stable.
+
+> **Shipped focused (PR #245).** Inventory showed the "~half of 3,800 lines
+> shareable" premise was over-estimated: konsultkalkyl/lonevaxling are already
+> lean, and the real duplication was `.save-state` (4 identical copies from the
+> shared PageHeader) + the byte-identical Bolånekoll↔Månadsavslut shell. Those
+> were consolidated into `components.css` (the shell comma-hoisted as
+> `.bk-root X, .ma-root X` to keep the anti-leak scoping). Pixel-verified both
+> tools, both themes. Deferred: the `.field-grid` global-leak fix (not
+> pixel-equivalent for Bostadskalkyl) and dead-selector removal (dynamic
+> `'kind-'+p.kind` classes defeat grep).
 
 ## Goal
 
