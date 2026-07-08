@@ -2,6 +2,10 @@
 <html lang="sv">
   <head>
     <meta charset="UTF-8" />
+    <!-- The CSP meta (allowing this inline script by sha256) is injected right
+         after <meta charset> by the hemma-csp-meta Vite plugin. The hash is
+         recomputed from this script's exact body on every build, so editing the
+         snippet below needs no manual hash update. -->
     <script>
       // Pre-paint theme to avoid a flash before React mounts. Dark is the app
       // default now — only an explicit stored 'light' opts out. Shares the key
@@ -14,12 +18,8 @@
       }
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300..600&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Fonts are self-hosted via @font-face in global.css (plan 54) — no
+         fonts.googleapis.com / fonts.gstatic.com runtime origins. -->
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <meta name="theme-color" content="" />
     <title>Hemma·OS</title>
