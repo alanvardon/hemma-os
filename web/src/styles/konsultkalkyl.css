@@ -62,14 +62,9 @@
   font-weight: 550;
   color: var(--ink-mid);
   letter-spacing: 0.01em;
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.3;
 }
-.field-en { color: var(--ink-faint); font-weight: 400; font-size: 10.5px; }
+.field-en { display: block; color: var(--ink-faint); font-weight: 400; font-size: 10.5px; margin-top: 3px; }
 
 .input-wrap { position: relative; display: flex; align-items: center; }
 .input-wrap input[type="text"] {

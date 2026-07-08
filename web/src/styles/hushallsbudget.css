@@ -549,7 +549,7 @@
     border-top: 1px solid var(--rule);
     font-size: 13px;
   }
-  .sum-row-label { color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .sum-row-label { color: var(--ink-soft); min-width: 0; }
   .sum-row-val { font-weight: 550; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .sum-row-val.positive { color: var(--accent); }
   .sum-row-val.negative { color: var(--warn); }
@@ -579,9 +579,6 @@
     color: var(--ink-soft);
     padding: 6px 0;
     border-top: 1px solid var(--rule);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .compare-val {
     font-size: 12.5px;

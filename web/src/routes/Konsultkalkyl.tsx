@@ -96,9 +96,7 @@ export default function Konsultkalkyl() {
   ) {
     return (
       <div className={`field${wide ? ' field-wide' : ''}`} key={id}>
-        <label htmlFor={id}>
-          {label} <span className="field-en">{en}</span>
-        </label>
+        <label htmlFor={id}>{label}</label>
         <div className="input-wrap">
           <input
             type="text"
@@ -112,6 +110,7 @@ export default function Konsultkalkyl() {
           />
           <span className="unit">{unit}</span>
         </div>
+        <span className="field-en">{en}</span>
       </div>
     )
   }
