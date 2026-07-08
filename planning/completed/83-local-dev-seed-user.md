@@ -1,6 +1,6 @@
 # Plan 83 — Seed the local dev user so devAuth auto-sign-in survives a `db reset`
 
-**Status:** plan · **Owner model:** Sonnet (small, self-contained SQL seed +
+**Status:** shipped · **Owner model:** Sonnet (small, self-contained SQL seed +
 config, but it touches the `auth` schema and the invite-gate security boundary —
 the implementer must not weaken the prod hook, and must verify login end-to-end
 via a real `db reset`, not by eyeballing) · **Source:** discovered while
