@@ -247,6 +247,7 @@ export default function Manadsavslut() {
       <main className="wrap">
 
         {/* ── Outstanding balance + settle ── */}
+        {items.length > 0 && (
         <section className="card balance-card">
           <div className="balance-main">
             <p className="balance-label">{balLabel}</p>
@@ -255,16 +256,25 @@ export default function Manadsavslut() {
           </div>
           <button type="button" className="btn btn-primary balance-settle" disabled={!open.length} onClick={() => setSettleDlg(true)}>Settle up</button>
         </section>
+        )}
 
         {/* ── Import a card statement ── */}
         <section className="card import-card">
           <div className="card-head"><h2>Importera kontoutdrag <span className="card-en">· Import a statement</span></h2></div>
           {!importCfg ? (
+            <>
             <FileDropzone isDragging={isDragging} onDragChange={setIsDragging} inputRef={fileInputRef}
               onFiles={files => { if (files[0]) handleFile(files[0]) }} accept=".csv,text/csv,text/plain">
               <p className="dropzone-lead">Drop a card-statement <strong>.csv</strong> here, or <span className="link-btn">browse</span>.</p>
               <p className="dropzone-hint">Swedish or English headers · comma or semicolon · we map the columns for you.</p>
             </FileDropzone>
+            {!items.length && (
+              <div className="import-secondary">
+                <span className="import-or">or</span>
+                <button type="button" className="btn btn-ghost" onClick={() => setItemDlg({ open: true, id: null })}>+ Add item manually</button>
+              </div>
+            )}
+            </>
           ) : (
             <div className="import-config">
               <div className="import-filebar">
@@ -336,6 +346,7 @@ export default function Manadsavslut() {
           )}
         </section>
 
+        {items.length > 0 && (<>
         {/* ── Items ── */}
         <section className="card">
           <div className="card-head">
@@ -450,6 +461,7 @@ export default function Manadsavslut() {
             </>
           )}
         </section>
+        </>)}
 
         {/* ── Settlement history ── */}
         <section className="card">
@@ -457,7 +469,7 @@ export default function Manadsavslut() {
             <h2>Tidigare avslut <span className="card-en">· History</span></h2>
             <span className="count-pill">{payments.length}</span>
           </div>
-          {!payments.length && <p className="empty">No settlements yet. Settle the open items above to close a month.</p>}
+          {!payments.length && <p className="empty">No settlements yet. Once you settle a month’s shared spending, it’s archived here.</p>}
           {/* Settling and reopening add/remove whole entries — animate the row
               in/out so the section doesn't jump when the list changes. */}
           <AnimatePresence initial={false}>

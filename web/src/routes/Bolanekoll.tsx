@@ -462,6 +462,19 @@ export default function Bolanekoll() {
 
       <main className="wrap">
 
+        {!parts.length ? (
+        <section className="card">
+          <div className="empty-hero">
+            <p className="empty-hero-eyebrow">Bolånekoll</p>
+            <h2 className="empty-hero-title">See how much of your home you own</h2>
+            <p className="empty-hero-text">Track your mortgage part by part — remaining debt, equity, loan-to-value and the road to payoff. Add your first loan part to begin; you can import statements as a CSV once it exists.</p>
+            <div className="empty-hero-actions">
+              <button type="button" className="btn btn-primary" onClick={() => setPartDlg({ open: true, id: null })}>+ Add loan part</button>
+            </div>
+          </div>
+        </section>
+        ) : (<>
+
         {/* ── Dashboard ── */}
         <section className="card dashboard-card">
           <div className="dash-main">
@@ -510,8 +523,17 @@ export default function Bolanekoll() {
         <section className="card market-card">
           <div className="dash-main">
             <p className="dash-label">Marknadsvärde · Market equity</p>
-            <p className="dash-headline">{hasValuation ? M(eq, false, true) : '—'}</p>
-            <p className="dash-sub">{dashSub}</p>
+            {hasValuation ? (
+              <>
+                <p className="dash-headline">{M(eq, false, true)}</p>
+                <p className="dash-sub">{dashSub}</p>
+              </>
+            ) : (
+              <div className="market-empty">
+                <p className="dash-sub">Add what the home is worth today to see your market equity vs the bank.</p>
+                <button type="button" className="btn btn-primary" onClick={() => setValDlg({ open: true, id: null })}>+ Add value</button>
+              </div>
+            )}
           </div>
           {hasValuation && settings.track_contributions && (
             <div className="split-row">
@@ -532,13 +554,20 @@ export default function Bolanekoll() {
         {/* ── Ownership vs bank over time ── */}
         <section className="card">
           <div className="card-head"><h2>Ägande över tid <span className="card-en">· Ownership vs bank</span></h2></div>
-          <div className="chart-wrap">
-            {timeline.length >= 2 && valuations.length > 0
-              ? <EquityStackChart data={chartData}
-                  mineLabel={nameOf(me) + '’s equity'} partnerLabel={nameOf(other) + '’s equity'}
-                  bankLabel="Banken · Bank" formatMoney={fmtMoney} />
-              : <p className="chart-empty">{valuations.length === 0 ? 'Add a property value to chart your equity vs the bank.' : 'Import a few months of payments to see the trend.'}</p>}
-          </div>
+          {valuations.length === 0 ? (
+            <div className="empty-stub">
+              <p>Add a property value to chart your equity vs the bank.</p>
+              <button type="button" className="btn btn-ghost" onClick={() => setValDlg({ open: true, id: null })}>+ Add value</button>
+            </div>
+          ) : (
+            <div className="chart-wrap">
+              {timeline.length >= 2
+                ? <EquityStackChart data={chartData}
+                    mineLabel={nameOf(me) + '’s equity'} partnerLabel={nameOf(other) + '’s equity'}
+                    bankLabel="Banken · Bank" formatMoney={fmtMoney} />
+                : <p className="chart-empty">Import a few months of payments to see the trend.</p>}
+            </div>
+          )}
         </section>
 
         {/* ── Insights ── */}
@@ -1022,6 +1051,8 @@ export default function Bolanekoll() {
             )}
           </section>
         )}
+
+        </>)}
 
       </main>
 

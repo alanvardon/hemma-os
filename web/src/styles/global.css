@@ -271,6 +271,67 @@ html.calc-layout #root {
   justify-content: center;
 }
 
+/* ── First-run empty states ─────────────────────────────────────
+   Shared primitives (like .btn) so every tool's first-run hero reads the
+   same. `.empty-hero` is the full-card invitation shown until the
+   prerequisite data exists; `.empty-stub` is the compact inline CTA used
+   mid-flow (e.g. a chart panel with no valuation yet) — never a tall
+   reserved void. */
+.empty-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.55rem;
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: clamp(2.4rem, 6vw, 3.8rem) 1.5rem;
+}
+.empty-hero-eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.empty-hero-title {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(1.6rem, 3.2vw, 2.1rem);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin: 0;
+}
+.empty-hero-text {
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  max-width: 30rem;
+}
+.empty-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.7rem;
+  margin-top: 0.9rem;
+}
+
+.empty-stub {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  padding: 1.5rem 1rem;
+  text-align: center;
+}
+.empty-stub p {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
 /* ── Layout ─────────────────────────────────────────────────── */
 .layout {
   display: grid;
