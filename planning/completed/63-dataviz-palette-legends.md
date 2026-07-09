@@ -1,6 +1,6 @@
 # Plan 63 — Data-viz color discipline + legible legends
 
-**Status:** plan · **Owner model:** Opus-suitable (palette design across two
+**Status:** shipped (PR pending) · **Owner model:** Opus-suitable (palette design across two
 themes + a legend layout rework; visual-regression heavy like plan 42) ·
 **Source:** design review 2026-07-07 · **Relationship:** builds on plan 41
 (one theme hook) — do 41 first so colors are read from one place; 42's

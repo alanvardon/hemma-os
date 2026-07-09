@@ -26,6 +26,21 @@
   --warn-light: oklch(64.11% 0.1201 61.72);
   --warn-faint: oklch(94.74% 0.0204 74.66);
   --rule: oklch(88.16% 0.0194 93.68);
+  /* Categorical data-viz ramp (plan 63). A disciplined two-hue scheme derived
+     from the suite's own families — 4 greens (1,3,5,7 @ hue ~153) + 3
+     coppers/ambers (2,4,6 @ hue ~50-63) + 1 warm neutral (8) — deliberately
+     NO blue/purple/pink. The lightness is a strict monotonic staircase
+     (43→80) across all eight slots so the ordering survives deuteranopia:
+     even when the two hues collapse, the L-steps still separate every slot.
+     Charts read these via the plan-41 useChartTokens hook. */
+  --cat-1: oklch(43% 0.074 153);
+  --cat-2: oklch(49% 0.118 47);
+  --cat-3: oklch(55% 0.085 153);
+  --cat-4: oklch(61% 0.11 55);
+  --cat-5: oklch(66% 0.086 154);
+  --cat-6: oklch(71% 0.098 63);
+  --cat-7: oklch(76% 0.058 156);
+  --cat-8: oklch(80% 0.018 95);
   --on-accent: oklch(100% 0 0);
   --input-bg: oklch(98.45% 0.0067 97.35);
   --input-focus-bg: oklch(100% 0 0);
@@ -72,6 +87,16 @@
   --warn-light: oklch(73.78% 0.1195 66.01);
   --warn-faint: oklch(25.72% 0.0269 68.61);
   --rule: oklch(30.04% 0.0143 118.67);
+  /* Categorical ramp — dark theme. Same staircase logic, lifted brighter so
+     each slot reads on the dark paper (L 64→90, still strictly monotonic). */
+  --cat-1: oklch(64% 0.104 152);
+  --cat-2: oklch(68% 0.122 52);
+  --cat-3: oklch(72% 0.096 152);
+  --cat-4: oklch(76% 0.112 58);
+  --cat-5: oklch(80% 0.084 153);
+  --cat-6: oklch(84% 0.098 64);
+  --cat-7: oklch(87% 0.058 155);
+  --cat-8: oklch(90% 0.014 100);
   --input-bg: oklch(23.92% 0.0115 122.28);
   --input-focus-bg: oklch(26.4% 0.013 120.26);
   --modal-backdrop: rgba(0, 0, 0, 0.66);

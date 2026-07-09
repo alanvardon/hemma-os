@@ -22,13 +22,19 @@ export default function BudgetDonutChart({
   formatMoney,
   centerLabel,
   centerValue,
+  variant = 'inline',
 }: {
   segments: DonutSegment[]
   formatMoney: (n: number) => string
   centerLabel: string
   centerValue: number
+  /** 'inline' = compact summary card (donut min-sized, center total lives in
+   *  the neighbouring "The pot" card, so it's hidden here); 'full' = the
+   *  fullscreen overlay, where the donut fills the stage and shows the total. */
+  variant?: 'inline' | 'full'
 }) {
   const [active, setActive] = useState<number | null>(null)
+  const showStaticCenter = variant === 'full'
 
   // Segment colours + the slice stroke (paper) live on the `.hb-root` scope,
   // not :root — resolve them via each segment's own token.
@@ -48,12 +54,15 @@ export default function BudgetDonutChart({
 
   const total = segments.reduce((t, s) => t + s.value, 0)
   const hovered = active != null ? segments[active] : null
+  // The center reads the hovered slice; with nothing hovered it only shows the
+  // running total in the fullscreen variant — the inline card leaves it empty.
+  const showCenter = hovered != null || showStaticCenter
   const shownLabel = hovered ? hovered.label : centerLabel
   const shownValue = hovered ? hovered.value : centerValue
   const shownPct = hovered && total > 0 ? Math.round((hovered.value / total) * 100) : null
 
   return (
-    <div className="hb-donut">
+    <div className={'hb-donut hb-donut--' + variant}>
       <div className="hb-donut-canvas">
         <ParentSize>
           {({ width, height }) => {
@@ -97,31 +106,35 @@ export default function BudgetDonutChart({
                       })
                     }
                   </Pie>
-                  <text
-                    textAnchor="middle"
-                    className="hb-donut-center-label"
-                    style={{ fontSize: labelFont }}
-                    y={shownPct != null ? -valueFont * 0.62 : -valueFont * 0.28}
-                  >
-                    {shownLabel}
-                  </text>
-                  <text
-                    textAnchor="middle"
-                    className="hb-donut-center-value"
-                    style={{ fontSize: valueFont }}
-                    y={shownPct != null ? valueFont * 0.42 : valueFont * 0.5}
-                  >
-                    {formatMoney(shownValue)}
-                  </text>
-                  {shownPct != null && (
-                    <text
-                      textAnchor="middle"
-                      className="hb-donut-center-sub"
-                      style={{ fontSize: subFont }}
-                      y={valueFont * 0.42 + subFont * 1.5}
-                    >
-                      {shownPct}% of the pot
-                    </text>
+                  {showCenter && (
+                    <>
+                      <text
+                        textAnchor="middle"
+                        className="hb-donut-center-label"
+                        style={{ fontSize: labelFont }}
+                        y={shownPct != null ? -valueFont * 0.62 : -valueFont * 0.28}
+                      >
+                        {shownLabel}
+                      </text>
+                      <text
+                        textAnchor="middle"
+                        className="hb-donut-center-value"
+                        style={{ fontSize: valueFont }}
+                        y={shownPct != null ? valueFont * 0.42 : valueFont * 0.5}
+                      >
+                        {formatMoney(shownValue)}
+                      </text>
+                      {shownPct != null && (
+                        <text
+                          textAnchor="middle"
+                          className="hb-donut-center-sub"
+                          style={{ fontSize: subFont }}
+                          y={valueFont * 0.42 + subFont * 1.5}
+                        >
+                          {shownPct}% of the pot
+                        </text>
+                      )}
+                    </>
                   )}
                 </Group>
               </svg>

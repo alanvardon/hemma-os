@@ -12,14 +12,9 @@
    shared sheets (field / sum-card / mobile-bar / chart-overlay) resolve here. */
 
 .hb-root {
-  --cat-1: #2e6f5e;
-  --cat-2: #3f6f9e;
-  --cat-3: #c08a2e;
-  --cat-4: #8a5a8f;
-  --cat-5: #b0552f;
-  --cat-6: #6b8e4e;
-  --cat-7: #51606e;
-  --cat-8: #a87f52;
+  /* Category palette (--cat-1…8) is now the shared data-viz ramp in
+     tokens.css (plan 63) — defined on :root so Månadsavslut and Bolånekoll
+     read the same scheme; it still resolves here through inheritance. */
 
   /* Lock the split view to the viewport on desktop; the columns scroll
      independently. Under 900px (below) this relaxes to normal page flow. */
@@ -664,12 +659,20 @@
   }
   .chart-expand-btn:hover { color: var(--accent); border-color: var(--accent-light); background: var(--paper-warm); }
 
-  .chart-wrap { position: relative; height: 240px; margin-top: 0.5rem; }
+  /* Donut card grows to fit its canvas (fixed height) + the table legend
+     below, rather than a fixed box that starved the ring (plan 63). */
+  .chart-wrap { position: relative; margin-top: 0.5rem; }
 
   /* visx donut — fills its container (the 240px card slot or the fullscreen
      stage); the ring takes the space, the legend sits below it. */
-  .hb-donut { display: flex; flex-direction: column; height: 100%; gap: 0.5rem; }
-  .hb-donut-canvas { position: relative; flex: 1; min-height: 0; }
+  .hb-donut { display: flex; flex-direction: column; gap: 0.75rem; }
+  .hb-donut-canvas { position: relative; }
+  /* Inline summary card: fixed, comfortably ≥160px (plan 63) — the ~90px
+     illegible donut was the legend blob starving it of height. */
+  .hb-donut--inline .hb-donut-canvas { height: 190px; }
+  /* Fullscreen overlay: fill the stage. */
+  .hb-donut--full { height: 100%; }
+  .hb-donut--full .hb-donut-canvas { flex: 1; min-height: 0; }
   .hb-donut-center-label { fill: var(--ink-soft); font-weight: 600; }
   .hb-donut-center-value {
     fill: var(--ink);
@@ -678,25 +681,31 @@
   }
   .hb-donut-center-sub { fill: var(--accent); font-weight: 600; }
 
-  .hb-donut-legend { display: flex; flex-wrap: wrap; gap: 0.2rem 0.3rem; justify-content: center; }
+  /* Legend as a left-aligned table: swatch · name · right-aligned kr, sorted
+     largest-first to match the arc order — scannable, unlike the old centered
+     wrapped blob (plan 63). */
+  .hb-donut-legend { display: flex; flex-direction: column; gap: 1px; }
   .hb-donut-key {
-    display: inline-flex;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
     align-items: center;
-    gap: 5px;
+    gap: 8px;
+    width: 100%;
     padding: 3px 7px;
     background: transparent;
     border: 1px solid transparent;
     border-radius: 6px;
     cursor: default;
+    text-align: left;
     font-family: inherit;
-    font-size: 11px;
-    line-height: 1.2;
+    font-size: 12px;
+    line-height: 1.3;
     transition: background 0.15s, border-color 0.15s;
   }
   .hb-donut-key.active { background: var(--paper-warm); border-color: var(--rule); }
-  .hb-donut-swatch { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
-  .hb-donut-key-label { color: var(--ink-mid); }
-  .hb-donut-key-val { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .hb-donut-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .hb-donut-key-label { color: var(--ink-mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hb-donut-key-val { justify-self: end; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 
   /* ── Fullscreen chart overlay ───────────────────────────────── */
   .chart-overlay {
@@ -1015,18 +1024,6 @@
   .mobile-stat:last-child { text-align: right; }
 }
 
-/* Category palette — dark theme */
-[data-theme="dark"] .hb-root {
-  --cat-1: #5fae93;
-  --cat-2: #6fa0d0;
-  --cat-3: #d9ab5a;
-  --cat-4: #bd8ec2;
-  --cat-5: #d98456;
-  --cat-6: #9bbf76;
-  --cat-7: #8a99a8;
-  --cat-8: #d0a878;
-}
-
 /* Lock background scroll while a salary/history dialog is open (matters on the
    mobile layout, where the page scrolls). showModal() inert-s the background
    but doesn't stop it scrolling, so gate it on the open dialog itself. */
@@ -1076,4 +1073,7 @@ html:has(dialog.hb-modal[open]) { overflow: hidden; }
 
 @media (max-width: 480px) {
   .hb-root .sum-big { font-size: 1.65rem; }
+  /* Below 480px the legend table IS the chart — a sub-160px ring is more
+     decoration than data, so drop it and let the sorted rows carry it (plan 63). */
+  .hb-root .hb-donut--inline .hb-donut-canvas { display: none; }
 }
