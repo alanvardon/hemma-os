@@ -116,3 +116,16 @@ Standalone; not blocked by and does not block any other batch. **Do the GitHub
 Pages custom-domain step and the Supabase Auth allow-list step in one sitting** —
 the gap between them is exactly when magic-link login silently breaks. Written
 pedagogically (mental model + the two non-obvious gotchas) at the user's request.
+
+---
+
+# Bolånekoll — 2026-07-08 (standalone)
+
+| File | Scope | Summary | Owner model | Effort |
+|------|-------|---------|-------------|--------|
+| [82-bolanekoll-rate-whatif.md](82-bolanekoll-rate-whatif.md) | bolånekoll | Rate what-if in the Prognos card — hypothetical rate on the whole balance → now / at X % / delta chips (kr/mån + kr/år); pure `rateWhatIf` helper + golden tests, ephemeral state, no schema change | Opus (golden values + ränteavdrag-per-month semantics) + Sonnet (UI wiring) | S |
+
+Standalone; not blocked by anything. Deliberately a *hypothetical*, not a
+forecast — plan 70 (Räntebesked) owns real repricing; plan 23 owns predicted
+actual charges. All 10 design decisions locked via grilled Q&A, recorded in
+the plan.
