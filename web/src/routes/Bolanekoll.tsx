@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ChevronRight, Copy, Flag, Pencil, Settings2, X } from 'lucide-react'
+import { ChevronRight, Copy, EllipsisVertical, Flag, Pencil, Settings2, X } from 'lucide-react'
+import { DropdownMenu } from 'radix-ui'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import Collapse from '../components/Collapse'
 import FileDropzone from '../components/FileDropzone'
@@ -848,7 +849,18 @@ export default function Bolanekoll() {
               <Segmented value={paymentFilter} onChange={setPaymentFilter} ariaLabel="Filter payments"
                 options={[{ v: 'all', label: 'All' }, ...parts.map(p => ({ v: p.id, label: p.label || 'part' }))]} />
               <button type="button" className="btn btn-ghost" onClick={() => setPayDlg({ open: true, id: null })}>+ Add payment</button>
-              <button type="button" className="btn btn-ghost btn-danger" disabled={!filteredPayments.length} onClick={clearPayments}>{paymentFilter === 'all' ? 'Delete all' : 'Delete ' + partNameById(paymentFilter)}</button>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger className="icon-btn" aria-label="More payment actions" title="More actions">
+                  <Icon icon={EllipsisVertical} size={16} />
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content className="kebab-menu" align="end" sideOffset={6}>
+                    <DropdownMenu.Item className="kebab-item kebab-danger" disabled={!filteredPayments.length} onSelect={clearPayments}>
+                      {paymentFilter === 'all' ? 'Delete all' : 'Delete ' + partNameById(paymentFilter)}
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
             </div>
           </div>
           <motion.div key={paymentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}

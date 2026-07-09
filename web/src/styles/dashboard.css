@@ -211,8 +211,10 @@
   outline: none;
 }
 .kebab-item[data-highlighted] { background: var(--accent-faint); }
+.kebab-item[data-disabled] { opacity: 0.5; cursor: not-allowed; }
 .kebab-danger { color: var(--warn); }
 .kebab-danger[data-highlighted] { background: var(--warn-faint); }
+.kebab-danger[data-disabled] { color: var(--warn); background: none; }
 @media (prefers-reduced-motion: no-preference) {
   .kebab-menu[data-state="open"] { animation: kebab-in 0.14s cubic-bezier(0.22, 1, 0.36, 1); transform-origin: var(--radix-dropdown-menu-content-transform-origin); }
 }

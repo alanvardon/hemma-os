@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ChevronRight, Pencil, Settings2, X } from 'lucide-react'
+import { ChevronRight, EllipsisVertical, Pencil, Settings2, X } from 'lucide-react'
+import { DropdownMenu } from 'radix-ui'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   defaultSettings, otherPerson, parseCsv, autoMapColumns,
@@ -344,7 +345,18 @@ export default function Manadsavslut() {
               <Segmented value={currentFilter} onChange={setCurrentFilter} ariaLabel="Filter items"
                 options={[{ v: 'open' as const, label: 'Open' }, { v: 'pending' as const, label: 'Ask later' }, { v: 'all' as const, label: 'All' }, { v: 'a' as const, label: aName }, { v: 'b' as const, label: bName }]} />
               <button type="button" className="btn btn-ghost" onClick={() => setItemDlg({ open: true, id: null })}>+ Add item</button>
-              <button type="button" className="btn btn-ghost btn-danger" onClick={clearOpen}>Delete all open</button>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger className="icon-btn" aria-label="More item actions" title="More actions">
+                  <Icon icon={EllipsisVertical} size={16} />
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content className="kebab-menu" align="end" sideOffset={6}>
+                    <DropdownMenu.Item className="kebab-item kebab-danger" disabled={!items.some(it => !it.paid)} onSelect={clearOpen}>
+                      Delete all open
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
             </div>
           </div>
           <motion.div key={currentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}

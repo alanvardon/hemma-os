@@ -1,9 +1,8 @@
 # Plan 61 — Button hierarchy: demote destructive, disable impossible
 
-**Status:** plan · **Owner model:** Sonnet-suitable (pattern is prescribed
+**Status:** shipped (PR #260) · **Owner model:** Sonnet-suitable (pattern is prescribed
 below; per-site sweep like plan 44) · **Source:** design review 2026-07-07 ·
-**Touches:** `Bolanekoll.tsx`, `Manadsavslut.tsx`, `components.css` +
-per-tool css for the button variants.
+**Touches:** `Bolanekoll.tsx`, `Manadsavslut.tsx`, `dashboard.css`.
 
 ## Finding
 
