@@ -308,7 +308,7 @@
     width: 100%; background: none; border: none; cursor: pointer; padding: 0;
     text-align: left; font: inherit; color: inherit;
   }
-  .ld-tri { display: inline-block; color: var(--ink-soft); font-size: 10px; width: 0.85em; flex-shrink: 0; transition: color 0.15s; }
+  .ld-tri { display: inline-flex; color: var(--ink-soft); width: 12px; height: 12px; flex-shrink: 0; transition: color 0.15s; }
   .ld-disclose:hover .ld-tri { color: var(--accent); }
   .ld-count {
     font-size: 11px; font-weight: 600; color: var(--ink-soft); white-space: nowrap;
@@ -346,7 +346,7 @@
     background: none; border: none; cursor: pointer; padding: 4px 2px;
     font-size: 11.5px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--ink-soft);
   }
-  .avslutade-toggle .expand-btn { color: var(--ink-soft); font-size: 10px; margin: 0; }
+  .avslutade-toggle .expand-btn { display: inline-flex; color: var(--ink-soft); width: 12px; height: 12px; margin: 0; }
   .avslutade-toggle:hover, .avslutade-toggle:hover .expand-btn { color: var(--ink-mid); }
   .avslutade-table { margin-top: 0.4rem; }
   .avslutade-table tr.is-settled .ld-name { font-weight: 500; color: var(--ink-soft); }
@@ -447,12 +447,13 @@ dialog.bk-dialog {
 .bk-dialog .rate-acts { margin-left: auto; display: inline-flex; gap: 1px; flex-shrink: 0; }
 .bk-dialog .rate-empty { color: var(--ink-soft); font-size: 13px; font-style: italic; }
 .bk-dialog .icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
   background: none; border: 1px solid transparent; cursor: pointer;
-  color: var(--ink-soft); font-size: 13px; line-height: 1;
-  padding: 4px 7px; border-radius: 6px; margin-left: 2px;
+  color: var(--ink-soft); line-height: 1;
+  width: 28px; height: 28px; padding: 0; border-radius: 6px; margin-left: 2px;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.bk-dialog .icon-btn:hover { background: var(--paper-warm); color: var(--ink); border-color: var(--rule); }
+.bk-dialog .icon-btn:hover { background: var(--accent-faint); color: var(--ink); border-color: var(--rule); }
 .bk-dialog .link-btn {
   background: none; border: none; padding: 0; cursor: pointer;
   color: var(--accent); font: inherit; font-weight: 550; text-decoration: underline; text-underline-offset: 2px;

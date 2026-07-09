@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { Pencil, X } from 'lucide-react'
 import DialogShell from '../../components/DialogShell'
 import FormField from '../../components/FormField'
+import Icon from '../../components/Icon'
 import { makeLoanPart, parseAmount, todayISO, derivedRate } from '../../lib/mortgage'
 import type { LoanPart, RatePeriod, Payment } from '../../lib/mortgage'
 import { fmtPct } from './shared'
@@ -55,8 +57,8 @@ export default function PartDialog({ open, id, parts, periods, payments, onSave,
                         <span className="rate-pct">{r.rate != null ? fmtPct(r.rate) : '—'}</span>
                         <span className={'rate-type' + (bunden ? ' is-bunden' : '')}>{bunden ? 'Bunden' : 'Rörlig'}</span>
                         <span className="rate-acts">
-                          <button type="button" className="icon-btn" title="Edit" onClick={() => setPeriodDlg({ open: true, id: r.id })}>✎</button>
-                          <button type="button" className="icon-btn" title="Delete" onClick={() => { if (confirm('Delete this rate period?')) onDeletePeriod(r.id) }}>✕</button>
+                          <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPeriodDlg({ open: true, id: r.id })}><Icon icon={Pencil} /></button>
+                          <button type="button" className="icon-btn" title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this rate period?')) onDeletePeriod(r.id) }}><Icon icon={X} /></button>
                         </span>
                       </li>
                     )

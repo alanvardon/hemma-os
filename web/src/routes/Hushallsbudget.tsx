@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Maximize2 } from 'lucide-react'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   defaultState, computeBudget, buildSubmission, formatWithSpaces, parseFormatted, money as fmt,
@@ -10,6 +11,7 @@ import { Money, Percent } from '../components/AnimatedNumber'
 import BudgetDonutChart, { type DonutSegment } from '../components/charts/BudgetDonutChart'
 import DialogShell from '../components/DialogShell'
 import EditableName from '../components/EditableName'
+import Icon from '../components/Icon'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { useSaveFlash } from '../components/useSaveFlash'
@@ -908,7 +910,7 @@ export default function Hushallsbudget() {
           <div className="sum-card">
             <div className="sum-card-title chart-head">
               Where the pot goes
-              <button type="button" className="chart-expand-btn" title="View full screen" aria-label="View chart full screen" onClick={() => setChartOpen(true)}>⤢</button>
+              <button type="button" className="chart-expand-btn" title="View full screen" aria-label="View chart full screen" onClick={() => setChartOpen(true)}><Icon icon={Maximize2} size={15} /></button>
             </div>
             <div className="chart-wrap">
               <BudgetDonutChart segments={donutSegments} formatMoney={fmt} centerLabel="In the pot" centerValue={r.totalIncome} />

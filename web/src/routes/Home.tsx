@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { Moon, Sun } from 'lucide-react'
 import HeroCanvas from '../components/HeroCanvas'
+import Icon from '../components/Icon'
 import FlipClock from '../components/FlipClock'
 import HouseholdMenu from '../components/HouseholdMenu'
 import HubSparkline from '../components/HubSparkline'
@@ -423,7 +425,7 @@ export default function Home() {
           aria-label="Toggle dark mode"
           onClick={toggleTheme}
         >
-          {theme === 'dark' ? '☾' : '☀'}
+          <Icon icon={theme === 'dark' ? Moon : Sun} size={18} />
         </button>
       </div>
     </header>

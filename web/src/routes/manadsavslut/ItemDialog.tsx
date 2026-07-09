@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { Pencil } from 'lucide-react'
 import DialogShell from '../../components/DialogShell'
 import FormField from '../../components/FormField'
+import Icon from '../../components/Icon'
 import Segmented from '../../components/Segmented'
 import { usePersonNames } from '../../components/usePersonNames'
 import { parseAmount, otherPerson, personalSums, computeOwed, makeItem } from '../../lib/manadsavslut'
@@ -74,7 +76,7 @@ export default function ItemDialog({ open, id, items, settings, defaultClass, on
                 {hasOffset ? (
                   <button type="button" className="personal-chip" onClick={() => setOffsetDlg(true)}>
                     <span>Personal: {sums.a > 0 && (aName + ' ' + fmtMoney(sums.a))}{sums.a > 0 && sums.b > 0 ? ' · ' : ''}{sums.b > 0 && (bName + ' ' + fmtMoney(sums.b))} · {personalItems.length} item{personalItems.length === 1 ? '' : 's'}</span>
-                    <span className="personal-edit" aria-hidden>✎</span>
+                    <Icon icon={Pencil} size={13} className="personal-edit" />
                   </button>
                 ) : (
                   <button type="button" className="link-btn personal-add" onClick={() => setOffsetDlg(true)}>+ Add personal items (not shared)</button>
