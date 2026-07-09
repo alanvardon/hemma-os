@@ -1,8 +1,10 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { ChevronRight, Copy, Flag, Pencil, Settings2, X } from 'lucide-react'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import Collapse from '../components/Collapse'
 import FileDropzone from '../components/FileDropzone'
+import Icon from '../components/Icon'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import Segmented from '../components/Segmented'
@@ -158,8 +160,8 @@ export default function Bolanekoll() {
     )
   const partActs = (p: LoanPart) => (
     <>
-      <button type="button" className="icon-btn" title="Edit" onClick={() => setPartDlg({ open: true, id: p.id })}>✎</button>
-      <button type="button" className="icon-btn" data-del-part title="Delete" onClick={() => { if (confirm('Delete this loan part and all its payments? This can’t be undone.')) handleDeletePart(p.id) }}>✕</button>
+      <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPartDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button>
+      <button type="button" className="icon-btn" data-del-part title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this loan part and all its payments? This can’t be undone.')) handleDeletePart(p.id) }}><Icon icon={X} /></button>
     </>
   )
 
@@ -452,7 +454,7 @@ export default function Bolanekoll() {
         tagline="Track your mortgage — how much of the home you own vs the bank"
         saveVisible={saved}
         actions={<>
-          <button className="btn btn-ghost theme-toggle-btn" onClick={() => setSettingsDlg(true)} title="Settings" aria-label="Settings">⚙</button>
+          <button className="btn btn-ghost theme-toggle-btn" onClick={() => setSettingsDlg(true)} title="Settings" aria-label="Settings"><Icon icon={Settings2} size={18} /></button>
           <ThemeToggle />
         </>}
       />
@@ -723,7 +725,7 @@ export default function Bolanekoll() {
                                 className="ld-tri"
                                 animate={{ rotate: isExp ? 90 : 0 }}
                                 transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                              >▸</motion.span>
+                              ><Icon icon={ChevronRight} size={12} /></motion.span>
                               {g.is_catchall
                                 ? <span className="ld-needs">No reprice date set</span>
                                 : <>{repriceMeta(g)}{rateBadge(g.rate, g.rate_type, g.rate_type == null)}</>}
@@ -768,7 +770,7 @@ export default function Bolanekoll() {
                       className="expand-btn"
                       animate={{ rotate: avslutadeOpen ? 90 : 0 }}
                       transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                    >▸</motion.span> Avslutade <span className="count-pill">{archivedParts.length}</span>
+                    ><Icon icon={ChevronRight} size={12} /></motion.span> Avslutade <span className="count-pill">{archivedParts.length}</span>
                   </button>
                   <Collapse open={avslutadeOpen}>
                     <table className="data-table avslutade-table">
@@ -825,8 +827,8 @@ export default function Bolanekoll() {
                         <td className="num">{fmtMoney(v.value)}</td>
                         <td>{v.note || ''}{v.is_purchase && <span className="row-flag row-flag-kop">köpeskilling</span>}</td>
                         <td className="col-act">
-                          <button type="button" className="icon-btn" title="Edit" onClick={() => setValDlg({ open: true, id: v.id })}>✎</button>
-                          <button type="button" className="icon-btn" data-del-val title="Delete" onClick={() => { if (confirm('Delete this valuation?')) handleDeleteVal(v.id) }}>✕</button>
+                          <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setValDlg({ open: true, id: v.id })}><Icon icon={Pencil} /></button>
+                          <button type="button" className="icon-btn" data-del-val title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this valuation?')) handleDeleteVal(v.id) }}><Icon icon={X} /></button>
                         </td>
                       </tr>
                     ))}
@@ -873,7 +875,7 @@ export default function Bolanekoll() {
                                 onClick={() => toggleExpandPay(p.id)}
                                 animate={{ rotate: isExp ? 90 : 0 }}
                                 transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
-                              >▸</motion.button>
+                              ><Icon icon={ChevronRight} size={12} /></motion.button>
                             )}
                             {p.date || '—'}
                           </td>
@@ -882,12 +884,12 @@ export default function Bolanekoll() {
                           <td className="num">{fmtMoney(p.amount)}</td>
                           <td className="num">{p.balance_after != null ? fmtMoney(p.balance_after) : '—'}</td>
                           <td className="col-act">
-                            <button type="button" className={'icon-btn' + (p.is_insats ? ' is-on' : '')} title={settings.track_contributions ? (p.is_insats ? 'Edit insats split' : 'Flag as insats & split') : (p.is_insats ? 'Unflag insats' : 'Flag as insats')} onClick={() => handleStarClick(p)}>{p.is_insats ? '★' : '☆'}</button>
-                            <button type="button" className="icon-btn" title="Edit" onClick={() => setPayDlg({ open: true, id: p.id })}>✎</button>
+                            <button type="button" className={'icon-btn' + (p.is_insats ? ' is-on' : '')} title={settings.track_contributions ? (p.is_insats ? 'Edit insats split' : 'Flag as insats & split') : (p.is_insats ? 'Unflag insats' : 'Flag as insats')} aria-label={p.is_insats ? 'Unflag insats' : 'Flag as insats'} onClick={() => handleStarClick(p)}><Flag size={16} strokeWidth={1.75} fill={p.is_insats ? 'currentColor' : 'none'} aria-hidden /></button>
+                            <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button>
                             {parts.length > 1 && (
-                              <button type="button" className="icon-btn" title="Copy to parts" onClick={() => setCopyDlg({ open: true, source: p })}>⧉</button>
+                              <button type="button" className="icon-btn" title="Copy to parts" aria-label="Copy to parts" onClick={() => setCopyDlg({ open: true, source: p })}><Icon icon={Copy} /></button>
                             )}
-                            <button type="button" className="icon-btn" data-del-pay title="Delete" onClick={() => { if (confirm('Delete this payment?')) handleDeletePay(p.id) }}>✕</button>
+                            <button type="button" className="icon-btn" data-del-pay title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this payment?')) handleDeletePay(p.id) }}><Icon icon={X} /></button>
                           </td>
                         </tr>
                         <AnimatePresence initial={false}>
@@ -975,8 +977,8 @@ export default function Bolanekoll() {
                         <td className="num">{fmtMoney(c.amount)}</td>
                         <td>{c.note || ''}</td>
                         <td className="col-act">
-                          <button type="button" className="icon-btn" title="Edit" onClick={() => setContDlg({ open: true, id: c.id })}>✎</button>
-                          <button type="button" className="icon-btn" title="Delete" onClick={() => { if (confirm('Delete this contribution?')) handleDeleteCont(c.id) }}>✕</button>
+                          <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setContDlg({ open: true, id: c.id })}><Icon icon={Pencil} /></button>
+                          <button type="button" className="icon-btn" title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this contribution?')) handleDeleteCont(c.id) }}><Icon icon={X} /></button>
                         </td>
                       </tr>
                     ))}

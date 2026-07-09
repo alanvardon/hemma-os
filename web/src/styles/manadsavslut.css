@@ -133,7 +133,7 @@
   .hl-type { color: var(--ink-soft); font-size: 11px; white-space: nowrap; align-self: center; padding: 1px 5px; background: var(--rule); border-radius: 3px; }
   .hl-personal { color: var(--accent); font-size: 12px; white-space: nowrap; }
   /* expandable item: per-person overview on the row, entries revealed on click */
-  .hl-expand { display: inline-block; color: var(--ink-soft); font-size: 10px; margin-left: 0.1rem; }
+  .hl-expand { display: inline-flex; color: var(--ink-soft); width: 12px; height: 12px; margin-left: 0.1rem; }
   .hl-sub { list-style: none; margin: 0.3rem 0 0.2rem; padding: 0 0 0 1.2rem; display: flex; flex-direction: column; gap: 0.2rem; }
   .hl-sub li { display: flex; gap: 0.6rem; align-items: baseline; font-size: 12.5px; color: var(--ink-mid); }
   .history-note { font-size: 12.5px; color: var(--ink-soft); font-style: italic; padding: 0 1rem 0.4rem; }
@@ -245,7 +245,7 @@ dialog.ma-dialog {
   border-radius: 999px; padding: 4px 12px; cursor: pointer;
 }
 .personal-chip:hover { border-color: var(--accent); }
-.personal-chip .personal-edit { color: var(--ink-soft); font-size: 11px; }
+.personal-chip .personal-edit { display: inline-flex; color: var(--ink-soft); width: 13px; height: 13px; }
 .ma-dialog .settle-line { font-size: 15px; color: var(--ink-mid); margin-bottom: 1.1rem; }
 .ma-dialog .settle-pending-note { font-size: 13px; color: var(--copper); margin: -0.7rem 0 1.1rem; }
 .ma-dialog .settings-data-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }

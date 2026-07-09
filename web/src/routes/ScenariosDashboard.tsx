@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion, useReducedMotion, type Variants } from 'motion/react'
+import { Moon, Settings2, Sun } from 'lucide-react'
 import { useStore, type DeletedInfo } from '../store/useStore'
 import { useTheme } from '../App'
+import Icon from '../components/Icon'
 import { derive } from '../lib/calc'
 import { filterScenarios, sortScenarios, SORT_OPTIONS, type SortKey } from '../lib/scenarioList'
 import ScenarioCard from '../components/ScenarioCard'
@@ -126,7 +128,7 @@ export default function ScenariosDashboard() {
               aria-label="Default calculation settings"
               onClick={() => setSettingsOpen(true)}
             >
-              ⚙
+              <Icon icon={Settings2} size={18} />
             </button>
             <button
               className="btn btn-ghost theme-toggle-btn"
@@ -134,7 +136,7 @@ export default function ScenariosDashboard() {
               aria-label="Toggle dark mode"
               onClick={toggleTheme}
             >
-              {theme === 'dark' ? '☾' : '☀'}
+              <Icon icon={theme === 'dark' ? Moon : Sun} size={18} />
             </button>
             <button className="btn btn-primary" onClick={() => navigate('/bostadskalkyl/new')}>
               + New scenario

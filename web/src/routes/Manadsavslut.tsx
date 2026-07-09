@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { ChevronRight, Pencil, Settings2, X } from 'lucide-react'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   defaultSettings, otherPerson, parseCsv, autoMapColumns,
@@ -14,6 +15,7 @@ import Segmented from '../components/Segmented'
 import Collapse from '../components/Collapse'
 import FileDropzone from '../components/FileDropzone'
 import GroceryTrendChart from '../components/charts/GroceryTrendChart'
+import Icon from '../components/Icon'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { usePersonNames } from '../components/usePersonNames'
@@ -236,7 +238,7 @@ export default function Manadsavslut() {
         tagline="Reconcile shared spending and settle up — the month-end close"
         saveVisible={saved}
         actions={<>
-          <button className="btn btn-ghost theme-toggle-btn" onClick={() => setSettingsDlg(true)} title="Settings" aria-label="Settings">⚙</button>
+          <button className="btn btn-ghost theme-toggle-btn" onClick={() => setSettingsDlg(true)} title="Settings" aria-label="Settings"><Icon icon={Settings2} size={18} /></button>
           <ThemeToggle />
         </>}
       />
@@ -377,8 +379,8 @@ export default function Manadsavslut() {
                           {it.paid
                             ? <span className="row-lock" title="Settled — reopen its settlement to edit">🔒</span>
                             : <>
-                                <button type="button" className="icon-btn" title="Edit" onClick={() => setItemDlg({ open: true, id: it.id })}>✎</button>
-                                <button type="button" className="icon-btn" data-del title="Delete" onClick={() => deleteItem(it.id)}>✕</button>
+                                <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setItemDlg({ open: true, id: it.id })}><Icon icon={Pencil} /></button>
+                                <button type="button" className="icon-btn" data-del title="Delete" aria-label="Delete" onClick={() => deleteItem(it.id)}><Icon icon={X} /></button>
                               </>}
                         </td>
                       </tr>
@@ -496,7 +498,7 @@ export default function Manadsavslut() {
                               aria-hidden
                               animate={{ rotate: isCarveOpen ? 90 : 0 }}
                               transition={{ duration: reduceMotion ? 0 : 0.15 }}
-                            >▸</motion.span>
+                            ><Icon icon={ChevronRight} size={12} /></motion.span>
                           </button>
                           <Collapse open={isCarveOpen}>
                             <ul className="hl-sub">

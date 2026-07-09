@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { X } from 'lucide-react'
 import DialogShell from '../../components/DialogShell'
 import FormField from '../../components/FormField'
+import Icon from '../../components/Icon'
 import { usePersonNames } from '../../components/usePersonNames'
 import { parseAmount, otherPerson, personalSums, computeOwed } from '../../lib/manadsavslut'
 import type { PersonalEntry, Person } from '../../lib/manadsavslut'
@@ -62,7 +64,7 @@ export default function PersonalOffsetDialog({ open, enterAmount, frontedBy, aNa
                 <span className="pe-person">{nameOf(e.person)}</span>
                 <span className="pe-amount num">{fmtMoney(e.amount)}</span>
                 <span className="pe-note">{e.note}</span>
-                <button type="button" className="icon-btn" title="Remove" aria-label="Remove" onClick={() => setEntries(es => es.filter((_, j) => j !== i))}>✕</button>
+                <button type="button" className="icon-btn" title="Remove" aria-label="Remove" onClick={() => setEntries(es => es.filter((_, j) => j !== i))}><Icon icon={X} /></button>
               </li>
             ))}
           </ul>

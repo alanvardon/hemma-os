@@ -1,4 +1,6 @@
+import { Moon, Sun } from 'lucide-react'
 import { useTheme } from '../App'
+import Icon from './Icon'
 
 // The dark/light toggle button in every tool-page header. Self-contained: reads
 // the theme context itself, so headers just drop in <ThemeToggle />.
@@ -11,7 +13,7 @@ export default function ThemeToggle() {
       aria-label="Toggle dark mode"
       onClick={toggleTheme}
     >
-      {theme === 'dark' ? '☾' : '☀'}
+      <Icon icon={theme === 'dark' ? Moon : Sun} size={18} />
     </button>
   )
 }

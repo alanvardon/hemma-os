@@ -34,7 +34,9 @@
   color: var(--ink-soft);
 }
 .chart-card-expand {
-  font-size: 14px;
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
   color: var(--ink-soft);
   opacity: 0.6;
   transition: opacity 0.2s, color 0.2s;

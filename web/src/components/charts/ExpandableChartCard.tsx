@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { Maximize2 } from 'lucide-react'
+import Icon from '../Icon'
 
 // A compact chart preview that morphs into a fullscreen panel via Motion's
 // shared-layout (`layoutId`) animation — the card and the open panel carry the
@@ -76,8 +78,8 @@ export default function ExpandableChartCard({ title, subtitle, preview, children
       >
         <div className="chart-card-head">
           <span className="chart-card-title">{title}</span>
-          <span className="chart-card-expand" aria-hidden>
-            ⤢
+          <span className="chart-card-expand">
+            <Icon icon={Maximize2} size={15} />
           </span>
         </div>
         {subtitle && <div className="chart-card-sub">{subtitle}</div>}

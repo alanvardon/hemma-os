@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Moon, Settings2, Sun } from 'lucide-react'
 import { derive } from '../lib/calc'
 import { useStore } from '../store/useStore'
 import { useTheme } from '../App'
+import Icon from '../components/Icon'
 import InputsColumn from '../components/InputsColumn'
 import SummaryColumn from '../components/SummaryColumn'
 import SavePrompt from '../components/SavePrompt'
@@ -104,7 +106,7 @@ export default function Bostadskalkyl() {
             aria-label="Calculation settings"
             onClick={() => setSettingsOpen(true)}
           >
-            ⚙
+            <Icon icon={Settings2} size={18} />
           </button>
           <button
             className="btn btn-ghost theme-toggle-btn"
@@ -112,7 +114,7 @@ export default function Bostadskalkyl() {
             aria-label="Toggle dark mode"
             onClick={toggleTheme}
           >
-            {theme === 'dark' ? '☾' : '☀'}
+            <Icon icon={theme === 'dark' ? Moon : Sun} size={18} />
           </button>
           {isBound ? (
             <button
