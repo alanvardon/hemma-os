@@ -86,9 +86,7 @@ html.calc-layout, html.calc-layout body { height: 100%; overflow: hidden; }
 
 body {
   font-family: var(--font-ui);
-  background:
-    radial-gradient(1100px 500px at 85% -10%, var(--accent-faint), transparent 60%),
-    var(--paper);
+  background: var(--paper);
   color: var(--ink);
   font-size: 15px;
   line-height: 1.5;
@@ -97,6 +95,20 @@ body {
   display: flex;
   flex-direction: column;
   -webkit-font-smoothing: antialiased;
+}
+
+/* The accent wash used to live in body's own (page-length) background, so on
+   tall tool pages the fixed-px radial ended mid-scroll and stepped abruptly
+   back to flat --paper — a visible horizontal seam (plan 59). Painting it on
+   a viewport-fixed pseudo-element instead means it never has a page-relative
+   end to be seen crossing. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(1100px 500px at 85% -10%, var(--accent-faint), transparent 60%);
+  pointer-events: none;
 }
 
 #root {
