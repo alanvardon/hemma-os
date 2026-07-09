@@ -91,6 +91,9 @@ export default function ScenariosDashboard() {
   const draftFigures = draftInputs ? derive(draftInputs, draftConstants ?? globalConstants) : null
   const noMatches = scenarios.length > 0 && visible.length === 0
   const isEmpty = scenarios.length === 0 && !draftFigures
+  // Searching/sorting a handful of scenarios is furniture — only surface the
+  // toolbar once the list is long enough to warrant it (plan 62).
+  const showToolbar = scenarios.length >= 3
 
   const bkActive = useToolPageActive('/bostadskalkyl')
 
@@ -138,13 +141,16 @@ export default function ScenariosDashboard() {
             >
               <Icon icon={theme === 'dark' ? Moon : Sun} size={18} />
             </button>
-            <button className="btn btn-primary" onClick={() => navigate('/bostadskalkyl/new')}>
-              + New scenario
-            </button>
+            {!isEmpty && (
+              <button className="btn btn-primary" onClick={() => navigate('/bostadskalkyl/new')}>
+                + New scenario
+              </button>
+            )}
           </div>
         </header>
 
         <div className="dashboard">
+          {showToolbar && (
           <div className="dashboard-toolbar">
             <input
               className="dashboard-search"
@@ -170,7 +176,17 @@ export default function ScenariosDashboard() {
                 : `${visible.length} ${visible.length === 1 ? 'scenario' : 'scenarios'}`}
             </span>
           </div>
+          )}
 
+          {isEmpty ? (
+            <div className="empty-hero dashboard-empty">
+              <h2 className="empty-hero-title">Model your first home purchase</h2>
+              <p className="empty-hero-text">A scenario captures a property’s price, your mortgage and interest, the running costs and the cash you put in — then shows the true monthly cost and what it takes to break even. Save as many as you like to compare side by side.</p>
+              <div className="empty-hero-actions">
+                <button type="button" className="btn btn-primary" onClick={() => navigate('/bostadskalkyl/new')}>+ New scenario</button>
+              </div>
+            </div>
+          ) : (
           <motion.div className="dashboard-list" variants={container} initial="hidden" animate="show">
             <motion.button
               type="button"
@@ -224,8 +240,8 @@ export default function ScenariosDashboard() {
               })}
             </AnimatePresence>
           </motion.div>
+          )}
 
-          {isEmpty && <p className="dashboard-hint">No scenarios yet — start your first calculation.</p>}
           {noMatches && <p className="dashboard-hint">No scenarios match “{query.trim()}”.</p>}
         </div>
       </div>

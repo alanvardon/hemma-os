@@ -39,6 +39,9 @@
     cursor: pointer;
   }
   .dropzone.is-drag { border-color: var(--accent); background: var(--accent-faint); }
+  /* First-run secondary path under the import hero (plan 62). */
+  .import-secondary { display: flex; align-items: center; justify-content: center; gap: 0.7rem; margin-top: 1rem; }
+  .import-or { font-size: 13px; color: var(--ink-soft); }
   .dropzone-icon { width: 44px; height: 44px; margin: 0 auto 0.8rem; color: var(--accent); display: flex; align-items: center; justify-content: center; }
   .dropzone-icon svg { width: 100%; height: 100%; }
   .dropzone-lead { font-size: 15px; color: var(--ink-mid); }

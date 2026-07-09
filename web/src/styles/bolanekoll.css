@@ -37,6 +37,10 @@
   /* Market equity is the secondary card beneath the primary cost-basis hero */
   .market-card .dash-headline { color: var(--ink); font-size: 2.2rem; }
   .market-card .split-row { margin-bottom: 0; }
+  /* One part but no valuation: an inline "+ Add value" invitation instead of
+     an em-dash headline (see plan 62). */
+  .market-empty { display: flex; align-items: center; gap: 0.9rem 1.1rem; flex-wrap: wrap; }
+  .market-empty .dash-sub { margin: 0; max-width: 28rem; }
   .metric-row {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(146px, 1fr));
     gap: 0.7rem;
