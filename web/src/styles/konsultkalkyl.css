@@ -22,9 +22,17 @@
 }
 
 .ledger-col {
-  padding: 2rem 2.25rem 3rem;
+  padding: 0 2.25rem 3rem;
   overflow-y: auto;
   height: 100%;
+}
+
+/* No top padding on the scroll container itself — a sticky child's `top: 0`
+   resolves against its padding edge, and any padding there leaves a gap the
+   header can't cover, letting scrolled rows show through above it. Push the
+   spacing onto the first child instead. */
+.ledger-col > .hero-card {
+  margin-top: 2rem;
 }
 
 /* ── Section note ────────────────────────────────────────────── */
@@ -304,7 +312,8 @@
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 1080px) {
   .konsult-layout { grid-template-columns: 320px 1fr; }
-  .ledger-col { padding: 1.5rem 1.5rem 3rem; }
+  .ledger-col { padding: 0 1.5rem 3rem; }
+  .ledger-col > .hero-card { margin-top: 1.5rem; }
 }
 @media (max-width: 900px) {
   .konsult-layout {
