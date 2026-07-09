@@ -440,13 +440,17 @@ export default function Manadsavslut() {
               )}
               <h3 className="insight-h">Spending by category</h3>
               <div className="bars">
-                {cats.map(c => {
+                {cats.map((c, i) => {
                   const max = cats.length ? cats[0].total : 0
                   const pct = max > 0 ? Math.max(2, Math.round(c.total / max * 100)) : 0
+                  // Colour by rank from the shared data-viz ramp — largest is the
+                  // strongest green, stepping down the staircase; never plain grey
+                  // for real data (plan 63). cats is already sorted largest-first.
+                  const barColor = 'var(--cat-' + (Math.min(i, 7) + 1) + ')'
                   return (
-                    <div key={c.key} className={'bar-row' + (c.key === 'groceries' ? ' is-groceries' : '')}>
+                    <div key={c.key} className="bar-row">
                       <span className="bar-label">{c.label}</span>
-                      <span className="bar-track"><span className="bar-fill" style={{ width: pct + '%' }} /></span>
+                      <span className="bar-track"><span className="bar-fill" style={{ width: pct + '%', background: barColor }} /></span>
                       <span className="bar-val num">{M(c.total)}</span>
                     </div>
                   )

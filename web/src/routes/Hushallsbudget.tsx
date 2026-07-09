@@ -46,7 +46,10 @@ function buildDonutSegments(result: BudgetResult, nameA: string, nameB: string):
   segs.push({ label: nameB + ' costs', value: result.costsB, token: '--copper' })
   segs.push({ label: 'Savings', value: result.totalSavings, token: '--warn-light' })
   segs.push({ label: 'Left over', value: Math.max(0, result.surplus), token: '--ink-faint' })
-  return segs.filter((s) => s.value > 0)
+  // Sort largest-first so the arc order and the legend table both read
+  // top-down by size — you can scan it (plan 63). pieSortValues is null in the
+  // chart, so the arc order follows this array 1:1.
+  return segs.filter((s) => s.value > 0).sort((a, b) => b.value - a.value)
 }
 
 function currentMonth(): string { return new Date().toISOString().slice(0, 7) } // YYYY-MM
@@ -456,7 +459,7 @@ function ChartOverlay({ open, onClose, segments, totalIncome }: {
           <button type="button" className="chart-expand-btn chart-overlay-close" title="Close" aria-label="Close full screen" onClick={onClose}>×</button>
         </div>
         <div className="chart-overlay-stage">
-          <BudgetDonutChart segments={segments} formatMoney={fmt} centerLabel="In the pot" centerValue={totalIncome} />
+          <BudgetDonutChart segments={segments} formatMoney={fmt} centerLabel="In the pot" centerValue={totalIncome} variant="full" />
         </div>
       </div>
     </div>
