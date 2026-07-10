@@ -508,24 +508,24 @@ export default function Bolanekoll() {
             )}
           </div>
           {/* The ownership split is ONE fact (contributionSplit) applied to two
-              bases below — market equity here, cost-basis further down. State
-              the percentages once, as a property of the household, so the same
-              "ALEX · 50 %" never appears twice under different labels (plan 86). */}
+              bases below — market equity here, cost-basis further down. Each
+              card carries "NAME · %" next to its figure (same pattern as the
+              Insatser cards); the head-note is the connective tying the two
+              rows to the one split (plan 86). */}
           {hasValuation && settings.track_contributions && (
             <>
               <div className="split-head">
                 <span className="split-head-label">Ägarandel · Ownership split</span>
-                <span className="split-head-val"><b>{nameOf('a')}</b> {fmtPct(cbSplit.a_pct)} · <b>{nameOf('b')}</b> {fmtPct(cbSplit.b_pct)}</span>
                 {hasPurchase && <span className="split-head-note">One split, applied to today’s equity here and to what’s been paid in below.</span>}
               </div>
               <div className="split-row">
                 <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
-                  <span className="split-name">{nameOf('a')}</span>
+                  <span className="split-name">{nameOf('a')} · {fmtPct(cbSplit.a_pct)}</span>
                   <span className="split-val">{M(eq * cbSplit.a_pct / 100, false, true)}</span>
                   <span className="split-sub">equity share</span>
                 </div>
                 <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
-                  <span className="split-name">{nameOf('b')}</span>
+                  <span className="split-name">{nameOf('b')} · {fmtPct(cbSplit.b_pct)}</span>
                   <span className="split-val">{M(eq * cbSplit.b_pct / 100, false, true)}</span>
                   <span className="split-sub">equity share</span>
                 </div>
@@ -547,12 +547,12 @@ export default function Bolanekoll() {
                 {settings.track_contributions && (
                   <div className="split-row">
                     <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
-                      <span className="split-name">{nameOf('a')}</span>
+                      <span className="split-name">{nameOf('a')} · {fmtPct(cbSplit.a_pct)}</span>
                       <span className="split-val">{M(cbSplit.a, false, true)}</span>
                       <span className="split-sub">paid in · insatt</span>
                     </div>
                     <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
-                      <span className="split-name">{nameOf('b')}</span>
+                      <span className="split-name">{nameOf('b')} · {fmtPct(cbSplit.b_pct)}</span>
                       <span className="split-val">{M(cbSplit.b, false, true)}</span>
                       <span className="split-sub">paid in · insatt</span>
                     </div>
