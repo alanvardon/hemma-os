@@ -475,54 +475,10 @@ export default function Bolanekoll() {
         </section>
         ) : (<>
 
-        {/* ── Dashboard ── */}
+        {/* ── Dashboard: one hero (market equity), cost-basis as a secondary row ── */}
         <section className="card dashboard-card">
           <div className="dash-main">
-            <p className="dash-label">Insatt kapital · Cost-basis equity</p>
-            <p className="dash-headline">{hasPurchase ? M(costBasisEq, false, true) : '—'}</p>
-            <p className="dash-sub">
-              {hasPurchase
-                ? <>{P(ownedPct, true)} of the köpeskilling funded — deposit plus amortised</>
-                : 'Flag your köpeskilling in Bostadens värde to see how much of the home you’ve actually paid for.'}
-            </p>
-          </div>
-          {hasPurchase && settings.track_contributions && (
-            <div className="split-row">
-              <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
-                <span className="split-name">{nameOf('a')} · {fmtPct(cbSplit.a_pct)}</span>
-                <span className="split-val">{M(cbSplit.a, false, true)}</span>
-                <span className="split-sub">funded</span>
-              </div>
-              <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
-                <span className="split-name">{nameOf('b')} · {fmtPct(cbSplit.b_pct)}</span>
-                <span className="split-val">{M(cbSplit.b, false, true)}</span>
-                <span className="split-sub">funded</span>
-              </div>
-            </div>
-          )}
-          <div className="metric-row">
-            <div className="metric-chip is-accent"><span className="metric-label">Remaining debt</span><span className="metric-val">{M(balance, false, true)}</span></div>
-            <div className="metric-chip"><span className="metric-label">Property value</span><span className="metric-val">{hasValuation ? M(value, false, true) : '—'}</span></div>
-            {hasPurchase && <div className="metric-chip"><span className="metric-label">Köpeskilling</span><span className="metric-val">{M(price, false, true)}</span></div>}
-            {hasPurchase && <div className="metric-chip"><span className="metric-label">Kontantinsats</span><span className="metric-val">{M(deposit, false, true)}</span></div>}
-            <div className="metric-chip"><span className="metric-label">Loan-to-value</span><span className="metric-val">{hasValuation ? P(ltv, true) : '—'}</span></div>
-            <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{M(amortized, false, true)}</span></div>
-            <div className="metric-chip"><span className="metric-label">Interest paid</span><span className="metric-val">{M(interest, false, true)}</span></div>
-            {settings.ranteavdrag && <div className="metric-chip"><span className="metric-label">Ränteavdrag (est.)</span><span className="metric-val">{M(deduction, false, true)}</span></div>}
-            {soon && <div className={'metric-chip' + (soon.days <= 90 ? ' is-warn' : '')}><span className="metric-label">Nästa villkorsändring</span><span className="metric-val">{soon.until}</span></div>}
-          </div>
-          {reconcile.length > 0 && (
-            <div className="reconcile-banner">
-              Start-balance check — your entered start balance doesn’t match where the imported ledger begins (a partial import, or a start balance to update — today’s balance still tracks the Saldo correctly):
-              <ul>{reconcile.map(r => <li key={r.loan_part_id}>{r.label || 'Loan part'}: start balance {fmtMoney(r.start_balance!)} vs the ledger’s earliest Saldo {fmtMoney(r.start_saldo!)} — off by {fmtMoney(Math.abs(r.drift!))}</li>)}</ul>
-            </div>
-          )}
-        </section>
-
-        {/* ── Market equity (secondary, beneath cost-basis) ── */}
-        <section className="card market-card">
-          <div className="dash-main">
-            <p className="dash-label">Marknadsvärde · Market equity</p>
+            <p className="dash-label">Marknadsvärde · How much of the home is yours</p>
             {hasValuation ? (
               <>
                 <p className="dash-headline">{M(eq, false, true)}</p>
@@ -530,7 +486,7 @@ export default function Bolanekoll() {
               </>
             ) : (
               <div className="market-empty">
-                <p className="dash-sub">Add what the home is worth today to see your market equity vs the bank.</p>
+                <p className="dash-sub">Add what the home is worth today to see how much of it is yours vs the bank.</p>
                 <button type="button" className="btn btn-primary" onClick={() => setValDlg({ open: true, id: null })}>+ Add value</button>
               </div>
             )}
@@ -547,6 +503,55 @@ export default function Bolanekoll() {
                 <span className="split-val">{M(eq * cbSplit.b_pct / 100, false, true)}</span>
                 <span className="split-sub">equity share</span>
               </div>
+            </div>
+          )}
+
+          {/* Cost-basis equity — what you've actually paid in. A secondary row
+              inside the same card (label + number + explainer), paired with the
+              market-equity headline above rather than competing with it. */}
+          <div className="costbasis-row">
+            {hasPurchase ? (
+              <>
+                <div className="cb-line">
+                  <span className="cb-label">Insatt kapital · Cost-basis equity</span>
+                  <span className="cb-val">{M(costBasisEq, false, true)}</span>
+                </div>
+                <p className="cb-sub">{P(ownedPct, true)} of the köpeskilling ({M(price, false, true)}) funded — kontantinsats {M(deposit, false, true)} plus amortised.</p>
+                {settings.track_contributions && (
+                  <div className="split-row">
+                    <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
+                      <span className="split-name">{nameOf('a')} · {fmtPct(cbSplit.a_pct)}</span>
+                      <span className="split-val">{M(cbSplit.a, false, true)}</span>
+                      <span className="split-sub">funded</span>
+                    </div>
+                    <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
+                      <span className="split-name">{nameOf('b')} · {fmtPct(cbSplit.b_pct)}</span>
+                      <span className="split-val">{M(cbSplit.b, false, true)}</span>
+                      <span className="split-sub">funded</span>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="cb-sub"><span className="cb-label">Insatt kapital · Cost-basis equity</span> — flag your köpeskilling in Bostadens värde to see how much of the home you’ve actually paid for.</p>
+            )}
+          </div>
+
+          <div className="metric-row">
+            <div className="metric-chip"><span className="metric-label">Remaining debt</span><span className="metric-val">{M(balance, false, true)}</span></div>
+            <div className="metric-chip"><span className="metric-label">Property value</span><span className="metric-val">{hasValuation ? M(value, false, true) : '—'}</span></div>
+            <div className="metric-chip"><span className="metric-label">Loan-to-value</span><span className="metric-val">{hasValuation ? P(ltv, true) : '—'}</span></div>
+            <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{M(amortized, false, true)}</span></div>
+          </div>
+          {soon && (
+            <p className={'dash-note' + (soon.days <= 90 ? ' is-warn' : '')}>
+              Nästa villkorsändring · next reprice <b>{soon.until}</b>
+            </p>
+          )}
+          {reconcile.length > 0 && (
+            <div className="reconcile-banner">
+              Start-balance check — your entered start balance doesn’t match where the imported ledger begins (a partial import, or a start balance to update — today’s balance still tracks the Saldo correctly):
+              <ul>{reconcile.map(r => <li key={r.loan_part_id}>{r.label || 'Loan part'}: start balance {fmtMoney(r.start_balance!)} vs the ledger’s earliest Saldo {fmtMoney(r.start_saldo!)} — off by {fmtMoney(Math.abs(r.drift!))}</li>)}</ul>
             </div>
           )}
         </section>
@@ -601,6 +606,8 @@ export default function Bolanekoll() {
                 {lastCost && <div className="metric-chip"><span className="metric-label">{settings.ranteavdrag ? 'Latest mo · net' : 'Latest mo'}</span><span className="metric-val">{M(lastCost.net)}</span></div>}
                 {blended > 0 && <div className="metric-chip is-accent"><span className="metric-label">Blended rate</span><span className="metric-val">{P(blended)}</span></div>}
                 {krav.has_value && <div className="metric-chip"><span className="metric-label">Amort.krav (est.)</span><span className="metric-val">{krav.exempt ? 'None · LTV ≤ 50 %' : krav.required_pct + ' % · ' + fmtMoney(krav.required_annual) + '/år'}</span></div>}
+                <div className="metric-chip"><span className="metric-label">Interest paid</span><span className="metric-val">{M(interest, false, true)}</span></div>
+                {settings.ranteavdrag && <div className="metric-chip"><span className="metric-label">Ränteavdrag (est.)</span><span className="metric-val">{M(deduction, false, true)}</span></div>}
               </div>
             </>
           )}
