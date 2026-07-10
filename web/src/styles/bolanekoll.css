@@ -34,9 +34,29 @@
     color: var(--accent); margin: 0.1rem 0; white-space: nowrap;
   }
   .dash-sub { font-size: 13.5px; color: var(--ink-soft); }
-  /* Market equity is the secondary card beneath the primary cost-basis hero */
-  .market-card .dash-headline { color: var(--ink); font-size: 2.2rem; }
-  .market-card .split-row { margin-bottom: 0; }
+  /* Cost-basis equity — a secondary row inside the hero card (what you've paid
+     in), deliberately quieter than the market-equity headline above it: sans
+     number at ~half the headline size so only one display-size figure leads. */
+  .costbasis-row {
+    margin-top: 1rem; padding-top: 1rem; margin-bottom: 1.2rem;
+    border-top: 1px solid var(--rule);
+  }
+  .cb-line { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
+  .cb-label {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--ink-soft);
+  }
+  .cb-val {
+    font-size: 1.4rem; font-weight: 600; color: var(--ink);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .cb-sub { font-size: 13px; color: var(--ink-soft); margin: 0.25rem 0 0; }
+  .costbasis-row .split-row { margin-top: 0.8rem; margin-bottom: 0; }
+  /* Portfolio-wide next reprice — an alert line, not a KPI chip. */
+  .dash-note { font-size: 13px; color: var(--ink-soft); margin-top: 0.85rem; }
+  .dash-note b { color: var(--ink); font-weight: 600; }
+  .dash-note.is-warn { color: var(--warn); }
+  .dash-note.is-warn b { color: var(--warn); }
   /* One part but no valuation: an inline "+ Add value" invitation instead of
      an em-dash headline (see plan 62). */
   .market-empty { display: flex; align-items: center; gap: 0.9rem 1.1rem; flex-wrap: wrap; }
@@ -45,7 +65,7 @@
     display: grid; grid-template-columns: repeat(auto-fit, minmax(146px, 1fr));
     gap: 0.7rem;
   }
-  /* Dashboard facts: a tidy 4-up grid (two rows of four for the full chip set) */
+  /* Dashboard facts: a tidy 4-up grid of demoted supporting chips. */
   .dashboard-card .metric-row { grid-template-columns: repeat(4, 1fr); }
   .metric-chip {
     border: 1px solid var(--rule); border-radius: var(--r-md);
@@ -483,7 +503,7 @@ dialog.bk-dialog {
   .bk-dialog .form-grid { grid-template-columns: 1fr; }
   .bk-root .card-actions { width: 100%; }
   .bk-root .dash-headline { font-size: 2.3rem; }
-  .bk-root .market-card .dash-headline { font-size: 1.9rem; }
+  .bk-root .cb-line { flex-direction: column; align-items: flex-start; gap: 0.15rem; }
   .bk-root .dashboard-card .metric-row { grid-template-columns: repeat(2, 1fr); }
   .bk-root .split-row { grid-template-columns: 1fr; }
   .bk-root .chart-wrap { height: 260px; }
