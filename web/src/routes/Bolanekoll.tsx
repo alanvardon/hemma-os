@@ -19,7 +19,7 @@ import {
   partBalance, totalBalance, totalAmortized, totalInterest, ranteavdrag,
   propertyValue, equity, loanToValue, otherOwner,
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit, insatsPayments,
-  effectiveRatePeriod, bindingStatus, groupLoanParts, weightedAvgRate, amorteringskravStatus,
+  effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   contributionSplit, settlement, todayISO,
@@ -130,16 +130,12 @@ export default function Bolanekoll() {
   const insatsPays = useMemo(() => insatsPayments(payments), [payments])
   const timeline = useMemo(() => equityTimeline(parts, payments, valuations, settings), [parts, payments, valuations, settings])
 
-  const soon = useMemo(() => {
-    let s: { days: number; until: string } | null = null
-    parts.forEach(p => {
-      const bs = bindingStatus(p, periods)
-      if (bs.bound && bs.days_left != null && (s == null || bs.days_left < s.days)) s = { days: bs.days_left, until: bs.until! }
-    })
-    return s as { days: number; until: string } | null
-  }, [parts, periods])
-
   const loanGroups = useMemo(() => groupLoanParts(parts, periods, payments, today), [parts, periods, payments, today])
+  // Next villkorsändring for the hero note: the soonest dated group. loanGroups
+  // is already ordered expired-first then by ascending end_date, so the first
+  // dated group IS the next (or most-overdue) reprice — and it carries what the
+  // bare date can't: how much of the loan moves, and off which rate.
+  const nextReprice = useMemo(() => loanGroups.find(g => !g.is_catchall && g.days_left != null) ?? null, [loanGroups])
   const archivedParts = useMemo(() => parts.filter(p => p.archived), [parts])
 
   useEffect(() => {
@@ -559,10 +555,16 @@ export default function Bolanekoll() {
             <div className="metric-chip"><span className="metric-label">Loan-to-value</span><span className="metric-val">{hasValuation ? P(ltv, true) : '—'}</span></div>
             <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{M(amortized, false, true)}</span></div>
           </div>
-          {soon && (
-            <p className={'dash-note' + (soon.days <= 90 ? ' is-warn' : '')}>
-              Nästa villkorsändring · next reprice <b>{soon.until}</b>
-            </p>
+          {nextReprice && (
+            <div className={'reprice-note' + (nextReprice.expired || nextReprice.days_left! <= 90 ? ' is-warn' : '')}>
+              <span className="reprice-count">{repriceLabel(nextReprice.days_left, nextReprice.expired)}</span>
+              <span className="reprice-text">
+                Nästa villkorsändring <span className="card-en">· next reprice</span> <b>{nextReprice.end_date}</b>
+                {' — '}{M(nextReprice.total_balance, false, true)}
+                {nextReprice.share_pct < 100 && <> ({P(nextReprice.share_pct, true)} of the loan)</>}
+                {nextReprice.rate != null && <> now at {fmtPct(nextReprice.rate)}{nextReprice.rate_type ? ' ' + nextReprice.rate_type : ''}</>}
+              </span>
+            </div>
           )}
           {reconcile.length > 0 && (
             <div className="reconcile-banner">

@@ -57,11 +57,22 @@
   }
   .cb-sub { font-size: 13px; color: var(--ink-soft); margin: 0.25rem 0 0; }
   .costbasis-row .split-row { margin-top: 0.8rem; margin-bottom: 0; }
-  /* Portfolio-wide next reprice — an alert line, not a KPI chip. */
-  .dash-note { font-size: 13px; color: var(--ink-soft); margin-top: 0.85rem; }
-  .dash-note b { color: var(--ink); font-weight: 600; }
-  .dash-note.is-warn { color: var(--warn); }
-  .dash-note.is-warn b { color: var(--warn); }
+  /* Portfolio-wide next reprice — a countdown pill (same vocabulary as the
+     Lånedelar ledger) + one sentence saying what moves. The pill carries the
+     urgency colour; the text stays calm so only the date and countdown pop. */
+  .reprice-note {
+    display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;
+    margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--rule);
+    font-size: 13px; color: var(--ink-soft);
+  }
+  .reprice-count {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
+    padding: 2px 9px; border-radius: 999px; flex-shrink: 0;
+    color: var(--accent); background: var(--accent-faint); border: 1px solid var(--accent-light);
+  }
+  .reprice-note.is-warn .reprice-count { color: var(--warn); background: var(--warn-faint); border-color: var(--warn-light); }
+  .reprice-note b { color: var(--ink); font-weight: 600; }
+  .reprice-note.is-warn b { color: var(--warn); }
   /* One part but no valuation: an inline "+ Add value" invitation instead of
      an em-dash headline (see plan 62). */
   .market-empty { display: flex; align-items: center; gap: 0.9rem 1.1rem; flex-wrap: wrap; }
