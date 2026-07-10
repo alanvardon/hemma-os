@@ -57,11 +57,45 @@
   }
   .cb-sub { font-size: 13px; color: var(--ink-soft); margin: 0.25rem 0 0; }
   .costbasis-row .split-row { margin-top: 0.8rem; margin-bottom: 0; }
-  /* Portfolio-wide next reprice — an alert line, not a KPI chip. */
-  .dash-note { font-size: 13px; color: var(--ink-soft); margin-top: 0.85rem; }
-  .dash-note b { color: var(--ink); font-weight: 600; }
-  .dash-note.is-warn { color: var(--warn); }
-  .dash-note.is-warn b { color: var(--warn); }
+  /* Portfolio-wide next reprice — a scannable heads-up chip: icon + term +
+     a relative countdown pill + the human date. Neutral by default; warms to
+     --warn inside 90 days, and reads as overdue (filled warn) once the date has
+     passed. Replaces the old raw-ISO alert sentence (.dash-note). */
+  .reprice-flag {
+    display: inline-flex; align-items: center; gap: 0.55rem;
+    margin-top: 1rem; padding: 0.45rem 0.8rem 0.45rem 0.65rem;
+    border: 1px solid var(--rule); border-radius: 999px;
+    background: var(--paper-warm); font-size: 13px; color: var(--ink-soft);
+    max-width: 100%; flex-wrap: wrap;
+  }
+  .reprice-icon { color: var(--ink-soft); flex-shrink: 0; }
+  .reprice-label { font-weight: 600; color: var(--ink); }
+  .reprice-when {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap;
+    color: var(--ink-soft); background: var(--paper-card);
+    border: 1px solid var(--rule); border-radius: 999px; padding: 1px 8px;
+  }
+  .reprice-date { font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+  /* Within 90 days — warn accents, still a light chip. */
+  .reprice-flag.is-soon {
+    background: var(--warn-faint); border-color: var(--warn-light);
+  }
+  .reprice-flag.is-soon .reprice-icon,
+  .reprice-flag.is-soon .reprice-label,
+  .reprice-flag.is-soon .reprice-date { color: var(--warn); }
+  .reprice-flag.is-soon .reprice-when {
+    color: var(--warn); background: transparent; border-color: var(--warn-light);
+  }
+  /* Overdue — the reprice date has passed; carry the strongest signal. */
+  .reprice-flag.is-overdue {
+    background: var(--warn); border-color: var(--warn);
+  }
+  .reprice-flag.is-overdue .reprice-icon,
+  .reprice-flag.is-overdue .reprice-label,
+  .reprice-flag.is-overdue .reprice-date { color: var(--paper); }
+  .reprice-flag.is-overdue .reprice-when {
+    color: var(--warn); background: var(--paper); border-color: transparent;
+  }
   /* One part but no valuation: an inline "+ Add value" invitation instead of
      an em-dash headline (see plan 62). */
   .market-empty { display: flex; align-items: center; gap: 0.9rem 1.1rem; flex-wrap: wrap; }

@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ChevronRight, Copy, EllipsisVertical, Flag, Pencil, Settings2, X } from 'lucide-react'
+import { CalendarClock, ChevronRight, Copy, EllipsisVertical, Flag, Pencil, Settings2, X } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import Collapse from '../components/Collapse'
@@ -34,6 +34,24 @@ import InsatsSplitDialog from './bolanekoll/InsatsSplitDialog'
 import ContribDialog from './bolanekoll/ContribDialog'
 import SettingsDialog from './bolanekoll/SettingsDialog'
 import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
+
+// ── Reprice heads-up helpers ─────────────────────────────────────────────────
+// A human countdown to the villkorsändringsdag — days close in, months further
+// out, and an overdue phrasing when the date has already passed (soon can carry
+// a negative days_left for a lapsed bound period).
+function repriceWhen(days: number): string {
+  if (days < 0) { const d = Math.abs(days); return d + (d === 1 ? ' dag sedan' : ' dagar sedan') }
+  if (days === 0) return 'idag'
+  if (days <= 60) return 'om ' + days + (days === 1 ? ' dag' : ' dagar')
+  return 'om ' + Math.round(days / 30.44) + ' mån'
+}
+// ISO 'YYYY-MM-DD' → '31 juli 2026', parsed component-wise so a local timezone
+// west of UTC can't roll the date back a day (as new Date(iso) would).
+function fmtRepriceDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  if (!m) return iso
+  return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('sv-SE', { day: 'numeric', month: 'long', year: 'numeric' })
+}
 
 // ── Main component ─────────────────────────────────────────────────────────
 
@@ -560,9 +578,12 @@ export default function Bolanekoll() {
             <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{M(amortized, false, true)}</span></div>
           </div>
           {soon && (
-            <p className={'dash-note' + (soon.days <= 90 ? ' is-warn' : '')}>
-              Nästa villkorsändring · next reprice <b>{soon.until}</b>
-            </p>
+            <div className={'reprice-flag' + (soon.days < 0 ? ' is-overdue' : soon.days <= 90 ? ' is-soon' : '')}>
+              <Icon icon={CalendarClock} size={15} className="reprice-icon" />
+              <span className="reprice-label">Nästa villkorsändring</span>
+              <span className="reprice-when">{repriceWhen(soon.days)}</span>
+              <span className="reprice-date">{fmtRepriceDate(soon.until)}</span>
+            </div>
           )}
           {reconcile.length > 0 && (
             <div className="reconcile-banner">
