@@ -57,45 +57,25 @@
   }
   .cb-sub { font-size: 13px; color: var(--ink-soft); margin: 0.25rem 0 0; }
   .costbasis-row .split-row { margin-top: 0.8rem; margin-bottom: 0; }
-  /* Portfolio-wide next reprice — a scannable heads-up chip: icon + term +
-     a relative countdown pill + the human date. Neutral by default; warms to
-     --warn inside 90 days, and reads as overdue (filled warn) once the date has
-     passed. Replaces the old raw-ISO alert sentence (.dash-note). */
-  .reprice-flag {
-    display: inline-flex; align-items: center; gap: 0.45rem;
-    margin-top: 0.85rem; padding: 0.28rem 0.7rem 0.28rem 0.55rem;
-    border: 1px solid var(--rule); border-radius: 999px;
-    background: var(--paper-warm); font-size: 12.5px; color: var(--ink-soft);
-    max-width: 100%; flex-wrap: wrap;
+  /* Portfolio-wide next reprice — one quiet sentence with a pulsing warn dot
+     (the footer-badge language), NOT a boxed component: it only renders inside
+     the final month before the villkorsändringsdag, so when it does appear it
+     should read as a whisper of urgency, not another chip competing with the
+     KPI grid above it. Countdown is the bold part; the date is context. */
+  .reprice-note {
+    /* Block, not flex: with flex the anonymous text runs around the <b> become
+       separate flex items and the gap opens holes mid-sentence. */
+    display: block; margin: 0.9rem 0 0; font-size: 13px; color: var(--ink-soft);
   }
-  .reprice-icon { color: var(--ink-soft); flex-shrink: 0; }
-  .reprice-label { font-weight: 600; color: var(--ink); }
-  .reprice-when {
-    font-size: 11px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap;
-    color: var(--ink-soft); background: var(--paper-card);
-    border: 1px solid var(--rule); border-radius: 999px; padding: 1px 8px;
+  .reprice-note b { color: var(--warn); font-weight: 600; }
+  .reprice-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-right: 0.5rem; vertical-align: 1px;
+    background: var(--warn);
+    animation: reprice-pulse 2.6s infinite;
   }
-  .reprice-date { font-variant-numeric: tabular-nums; color: var(--ink-soft); }
-  /* Within 90 days — warn accents, still a light chip. */
-  .reprice-flag.is-soon {
-    background: var(--warn-faint); border-color: var(--warn-light);
-  }
-  .reprice-flag.is-soon .reprice-icon,
-  .reprice-flag.is-soon .reprice-label,
-  .reprice-flag.is-soon .reprice-date { color: var(--warn); }
-  .reprice-flag.is-soon .reprice-when {
-    color: var(--warn); background: transparent; border-color: var(--warn-light);
-  }
-  /* Overdue — the reprice date has passed; carry the strongest signal. */
-  .reprice-flag.is-overdue {
-    background: var(--warn); border-color: var(--warn);
-  }
-  .reprice-flag.is-overdue .reprice-icon,
-  .reprice-flag.is-overdue .reprice-label,
-  .reprice-flag.is-overdue .reprice-date { color: var(--paper); }
-  .reprice-flag.is-overdue .reprice-when {
-    color: var(--warn); background: var(--paper); border-color: transparent;
-  }
+  /* Overdue — the whole sentence carries the warn, not just the countdown. */
+  .reprice-note.is-overdue { color: var(--warn); }
   /* One part but no valuation: an inline "+ Add value" invitation instead of
      an em-dash headline (see plan 62). */
   .market-empty { display: flex; align-items: center; gap: 0.9rem 1.1rem; flex-wrap: wrap; }
@@ -548,4 +528,19 @@ dialog.bk-dialog {
   .bk-root .chart-wrap { height: 260px; }
   .bk-root .bar-row { grid-template-columns: 84px 1fr auto; gap: 0.5rem; }
   .bk-root .bar-label { font-size: 12px; }
+}
+
+/* Reprice-note pulse — a soft warn ripple, kin to the homepage footer badge's
+   pulse-dot but warn-toned. Top-level: @keyframes can't live inside the
+   .bk-root nesting block. Reduced motion: a static halo instead of the ripple. */
+@keyframes reprice-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 40%, transparent); }
+  70%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bk-root .reprice-dot {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 20%, transparent);
+  }
 }

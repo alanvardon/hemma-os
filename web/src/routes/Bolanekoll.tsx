@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { CalendarClock, ChevronRight, Copy, EllipsisVertical, Flag, Pencil, Settings2, X } from 'lucide-react'
+import { ChevronRight, Copy, EllipsisVertical, Flag, Pencil, Settings2, X } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import Collapse from '../components/Collapse'
@@ -41,14 +41,13 @@ import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fm
 const REPRICE_HEADS_UP_DAYS = 31
 
 // ── Reprice heads-up helpers ─────────────────────────────────────────────────
-// A human countdown to the villkorsändringsdag — days close in, months further
-// out, and an overdue phrasing when the date has already passed (soon can carry
-// a negative days_left for a lapsed bound period).
+// A human countdown to the villkorsändringsdag — always day-granular (the note
+// only renders inside the final month), with an overdue phrasing when the date
+// has passed (soon can carry a negative days_left for a lapsed bound period).
 function repriceWhen(days: number): string {
-  if (days < 0) { const d = Math.abs(days); return d + (d === 1 ? ' dag sedan' : ' dagar sedan') }
+  if (days < 0) { const d = Math.abs(days); return 'för ' + d + (d === 1 ? ' dag' : ' dagar') + ' sedan' }
   if (days === 0) return 'idag'
-  if (days <= 60) return 'om ' + days + (days === 1 ? ' dag' : ' dagar')
-  return 'om ' + Math.round(days / 30.44) + ' mån'
+  return 'om ' + days + (days === 1 ? ' dag' : ' dagar')
 }
 // ISO 'YYYY-MM-DD' → '31 juli 2026', parsed component-wise so a local timezone
 // west of UTC can't roll the date back a day (as new Date(iso) would).
@@ -583,12 +582,12 @@ export default function Bolanekoll() {
             <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{M(amortized, false, true)}</span></div>
           </div>
           {soon && soon.days <= REPRICE_HEADS_UP_DAYS && (
-            <div className={'reprice-flag' + (soon.days < 0 ? ' is-overdue' : ' is-soon')}>
-              <Icon icon={CalendarClock} size={14} className="reprice-icon" />
-              <span className="reprice-label">Nästa villkorsändring</span>
-              <span className="reprice-when">{repriceWhen(soon.days)}</span>
-              <span className="reprice-date">{fmtRepriceDate(soon.until)}</span>
-            </div>
+            <p className={'reprice-note' + (soon.days < 0 ? ' is-overdue' : '')}>
+              <span className="reprice-dot" aria-hidden="true" />
+              {soon.days < 0
+                ? <>Villkorsändringen passerade <b>{repriceWhen(soon.days)}</b> · {fmtRepriceDate(soon.until)} — dags att uppdatera räntan</>
+                : <>Räntan ändras <b>{repriceWhen(soon.days)}</b> · {fmtRepriceDate(soon.until)}</>}
+            </p>
           )}
           {reconcile.length > 0 && (
             <div className="reconcile-banner">
