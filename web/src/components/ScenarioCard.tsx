@@ -39,10 +39,17 @@ function ltvTone(ltv: number): 'good' | 'warn' | 'bad' {
   return 'good'
 }
 
+const LTV_TITLE: Record<'good' | 'warn' | 'bad', string> = {
+  good: 'LTV ≤ 70% — 1% amorteringskrav',
+  warn: 'LTV 70–85% — 2% amorteringskrav',
+  bad: 'LTV > 85% — over bolånetakets 85%-gräns',
+}
+
 function Stat({
   label,
   k,
   tone,
+  title,
   lead,
   children,
 }: {
@@ -50,13 +57,15 @@ function Stat({
   /** Layout key → .row-stat-<k> min-width class so columns line up down the list. */
   k: string
   tone?: 'good' | 'warn' | 'bad'
+  /** Tooltip on the value — used for the LTV threshold legend. */
+  title?: string
   lead?: boolean
   children: ReactNode
 }) {
   return (
     <div className={'row-stat row-stat-' + k + (lead ? ' row-stat-lead' : '')}>
       <span className="row-stat-label">{label}</span>
-      <span className={'row-stat-val' + (tone ? ' tone-' + tone : '')}>{children}</span>
+      <span className={'row-stat-val' + (tone ? ' tone-' + tone : '')} title={title}>{children}</span>
     </div>
   )
 }
@@ -159,22 +168,27 @@ export default function ScenarioCard({
       </div>
 
       <div className="row-stats">
-        <Stat label="Price" k="price" lead>
-          <MoneyCompact value={inputs.newPrice || 0} rollIn={countUp && !reduce} />
-        </Stat>
-        <Stat label="Monthly" k="monthly" lead>
-          <Money value={monthlyVal} suffix=" / mån" />
-          <span className="row-stat-sub">eff. {fmt(figures.effectiveMonthly)}</span>
-        </Stat>
-        <Stat label="Cash" k="cash" tone={figures.cashBalance >= 0 ? 'good' : 'bad'}>
-          <MoneyCompact value={figures.cashBalance} signed rollIn={countUp && !reduce} />
-        </Stat>
-        <Stat label="LTV" k="ltv" tone={ltvTone(figures.ltv)}>
-          {Math.round(figures.ltv)}%
-        </Stat>
-        <Stat label="Req. lön" k="salary">
-          <MoneyCompact value={figures.reqSalaryMonthly} rollIn={countUp && !reduce} />{' / mån'}
-        </Stat>
+        <div className="row-stats-lead">
+          <Stat label="Pris" k="price" lead>
+            <MoneyCompact value={inputs.newPrice || 0} rollIn={countUp && !reduce} />
+          </Stat>
+          <Stat label="Månadskostnad" k="monthly" lead>
+            <Money value={monthlyVal} suffix=" / mån" />
+            <span className="row-stat-sub">eff. {fmt(figures.effectiveMonthly)}</span>
+          </Stat>
+        </div>
+        <div className="row-stats-detail">
+          <Stat label="Kontant" k="cash" tone={figures.cashBalance >= 0 ? 'good' : 'bad'}>
+            <MoneyCompact value={figures.cashBalance} signed rollIn={countUp && !reduce} />
+          </Stat>
+          <Stat label="LTV" k="ltv" tone={ltvTone(figures.ltv)} title={LTV_TITLE[ltvTone(figures.ltv)]}>
+            {Math.round(figures.ltv)}%
+          </Stat>
+          <Stat label="Lön krävs" k="salary">
+            <MoneyCompact value={figures.reqSalaryMonthly} rollIn={countUp && !reduce} />
+            <span className="row-stat-sub">/ mån</span>
+          </Stat>
+        </div>
       </div>
 
       {!draft && (
