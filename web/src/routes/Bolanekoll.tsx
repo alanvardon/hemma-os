@@ -347,7 +347,7 @@ export default function Bolanekoll() {
     try {
       await Store.updatePayment(p.id, { is_insats: !p.is_insats, ...(p.is_insats ? { paid_split: null } : {}) })
       await refresh(); flashSaved()
-      if (!p.is_insats) await maybeEnableContributions('Flagged as insats. Turn on contribution tracking to see per-owner insatser and the funded split?')
+      if (!p.is_insats) await maybeEnableContributions('Flagged as insats. Turn on contribution tracking to see per-owner insatser and the paid-in split?')
     } catch (err) { saveErr(err) }
   }
   // With contributions tracked, the ★ opens the split dialog instead of a plain toggle.
@@ -379,7 +379,7 @@ export default function Bolanekoll() {
     try {
       if (payDlg.id) await Store.updatePayment(payDlg.id, data); else await Store.addPayment(data)
       await refresh(); flashSaved(); setPayDlg({ open: false, id: null }); showToast('Payment saved.')
-      if (data.is_insats) await maybeEnableContributions('Saved as insats. Turn on contribution tracking to see per-owner insatser and the funded split?')
+      if (data.is_insats) await maybeEnableContributions('Saved as insats. Turn on contribution tracking to see per-owner insatser and the paid-in split?')
     } catch (err) { saveErr(err) }
   }
   async function handleDeletePay(id: string) {
@@ -507,19 +507,30 @@ export default function Bolanekoll() {
               </div>
             )}
           </div>
+          {/* The ownership split is ONE fact (contributionSplit) applied to two
+              bases below — market equity here, cost-basis further down. State
+              the percentages once, as a property of the household, so the same
+              "ALEX · 50 %" never appears twice under different labels (plan 86). */}
           {hasValuation && settings.track_contributions && (
-            <div className="split-row">
-              <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
-                <span className="split-name">{nameOf('a')} · {fmtPct(cbSplit.a_pct)}</span>
-                <span className="split-val">{M(eq * cbSplit.a_pct / 100, false, true)}</span>
-                <span className="split-sub">equity share</span>
+            <>
+              <div className="split-head">
+                <span className="split-head-label">Ägarandel · Ownership split</span>
+                <span className="split-head-val"><b>{nameOf('a')}</b> {fmtPct(cbSplit.a_pct)} · <b>{nameOf('b')}</b> {fmtPct(cbSplit.b_pct)}</span>
+                {hasPurchase && <span className="split-head-note">One split, applied to today’s equity here and to what’s been paid in below.</span>}
               </div>
-              <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
-                <span className="split-name">{nameOf('b')} · {fmtPct(cbSplit.b_pct)}</span>
-                <span className="split-val">{M(eq * cbSplit.b_pct / 100, false, true)}</span>
-                <span className="split-sub">equity share</span>
+              <div className="split-row">
+                <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
+                  <span className="split-name">{nameOf('a')}</span>
+                  <span className="split-val">{M(eq * cbSplit.a_pct / 100, false, true)}</span>
+                  <span className="split-sub">equity share</span>
+                </div>
+                <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
+                  <span className="split-name">{nameOf('b')}</span>
+                  <span className="split-val">{M(eq * cbSplit.b_pct / 100, false, true)}</span>
+                  <span className="split-sub">equity share</span>
+                </div>
               </div>
-            </div>
+            </>
           )}
 
           {/* Cost-basis equity — what you've actually paid in. A secondary row
@@ -532,18 +543,18 @@ export default function Bolanekoll() {
                   <span className="cb-label">Insatt kapital · Cost-basis equity</span>
                   <span className="cb-val">{M(costBasisEq, false, true)}</span>
                 </div>
-                <p className="cb-sub">{P(ownedPct, true)} of the köpeskilling ({M(price, false, true)}) funded — kontantinsats {M(deposit, false, true)} plus amortised.</p>
+                <p className="cb-sub">{P(ownedPct, true)} of the köpeskilling ({M(price, false, true)}) paid in — kontantinsats {M(deposit, false, true)} plus amortised.</p>
                 {settings.track_contributions && (
                   <div className="split-row">
                     <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
-                      <span className="split-name">{nameOf('a')} · {fmtPct(cbSplit.a_pct)}</span>
+                      <span className="split-name">{nameOf('a')}</span>
                       <span className="split-val">{M(cbSplit.a, false, true)}</span>
-                      <span className="split-sub">funded</span>
+                      <span className="split-sub">paid in · insatt</span>
                     </div>
                     <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
-                      <span className="split-name">{nameOf('b')} · {fmtPct(cbSplit.b_pct)}</span>
+                      <span className="split-name">{nameOf('b')}</span>
                       <span className="split-val">{M(cbSplit.b, false, true)}</span>
-                      <span className="split-sub">funded</span>
+                      <span className="split-sub">paid in · insatt</span>
                     </div>
                   </div>
                 )}
@@ -962,7 +973,7 @@ export default function Bolanekoll() {
                               <td colSpan={6}>
                                 <CellReveal reduce={reduceMotion}>
                                 <div className="pay-detail-inner">
-                                  <span className="pay-detail-label">Insats funded by</span>
+                                  <span className="pay-detail-label">Insats paid by</span>
                                   {p.paid_split ? (
                                     <>
                                       <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(p.paid_split.a)}</span>
@@ -1013,13 +1024,13 @@ export default function Bolanekoll() {
               <div className="card-actions"><button type="button" className="btn btn-ghost" onClick={() => setContDlg({ open: true, id: null })}>+ Add contribution</button></div>
             </div>
             {hasPurchase && (
-              <p className="contrib-note">Kontantinsats (deriverad) · köpeskilling − lån = <b>{fmtMoney(deposit)}</b>. Add who paid it below so the funded split is right.</p>
+              <p className="contrib-note">Kontantinsats (deriverad) · köpeskilling − lån = <b>{fmtMoney(deposit)}</b>. Add who paid it below so the paid-in split is right.</p>
             )}
             {contribSplit && (
               <>
                 <div className="split-row">
-                  <div className={'split-card' + (settings.i_am !== 'b' ? ' is-accent' : '')}><span className="split-name">{nameOf('a')} · {fmtPct(contribSplit.a_pct)}</span><span className="split-val">{fmtMoney(contribSplit.a)}</span><span className="split-sub">contributed</span></div>
-                  <div className={'split-card' + (settings.i_am === 'b' ? ' is-accent' : '')}><span className="split-name">{nameOf('b')} · {fmtPct(contribSplit.b_pct)}</span><span className="split-val">{fmtMoney(contribSplit.b)}</span><span className="split-sub">contributed</span></div>
+                  <div className={'split-card' + (settings.i_am !== 'b' ? ' is-accent' : '')}><span className="split-name">{nameOf('a')} · {fmtPct(contribSplit.a_pct)}</span><span className="split-val">{fmtMoney(contribSplit.a)}</span><span className="split-sub">paid in · insatt</span></div>
+                  <div className={'split-card' + (settings.i_am === 'b' ? ' is-accent' : '')}><span className="split-name">{nameOf('b')} · {fmtPct(contribSplit.b_pct)}</span><span className="split-val">{fmtMoney(contribSplit.b)}</span><span className="split-sub">paid in · insatt</span></div>
                 </div>
                 <p className="contrib-note">
                   {settl?.owes && settl.amount > 0
