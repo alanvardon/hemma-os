@@ -14,7 +14,7 @@ import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
-  defaultSettings, parseCsv, parseAmount, autoMapColumns, classifyKind,
+  parseCsv, parseAmount, autoMapColumns, classifyKind,
   makePayment, flagDuplicates, assignPaymentsToPart,
   partBalance, totalBalance, totalAmortized, totalInterest, ranteavdrag,
   propertyValue, equity, loanToValue, otherOwner,
@@ -41,12 +41,22 @@ export default function Bolanekoll() {
   const active = useToolPageActive('/bolanekoll')
   useLayoutEffect(() => { document.documentElement.classList.remove('calc-layout') }, [])
 
-  const [parts, setParts] = useState<LoanPart[]>([])
-  const [payments, setPayments] = useState<Payment[]>([])
-  const [valuations, setValuations] = useState<Valuation[]>([])
-  const [periods, setPeriods] = useState<RatePeriod[]>([])
-  const [contributions, setContributions] = useState<Contribution[]>([])
-  const [settings, setSettings] = useState<MortgageSettings>(defaultSettings())
+  // Seed initial state synchronously from the store's localStorage cache so a
+  // returning user sees their populated dashboard on the FIRST paint instead of
+  // the empty-hero flashing for a frame before the async cloud read lands. The
+  // snapshot is sorted to match what refresh() will return, so nothing reorders.
+  // Cold cache → empty arrays (a genuine first-time user), and the `loaded` flag
+  // below holds back the empty-hero until we actually know it's empty.
+  const [seed] = useState(Store.cachedSnapshot)
+  const [parts, setParts] = useState<LoanPart[]>(seed.loan_parts)
+  const [payments, setPayments] = useState<Payment[]>(seed.payments)
+  const [valuations, setValuations] = useState<Valuation[]>(seed.valuations)
+  const [periods, setPeriods] = useState<RatePeriod[]>(seed.rate_periods)
+  const [contributions, setContributions] = useState<Contribution[]>(seed.contributions)
+  const [settings, setSettings] = useState<MortgageSettings>(seed.settings)
+  // False until the first cloud refresh resolves — distinguishes "still loading"
+  // from "loaded and genuinely empty" so the empty-hero only shows for the latter.
+  const [loaded, setLoaded] = useState(false)
 
   const { toast, showToast } = useToast()
   const { saveVisible: saved, flashSaved } = useSaveFlash()
@@ -89,6 +99,7 @@ export default function Bolanekoll() {
       Store.listRatePeriods(), Store.listContributions(), Store.getSettings(),
     ])
     setParts(ps); setPayments(pays); setValuations(vals); setPeriods(pers); setContributions(contribs); setSettings(sett)
+    setLoaded(true)
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
@@ -463,6 +474,10 @@ export default function Bolanekoll() {
       <main className="wrap">
 
         {!parts.length ? (
+        // Hold the empty-hero back until the cloud read has resolved: on a cold
+        // cache with cloud data, showing it before `loaded` would flash the
+        // first-run screen for a frame before the dashboard appears.
+        !loaded ? null : (
         <section className="card">
           <div className="empty-hero">
             <p className="empty-hero-eyebrow">Bolånekoll</p>
@@ -473,6 +488,7 @@ export default function Bolanekoll() {
             </div>
           </div>
         </section>
+        )
         ) : (<>
 
         {/* ── Dashboard: one hero (market equity), cost-basis as a secondary row ── */}

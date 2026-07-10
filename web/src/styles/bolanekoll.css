@@ -47,7 +47,12 @@
     text-transform: uppercase; color: var(--ink-soft);
   }
   .cb-val {
-    font-size: 1.4rem; font-weight: 600; color: var(--ink);
+    /* Display serif like .dash-headline / .split-val — this was the one money
+       figure in the hero card rendering in the body sans, which read as a
+       styling bug next to the serif headline above it. Subordinate to the
+       2.8rem headline by size, not by switching typeface. */
+    font-family: var(--font-display); font-weight: 400;
+    font-size: 1.5rem; color: var(--ink);
     font-variant-numeric: tabular-nums; white-space: nowrap;
   }
   .cb-sub { font-size: 13px; color: var(--ink-soft); margin: 0.25rem 0 0; }

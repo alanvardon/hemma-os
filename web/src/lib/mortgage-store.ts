@@ -191,6 +191,24 @@ function _patchCache(fn: (e: StoreEnvelope) => void): void {
   const env = _readCache(); fn(env); _writeCache(env)
 }
 
+// Synchronous snapshot of the write-through cache, sorted to MATCH what the
+// async list*() reads return, so a component can seed its initial React state
+// on the first paint and avoid the empty-then-populated flash while the cloud
+// refresh reconciles. Cold cache (first-ever visit) → the empty envelope, so
+// callers still fall through to their genuine empty state.
+export function cachedSnapshot(): StoreEnvelope {
+  const e = _readCache()
+  return {
+    version: e.version,
+    loan_parts: e.loan_parts.slice(),
+    payments: byDateDesc(e.payments),
+    valuations: byDateDesc(e.valuations),
+    rate_periods: byStartDesc(e.rate_periods),
+    contributions: byDateDesc(e.contributions),
+    settings: e.settings,
+  }
+}
+
 // The pre-Supabase envelope from the legacy key — v<4-migrated in memory (no
 // write-back, STORAGE_KEY stays read-only) with id/created_at guaranteed on
 // every row, ready to upsert. null when there's no legacy data to import.
