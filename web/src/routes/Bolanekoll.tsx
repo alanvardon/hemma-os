@@ -35,6 +35,10 @@ import ContribDialog from './bolanekoll/ContribDialog'
 import SettingsDialog from './bolanekoll/SettingsDialog'
 import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
 
+// The hero reprice notice appears only inside the final month before the
+// villkorsändring — before that, the date lives in the Lånedelar ledger.
+const REPRICE_NOTICE_DAYS = 31
+
 // ── Main component ─────────────────────────────────────────────────────────
 
 export default function Bolanekoll() {
@@ -555,14 +559,18 @@ export default function Bolanekoll() {
             <div className="metric-chip"><span className="metric-label">Loan-to-value</span><span className="metric-val">{hasValuation ? P(ltv, true) : '—'}</span></div>
             <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{M(amortized, false, true)}</span></div>
           </div>
-          {nextReprice && (
-            <div className={'reprice-note' + (nextReprice.expired || nextReprice.days_left! <= 90 ? ' is-warn' : '')}>
+          {/* Reprice notice — deliberately absent until it's actionable: the
+              date always lives in the Lånedelar ledger; this only surfaces in
+              the hero once the villkorsändring is a month out (or overdue). */}
+          {nextReprice && (nextReprice.expired || nextReprice.days_left! <= REPRICE_NOTICE_DAYS) && (
+            <div className="reprice-note">
               <span className="reprice-count">{repriceLabel(nextReprice.days_left, nextReprice.expired)}</span>
               <span className="reprice-text">
                 Nästa villkorsändring <span className="card-en">· next reprice</span> <b>{nextReprice.end_date}</b>
                 {' — '}{M(nextReprice.total_balance, false, true)}
                 {nextReprice.share_pct < 100 && <> ({P(nextReprice.share_pct, true)} of the loan)</>}
                 {nextReprice.rate != null && <> now at {fmtPct(nextReprice.rate)}{nextReprice.rate_type ? ' ' + nextReprice.rate_type : ''}</>}
+                {' — '}time to talk to the bank about rebinding.
               </span>
             </div>
           )}
