@@ -1,6 +1,6 @@
 # Plan 66 — Skip-link renders visibly mid-page (broken position:fixed)
 
-**Status:** plan · **Owner model:** Sonnet-suitable (one containing-block
+**Status:** resolved, no code change needed (verified 2026-07-10) · **Owner model:** Sonnet-suitable (one containing-block
 bug; repro + likely cause given) · **Source:** homepage design review
 2026-07-07 · **Touches:** `home.css` (.skip-link), possibly where the link
 sits in `Home.tsx:411`.
@@ -40,3 +40,17 @@ ancestor-relative and `translateY(-150%)` of a 30 px chip only lifts it
 - Tab reveals it at viewport top-left; Enter jumps to #tools.
 - No other fixed-position element inside the hub suffers the same
   containing-block issue (quick audit of `position: fixed` in home.css).
+
+## Resolution
+
+Re-verified against current `main` (Home.tsx:407-413) with Playwright at
+1440×900 and 390×844, scrolled and unscrolled: the skip-link already sits
+as a sibling of `.hub-pan` (not a descendant), per the containing-block
+comment now at `Home.tsx:407-412` — apparently landed as a side effect of
+fixing the same issue for `.site-header`. Measured `getBoundingClientRect()`
+confirms it sits off-screen (`top: -36px`) with no transformed ancestor.
+Tab reveals it at the true viewport top-left; Enter navigates to `#tools`.
+Audited the other two `position: fixed` rules in home.css — `.orbs`
+(intentionally inside `.hub-pan`, panning by design per plan 26) and
+`body::after` (grain overlay, not inside any transformed wrapper) — neither
+has the bug. No code change required.
