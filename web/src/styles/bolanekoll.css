@@ -41,7 +41,10 @@
     margin-top: 1rem; padding-top: 1rem; margin-bottom: 1.2rem;
     border-top: 1px solid var(--rule);
   }
-  .cb-line { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
+  /* Label over value, left-aligned — same stacking as the dash-main hero above
+     (label → figure → sub). space-between pushed the figure to the far right
+     edge of the wide card, orphaning it from its label. */
+  .cb-line { display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; }
   .cb-label {
     font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
     text-transform: uppercase; color: var(--ink-soft);
@@ -104,8 +107,8 @@
   /* The split percentages are stated once here, as a household fact; the
      split-cards below carry only names + amounts (plan 86). */
   .split-head {
-    display: flex; align-items: baseline; justify-content: space-between;
-    gap: 0.2rem 0.9rem; flex-wrap: wrap; margin-bottom: 0.6rem;
+    display: flex; flex-direction: column; align-items: flex-start;
+    gap: 0.15rem; margin-bottom: 0.6rem;
   }
   .split-head-label {
     font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
@@ -113,7 +116,7 @@
   }
   .split-head-val { font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
   .split-head-val b { font-weight: 600; }
-  .split-head-note { flex-basis: 100%; font-size: 11.5px; color: var(--ink-soft); }
+  .split-head-note { font-size: 11.5px; color: var(--ink-soft); }
   .split-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; margin-bottom: 1rem; }
   .split-card {
     border: 1px solid var(--rule); border-radius: var(--r-md);
@@ -533,7 +536,6 @@ dialog.bk-dialog {
   .bk-dialog .form-grid { grid-template-columns: 1fr; }
   .bk-root .card-actions { width: 100%; }
   .bk-root .dash-headline { font-size: 2.3rem; }
-  .bk-root .cb-line { flex-direction: column; align-items: flex-start; gap: 0.15rem; }
   .bk-root .dashboard-card .metric-row { grid-template-columns: repeat(2, 1fr); }
   .bk-root .split-row { grid-template-columns: 1fr; }
   .bk-root .chart-wrap { height: 260px; }
