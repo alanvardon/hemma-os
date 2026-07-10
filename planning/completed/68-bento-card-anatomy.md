@@ -1,6 +1,6 @@
 # Plan 68 — Living-bento card anatomy: label every stat, one consistent card
 
-**Status:** plan · **Owner model:** Opus-suitable (extends plan 30's design;
+**Status:** shipped · **Owner model:** Opus-suitable (extends plan 30's design;
 deciding the card anatomy across breakpoints is layout judgment, and the
 wide-slot logic changes behaviour) · **Source:** homepage design review
 2026-07-07 · **Touches:** `Home.tsx` (grid + statLineFor/wideStatFor),
@@ -52,3 +52,25 @@ inconsistent anatomies:
 - Empty-store household: no wide card renders with a dead half — either a
   different tool takes the slot or the card collapses to standard.
 - Hushållsbudget stat renders when pot data exists (seeded household).
+
+## Resolution (shipped)
+
+- **Item 1** — `statLineFor` → `standardStatFor`: standard cards now emit the
+  same `card-stat` block (micro-label + value) as wide cards, scaled down and
+  pinned above the footer, never inline with "Open →". Labels: "Månadskostnad"
+  (Bostadskalkyl), "Kvar var" / "Kvar" (Hushållsbudget, equal vs split).
+- **Item 2** — mobile keeps its plan-30 rule (`.has-stat .app-desc { display:
+  none }`, wide flatten via `display: contents`); with the stat now living above
+  the footer in the DOM for both card types, all six mobile cards render one
+  anatomy: icon-row · name · (stat | description) · CTA. Verified at 390 px.
+- **Item 3** — the grid is data-driven: `WIDE_CANDIDATES` (Bolånekoll,
+  Månadsavslut) take wide slots ONLY when their live stat has data; an empty
+  store drops the tool into the standard pool and the grid rebalances (each wide
+  anchors a `[wide, std, std]` row, leftovers flow after). Verified: empty store
+  → six standard cards; one-with-data → one wide + Bolånekoll collapsed to
+  standard (no dead half).
+- **Item 4** — NOT a code bug. `stats.budget` hydrates correctly; the review saw
+  the un-saved *example* budget (no `tool_state` row → `loadBudget` returns null
+  by design, so the hub shows prose, not example figures as if they were the
+  household's). Seeding a real saved budget renders "KVAR / +10 tkr · +10 tkr"
+  as expected.
