@@ -36,10 +36,13 @@ const fineHover =
   window.matchMedia('(hover: hover) and (pointer: fine)').matches &&
   !window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-// ── The bento (plan 30) ──────────────────────────────────────────────────────
-// Tools with persisted household data are WIDE cards showing the live figures;
-// pure calculators stay standard. Wide cards are pinned to their row starts;
-// the standard cards reorder by last-opened recency (orderTools).
+// ── The bento (plans 30, 68) ─────────────────────────────────────────────────
+// The two wide-capable tools (rich live figures — mortgage sparkline, month-end
+// countdown) claim the wide slots, but ONLY when their store has data: an empty
+// store drops the tool to a standard card so the hero row never shows a dead
+// half (plan 68 item 3). Standard cards reorder by last-opened recency
+// (orderTools); wide cards anchor their row starts. Every card carries the same
+// stat anatomy — micro-label + value (+ optional sub) — scaled to its size.
 
 interface ToolDef {
   path: string
@@ -125,6 +128,10 @@ const STANDARD_TOOLS: ToolDef[] = [
     ),
   },
 ]
+
+// Wide-eligible tools, in priority order. A tool takes a wide slot only when its
+// live stat has data; otherwise it falls back into the standard pool (plan 68).
+const WIDE_CANDIDATES: ToolDef[] = [BOLANEKOLL, MANADSAVSLUT]
 
 interface HubStats {
   mortgage: MortgageStat | null
@@ -237,18 +244,35 @@ export default function Home() {
   const scStat = useMemo(() => scenarioStat(scenarios, globalConstants), [scenarios, globalConstants])
 
   // Standard cards sort by last-opened recency, frozen once per mount so the
-  // grid never reshuffles under the pointer; wide cards are pinned to their
-  // row starts so the layout keeps its anchors.
-  const [lastOpened] = useState(() => readLastOpened(STANDARD_TOOLS.map((t) => t.path)))
-  const standard = useMemo(() => orderTools(STANDARD_TOOLS, lastOpened), [lastOpened])
-  const grid: Array<{ tool: ToolDef; wide: boolean }> = [
-    { tool: BOLANEKOLL, wide: true },
-    { tool: standard[0], wide: false },
-    { tool: standard[1], wide: false },
-    { tool: MANADSAVSLUT, wide: true },
-    { tool: standard[2], wide: false },
-    { tool: standard[3], wide: false },
-  ]
+  // grid never reshuffles under the pointer. Wide slots follow DATA, not names:
+  // a wide-candidate with no live stat drops into the standard pool and the grid
+  // rebalances — no giant half-empty hero card (plan 68). The stores hydrate
+  // once at mount, so the layout settles a single time and then holds.
+  const [lastOpened] = useState(() =>
+    readLastOpened([...WIDE_CANDIDATES, ...STANDARD_TOOLS].map((t) => t.path)),
+  )
+  const grid: Array<{ tool: ToolDef; wide: boolean }> = useMemo(() => {
+    const hasWide = (path: string) =>
+      (path === '/bolanekoll' && !!stats.mortgage) ||
+      (path === '/manadsavslut' && !!stats.monthEnd)
+    const wide = WIDE_CANDIDATES.filter((t) => hasWide(t.path))
+    const pool = orderTools(
+      [...WIDE_CANDIDATES.filter((t) => !hasWide(t.path)), ...STANDARD_TOOLS],
+      lastOpened,
+    )
+    // Each wide anchors a row: [wide, std, std] fills all four columns; leftover
+    // standards flow after. 2 wide → the plan-30 two-shelf bento; 1 or 0 wide →
+    // a naturally ragged tail rather than a dead half-card.
+    const cells: Array<{ tool: ToolDef; wide: boolean }> = []
+    let si = 0
+    for (const w of wide) {
+      cells.push({ tool: w, wide: true })
+      if (si < pool.length) cells.push({ tool: pool[si++], wide: false })
+      if (si < pool.length) cells.push({ tool: pool[si++], wide: false })
+    }
+    while (si < pool.length) cells.push({ tool: pool[si++], wide: false })
+    return cells
+  }, [stats, lastOpened])
 
   useEffect(() => {
     function render() {
@@ -350,24 +374,42 @@ export default function Home() {
     return null
   }
 
-  // The one-line stat on a STANDARD card, sitting on the footer row.
-  function statLineFor(path: string): ReactNode {
+  // The stat block on a STANDARD card — the same label + value anatomy as the
+  // wide cards, scaled down and sitting ABOVE the footer (never inline with the
+  // "Open →" cta). Returns null when the store has no real content, so the card
+  // keeps its description prose (plan 68 item 1).
+  function standardStatFor(path: string): ReactNode {
     if (path === '/hushallsbudget' && stats.budget) {
       const b = stats.budget
-      return b.equal
-        ? <Money value={b.a} signed suffix=" var" />
-        : <><MoneyCompact value={b.a} signed /> · <MoneyCompact value={b.b} signed /></>
+      return (
+        <div className="card-stat">
+          <span className="stat-label">{b.equal ? 'Kvar var' : 'Kvar'}</span>
+          <span className="stat-value">
+            {b.equal
+              ? <Money value={b.a} signed />
+              : <><MoneyCompact value={b.a} signed /> · <MoneyCompact value={b.b} signed /></>}
+          </span>
+        </div>
+      )
     }
     if (path === '/bostadskalkyl' && scStat) {
-      return scStat.monthly != null
-        ? <Money value={scStat.monthly} suffix="/mån" />
-        : <><Num value={scStat.count} /> sparade scenarier</>
+      return scStat.monthly != null ? (
+        <div className="card-stat">
+          <span className="stat-label">Månadskostnad</span>
+          <span className="stat-value"><Money value={scStat.monthly} suffix="/mån" /></span>
+        </div>
+      ) : (
+        <div className="card-stat">
+          <span className="stat-label">Sparade scenarier</span>
+          <span className="stat-value"><Num value={scStat.count} /></span>
+        </div>
+      )
     }
     return null
   }
 
   function renderCard({ tool, wide }: { tool: ToolDef; wide: boolean }, i: number) {
-    const stat = wide ? wideStatFor(tool.path) : statLineFor(tool.path)
+    const stat = wide ? wideStatFor(tool.path) : standardStatFor(tool.path)
     const cls =
       'app-card reveal reveal-' + (4 + i) +
       (wide ? ' wide' : '') +
@@ -380,9 +422,9 @@ export default function Home() {
         </div>
         <span className="app-name">{tool.name}</span>
         <span className="app-desc">{tool.desc}</span>
+        {!wide && stat}
         <span className="app-foot">
           <span className="app-cta">Open <span className="arrow">→</span></span>
-          {!wide && stat ? <span className="stat-line">{stat}</span> : null}
         </span>
       </>
     )
