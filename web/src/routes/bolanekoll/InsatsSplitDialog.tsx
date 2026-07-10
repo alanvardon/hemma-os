@@ -37,7 +37,7 @@ export default function InsatsSplitDialog({ open, payment, settings, onSave, onR
     <DialogShell open={open} onClose={onClose} className="bk-dialog">
       <form className="dialog-body" onSubmit={submit}>
         <h3 className="dialog-title">Allocate insats</h3>
-        <p className="config-note" style={{ marginBottom: '1rem' }}>Split this {fmtMoney(amount)} extra payment between {aName} and {bName} — how much each person actually funded. Editing one side fills the other.</p>
+        <p className="config-note" style={{ marginBottom: '1rem' }}>Split this {fmtMoney(amount)} extra payment between {aName} and {bName} — how much each person actually paid in. Editing one side fills the other.</p>
         <div className="form-grid">
           <FormField label={aName}><input type="text" inputMode="decimal" value={aStr} onChange={e => changeA(e.target.value)} /></FormField>
           <FormField label={bName}><input type="text" inputMode="decimal" value={bStr} onChange={e => changeB(e.target.value)} /></FormField>

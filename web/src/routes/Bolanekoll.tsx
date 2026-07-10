@@ -31,6 +31,7 @@ import ValuationDialog from './bolanekoll/ValuationDialog'
 import PaymentDialog from './bolanekoll/PaymentDialog'
 import CopyToPartsDialog from './bolanekoll/CopyToPartsDialog'
 import InsatsSplitDialog from './bolanekoll/InsatsSplitDialog'
+import EnableInsatserDialog from './bolanekoll/EnableInsatserDialog'
 import ContribDialog from './bolanekoll/ContribDialog'
 import SettingsDialog from './bolanekoll/SettingsDialog'
 import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
@@ -87,6 +88,7 @@ export default function Bolanekoll() {
   const [payDlg, setPayDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [copyDlg, setCopyDlg] = useState<{ open: boolean; source: Payment | null }>({ open: false, source: null })
   const [insatsDlg, setInsatsDlg] = useState<{ open: boolean; payment: Payment | null }>({ open: false, payment: null })
+  const [enableDlg, setEnableDlg] = useState<{ open: boolean; payment: Payment | null }>({ open: false, payment: null })
   const [expandedPays, setExpandedPays] = useState<Set<string>>(new Set())
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const groupsSeeded = useRef(false)
@@ -322,14 +324,17 @@ export default function Bolanekoll() {
     try { await Store.removeRatePeriod(id); await refresh(); flashSaved() }
     catch (err) { saveErr(err) }
   }
-  // Offer to switch on contribution tracking the first time the user records an
-  // insats / contribution — never flip it silently.
-  async function maybeEnableContributions(msg: string) {
-    if (settings.track_contributions) return
-    if (confirm(msg)) {
-      try { await Store.saveSettings({ track_contributions: true }) }
-      catch (err) { saveErr(err) }
-    }
+  // Turning tracking on is always an explicit user action — the dashboard CTA,
+  // the Insatser section's teaching state, or the ★ dialog. Never a retroactive
+  // window.confirm after the data has already changed (plan 87).
+  async function handleEnableTracking(pending?: Payment | null) {
+    try {
+      await Store.saveSettings({ track_contributions: true })
+      await refresh(); flashSaved()
+      setEnableDlg({ open: false, payment: null })
+      if (pending) setInsatsDlg({ open: true, payment: pending })
+      else showToast('Contribution tracking on — log who paid what under Insatser.')
+    } catch (err) { saveErr(err) }
   }
   async function handleSaveVal(data: Omit<Valuation, 'id' | 'created_at'>) {
     try {
@@ -347,13 +352,15 @@ export default function Bolanekoll() {
     try {
       await Store.updatePayment(p.id, { is_insats: !p.is_insats, ...(p.is_insats ? { paid_split: null } : {}) })
       await refresh(); flashSaved()
-      if (!p.is_insats) await maybeEnableContributions('Flagged as insats. Turn on contribution tracking to see per-owner insatser and the paid-in split?')
     } catch (err) { saveErr(err) }
   }
-  // With contributions tracked, the ★ opens the split dialog instead of a plain toggle.
+  // With contributions tracked, the ★ opens the split dialog instead of a plain
+  // toggle. With tracking off, flagging asks the feature question first (in-app
+  // dialog — decision before data); unflagging never prompts.
   function handleStarClick(p: Payment) {
     if (settings.track_contributions) setInsatsDlg({ open: true, payment: p })
-    else handleToggleInsats(p)
+    else if (p.is_insats) handleToggleInsats(p)
+    else setEnableDlg({ open: true, payment: p })
   }
   async function handleSaveInsatsSplit(payment: Payment, split: { a: number; b: number }) {
     try {
@@ -379,7 +386,6 @@ export default function Bolanekoll() {
     try {
       if (payDlg.id) await Store.updatePayment(payDlg.id, data); else await Store.addPayment(data)
       await refresh(); flashSaved(); setPayDlg({ open: false, id: null }); showToast('Payment saved.')
-      if (data.is_insats) await maybeEnableContributions('Saved as insats. Turn on contribution tracking to see per-owner insatser and the paid-in split?')
     } catch (err) { saveErr(err) }
   }
   async function handleDeletePay(id: string) {
@@ -531,6 +537,17 @@ export default function Bolanekoll() {
                 </div>
               </div>
             </>
+          )}
+          {/* Front door into contribution tracking (plan 87) — a quiet CTA where
+              the split would render, so the feature is discovered here (the
+              decision) rather than via the ledger ★ (the data). */}
+          {hasValuation && !settings.track_contributions && (
+            <div className="split-head split-head-cta">
+              <span className="split-head-label">Ägarandel · Ownership split</span>
+              <button type="button" className="link-btn split-cta" onClick={() => handleEnableTracking()}>
+                Track who paid in what — turn on insatser →
+              </button>
+            </div>
           )}
 
           {/* Cost-basis equity — what you've actually paid in. A secondary row
@@ -1026,15 +1043,30 @@ export default function Bolanekoll() {
         </section>
 
         {/* ── Contributions / insatser ── */}
-        {(settings.track_contributions || insatsPays.length > 0) && (
-          <section className="card">
+        {/* Always rendered (plan 87): before tracking is on, the section is the
+            teaching surface — heading, the three-concept legend and an explicit
+            way in — instead of only appearing once you've found the feature
+            elsewhere. Interactive bits stay gated on track_contributions. */}
+        <section className="card">
             <div className="card-head">
               <h2>Insatser <span className="card-en">· Contributions</span></h2>
-              <span className="count-pill">{contributions.length}</span>
-              <div className="card-actions"><button type="button" className="btn btn-ghost" onClick={() => setContDlg({ open: true, id: null })}>+ Add contribution</button></div>
+              {settings.track_contributions && <>
+                <span className="count-pill">{contributions.length}</span>
+                <div className="card-actions"><button type="button" className="btn btn-ghost" onClick={() => setContDlg({ open: true, id: null })}>+ Add contribution</button></div>
+              </>}
             </div>
-            {hasPurchase && (
-              <p className="contrib-note">Kontantinsats (deriverad) · köpeskilling − lån = <b>{fmtMoney(deposit)}</b>. Add who paid it below so the paid-in split is right.</p>
+            {/* The three money concepts behind the paid-in split, named once —
+                so derived-vs-manual isn't a surprise on first contact. */}
+            <ul className="contrib-legend">
+              <li><b>Kontantinsats</b> — the down payment, derived: köpeskilling − lån{hasPurchase ? <> = <b>{fmtMoney(deposit)}</b></> : null}. Log who paid it as a lump sum here so the paid-in split is right.</li>
+              <li><b>Amortering</b> — counted per owner automatically from the payments in the ledger; the ★ there flags an extra amortering as an insats.</li>
+              <li><b>Engångsbelopp · Lump sums</b> — one-off contributions you add here yourself.</li>
+            </ul>
+            {!settings.track_contributions && (
+              <div className="empty-stub">
+                <p>Turn on insatser to see who has paid in what — each owner’s share of the home.</p>
+                <button type="button" className="btn btn-ghost" onClick={() => handleEnableTracking()}>Slå på · Turn on tracking</button>
+              </div>
             )}
             {contribSplit && (
               <>
@@ -1050,7 +1082,7 @@ export default function Bolanekoll() {
                 </p>
               </>
             )}
-            {!contributions.length ? <p className="empty">No lump sums yet. Per-owner amortering is counted automatically from the payments above; add down payments here.</p> : (
+            {settings.track_contributions && (!contributions.length ? <p className="empty">Inga engångsbelopp ännu · No lump sums yet.</p> : (
               <div className="table-wrap">
                 <table className="data-table">
                   <thead><tr><th className="col-date">Date</th><th>Owner</th><th className="num">Amount</th><th>Note</th><th className="col-act"></th></tr></thead>
@@ -1070,7 +1102,7 @@ export default function Bolanekoll() {
                   </tbody>
                 </table>
               </div>
-            )}
+            ))}
             {insatsPays.length > 0 && (
               <div className="insats-extra">
                 <p className="contrib-note">Extra amorteringar flaggade i liggaren · flagged in the ledger (info — these already lower your debt &amp; raise amortised):</p>
@@ -1093,8 +1125,7 @@ export default function Bolanekoll() {
                 </div>
               </div>
             )}
-          </section>
-        )}
+        </section>
 
         </>)}
 
@@ -1107,6 +1138,10 @@ export default function Bolanekoll() {
       <ValuationDialog open={valDlg.open} id={valDlg.id} valuations={valuations} onSave={handleSaveVal} onDelete={handleDeleteVal} onClose={() => setValDlg({ open: false, id: null })} />
       <PaymentDialog open={payDlg.open} id={payDlg.id} payments={payments} parts={parts} settings={settings} onSave={handleSavePay} onDelete={handleDeletePay} onClose={() => setPayDlg({ open: false, id: null })} />
       <CopyToPartsDialog open={copyDlg.open} source={copyDlg.source} parts={parts} onConfirm={ids => copyDlg.source && handleCopyToParts(copyDlg.source, ids)} onClose={() => setCopyDlg({ open: false, source: null })} />
+      <EnableInsatserDialog open={enableDlg.open} payment={enableDlg.payment}
+        onEnable={() => handleEnableTracking(enableDlg.payment)}
+        onFlagOnly={() => { const p = enableDlg.payment; setEnableDlg({ open: false, payment: null }); if (p) handleToggleInsats(p) }}
+        onClose={() => setEnableDlg({ open: false, payment: null })} />
       <InsatsSplitDialog open={insatsDlg.open} payment={insatsDlg.payment} settings={settings}
         onSave={split => insatsDlg.payment && handleSaveInsatsSplit(insatsDlg.payment, split)}
         onRemove={() => insatsDlg.payment && handleRemoveInsats(insatsDlg.payment)}
