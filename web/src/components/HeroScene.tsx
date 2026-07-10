@@ -134,7 +134,12 @@ const AURORA_VERT = /* glsl */ `
 `
 
 const AURORA_FRAG = /* glsl */ `
-  precision mediump float;
+  // highp, deliberately: the curtain is built from hash(sin(n)·43758) value
+  // noise, and under mediump the large-magnitude sin() loses precision in
+  // rectangular lattice cells — the blocky brightness patches plan 69 flagged.
+  // highp evaluates the noise cleanly; a screen-space dither (below) then
+  // breaks the residual 8-bit banding of the low-alpha additive glow.
+  precision highp float;
   varying vec2 vUv;
   uniform float uTime;
   uniform float uIntensity;
@@ -196,6 +201,14 @@ const AURORA_FRAG = /* glsl */ `
     vec3 col = mix(green, violet, clamp(up * 1.4, 0.0, 1.0));
 
     float a = min(curtain * 1.7, 1.0) * uIntensity;
+
+    // Ordered-ish screen-space dither: a sub-LSB triangular perturbation that
+    // dissolves the 8-bit contour banding of the smooth glow into noise the
+    // eye integrates away. Keyed on gl_FragCoord so it's a fixed grain, not a
+    // shimmer; ±1 code value is enough at these low alphas.
+    float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+    col += dither / 255.0;
+
     gl_FragColor = vec4(col, a);
   }
 `

@@ -208,12 +208,40 @@ body::after {
   width: 100%;
 }
 
+/* Text-protection scrim (plan 69): a soft paper radial anchored over the
+   copy column (left-aligned, upper two-thirds) so the small greeting + subline
+   never sit on a bright dot/aurora pixel where AA contrast goes marginal. Sits
+   ABOVE the canvas but BELOW the copy — .hero is a z-index:1 stacking context,
+   so z-index:-1 lands the scrim between the terrain and the text. The display
+   h1 knocks out on its own; the scrim just has to carry the fine type, and it
+   fades to nothing well before the Tools grid in both themes. */
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(130% 118% at 28% 52%,
+    color-mix(in srgb, var(--paper) 90%, transparent) 0%,
+    color-mix(in srgb, var(--paper) 80%, transparent) 30%,
+    color-mix(in srgb, var(--paper) 56%, transparent) 52%,
+    color-mix(in srgb, var(--paper) 20%, transparent) 72%,
+    transparent 90%);
+}
+
 .greeting {
   display: flex;
   align-items: center;
   gap: 10px;
   font-size: clamp(13px, 1.5vw, 15px);
-  color: var(--ink-soft);
+  /* Bumped from --ink-soft: the eyebrow must clear AA on the sampled hero
+     background, not just on bare paper (plan 69). */
+  color: var(--ink-mid);
+  /* Paper halo hugging each glyph: guarantees local contrast over whatever
+     terrain dot rolls behind the text, without dulling the surrounding field
+     (the .hero radial scrim can't reach the horizon band where the dots are
+     densest). --paper is theme-aware, so it darkens-behind in dark too. */
+  text-shadow: 0 0 3px var(--paper), 0 0 6px var(--paper), 0 0 6px var(--paper);
   margin-bottom: 1.1rem;
 }
 
@@ -224,7 +252,9 @@ body::after {
   flex-shrink: 0;
 }
 
-.greeting .date { color: var(--ink-faint); }
+/* Was --ink-faint — near-invisible on the wash. Bumped to the --ink-mid floor
+   (plan 69); the em-dash + greeting weight carry the hierarchy instead. */
+.greeting .date { color: var(--ink-mid); }
 
 .hero h1 {
   font-family: var(--font-display);
@@ -264,6 +294,9 @@ body::after {
   font-weight: 350;
   color: var(--ink-mid);
   max-width: 46ch;
+  /* Same paper halo as the greeting — the subline sits on the horizon band
+     where the dots are densest, so it needs the glyph-local guarantee most. */
+  text-shadow: 0 0 3px var(--paper), 0 0 6px var(--paper), 0 0 6px var(--paper);
 }
 
 /* Scroll cue (plan 31): a whisper at the hero's base inviting the descent.
@@ -702,5 +735,12 @@ a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
   .app-card.wide .card-stat { order: 1; }
   .app-card.wide .app-foot { order: 2; }
   .card-stat { align-items: flex-start; text-align: left; }
-  .hero { padding-top: 3rem; }
+  /* Cap the hero block so the subline→TOOLS gap stays tight (plan 69 item 4):
+     at ≤600px the 2D canvas contributes only a faint void below the copy, so
+     the tall desktop bottom padding read as a dead viewport-third. Trimmed to
+     leave just enough room for the scroll cue. */
+  .hero {
+    padding-top: 3rem;
+    padding-bottom: 3rem;
+  }
 }

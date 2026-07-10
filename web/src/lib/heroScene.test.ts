@@ -170,24 +170,19 @@ describe('greetingFor', () => {
 describe('paletteFor', () => {
   const buckets = ['natt', 'morgon', 'dag', 'kvall'] as const
 
-  it('always shows the aurora, in both themes, hard-capped at AURORA_MAX', () => {
+  it('shows the aurora in dark only, hard-capped at AURORA_MAX (plan 69)', () => {
     for (const b of buckets) {
-      for (const t of ['light', 'dark'] as const) {
-        const a = paletteFor(b, t).aurora
-        expect(a).toBeGreaterThan(0)
-        expect(a).toBeLessThanOrEqual(AURORA_MAX)
-      }
+      const dark = paletteFor(b, 'dark').aurora
+      expect(dark).toBeGreaterThan(0)
+      expect(dark).toBeLessThanOrEqual(AURORA_MAX)
+      // Daylight carries no curtain — it read as a washed-out green smudge.
+      expect(paletteFor(b, 'light').aurora).toBe(0)
     }
   })
 
-  it('burns brighter in dark than light, and night brightest of all', () => {
-    for (const b of buckets) {
-      expect(paletteFor(b, 'dark').aurora).toBeGreaterThan(paletteFor(b, 'light').aurora)
-    }
-    for (const t of ['light', 'dark'] as const) {
-      expect(paletteFor('natt', t).aurora).toBeGreaterThan(paletteFor('dag', t).aurora)
-      expect(paletteFor('kvall', t).aurora).toBeGreaterThan(paletteFor('dag', t).aurora)
-    }
+  it('night burns brightest of the dark-theme curtains', () => {
+    expect(paletteFor('natt', 'dark').aurora).toBeGreaterThan(paletteFor('dag', 'dark').aurora)
+    expect(paletteFor('kvall', 'dark').aurora).toBeGreaterThan(paletteFor('dag', 'dark').aurora)
   })
 
   it('shapes the day: morning mistiest, midday clearest and brightest', () => {
@@ -207,11 +202,13 @@ describe('paletteFor', () => {
     expect(paletteFor('natt', 'light').dotScale).toBeLessThan(1)
   })
 
-  it('is identical across themes apart from the aurora', () => {
+  it('dims the light-theme dot field below the dark opacity (plan 69)', () => {
     for (const b of buckets) {
       const l = paletteFor(b, 'light')
       const d = paletteFor(b, 'dark')
-      expect({ ...l, aurora: 0 }).toEqual({ ...d, aurora: 0 })
+      expect(l.alpha).toBeLessThan(d.alpha)
+      // Only alpha and aurora differ across themes — fog/copper/dot are shared.
+      expect({ ...l, alpha: 0, aurora: 0 }).toEqual({ ...d, alpha: 0, aurora: 0 })
     }
   })
 })
