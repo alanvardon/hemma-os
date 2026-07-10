@@ -127,8 +127,12 @@
 .row-date { font-size: 11px; color: var(--ink-soft); opacity: 0.85; }
 .scenario-row-rename { font-size: 1.25rem; line-height: 1.2; max-width: 100%; margin: 0; }
 
-/* Stat columns — fixed min-widths so they line up down the list. */
+/* Stat columns — fixed min-widths so they line up down the list. Grouped into
+   a lead pair (price/monthly) and a detail trio (cash/ltv/salary) so the
+   mobile grid below can give each group its own column count — a plain
+   auto-fit grid leaves the 5th stat dangling alone in its row. */
 .row-stats { display: flex; align-items: flex-start; gap: 1.4rem; flex-shrink: 0; }
+.row-stats-lead, .row-stats-detail { display: flex; align-items: flex-start; gap: 1.4rem; }
 .row-stat { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .row-stat-label {
   font-size: 10px;
@@ -230,12 +234,11 @@
 /* ── Responsive: stack the row on narrow screens ────────────────── */
 @media (max-width: 720px) {
   .scenario-row { flex-direction: column; align-items: stretch; gap: 0.85rem; padding: 1rem 1.1rem; }
-  .row-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-    gap: 0.85rem 1rem;
-    align-items: end;
-  }
+  .row-stats { display: flex; flex-direction: column; gap: 0.85rem; }
+  /* Two explicit rows — lead pair (price/monthly) then the detail trio — so
+     the odd 5th stat never dangles alone in a half-empty row. */
+  .row-stats-lead { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.85rem 1rem; }
+  .row-stats-detail { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.85rem 1rem; }
   .row-stat { align-items: flex-start; }
   .row-stat-val { align-items: flex-start; }
   .row-stat-price, .row-stat-monthly, .row-stat-cash, .row-stat-ltv, .row-stat-salary { min-width: 0; }

@@ -13,9 +13,11 @@ export function fmtMoney(n: number): string {
   return num.toLocaleString('sv-SE', { minimumFractionDigits: hasOre ? 2 : 0, maximumFractionDigits: 2 }) + ' ' + suffix
 }
 // Animated equivalent for the SUMMARY figures (balance headline, insight amount,
-// category bar values). Data tables, the triage and prose keep fmtMoney above.
+// category bar values) — these are heroes, so they round to whole kr (see
+// formatHeroKr's contract in lib/format.ts). Data tables, the triage and the
+// settlement transfer line keep exact öre via fmtMoney / Money maxDecimals={2}.
 export function M(value: number) {
-  return <Money value={value} currencySuffix={CURRENCY_SUFFIX[currencyState.current] || 'kr'} maxDecimals={2} />
+  return <Money value={value} currencySuffix={CURRENCY_SUFFIX[currencyState.current] || 'kr'} />
 }
 export const clean = (v: unknown) => String(v == null ? '' : v).trim()
 export const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100
