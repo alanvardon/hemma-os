@@ -129,3 +129,22 @@ Standalone; not blocked by anything. Deliberately a *hypothetical*, not a
 forecast — plan 70 (Räntebesked) owns real repricing; plan 23 owns predicted
 actual charges. All 10 design decisions locked via grilled Q&A, recorded in
 the plan.
+
+---
+
+# Bolånekoll UX from live review — 2026-07-10 (batch)
+
+Raised while using the app after plans 63–69 shipped. Two design plans; the
+sibling correctness/polish fixes from the same review (bento hydration
+layout-shift + back-zoom, Bolånekoll empty-hero flash, cost-basis figure in the
+wrong font) were **implemented directly** — no plan doc — on branch
+`fix/bolanekoll-hydration-flash-hero-font`.
+
+| File | Scope | Summary | Owner model | Effort |
+|------|-------|---------|-------------|--------|
+| [86-bolanekoll-ownership-split-vocab.md](86-bolanekoll-ownership-split-vocab.md) | bolånekoll | One ownership-split model: same % is printed 3× under "equity share"/"funded"/"contributed" against 3 different bases — state the split once, keep two distinct bases, kill the third label | Opus (information design) | S |
+| [87-bolanekoll-insatser-onboarding.md](87-bolanekoll-insatser-onboarding.md) | bolånekoll | Give Insatser a front door: explicit "track who paid what" CTA, drop the native `confirm()`, let the section teach before tracking is on, name the 3 concepts once | Opus (onboarding/IA) | M |
+
+**Build order: 86 → 87.** 86 settles the vocabulary ("paid in"); 87 reuses it in
+every onboarding string. Each is its own branch + PR, base main, landed one at a
+time.
