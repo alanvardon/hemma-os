@@ -202,7 +202,7 @@ describe('paletteFor', () => {
     expect(paletteFor('natt', 'light').dotScale).toBeLessThan(1)
   })
 
-  it('dims the light-theme dot field to half the dark opacity (plan 69)', () => {
+  it('dims the light-theme dot field below the dark opacity (plan 69)', () => {
     for (const b of buckets) {
       const l = paletteFor(b, 'light')
       const d = paletteFor(b, 'dark')

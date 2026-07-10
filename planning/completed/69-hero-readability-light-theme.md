@@ -1,6 +1,6 @@
 # Plan 69 — Hero polish: subline readability, aurora banding, a light theme that isn't a smudge
 
-**Status:** shipped (light-hero portfolio sign-off pending before merge) ·
+**Status:** shipped (PR #268, light-hero signed off in-session) ·
 **Owner model:** Opus-suitable (WebGL scene + typography
 judgment; carries the plan-28 landmines — R3F v9 clones `uniforms` props,
 verify canvas via in-page rAF probe not screenshots) · **Source:** homepage
@@ -71,14 +71,16 @@ server (localhost:5174, WebGL2 path active) with per-pixel AA sampling — text
 glyphs hidden, tight `Range.getClientRects()` boxes, worst background pixel over
 3 animation frames, contrast vs the resolved `--ink-mid` sRGB.
 
-1. **Text protection (findings 1 + 3).** Local paper radial scrim on
-   `.hero::before` (z-index −1: above the terrain, below the copy), sized to
-   the left copy column and fading out before the Tools grid — invisible as a
-   blob in both themes. Greeting → `--ink-mid`, date → `--ink-mid` (was
-   `--ink-soft`/`--ink-faint`). Measured contrast against the worst sampled
-   background pixel:
-   - Dark: greeting **7.31**, subline **4.87** (both ≥ 4.5 AA)
-   - Light: greeting **8.08**, subline **7.16**
+1. **Text protection (findings 1 + 3).** Two layers: a paper radial scrim on
+   `.hero::before` (z-index −1: above the terrain, below the copy) sized to the
+   copy column so it mutes the dots *under* the text while leaving them lively
+   to the sides; plus a subtle paper `text-shadow` halo on the greeting +
+   subline that guarantees glyph-local contrast over whatever dot rolls behind
+   (the horizon band, where the subline sits, is the densest). Greeting →
+   `--ink-mid`, date → `--ink-mid` (was `--ink-soft`/`--ink-faint`). Worst
+   sampled background pixel on the glyph band (leading trimmed):
+   - Light: greeting **8.12**, subline **7.21**
+   - Dark: greeting **7.31**, subline **4.87** (all ≥ 4.5 AA)
 2. **Aurora banding (finding 2).** Root cause was `mediump` precision on the
    `hash(sin(n)·43758)` value noise — the large-magnitude `sin()` loses
    precision in rectangular lattice cells. Switched the aurora fragment shader
@@ -86,12 +88,15 @@ glyphs hidden, tight `Range.getClientRects()` boxes, worst background pixel over
    output. Forensic 2.6× contrast/brightness boost of the y40–210 band shows
    smooth curtain rays with fine grain — no contour banding, no rectangular
    quantization blocks.
-3. **Light theme (finding 3).** Chose option (a): tuned the scene for day.
-   `heroScene.ts` now dims the light-theme dot field to half opacity
-   (`LIGHT_ALPHA_SCALE = 0.5`) and carries **no aurora** in light
-   (`paletteFor(..,'light').aurora === 0`) — the washed-out green pigment veil
-   is gone; light hero reads as a calm editorial paper header. Tests updated.
+3. **Light theme (finding 3).** Chose option (a): tuned the scene for day. The
+   real "smudge" was the green aurora veil, so `heroScene.ts` carries **no
+   aurora** in light (`paletteFor(..,'light').aurora === 0`). The dot field is
+   only lightly thinned (`LIGHT_ALPHA_SCALE = 0.82`) — an early 0.5 killed the
+   wave's visible motion; with the aurora gone and the scrim/halo handling the
+   copy, the dots stay near-full and unmistakably alive (motion ≈ 18 % of the
+   terrain region changes frame-to-frame, matching dark). Tests updated.
 4. **Mobile (finding 4).** Capped `.hero` bottom padding to 3rem at ≤600px:
    subline→TOOLS gap is now **48 px** at 390 px (was ~a viewport-third).
 
-Remaining gate: light-hero portfolio screenshot sign-off before merge.
+Signed off by the user in-session ("this looks good now") after the light-mode
+dot alpha was restored.

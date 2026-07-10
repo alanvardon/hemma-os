@@ -155,9 +155,12 @@ const AURORA_DARK: Record<TimeBucket, number> = {
   natt: AURORA_MAX,
 }
 
-/* Light theme thins the dot field to ~half — a faint relief on paper rather
-   than a green haze over the hero copy (plan 69). */
-export const LIGHT_ALPHA_SCALE = 0.5
+/* Light theme thins the dot field a touch (not much) — the daylight "smudge"
+   was really the green aurora veil (now off in light) plus copy fighting the
+   dots (now the .hero scrim handles that, with wide AA headroom). Dimming the
+   dots hard on top of that killed the wave's visible motion, so keep them
+   nearly full — calm, but unmistakably alive (plan 69). */
+export const LIGHT_ALPHA_SCALE = 0.82
 
 export function paletteFor(bucket: TimeBucket, theme: 'light' | 'dark'): ScenePalette {
   const base = PALETTES[bucket]

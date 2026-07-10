@@ -221,12 +221,12 @@ body::after {
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background: radial-gradient(135% 100% at 30% 46%,
-    color-mix(in srgb, var(--paper) 88%, transparent) 0%,
-    color-mix(in srgb, var(--paper) 74%, transparent) 34%,
-    color-mix(in srgb, var(--paper) 42%, transparent) 58%,
-    color-mix(in srgb, var(--paper) 12%, transparent) 74%,
-    transparent 88%);
+  background: radial-gradient(130% 118% at 28% 52%,
+    color-mix(in srgb, var(--paper) 90%, transparent) 0%,
+    color-mix(in srgb, var(--paper) 80%, transparent) 30%,
+    color-mix(in srgb, var(--paper) 56%, transparent) 52%,
+    color-mix(in srgb, var(--paper) 20%, transparent) 72%,
+    transparent 90%);
 }
 
 .greeting {
@@ -237,6 +237,11 @@ body::after {
   /* Bumped from --ink-soft: the eyebrow must clear AA on the sampled hero
      background, not just on bare paper (plan 69). */
   color: var(--ink-mid);
+  /* Paper halo hugging each glyph: guarantees local contrast over whatever
+     terrain dot rolls behind the text, without dulling the surrounding field
+     (the .hero radial scrim can't reach the horizon band where the dots are
+     densest). --paper is theme-aware, so it darkens-behind in dark too. */
+  text-shadow: 0 0 3px var(--paper), 0 0 6px var(--paper), 0 0 6px var(--paper);
   margin-bottom: 1.1rem;
 }
 
@@ -289,6 +294,9 @@ body::after {
   font-weight: 350;
   color: var(--ink-mid);
   max-width: 46ch;
+  /* Same paper halo as the greeting — the subline sits on the horizon band
+     where the dots are densest, so it needs the glyph-local guarantee most. */
+  text-shadow: 0 0 3px var(--paper), 0 0 6px var(--paper), 0 0 6px var(--paper);
 }
 
 /* Scroll cue (plan 31): a whisper at the hero's base inviting the descent.
