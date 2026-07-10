@@ -35,6 +35,11 @@ import ContribDialog from './bolanekoll/ContribDialog'
 import SettingsDialog from './bolanekoll/SettingsDialog'
 import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
 
+// Only surface the reprice heads-up inside the month before the
+// villkorsändringsdag (or once it's overdue) — further out it's just noise on
+// the dashboard. ~31 days ≈ "tell me a month before".
+const REPRICE_HEADS_UP_DAYS = 31
+
 // ── Reprice heads-up helpers ─────────────────────────────────────────────────
 // A human countdown to the villkorsändringsdag — days close in, months further
 // out, and an overdue phrasing when the date has already passed (soon can carry
@@ -577,9 +582,9 @@ export default function Bolanekoll() {
             <div className="metric-chip"><span className="metric-label">Loan-to-value</span><span className="metric-val">{hasValuation ? P(ltv, true) : '—'}</span></div>
             <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{M(amortized, false, true)}</span></div>
           </div>
-          {soon && (
-            <div className={'reprice-flag' + (soon.days < 0 ? ' is-overdue' : soon.days <= 90 ? ' is-soon' : '')}>
-              <Icon icon={CalendarClock} size={15} className="reprice-icon" />
+          {soon && soon.days <= REPRICE_HEADS_UP_DAYS && (
+            <div className={'reprice-flag' + (soon.days < 0 ? ' is-overdue' : ' is-soon')}>
+              <Icon icon={CalendarClock} size={14} className="reprice-icon" />
               <span className="reprice-label">Nästa villkorsändring</span>
               <span className="reprice-when">{repriceWhen(soon.days)}</span>
               <span className="reprice-date">{fmtRepriceDate(soon.until)}</span>
