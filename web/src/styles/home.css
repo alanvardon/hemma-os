@@ -78,7 +78,7 @@ body::after {
   border-bottom: 1px solid var(--rule);
 }
 
-/* Skip link — visually hidden until focused, styled like a .chip-live so
+/* Skip link — visually hidden until focused, styled as an on-brand pill so
    the a11y affordance still reads on-brand rather than a UA-default banner. */
 .skip-link {
   position: fixed;
@@ -111,9 +111,6 @@ body::after {
   letter-spacing: -0.01em;
   color: var(--ink);
   text-decoration: none;
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
 }
 
 .wordmark .dot { color: var(--accent); }
@@ -586,17 +583,6 @@ a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
 /* Wide card = content column + right-aligned stat column. */
 .app-card.wide { flex-direction: row; align-items: stretch; gap: 1.25rem; }
 
-/* The head lives inside the content column, so on a wide card its
-   space-between would strand the Live chip mid-card, just left of the stat
-   block. Pin it to the card's true top-right corner instead (the stat column
-   is bottom-aligned, so there's no collision). */
-.app-card.wide .chip-live {
-  position: absolute;
-  top: 1.5rem;
-  right: 1.5rem;
-  z-index: 1;
-}
-
 .app-card-main {
   display: flex;
   flex-direction: column;
@@ -662,23 +648,6 @@ a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
   color: var(--ink);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-.chip {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  padding: 4px 9px;
-  border-radius: 999px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.chip-live {
-  color: var(--accent);
-  background: var(--accent-faint);
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 /* ── Footer ─────────────────────────────────────────────────── */

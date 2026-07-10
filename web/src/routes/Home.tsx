@@ -256,7 +256,7 @@ export default function Home() {
       // Shared bucket (lib/heroScene) — the WebGL scene lights itself from the
       // same function, so greeting text and terrain light can never disagree.
       const g = greetingFor(timeBucket(now.getHours()))
-      setGreeting(g + ' —')
+      setGreeting(g)
       setDateLine(now.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'long' }))
     }
     render()
@@ -377,7 +377,6 @@ export default function Home() {
       <>
         <div className="app-card-head">
           <span className="app-icon">{tool.icon}</span>
-          <span className="chip chip-live">Live</span>
         </div>
         <span className="app-name">{tool.name}</span>
         <span className="app-desc">{tool.desc}</span>
@@ -440,7 +439,7 @@ export default function Home() {
       <HeroCanvas>
         <section className="hero">
           <p className="greeting reveal reveal-1">
-            <span>{greeting}</span> <span className="date">{dateLine}</span>
+            <span>{greeting}</span> <span className="date">— {dateLine}</span>
           </p>
           <h1 className="hero-h1">
             <span className="h1-line">Everything for the</span>
@@ -449,7 +448,7 @@ export default function Home() {
           </h1>
           <p className="sub reveal reveal-3">
             The family operating system — calculators, plans and shared tools that grow with us.
-            Local-first today, synced everywhere tomorrow.
+            Synced across the household.
           </p>
           {!cueSuppressed && (
             <button
@@ -474,7 +473,7 @@ export default function Home() {
       </main>
 
       <footer className="site-footer">
-        <span className="footer-badge"><span className="pulse" />Local-first · Supabase-ready</span>
+        <span className="footer-badge"><span className="pulse" />Local-first · Synced via Supabase</span>
         <span className="footer-soon">Kommer snart: Kalender · Matplan</span>
         <span>Hemma·OS · built by the Vardon family</span>
       </footer>
