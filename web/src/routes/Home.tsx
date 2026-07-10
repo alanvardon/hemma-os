@@ -215,7 +215,27 @@ export default function Home() {
   // fully populated before a whoosh — a first-visit hydrate that lands
   // mid-transition would otherwise snapshot an empty page and pop content in
   // afterward. All reads are idempotent localStorage loads.
-  const [stats, setStats] = useState<HubStats>({ mortgage: null, monthEnd: null, budget: null })
+  // Seed the two WIDE-deciding stats (mortgage, month-end) synchronously from
+  // each store's localStorage cache so the bento grid picks its wide/standard
+  // layout on the FIRST render. Otherwise the grid mounts all-standard and
+  // reflows once the async cloud read lands — the "split-second size decision",
+  // and on a back-whoosh the View Transition captures the card at the wrong
+  // size/position so the page doesn't zoom into its own slot. Budget stays null
+  // (it only feeds a standard card's inner text, not the layout) and fills in
+  // with the async read below. Cold cache → nulls, i.e. the genuine empty grid.
+  const [stats, setStats] = useState<HubStats>(() => {
+    try {
+      const m = mortgageStore.cachedSnapshot()
+      const me = monthEndStore.cachedSnapshot()
+      return {
+        mortgage: mortgageStat(m.loan_parts, m.payments, m.valuations),
+        monthEnd: monthEndStat(me.items, me.payments, me.settings, new Date()),
+        budget: null,
+      }
+    } catch {
+      return { mortgage: null, monthEnd: null, budget: null }
+    }
+  })
   useEffect(() => {
     useStore.getState().hydrate()
     let alive = true

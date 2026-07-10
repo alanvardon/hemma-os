@@ -124,6 +124,15 @@ function _patchCache(fn: (env: Envelope) => void): void {
   const env = _readCache(); fn(env); _writeCache(env)
 }
 
+// Synchronous snapshot of the write-through cache, sorted to MATCH the async
+// list*() reads, so the hub can seed its month-end stat on the first paint
+// (no wide-card layout shift while the cloud refresh reconciles). Cold cache →
+// empty arrays, so the caller still resolves to "no data".
+export function cachedSnapshot(): { items: Item[]; payments: Payment[]; settings: MonthEndSettings } {
+  const e = _readCache()
+  return { items: sortedDesc(e.items), payments: sortedDesc(e.payments), settings: e.settings }
+}
+
 // ── First-login import (one-time, idempotent) ───────────────────────────────
 // Read the pre-Supabase envelope from the legacy key — normalised, with
 // id/created_at guaranteed — ready to upsert. Read-only: STORAGE_KEY is never
