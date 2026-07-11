@@ -592,38 +592,119 @@ dialog.bk-dialog {
 }
 .bk-toast.show { opacity: 1; transform: translate(-50%, 0); }
 
-/* ── Mobile payment cards (plan 73) ─────────────────────────────────────────
-   ≤600px each Betalningar row is a card (shared plumbing in components.css):
-     line 1  date + type chip                            amount, right
-     line 2  loan part                       balance <after>, right
-     line 3  row actions, right */
-@media (max-width: 600px) {
+/* ── Mobile cards (plan 73) ─────────────────────────────────────────────────
+   ≤760px every Bolånekoll data row is a card (shared plumbing in
+   components.css) — nothing scrolls horizontally. */
+@media (max-width: 760px) {
+  /* micro-labels standing in for the hidden column headers */
+  .bk-root .table-cards .col-balance::before, .bk-root .triage-table .col-bal::before {
+    content: 'saldo '; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--ink-soft);
+  }
+
+  /* Betalningar: date + type chip + amount / loan part / balance — the row
+     actions sit right, vertically centred over the two detail lines */
   .bk-root .payments-table tr {
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
       'date kind amount'
-      'part part balance'
-      'act  act  act';
+      'part part act'
+      'bal  bal  act';
+    row-gap: 0.3rem;
   }
   .bk-root .payments-table .col-date { grid-area: date; }
   .bk-root .payments-table .col-kind { grid-area: kind; }
-  .bk-root .payments-table .col-amount { grid-area: amount; color: var(--ink); font-weight: 550; }
+  .bk-root .payments-table .col-amount { grid-area: amount; color: var(--ink); font-weight: 600; }
   .bk-root .payments-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
-  .bk-root .payments-table .col-balance { grid-area: balance; font-size: 12.5px; color: var(--ink-soft); }
-  .bk-root .payments-table .col-balance::before { content: 'balance '; }
-  .bk-root .payments-table .col-act { grid-area: act; justify-self: end; }
+  .bk-root .payments-table .col-balance { grid-area: bal; font-size: 12.5px; color: var(--ink-soft); text-align: left; }
+  .bk-root .payments-table .col-act { grid-area: act; justify-self: end; align-self: center; }
   /* the insats marker moves from the (now mid-card) first cell to the card */
-  .bk-root .payments-table tr.is-insats td:first-child { box-shadow: none; }
-  .bk-root .payments-table tr.is-insats { box-shadow: inset 2px 0 0 var(--accent); }
+  .bk-root .table-cards tr.is-insats td:first-child { box-shadow: none; }
+  .bk-root .table-cards tr.is-insats { box-shadow: inset 2px 0 0 var(--accent); }
   /* the expanded insats-allocation row stays a full-width block; the warm
      band bleeds to the card edges, the text keeps the card inset */
   .bk-root .payments-table tr.pay-detail { display: block; padding: 0; }
   .bk-root .payments-table tr.pay-detail td { padding: 0 0.85rem; }
 
-  /* Lånedelar stays a table (3 data cols) — trim cell padding for the room */
-  .bk-root .lanedelar-table th, .bk-root .lanedelar-table td,
+  /* Lånedelar: the group row is a folder band (label line, sums line);
+     member rows are indented cards under it */
+  .bk-root .lanedelar-table tr {
+    grid-template-columns: auto auto 1fr;
+    grid-template-areas:
+      'label label label'
+      'bal   share act';
+    row-gap: 0.3rem;
+  }
+  .bk-root .lanedelar-table td:nth-child(1) { grid-area: label; }
+  .bk-root .lanedelar-table td:nth-child(2) { grid-area: bal; text-align: left; }
+  .bk-root .lanedelar-table td:nth-child(3) { grid-area: share; text-align: left; color: var(--ink-soft); }
+  .bk-root .lanedelar-table td.col-act { grid-area: act; justify-self: end; }
+  .bk-root .lanedelar-table tr.ld-group { background: var(--paper-warm); }
+  .bk-root .lanedelar-table tr.ld-group > td { background: transparent; }
+  .bk-root .lanedelar-table tr.ld-group.is-expired { background: var(--warn-faint); }
+  .bk-root .lanedelar-table tr.ld-group.is-expired > td { background: transparent; }
+  .bk-root .lanedelar-table tr.ld-group.is-catchall { background: transparent; }
+  .bk-root .lanedelar-table tr.ld-member > td { padding: 0; }
+  .bk-root .lanedelar-table tr.ld-member > td:first-child { padding-left: 1.1rem; position: static; }
+  .bk-root .lanedelar-table tr.ld-member > td:first-child::before { display: none; }
+  .bk-root .lanedelar-table tr.ld-member td:nth-child(2),
+  .bk-root .lanedelar-table tr.ld-member td:nth-child(3) { padding-left: 1.1rem; }
+  .bk-root .lanedelar-table tr.ld-member .cell-pad { padding: 0; }
   .bk-root .avslutade-table td { padding-left: 8px; padding-right: 8px; }
-  .bk-root .lanedelar-table tr.ld-member > td:first-child { padding-left: 1.7rem; }
+
+  /* Import triage rows */
+  .bk-root .triage-table tr {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      'desc  desc'
+      'date  amt'
+      'treat bal';
+  }
+  .bk-root .triage-table .col-desc { grid-area: desc; color: var(--ink); }
+  .bk-root .triage-table .col-date { grid-area: date; font-size: 12.5px; color: var(--ink-soft); }
+  .bk-root .triage-table .col-amt { grid-area: amt; }
+  .bk-root .triage-table .col-bal { grid-area: bal; font-size: 12.5px; color: var(--ink-soft); }
+  .bk-root .triage-table .col-treat { grid-area: treat; justify-self: start; min-width: 0; white-space: normal; }
+  .bk-root .triage-table .col-treat .segmented { flex-wrap: nowrap; }
+
+  .bk-root .valuations-table .col-date, .bk-root .contrib-table .col-date,
+  .bk-root .insats-table .col-date { grid-area: date; }
+
+  /* Bostadens värde: one line per valuation, note underneath when present */
+  .bk-root .valuations-table tr {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      'date amt  act'
+      'note note note';
+  }
+  .bk-root .valuations-table .col-amt { grid-area: amt; color: var(--ink); font-weight: 600; }
+  .bk-root .valuations-table .col-note { grid-area: note; font-size: 12.5px; color: var(--ink-soft); }
+  .bk-root .valuations-table .col-act { grid-area: act; justify-self: end; }
+  .bk-root .valuations-table tr.is-purchase td { background: transparent; }
+  .bk-root .valuations-table tr.is-purchase { background: var(--accent-faint); }
+
+  /* Insatser lump sums — one line per row, note underneath when present */
+  .bk-root .contrib-table tr {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'date owner amt  act'
+      'note note  note note';
+  }
+  .bk-root .contrib-table .col-owner { grid-area: owner; }
+  .bk-root .contrib-table .col-amt { grid-area: amt; color: var(--ink); font-weight: 600; }
+  .bk-root .contrib-table .col-note { grid-area: note; font-size: 12.5px; color: var(--ink-soft); }
+  .bk-root .contrib-table .col-act { grid-area: act; justify-self: end; }
+
+  /* Extra amorteringar flagged in the ledger */
+  .bk-root .insats-table tr {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      'date  part  amt'
+      'owner owner owner';
+  }
+  .bk-root .insats-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); }
+  .bk-root .insats-table .col-amt { grid-area: amt; color: var(--ink); font-weight: 600; }
+  .bk-root .insats-table .col-owner { grid-area: owner; font-size: 12.5px; color: var(--ink-soft); }
 }
 @media (max-width: 480px) {
   /* Share is derivable and shown on the group row — give the label the room */
@@ -640,6 +721,10 @@ dialog.bk-dialog {
   .bk-root .card-actions { width: 100%; }
   .bk-root .dash-headline { font-size: 2.3rem; }
   .bk-root .dashboard-card .metric-row { grid-template-columns: repeat(2, 1fr); }
+  /* Half-width chips can't hold a nowrap 17px figure ("2 % · 80 000 kr/år")
+     — let values wrap at the · separators (numbers hold via NBSP) and step
+     the size down so nothing spills over the pill (plan 73 feedback). */
+  .bk-root .metric-val { font-size: 15px; white-space: normal; }
   .bk-root .split-row { grid-template-columns: 1fr; }
   .bk-root .rate-strip { grid-template-columns: 1fr; }
   .bk-root .chart-wrap { height: 260px; }

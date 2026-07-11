@@ -309,7 +309,7 @@ export default function Manadsavslut() {
                 <span className="triage-hint">Tip: change “Default treatment” to set every row at once.</span>
               </div>
               <div className="table-wrap triage-wrap">
-                <table className="data-table triage-table">
+                <table className="data-table table-cards triage-table">
                   <thead><tr><th className="col-treat">Treatment</th><th className="col-date">Date</th><th>Description</th><th className="num">Amount</th></tr></thead>
                   <tbody>
                     {importCfg.triage.map((t, i) => {
@@ -325,13 +325,13 @@ export default function Manadsavslut() {
                             ) : <span className="treat-na">no amount</span>}
                           </td>
                           <td className="col-date">{cellAt(row, importCfg.mapping.date_purchased)}</td>
-                          <td>
+                          <td className="col-desc">
                             {cellAt(row, importCfg.mapping.description)}
                             {t.kind === 'refund' && <span className="row-flag row-flag-refund">refund</span>}
                             {isAmt && t.classification === 'pending' && <span className="row-flag row-flag-pending">ask later</span>}
                             {isAmt && t.duplicate && <span className="row-flag">possible duplicate</span>}
                           </td>
-                          <td className={'num' + (t.kind === 'refund' ? ' is-neg' : '')}>{isAmt ? fmtMoney(t.charge) : '—'}</td>
+                          <td className={'num col-amt' + (t.kind === 'refund' ? ' is-neg' : '')}>{isAmt ? fmtMoney(t.charge) : '—'}</td>
                         </tr>
                       )
                     })}

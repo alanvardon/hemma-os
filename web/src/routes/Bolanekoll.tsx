@@ -967,7 +967,7 @@ export default function Bolanekoll() {
                 </span>
               </div>
               <div className="table-wrap triage-wrap">
-                <table className="data-table triage-table">
+                <table className="data-table table-cards triage-table">
                   <thead><tr><th className="col-treat">Treatment</th><th className="col-date">Date</th><th>Type</th><th className="num">Amount</th><th className="num">Balance</th></tr></thead>
                   <tbody>
                     {importCfg.triage.map((t, i) => {
@@ -984,13 +984,13 @@ export default function Bolanekoll() {
                             ) : <span className="treat-na">no amount</span>}
                           </td>
                           <td className="col-date">{importCfg.mapping.date != null ? row[importCfg.mapping.date] : ''}</td>
-                          <td>
+                          <td className="col-desc">
                             {t.specText || kindLabel(t.kind)}
                             {t.duplicate && <span className="row-flag">possible duplicate</span>}
                             {auto && t.hasAmount && <span className={'row-flag' + (t.partMatched ? ' row-flag-refund' : '')}>{(t.partMatched ? '→ ' : 'no loan # → ') + partNameById(t.loan_part_id)}</span>}
                           </td>
-                          <td className="num">{t.hasAmount && t.amount ? fmtMoney(t.amount) : '—'}</td>
-                          <td className="num">{t.balance_after != null ? fmtMoney(t.balance_after) : '—'}</td>
+                          <td className="num col-amt">{t.hasAmount && t.amount ? fmtMoney(t.amount) : '—'}</td>
+                          <td className="num col-bal">{t.balance_after != null ? fmtMoney(t.balance_after) : '—'}</td>
                         </tr>
                       )
                     })}
@@ -1014,7 +1014,7 @@ export default function Bolanekoll() {
           </div>
           {!parts.length ? <p className="empty">No loan parts yet. Add your lånedelar — one per loan account — to begin.</p> : (
             <div className="table-wrap">
-              <table className="data-table lanedelar-table">
+              <table className="data-table table-cards lanedelar-table">
                 <thead><tr><th>Lånedel <span className="th-en">· part</span></th><th className="num">Balance</th><th className="num">Share</th><th className="col-act"></th></tr></thead>
                 <tbody>
                   {loanGroups.map(g => {
@@ -1123,14 +1123,14 @@ export default function Bolanekoll() {
                 </div>
               )}
               <div className="table-wrap">
-                <table className="data-table">
+                <table className="data-table table-cards valuations-table">
                   <thead><tr><th className="col-date">Date</th><th className="num">Value</th><th>Note</th><th className="col-act"></th></tr></thead>
                   <tbody>
                     {valuations.map(v => (
                       <tr key={v.id} className={v.is_purchase ? 'is-purchase' : ''}>
                         <td className="col-date">{v.date || '—'}</td>
-                        <td className="num">{fmtMoney(v.value)}</td>
-                        <td>{v.note || ''}{v.is_purchase && <span className="row-flag row-flag-kop">köpeskilling</span>}</td>
+                        <td className="num col-amt">{fmtMoney(v.value)}</td>
+                        <td className="col-note">{v.note || ''}{v.is_purchase && <span className="row-flag row-flag-kop">köpeskilling</span>}</td>
                         <td className="col-act">
                           <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setValDlg({ open: true, id: v.id })}><Icon icon={Pencil} /></button>
                           <button type="button" className="icon-btn" data-del-val title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this valuation?')) handleDeleteVal(v.id) }}><Icon icon={X} /></button>
@@ -1298,15 +1298,15 @@ export default function Bolanekoll() {
             )}
             {settings.track_contributions && (!contributions.length ? <p className="empty">Inga engångsbelopp ännu · No lump sums yet.</p> : (
               <div className="table-wrap">
-                <table className="data-table">
+                <table className="data-table table-cards contrib-table">
                   <thead><tr><th className="col-date">Date</th><th>Owner</th><th className="num">Amount</th><th>Note</th><th className="col-act"></th></tr></thead>
                   <tbody>
                     {contributions.map(c => (
                       <tr key={c.id}>
                         <td className="col-date">{c.date || '—'}</td>
-                        <td>{c.owner === 'joint' ? 'Gemensam · Joint' : nameOf(c.owner === 'b' ? 'b' : 'a')}</td>
-                        <td className="num">{fmtMoney(c.amount)}</td>
-                        <td>{c.note || ''}</td>
+                        <td className="col-owner">{c.owner === 'joint' ? 'Gemensam · Joint' : nameOf(c.owner === 'b' ? 'b' : 'a')}</td>
+                        <td className="num col-amt">{fmtMoney(c.amount)}</td>
+                        <td className="col-note">{c.note || ''}</td>
                         <td className="col-act">
                           <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setContDlg({ open: true, id: c.id })}><Icon icon={Pencil} /></button>
                           <button type="button" className="icon-btn" title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this contribution?')) handleDeleteCont(c.id) }}><Icon icon={X} /></button>
@@ -1321,17 +1321,17 @@ export default function Bolanekoll() {
               <div className="insats-extra">
                 <p className="contrib-note">Extra amorteringar flaggade i liggaren · flagged in the ledger (info — these already lower your debt &amp; raise amortised):</p>
                 <div className="table-wrap">
-                  <table className="data-table">
+                  <table className="data-table table-cards insats-table">
                     <thead><tr><th className="col-date">Date</th><th>Owner</th><th>Loan part</th><th className="num">Amount</th></tr></thead>
                     <tbody>
                       {insatsPays.map(p => (
                         <tr key={p.id}>
                           <td className="col-date">{p.date || '—'}</td>
-                          <td>{p.paid_split
+                          <td className="col-owner">{p.paid_split
                             ? <span className="insats-alloc">{nameOf('a')} {fmtMoney(p.paid_split.a)} · {nameOf('b')} {fmtMoney(p.paid_split.b)}</span>
                             : (p.paid_by === 'joint' ? 'Gemensam · Joint' : nameOf(p.paid_by === 'b' ? 'b' : 'a'))}</td>
-                          <td>{partNameById(p.loan_part_id)}</td>
-                          <td className="num">{fmtMoney(p.amount)}</td>
+                          <td className="col-part">{partNameById(p.loan_part_id)}</td>
+                          <td className="num col-amt">{fmtMoney(p.amount)}</td>
                         </tr>
                       ))}
                     </tbody>

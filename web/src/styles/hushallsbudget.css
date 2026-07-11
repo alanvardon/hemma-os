@@ -487,6 +487,12 @@
 
   .pot-actions { display: flex; gap: 0.6rem; margin-top: 1rem; flex-wrap: wrap; }
   .pot-actions .btn { flex: 1; min-width: 0; }
+  /* .btn labels are nowrap — on a phone flex:1 squeezes the CTA below its
+     text width and the label spills; let each button keep its width and
+     wrap to its own row instead (plan 73 feedback). */
+  @media (max-width: 600px) {
+    .pot-actions .btn { flex: 1 1 auto; }
+  }
 
   /* ── Summary cards ──────────────────────────────────────────── */
   .summary-title {

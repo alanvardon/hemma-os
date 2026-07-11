@@ -492,11 +492,13 @@ input::placeholder { color: var(--ink-faint); }
 .bk-root .data-table .num, .ma-root .data-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bk-root .data-table .col-date, .ma-root .data-table .col-date { white-space: nowrap; color: var(--ink-mid); }
 
-/* Mobile card-mode (plan 73): ≤600px a `.table-cards` data row renders as a
+/* Mobile card-mode (plan 73): ≤760px a `.table-cards` data row renders as a
    card, never a horizontally-scrolled table row. This block is only the
    shared plumbing (display resets, card frame); each table's grid areas live
-   in its tool stylesheet. 600px matches the plan-20 mobile threshold. */
-@media (max-width: 600px) {
+   in its tool stylesheet. 760px matches these tools' mobile breakpoint —
+   the wide tables (Poster, Betalningar) have a ~770px natural width, so any
+   lower threshold leaves a horizontal scroll band. */
+@media (max-width: 760px) {
   .bk-root .table-cards, .ma-root .table-cards,
   .bk-root .table-cards tbody, .ma-root .table-cards tbody { display: block; }
   .bk-root .table-cards thead, .ma-root .table-cards thead { display: none; }
@@ -524,7 +526,17 @@ input::placeholder { color: var(--ink-faint); }
   from { --tw-fade-l: 0px; --tw-fade-r: 28px; }
   to { --tw-fade-l: 28px; --tw-fade-r: 0px; }
 }
-@media (max-width: 767px) {
+/* 761–900px the wide tables are tables again but the viewport can't hold
+   their untrimmed ~770px natural width — tighten the shell and cells so
+   nothing needs a horizontal scroll (plan 73 feedback). */
+@media (min-width: 761px) and (max-width: 900px) {
+  .bk-root .wrap, .ma-root .wrap { padding-left: 1.25rem; padding-right: 1.25rem; }
+  .bk-root .data-table, .ma-root .data-table { font-size: 13px; }
+  .bk-root .data-table th, .ma-root .data-table th,
+  .bk-root .data-table td, .ma-root .data-table td { padding-left: 8px; padding-right: 8px; }
+}
+
+@media (max-width: 900px) {
   @supports (animation-timeline: scroll(self x)) {
     .bk-root .table-wrap, .ma-root .table-wrap {
       animation: tw-edge-fade linear both;

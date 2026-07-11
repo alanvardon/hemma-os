@@ -216,8 +216,15 @@ html.calc-layout #root {
   .active-scenario-label { display: none; }
 }
 @container header (max-width: 440px) {
-  .header-brand { flex: 1 1 100%; }
-  .header-actions { width: 100%; justify-content: flex-end; }
+  /* One row on phones: home pill + ellipsized title + actions stay together
+     (plan 73 feedback) — the brand shrinks instead of wrapping the actions
+     to a second row, but the title never collapses below a readable stub. */
+  .page-header { flex-wrap: nowrap; }
+  .header-brand { flex: 1 1 0; }
+  .header-brand > div { min-width: 4.5rem; }
+  /* The save flash keeps its layout slot otherwise — too dear on one row. */
+  .save-state { display: none; }
+  .save-state.show { display: inline; }
 }
 
 .page-header .tagline {
@@ -348,6 +355,9 @@ html.calc-layout #root {
   padding: 2rem 2.25rem 3rem;
   overflow-y: auto;
   height: 100%;
+  /* Grid items default to min-width auto — nowrap text inside would set the
+     whole column's min-content and overflow the viewport on phones. */
+  min-width: 0;
 }
 
 .summary-col {
@@ -356,6 +366,7 @@ html.calc-layout #root {
   border-left: 1px solid var(--rule);
   overflow-y: auto;
   height: 100%;
+  min-width: 0;
 }
 
 /* ── Sections (input column cards) ──────────────────────────── */
