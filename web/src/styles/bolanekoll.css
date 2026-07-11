@@ -602,21 +602,21 @@ dialog.bk-dialog {
     text-transform: uppercase; color: var(--ink-soft);
   }
 
-  /* Betalningar: date + type chip + amount / loan part / balance — the row
-     actions sit right, vertically centred over the two detail lines */
+  /* Betalningar: date + amount / loan part / balance — the row actions sit
+     right, vertically centred over the detail lines; the type (and insats)
+     chips get their own line at the bottom of the card */
   .bk-root .payments-table tr {
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      'date kind amount'
+      'date date amount'
       'part part act'
-      'bal  bal  act';
+      'bal  bal  act'
+      'kind kind kind';
     row-gap: 0.3rem;
   }
   .bk-root .payments-table .col-date { grid-area: date; }
   .bk-root .payments-table .col-kind { grid-area: kind; white-space: nowrap; }
-  /* the insats chip stacked squashed under the kind chip here — the state is
-     already carried by the accent bar + the filled flag action */
-  .bk-root .payments-table .col-kind .row-flag-insats { display: none; }
+  .bk-root .payments-table .col-kind .row-flag { margin-left: 0.35rem; }
   .bk-root .payments-table .col-amount { grid-area: amount; color: var(--ink); font-weight: 600; }
   .bk-root .payments-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
   .bk-root .payments-table .col-balance { grid-area: bal; font-size: 12.5px; color: var(--ink-soft); text-align: left; }
