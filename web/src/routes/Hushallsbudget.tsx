@@ -484,7 +484,6 @@ export default function Hushallsbudget() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyRows, setHistoryRows] = useState<SalarySubmission[]>([])
   const [chartOpen, setChartOpen] = useState(false)
-  const mortgageFiguresRef = useRef<{ ranta: number; amortering: number } | null>(null)
 
   // Load the persisted budget once on mount (now async — localStorage today,
   // cloud after the swap). `loadedRef` holds the exact object we hydrated with
@@ -505,7 +504,6 @@ export default function Hushallsbudget() {
         // which means the mortgage gate failed and synced rows must be removed.
         if (!mortgageSnapshot) return base
         const figures = mortgageMonthlyFigures(mortgageSnapshot.parts, mortgageSnapshot.periods, mortgageSnapshot.payments)
-        mortgageFiguresRef.current = figures
         return applyMortgageSync(base, figures)
       })
     })
@@ -554,22 +552,6 @@ export default function Hushallsbudget() {
   }
   function removeRow(kind: 'income' | 'cost' | 'saving', id: string) {
     mutate((s) => { const list = listFor(s, kind); const i = list.findIndex((x) => x.id === id); if (i >= 0) list.splice(i, 1) })
-  }
-
-  function disableMortgageSync() {
-    mutate((s) => {
-      s.mortgageSyncOff = true
-      s.costs = s.costs.filter((row) => row.source !== 'bolanekoll')
-    })
-  }
-
-  function enableMortgageSync() {
-    const figures = mortgageFiguresRef.current
-    if (!figures) return
-    mutate((s) => {
-      s.mortgageSyncOff = false
-      s.costs = applyMortgageSync(s, figures).costs
-    })
   }
 
   // ── Categories ─────────────────────────────────────────────────────────────
@@ -797,13 +779,6 @@ export default function Hushallsbudget() {
                     </div>
                   ))}
                 </div>
-                <button type="button" className="link-btn bolan-off" onClick={disableMortgageSync}>Stäng av synk</button>
-              </div>
-            )}
-            {state.mortgageSyncOff && mortgageFiguresRef.current && (
-              <div className="bolan-ghost">
-                <span>Bolån-synk är avstängd</span>
-                <button type="button" className="link-btn" onClick={enableMortgageSync}>Slå på igen</button>
               </div>
             )}
             {state.costs.some((row) => row.source === 'bolanekoll') && !state.bolanHintDismissed && state.costs.some((row) => row.owner === 'joint' && !row.source && /bolån|mortgage/i.test(row.label)) && (

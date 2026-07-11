@@ -32,9 +32,11 @@ describe('applyMortgageSync', () => {
     expect(removed.costs).toEqual(state.costs)
   })
 
-  it('keeps sync rows absent while mortgage sync is switched off', () => {
+  it('reactivates sync and clears a legacy off flag', () => {
     const state = { ...defaultState(), mortgageSyncOff: true }
-    expect(applyMortgageSync(state, { ranta: 8_550, amortering: 3_000 })).toBe(state)
+    const synced = applyMortgageSync(state, { ranta: 8_550, amortering: 3_000 })
+    expect(synced.costs.slice(0, 2).map((row) => row.id)).toEqual([BOLAN_ROW_IDS.ranta, BOLAN_ROW_IDS.amortering])
+    expect(synced.mortgageSyncOff).toBeUndefined()
   })
 
   it('updates fixed rows when mortgage figures change', () => {

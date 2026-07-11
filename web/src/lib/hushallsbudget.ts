@@ -30,6 +30,8 @@ export interface BudgetState {
   savings: Row[]
   seq: number
   catSeq: number
+  /** @deprecated Plan 89 originally exposed an off toggle. Retained only so a
+   * loaded legacy blob can be normalised back to always-on sync. */
   mortgageSyncOff?: boolean
   bolanHintDismissed?: boolean
 }
@@ -146,7 +148,7 @@ export function defaultState(): BudgetState {
 export const BOLAN_ROW_IDS = { ranta: 'r-bolan-ranta', amortering: 'r-bolan-amort' } as const
 
 export function applyMortgageSync(state: BudgetState, figures: { ranta: number; amortering: number } | null): BudgetState {
-  const wanted: Row[] = figures && !state.mortgageSyncOff ? [
+  const wanted: Row[] = figures ? [
     { id: BOLAN_ROW_IDS.ranta, label: 'Bolån — ränta', amount: figures.ranta, owner: 'joint', source: 'bolanekoll' },
     { id: BOLAN_ROW_IDS.amortering, label: 'Bolån — amortering', amount: figures.amortering, owner: 'joint', source: 'bolanekoll' },
   ] : []
@@ -154,9 +156,10 @@ export function applyMortgageSync(state: BudgetState, figures: { ranta: number; 
   const unchanged = existing.length === wanted.length && wanted.every((wantedRow) =>
     existing.some((row) => row.id === wantedRow.id && row.label === wantedRow.label &&
       row.amount === wantedRow.amount && row.owner === wantedRow.owner && row.category === undefined))
-  if (unchanged) return state
+  if (unchanged && state.mortgageSyncOff === undefined) return state
   const humanRows = state.costs.filter((row) => row.source !== 'bolanekoll')
-  return { ...state, costs: [...wanted, ...humanRows] }
+  const { mortgageSyncOff: _legacyMortgageSyncOff, ...activeState } = state
+  return { ...activeState, costs: [...wanted, ...humanRows] }
 }
 
 export function computeBudget(state: Partial<BudgetState> = {}): BudgetResult {
