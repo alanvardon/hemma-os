@@ -41,8 +41,6 @@ The primary product is the React/TypeScript/Vite application in `web/`.
 - `supabase/`: schema migrations, RLS and database tests, seed data, configuration, and edge functions.
 - `planning/`: proposed work and decision context.
 
-`orchestrator/` is a separate, temporary project and is outside these development instructions. Do not modify it as part of Hemma OS work unless the user explicitly requests that project.
-
 ## Architecture
 
 Preserve this direction of responsibility:
