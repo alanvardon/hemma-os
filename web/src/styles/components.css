@@ -197,13 +197,17 @@ input::placeholder { color: var(--ink-faint); }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 1rem;
+  gap: 0.35rem 1rem;
+  /* Long label + nowrap verdict don't fit side-by-side on a phone — let the
+     verdict wrap to its own line inside the pill instead of spilling out. */
+  flex-wrap: wrap;
   padding: 10px 1.1rem;
   background: var(--accent-faint);
   border: 1px solid color-mix(in oklch, var(--accent) 22%, transparent);
   border-radius: var(--r-md);
   font-size: 13px;
 }
+.bank-diff-row .derived-value { white-space: normal; }
 
 /* ── Stress slider ──────────────────────────────────────────── */
 .stress-slider-wrap { margin-top: 0.5rem; }
@@ -386,7 +390,7 @@ input::placeholder { color: var(--ink-faint); }
 
 /* Affordability inline controls */
 .afford-input { width: 52px; padding: 4px 6px; font-size: 12px; text-align: center; border-radius: 7px; }
-.afford-unit { font-size: 12px; color: var(--ink-soft); }
+.afford-unit { font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
 .afford-row { align-items: center; }
 
 /* ── Toggle switch ──────────────────────────────────────────── */
@@ -491,6 +495,62 @@ input::placeholder { color: var(--ink-faint); }
 .bk-root .data-table tbody tr:last-child td, .ma-root .data-table tbody tr:last-child td { border-bottom: none; }
 .bk-root .data-table .num, .ma-root .data-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bk-root .data-table .col-date, .ma-root .data-table .col-date { white-space: nowrap; color: var(--ink-mid); }
+
+/* Mobile card-mode (plan 73): ≤760px a `.table-cards` data row renders as a
+   card, never a horizontally-scrolled table row. This block is only the
+   shared plumbing (display resets, card frame); each table's grid areas live
+   in its tool stylesheet. 760px matches these tools' mobile breakpoint —
+   the wide tables (Poster, Betalningar) have a ~770px natural width, so any
+   lower threshold leaves a horizontal scroll band. */
+@media (max-width: 760px) {
+  .bk-root .table-cards, .ma-root .table-cards,
+  .bk-root .table-cards tbody, .ma-root .table-cards tbody { display: block; }
+  .bk-root .table-cards thead, .ma-root .table-cards thead { display: none; }
+  .bk-root .table-cards tr, .ma-root .table-cards tr {
+    display: grid; align-items: center; gap: 0.35rem 0.5rem;
+    padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--rule);
+  }
+  .bk-root .table-cards tbody tr:last-child, .ma-root .table-cards tbody tr:last-child { border-bottom: none; }
+  .bk-root .table-cards td, .ma-root .table-cards td {
+    display: block; min-width: 0; padding: 0; border-bottom: none;
+  }
+  /* the desktop squeeze (width: 1%) would collapse the actions grid cell */
+  .bk-root .table-cards .col-act, .ma-root .table-cards .col-act { width: auto; }
+}
+
+/* Edge fade for tables that keep the horizontal-scroll safety net below the
+   desktop width (plan 73): overlay scrollbars render nothing, so fade the
+   clipped edge to make the cut visible. The scroll-driven timeline only
+   activates when the wrap actually overflows, and slides the fade to the
+   trailing edge as you scroll — pure CSS, no fade on tables that fit.
+   Progressive enhancement: unsupported browsers keep the status quo. */
+@property --tw-fade-l { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --tw-fade-r { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@keyframes tw-edge-fade {
+  from { --tw-fade-l: 0px; --tw-fade-r: 28px; }
+  to { --tw-fade-l: 28px; --tw-fade-r: 0px; }
+}
+/* 761–900px the wide tables are tables again but the viewport can't hold
+   their untrimmed ~770px natural width — tighten the shell and cells so
+   nothing needs a horizontal scroll (plan 73 feedback). */
+@media (min-width: 761px) and (max-width: 900px) {
+  .bk-root .wrap, .ma-root .wrap { padding-left: 1.25rem; padding-right: 1.25rem; }
+  .bk-root .data-table, .ma-root .data-table { font-size: 13px; }
+  .bk-root .data-table th, .ma-root .data-table th,
+  .bk-root .data-table td, .ma-root .data-table td { padding-left: 8px; padding-right: 8px; }
+}
+
+@media (max-width: 900px) {
+  @supports (animation-timeline: scroll(self x)) {
+    .bk-root .table-wrap, .ma-root .table-wrap {
+      animation: tw-edge-fade linear both;
+      animation-timeline: scroll(self x);
+      mask-image: linear-gradient(90deg,
+        transparent 0, #000 var(--tw-fade-l),
+        #000 calc(100% - var(--tw-fade-r)), transparent 100%);
+    }
+  }
+}
 
 /* Icon button (base; per-tool delete-hover variants stay in each file) */
 .bk-root .icon-btn, .ma-root .icon-btn {
