@@ -247,11 +247,11 @@ export default function Bolanekoll() {
       {g.days_left != null && <span className={'ld-countdown' + (g.expired ? ' is-expired' : '')}>{repriceLabel(g.days_left, g.expired)}</span>}
     </span>
   )
-  // Rate pill. `blended` prefixes Ø for a balance-weighted group average (mixed types).
-  const rateBadge = (rate: number | null, type: 'rörlig' | 'bunden' | null, blended = false) =>
+  // Rate pill.
+  const rateBadge = (rate: number | null, type: 'rörlig' | 'bunden' | null) =>
     rate == null ? null : (
       <span className={'ld-rate' + (type === 'bunden' ? ' is-bunden' : '')}>
-        {blended ? 'Ø ' : ''}{fmtPct(rate)}{type ? ' · ' + (type === 'bunden' ? 'bunden' : 'rörlig') : ''}
+        {fmtPct(rate)}{type ? ' · ' + (type === 'bunden' ? 'bunden' : 'rörlig') : ''}
       </span>
     )
   const partActs = (p: LoanPart) => (
@@ -872,7 +872,7 @@ export default function Bolanekoll() {
                   <hr className="whatif-divider" />
                   <p className="whatif-group-label">Betalning till banken</p>
                   <div className="metric-row whatif-row">
-                    <div className="metric-chip"><span className="metric-label">Nu (Ø {fmtPct(blended)})</span>
+                    <div className="metric-chip"><span className="metric-label">Nu ({fmtPct(blended)})</span>
                       <span className="metric-val">{M(whatIf.now.gross)}</span>
                       {settings.ranteavdrag && <span className="metric-sub">{fmtMoney(whatIf.now.net)} netto</span>}</div>
                     <div className="metric-chip is-accent"><span className="metric-label">Vid {fmtPct(hypRate)}</span>
@@ -890,7 +890,7 @@ export default function Bolanekoll() {
                   <hr className="whatif-divider" />
                   <p className="whatif-group-label">Din andel av hushållets delade kostnader</p>
                   <div className="metric-row whatif-row">
-                    <div className="metric-chip"><span className="metric-label">Hushåll nu (Ø {fmtPct(blended)})</span>
+                    <div className="metric-chip"><span className="metric-label">Hushåll nu ({fmtPct(blended)})</span>
                       <span className="metric-val">{M(whatIf.household.now / 2)}</span>
                       <span className="metric-sub">din andel / mån</span></div>
                     <div className="metric-chip is-accent"><span className="metric-label">Hushåll vid {fmtPct(hypRate)}</span>
@@ -1033,7 +1033,7 @@ export default function Bolanekoll() {
                               ><Icon icon={ChevronRight} size={12} /></motion.span>
                               {g.is_catchall
                                 ? <span className="ld-needs">No reprice date set</span>
-                                : <>{repriceMeta(g)}{rateBadge(g.rate, g.rate_type, g.rate_type == null)}</>}
+                                : <>{repriceMeta(g)}{rateBadge(g.rate, g.rate_type)}</>}
                               <span className="ld-count">{g.parts.length} part{g.parts.length === 1 ? '' : 's'}</span>
                             </button>
                           </td>
