@@ -2,10 +2,12 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Maximize2 } from 'lucide-react'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
-  defaultState, computeBudget, buildSubmission, formatWithSpaces, parseFormatted, money as fmt,
+  applyMortgageSync, defaultState, computeBudget, buildSubmission, formatWithSpaces, parseFormatted, money as fmt,
 } from '../lib/hushallsbudget'
 import type { BudgetState, BudgetResult, Owner, Row, SalarySubmission, IncomeItem } from '../lib/hushallsbudget'
 import { loadBudget, saveBudget } from '../lib/hushallsbudget-store'
+import { mortgageMonthlyFigures } from '../lib/mortgage'
+import { loadMortgageSyncSnapshot } from '../lib/mortgage-store'
 import * as salaryStore from '../lib/salary-store'
 import { Money, Percent } from '../components/AnimatedNumber'
 import BudgetDonutChart, { type DonutSegment } from '../components/charts/BudgetDonutChart'
@@ -482,6 +484,7 @@ export default function Hushallsbudget() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyRows, setHistoryRows] = useState<SalarySubmission[]>([])
   const [chartOpen, setChartOpen] = useState(false)
+  const mortgageFiguresRef = useRef<{ ranta: number; amortering: number } | null>(null)
 
   // Load the persisted budget once on mount (now async — localStorage today,
   // cloud after the swap). `loadedRef` holds the exact object we hydrated with
@@ -490,12 +493,21 @@ export default function Hushallsbudget() {
   const loadedRef = useRef<BudgetState | null>(null)
   useEffect(() => {
     let alive = true
-    loadBudget().then((loaded) => {
+    Promise.all([
+      loadBudget(),
+      loadMortgageSyncSnapshot().catch(() => null),
+    ]).then(([loaded, mortgageSnapshot]) => {
       if (!alive) return
-      // Capture the hydration baseline via the updater (reads `prev`, not a
-      // stale `state` closure) — the placeholder default when nothing's stored,
-      // else the loaded budget. The save effect skips this exact object.
-      setState((prev) => (loadedRef.current = loaded ?? prev))
+      setState((prev) => {
+        const base = (loadedRef.current = loaded ?? prev)
+        // null snapshot means the live read failed: retain any previously
+        // synced rows. A successful snapshot may legitimately compute null,
+        // which means the mortgage gate failed and synced rows must be removed.
+        if (!mortgageSnapshot) return base
+        const figures = mortgageMonthlyFigures(mortgageSnapshot.parts, mortgageSnapshot.periods, mortgageSnapshot.payments)
+        mortgageFiguresRef.current = figures
+        return applyMortgageSync(base, figures)
+      })
     })
     return () => { alive = false }
   }, [])
@@ -542,6 +554,22 @@ export default function Hushallsbudget() {
   }
   function removeRow(kind: 'income' | 'cost' | 'saving', id: string) {
     mutate((s) => { const list = listFor(s, kind); const i = list.findIndex((x) => x.id === id); if (i >= 0) list.splice(i, 1) })
+  }
+
+  function disableMortgageSync() {
+    mutate((s) => {
+      s.mortgageSyncOff = true
+      s.costs = s.costs.filter((row) => row.source !== 'bolanekoll')
+    })
+  }
+
+  function enableMortgageSync() {
+    const figures = mortgageFiguresRef.current
+    if (!figures) return
+    mutate((s) => {
+      s.mortgageSyncOff = false
+      s.costs = applyMortgageSync(s, figures).costs
+    })
   }
 
   // ── Categories ─────────────────────────────────────────────────────────────
@@ -755,6 +783,35 @@ export default function Hushallsbudget() {
             </p>
 
             <p className="owner-split-label">Joint costs <span className="owner-block-tag">split 50/50</span></p>
+            {state.costs.some((row) => row.source === 'bolanekoll') && (
+              <div className="cat-card bolan-card">
+                <div className="cat-head">
+                  <span className="cat-name-static">Bolån <span className="bolan-src">· från <a href="#/bolanekoll">Bolånekoll</a> →</span></span>
+                  <span className="cat-sub">{fmt(r.jointCategories.find((category) => category.id === '_bolan')?.amount ?? 0)}</span>
+                </div>
+                <div className="b-list">
+                  {state.costs.filter((row) => row.source === 'bolanekoll').map((row) => (
+                    <div key={row.id} className="b-row bolan-row">
+                      <span className="b-label-static">{row.label}</span>
+                      <span className="b-amount-static">{fmt(row.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+                <button type="button" className="link-btn bolan-off" onClick={disableMortgageSync}>Stäng av synk</button>
+              </div>
+            )}
+            {state.mortgageSyncOff && mortgageFiguresRef.current && (
+              <div className="bolan-ghost">
+                <span>Bolån-synk är avstängd</span>
+                <button type="button" className="link-btn" onClick={enableMortgageSync}>Slå på igen</button>
+              </div>
+            )}
+            {state.costs.some((row) => row.source === 'bolanekoll') && !state.bolanHintDismissed && state.costs.some((row) => row.owner === 'joint' && !row.source && /bolån|mortgage/i.test(row.label)) && (
+              <div className="bolan-hint">
+                <span>Din manuella bolånerad räknas också med i totalen — ta bort den om den nu dubblas.</span>
+                <button type="button" className="link-btn" onClick={() => mutate((s) => { s.bolanHintDismissed = true })}>Ok, göm</button>
+              </div>
+            )}
             <div className="cat-cards">
               {state.categories.map((cat) => (
                 <div key={cat.id} className={'cat-card' + (dragOverCatId === cat.id ? ' drag-over' : '')}

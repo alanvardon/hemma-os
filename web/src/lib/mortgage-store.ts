@@ -258,6 +258,37 @@ const _importLocalOnce = makeImportOnce(IMPORT_FLAG, async () => {
 })
 
 // ── Loan parts ───────────────────────────────────────────────────────────────
+export interface MortgageSyncSnapshot {
+  parts: LoanPart[]
+  periods: RatePeriod[]
+  payments: Payment[]
+}
+
+// Unlike the ordinary list functions, this all-or-nothing read never falls
+// back to cache. Hushållsbudget must distinguish authoritative empty data
+// (remove synced rows) from an unavailable live source (preserve stale rows).
+export async function loadMortgageSyncSnapshot(): Promise<MortgageSyncSnapshot | null> {
+  await _importLocalOnce()
+  const [partsResult, periodsResult, paymentsResult] = await Promise.all([
+    supabase.from(T.parts).select('*').order('created_at', { ascending: true }),
+    supabase.from(T.periods).select('*'),
+    supabase.from(T.payments).select('*'),
+  ])
+  if (partsResult.error || periodsResult.error || paymentsResult.error ||
+      !partsResult.data || !periodsResult.data || !paymentsResult.data) return null
+  const snapshot: MortgageSyncSnapshot = {
+    parts: partsResult.data as LoanPart[],
+    periods: periodsResult.data as RatePeriod[],
+    payments: paymentsResult.data as Payment[],
+  }
+  _patchCache((cache) => {
+    cache.loan_parts = snapshot.parts
+    cache.rate_periods = snapshot.periods
+    cache.payments = snapshot.payments
+  })
+  return snapshot
+}
+
 export async function listLoanParts(): Promise<LoanPart[]> {
   await _importLocalOnce()
   const { data, error } = await supabase.from(T.parts).select('*').order('created_at', { ascending: true })

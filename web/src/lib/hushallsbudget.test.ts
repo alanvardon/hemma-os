@@ -1,7 +1,50 @@
 import { describe, it, expect } from 'vitest'
 import {
-  defaultState, computeBudget, buildSubmission, formatWithSpaces, parseFormatted,
+  BOLAN_ROW_IDS, applyMortgageSync, defaultState, computeBudget, buildSubmission, formatWithSpaces, parseFormatted,
 } from './hushallsbudget'
+
+describe('applyMortgageSync', () => {
+  it('inserts fixed machine-owned rows without changing human row order or seq', () => {
+    const state = defaultState()
+    const humanIds = state.costs.map((row) => row.id)
+    const seq = state.seq
+
+    const synced = applyMortgageSync(state, { ranta: 8_550, amortering: 3_000 })
+
+    expect(synced).not.toBe(state)
+    expect(synced.costs.slice(0, 2)).toEqual([
+      { id: BOLAN_ROW_IDS.ranta, label: 'Bolån — ränta', amount: 8_550, owner: 'joint', source: 'bolanekoll' },
+      { id: BOLAN_ROW_IDS.amortering, label: 'Bolån — amortering', amount: 3_000, owner: 'joint', source: 'bolanekoll' },
+    ])
+    expect(synced.costs.slice(2).map((row) => row.id)).toEqual(humanIds)
+    expect(synced.seq).toBe(seq)
+  })
+
+  it('returns the identical state reference when synced figures are unchanged', () => {
+    const synced = applyMortgageSync(defaultState(), { ranta: 8_550, amortering: 3_000 })
+    expect(applyMortgageSync(synced, { ranta: 8_550, amortering: 3_000 })).toBe(synced)
+  })
+
+  it('removes only synced rows when the mortgage gate no longer passes', () => {
+    const state = defaultState()
+    const synced = applyMortgageSync(state, { ranta: 8_550, amortering: 3_000 })
+    const removed = applyMortgageSync(synced, null)
+    expect(removed.costs).toEqual(state.costs)
+  })
+
+  it('keeps sync rows absent while mortgage sync is switched off', () => {
+    const state = { ...defaultState(), mortgageSyncOff: true }
+    expect(applyMortgageSync(state, { ranta: 8_550, amortering: 3_000 })).toBe(state)
+  })
+
+  it('updates fixed rows when mortgage figures change', () => {
+    const synced = applyMortgageSync(defaultState(), { ranta: 8_550, amortering: 3_000 })
+    const updated = applyMortgageSync(synced, { ranta: 8_000, amortering: 2_500 })
+    expect(updated.costs.slice(0, 2).map((row) => [row.id, row.amount])).toEqual([
+      [BOLAN_ROW_IDS.ranta, 8_000], [BOLAN_ROW_IDS.amortering, 2_500],
+    ])
+  })
+})
 
 // ── Ported from the vanilla budget.js pure-math section ──────────────────────
 describe('computeBudget — the pot', () => {
@@ -55,6 +98,14 @@ describe('computeBudget — the pot', () => {
     })
     const other = r2.jointCategories.find((c) => c.id === '_other')
     expect(other).toEqual({ id: '_other', name: 'Övrigt', amount: 500 })
+  })
+
+  it('separates synced mortgage costs into a prepended Bolån bucket', () => {
+    const state = applyMortgageSync(defaultState(), { ranta: 8_550, amortering: 3_000 })
+    const result = computeBudget(state)
+    expect(result.jointCategories[0]).toEqual({ id: '_bolan', name: 'Bolån', amount: 11_550 })
+    expect(result.costsJoint).toBe(44_542 + 11_550)
+    expect(result.jointCategories.find((category) => category.id === '_other')).toBeUndefined()
   })
 
   it('tolerates an empty state', () => {

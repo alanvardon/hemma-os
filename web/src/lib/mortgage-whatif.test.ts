@@ -1,5 +1,33 @@
 import { describe, it, expect } from 'vitest'
-import { rateWhatIf } from './mortgage'
+import { mortgageMonthlyFigures, rateWhatIf } from './mortgage'
+import type { LoanPart, Payment, RatePeriod } from './mortgage'
+
+describe('mortgageMonthlyFigures', () => {
+  it('returns steady-state gross interest and observed monthly amortization', () => {
+    const parts: LoanPart[] = [{
+      id: 'part-1', created_at: '', label: 'Bolån', loan_number: '1',
+      start_balance: 3_003_000, start_date: '2026-01-01', archived: false,
+    }]
+    const periods: RatePeriod[] = [{
+      id: 'rate-1', created_at: '', loan_part_id: 'part-1',
+      start_date: '2026-01-01', end_date: null, rate: 3.42, rate_type: 'rörlig',
+    }]
+    const payments: Payment[] = [
+      { id: 'pay-1', created_at: '', loan_part_id: 'part-1', date: '2026-01-31', kind: 'amortization', description: '', amount: 3_000, balance_after: 3_003_000, paid_by: 'joint', source: '' },
+      { id: 'pay-2', created_at: '', loan_part_id: 'part-1', date: '2026-02-28', kind: 'amortization', description: '', amount: 3_000, balance_after: 3_000_000, paid_by: 'joint', source: '' },
+    ]
+
+    // Interest = 3 000 000 × 3.42/100 / 12 = 8 550 kr/month.
+    expect(mortgageMonthlyFigures(parts, periods, payments)).toEqual({ ranta: 8_550, amortering: 3_000 })
+  })
+
+  it('returns null when balance or blended rate is unavailable', () => {
+    const part: LoanPart = { id: 'p', created_at: '', label: '', loan_number: '', start_balance: 3_000_000, start_date: '', archived: false }
+    const period: RatePeriod = { id: 'r', created_at: '', loan_part_id: 'p', start_date: '', end_date: null, rate: 3.42, rate_type: 'rörlig' }
+    expect(mortgageMonthlyFigures([], [period], [])).toBeNull()
+    expect(mortgageMonthlyFigures([part], [], [])).toBeNull()
+  })
+})
 
 // Plan 82 — rate what-if. Both legs COMPUTED with balance × rate/100 / 12 + the
 // observed monthly amortization; deduction applies ranteavdrag() to the MONTHLY

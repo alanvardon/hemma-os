@@ -592,6 +592,19 @@ export function rateWhatIf(balance: number, baseRate: number, rate: number, amor
 
 // ── Rate periods ───────────────────────────────────────────────────────────
 
+// Steady-state monthly figures synced into Hushållsbudget. Interest uses the
+// same balance × rate/100 / 12 convention as rateWhatIf; amortization is the
+// observed monthly balance reduction.
+export function mortgageMonthlyFigures(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]): { ranta: number; amortering: number } | null {
+  const balance = totalBalance(parts, payments)
+  const blended = weightedAvgRate(parts, periods, payments)
+  if (balance <= 0 || blended <= 0) return null
+  return {
+    ranta: r2(balance * blended / 100 / 12),
+    amortering: monthlyAmortizationRate(parts, payments),
+  }
+}
+
 export function effectiveRatePeriod(part: LoanPart, periods: RatePeriod[], asOf?: string): RatePeriod | null {
   const mine = periods.filter(r => r?.loan_part_id === part?.id && r.rate != null)
   if (!mine.length) return null

@@ -13,6 +13,7 @@ export interface Row {
   amount: number
   owner: Owner
   category?: string
+  source?: 'bolanekoll'
 }
 
 export interface Category {
@@ -29,6 +30,8 @@ export interface BudgetState {
   savings: Row[]
   seq: number
   catSeq: number
+  mortgageSyncOff?: boolean
+  bolanHintDismissed?: boolean
 }
 
 export interface PersonResult {
@@ -140,6 +143,22 @@ export function defaultState(): BudgetState {
   return s
 }
 
+export const BOLAN_ROW_IDS = { ranta: 'r-bolan-ranta', amortering: 'r-bolan-amort' } as const
+
+export function applyMortgageSync(state: BudgetState, figures: { ranta: number; amortering: number } | null): BudgetState {
+  const wanted: Row[] = figures && !state.mortgageSyncOff ? [
+    { id: BOLAN_ROW_IDS.ranta, label: 'Bolån — ränta', amount: figures.ranta, owner: 'joint', source: 'bolanekoll' },
+    { id: BOLAN_ROW_IDS.amortering, label: 'Bolån — amortering', amount: figures.amortering, owner: 'joint', source: 'bolanekoll' },
+  ] : []
+  const existing = state.costs.filter((row) => row.source === 'bolanekoll')
+  const unchanged = existing.length === wanted.length && wanted.every((wantedRow) =>
+    existing.some((row) => row.id === wantedRow.id && row.label === wantedRow.label &&
+      row.amount === wantedRow.amount && row.owner === wantedRow.owner && row.category === undefined))
+  if (unchanged) return state
+  const humanRows = state.costs.filter((row) => row.source !== 'bolanekoll')
+  return { ...state, costs: [...wanted, ...humanRows] }
+}
+
 export function computeBudget(state: Partial<BudgetState> = {}): BudgetResult {
   const incomes = state.incomes || []
   const costs = state.costs || []
@@ -170,9 +189,14 @@ export function computeBudget(state: Partial<BudgetState> = {}): BudgetResult {
   const catTotals: Record<string, number> = {}
   cats.forEach((c) => { catTotals[c.id] = 0 })
   let otherTotal = 0
+  let bolanTotal = 0
   for (let ci = 0; ci < costs.length; ci++) {
     const cr = costs[ci]
     if (cr.owner !== 'joint') continue
+    if (cr.source === 'bolanekoll') {
+      bolanTotal += cr.amount || 0
+      continue
+    }
     if (cr.category && Object.prototype.hasOwnProperty.call(catTotals, cr.category)) {
       catTotals[cr.category] += cr.amount || 0
     } else {
@@ -180,6 +204,7 @@ export function computeBudget(state: Partial<BudgetState> = {}): BudgetResult {
     }
   }
   const jointCategories: JointCategory[] = cats.map((c) => ({ id: c.id, name: c.name, amount: catTotals[c.id] }))
+  if (bolanTotal > 0) jointCategories.unshift({ id: '_bolan', name: 'Bolån', amount: bolanTotal })
   if (otherTotal > 0) jointCategories.push({ id: '_other', name: 'Övrigt', amount: otherTotal })
 
   const savingsJoint = sum(savings, 'joint')

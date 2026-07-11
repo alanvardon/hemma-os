@@ -62,6 +62,25 @@ describe('read path', () => {
     const rows = await store.listLoanParts()
     expect(rows).toEqual([{ id: 'cached', label: 'X' }])
   })
+
+  it('sync snapshot reports failure instead of presenting cached rows as live data', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mem.set(CACHE_KEY, JSON.stringify({ version: 4, loan_parts: [{ id: 'cached', label: 'X' }], payments: [], valuations: [], rate_periods: [], contributions: [], settings: {} }))
+    mock().control.failing.add('mortgage_rate_periods')
+
+    expect(await store.loadMortgageSyncSnapshot()).toBeNull()
+  })
+
+  it('sync snapshot returns all three live mortgage inputs together', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.mortgage_loan_parts = [{ id: 'p1' }]
+    mock().tables.mortgage_rate_periods = [{ id: 'r1' }]
+    mock().tables.mortgage_payments = [{ id: 'pay1' }]
+
+    expect(await store.loadMortgageSyncSnapshot()).toEqual({
+      parts: [{ id: 'p1' }], periods: [{ id: 'r1' }], payments: [{ id: 'pay1' }],
+    })
+  })
 })
 
 describe('write path', () => {
