@@ -5,7 +5,7 @@ import { LinePath, AreaClosed, Line, Bar } from '@visx/shape'
 import { AxisBottom, AxisLeft } from '@visx/axis'
 import { GridRows } from '@visx/grid'
 import { LinearGradient } from '@visx/gradient'
-import { curveMonotoneX } from '@visx/curve'
+import { curveMonotoneX, curveStepAfter } from '@visx/curve'
 import { useTooltip } from '@visx/tooltip'
 import { localPoint } from '@visx/event'
 import type { ChartTheme } from './useChartTheme'
@@ -30,6 +30,16 @@ interface Props {
   xValues: number[]
   series: SeriesDef[]
   yMin?: number
+  /** Explicit x-domain [min, max]. Defaults to the data's first/last x. Pass an
+   * animated window to zoom the timeline without slicing the data — the series
+   * is clipped to the plot and the tooltip only picks points inside the window. */
+  xDomain?: [number, number]
+  /** 'step' draws a piecewise-constant step-after curve (e.g. a policy rate that only moves on change points) instead of the default smoothed monotone line. */
+  curve?: 'monotone' | 'step'
+  /** Max x-axis ticks — pass a width-derived count when x labels are wide enough to collide on narrow screens. */
+  xTicks?: number
+  /** Exact x tick positions — wins over xTicks. Use when d3's rounded picks mislabel (e.g. duplicate years on a timestamp scale). */
+  xTickValues?: number[]
   marker?: { x: number; label?: string }
   formatXAxis?: (x: number) => string
   formatYAxis?: (y: number) => string
@@ -52,6 +62,10 @@ export default function LineAreaChart({
   xValues,
   series,
   yMin = 0,
+  xDomain,
+  curve = 'monotone',
+  xTicks,
+  xTickValues,
   marker,
   formatXAxis = (x) => String(x),
   formatYAxis = (y) => String(y),
@@ -65,8 +79,10 @@ export default function LineAreaChart({
   const innerW = Math.max(0, width - m.left - m.right)
   const innerH = Math.max(0, height - m.top - m.bottom)
 
-  const xMin = xValues[0] ?? 0
-  const xMax = xValues[xValues.length - 1] ?? 1
+  const xMin = xDomain ? xDomain[0] : (xValues[0] ?? 0)
+  const xMax = xDomain ? xDomain[1] : (xValues[xValues.length - 1] ?? 1)
+  const clip = xDomain != null
+  const clipId = `${idPrefix}-plot`
   const yMax = useMemo(() => {
     let max = 0
     for (const s of series) for (const v of s.values) if (v != null && v > max) max = v
@@ -96,24 +112,29 @@ export default function LineAreaChart({
       const point = localPoint(event)
       if (!point) return
       const xVal = xScale.invert(point.x - m.left)
-      // nearest index in xValues
-      let nearest = 0
+      // nearest index in xValues — only among points inside the visible domain,
+      // so a clipped/zoomed view never surfaces an off-screen point.
+      let nearest = -1
       let best = Infinity
       for (let i = 0; i < xValues.length; i++) {
+        if (xValues[i] < xMin || xValues[i] > xMax) continue
         const d = Math.abs(xValues[i] - xVal)
         if (d < best) {
           best = d
           nearest = i
         }
       }
+      if (nearest < 0) return
       showTooltip({
         tooltipData: { index: nearest, x: xValues[nearest] },
         tooltipLeft: m.left + xScale(xValues[nearest]),
         tooltipTop: point.y,
       })
     },
-    [xScale, xValues, m.left, showTooltip],
+    [xScale, xValues, xMin, xMax, m.left, showTooltip],
   )
+
+  const curveFn = curve === 'step' ? curveStepAfter : curveMonotoneX
 
   if (width < 10) return null
 
@@ -123,6 +144,14 @@ export default function LineAreaChart({
         <Group left={m.left} top={m.top}>
           {!compact && (
             <GridRows scale={yScale} width={innerW} height={innerH} stroke={theme.grid} strokeWidth={0.5} numTicks={5} />
+          )}
+
+          {clip && (
+            <defs>
+              <clipPath id={clipId}>
+                <rect x={0} y={0} width={innerW} height={innerH} />
+              </clipPath>
+            </defs>
           )}
 
           {series.map((s) =>
@@ -138,36 +167,40 @@ export default function LineAreaChart({
             ) : null,
           )}
 
-          {series.map((s) =>
-            s.area ? (
-              <AreaClosed<number>
-                key={`area-${s.key}`}
+          {/* Series clipped to the plot rect so a zoomed x-domain hides the
+              out-of-window portion of the line/area (no-op without xDomain). */}
+          <Group clipPath={clip ? `url(#${clipId})` : undefined}>
+            {series.map((s) =>
+              s.area ? (
+                <AreaClosed<number>
+                  key={`area-${s.key}`}
+                  data={xValues}
+                  x={(_, i) => xScale(xValues[i])}
+                  y={(_, i) => yScale(s.values[i] ?? 0)}
+                  yScale={yScale}
+                  defined={(_, i) => s.values[i] != null}
+                  curve={curveFn}
+                  fill={`url(#${idPrefix}-${s.key}-grad)`}
+                  stroke="transparent"
+                />
+              ) : null,
+            )}
+
+            {series.map((s) => (
+              <LinePath<number>
+                key={`line-${s.key}`}
                 data={xValues}
                 x={(_, i) => xScale(xValues[i])}
                 y={(_, i) => yScale(s.values[i] ?? 0)}
-                yScale={yScale}
                 defined={(_, i) => s.values[i] != null}
-                curve={curveMonotoneX}
-                fill={`url(#${idPrefix}-${s.key}-grad)`}
-                stroke="transparent"
+                curve={curveFn}
+                stroke={s.color}
+                strokeWidth={s.strokeWidth ?? 2}
+                strokeDasharray={s.dashed ? '6 4' : undefined}
+                strokeLinecap="round"
               />
-            ) : null,
-          )}
-
-          {series.map((s) => (
-            <LinePath<number>
-              key={`line-${s.key}`}
-              data={xValues}
-              x={(_, i) => xScale(xValues[i])}
-              y={(_, i) => yScale(s.values[i] ?? 0)}
-              defined={(_, i) => s.values[i] != null}
-              curve={curveMonotoneX}
-              stroke={s.color}
-              strokeWidth={s.strokeWidth ?? 2}
-              strokeDasharray={s.dashed ? '6 4' : undefined}
-              strokeLinecap="round"
-            />
-          ))}
+            ))}
+          </Group>
 
           {marker && (
             <Line
@@ -193,7 +226,8 @@ export default function LineAreaChart({
               <AxisBottom
                 scale={xScale}
                 top={innerH}
-                numTicks={Math.min(8, xValues.length)}
+                numTicks={Math.min(xTicks ?? 8, xValues.length)}
+                tickValues={xTickValues}
                 stroke={theme.grid}
                 tickStroke={theme.grid}
                 tickFormat={(v) => formatXAxis(Number(v))}
