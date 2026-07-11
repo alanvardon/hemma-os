@@ -148,3 +148,20 @@ wrong font) were **implemented directly** — no plan doc — on branch
 **Build order: 86 → 87.** 86 settles the vocabulary ("paid in"); 87 reuses it in
 every onboarding string. Each is its own branch + PR, base main, landed one at a
 time.
+
+---
+
+# Cross-tool sync — 2026-07-11 (standalone)
+
+Raised during the plan-82 grilled Q&A; all 8 design decisions locked via a
+second grilled Q&A the same day and recorded in the plan.
+
+| File | Scope | Summary | Owner model | Effort |
+|------|-------|---------|-------------|--------|
+| [89-hushallsbudget-bolan-auto-sync.md](89-hushallsbudget-bolan-auto-sync.md) | hushållsbudget ← bolånekoll | Auto-synced read-only "Bolån" section in the budget's joint costs: two rows (ränta = balance × blended /12, amortering observed), synced on budget mount, `source:'bolanekoll'`-tagged rows + `_migrate` guard, dismissible double-count hint, off-toggle | Opus (sync/state-identity semantics + migrate guard + golden values) + Sonnet (pinned card UI) | M |
+
+Standalone; builds on plan 82's figure conventions (shipped, PR #275). Key
+landmine documented in the plan: the store's `_migrate` force-categorises
+category-less joint rows on every load and must be guarded or it teleports the
+synced rows into user categories. Branch/PR convention as always: own branch,
+base main.
