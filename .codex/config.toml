@@ -1,0 +1,7 @@
+sandbox_mode = "workspace-write"
+[mcp_servers.orchestrator]
+command = "/Users/avardon/.pyenv/versions/bk-orchestrator-env/bin/python"
+args = [
+    "-m",
+    "orchestrator.mcp_server",
+]
