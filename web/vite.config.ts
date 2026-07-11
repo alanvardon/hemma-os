@@ -94,8 +94,19 @@ export default defineConfig(({ mode, command }) => {
     build: { assetsDir: 'bk-assets' },
     server: { port: 5174 },
     test: {
+      // Node stays the default: the 17 existing lib/store tests don't touch the
+      // DOM, so they don't pay jsdom's cost. Component tests opt in per-file with
+      // a `// @vitest-environment jsdom` docblock (plan 78).
       environment: 'node',
-      include: ['src/**/*.test.ts'],
+      // Auto-run @testing-library/react's cleanup() between tests (it hooks the
+      // global afterEach) so mounted DOM from one test doesn't leak into the
+      // next. Harmless for the existing node tests, which import from 'vitest'
+      // explicitly and don't rely on globals.
+      globals: true,
+      // .tsx so component tests are collected at all; setup.ts registers the
+      // jest-dom matchers (toBeInTheDocument, etc.) for the jsdom files.
+      include: ['src/**/*.test.{ts,tsx}'],
+      setupFiles: ['./src/test/setup.ts'],
     },
   }
 })
