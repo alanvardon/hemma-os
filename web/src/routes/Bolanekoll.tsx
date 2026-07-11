@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { ChevronRight, Copy, EllipsisVertical, Flag, Pencil, Settings2, X } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
+import RiksbankChart from '../components/charts/RiksbankChart'
 import Collapse from '../components/Collapse'
 import FileDropzone from '../components/FileDropzone'
 import Icon from '../components/Icon'
@@ -25,6 +26,12 @@ import {
   contributionSplit, settlement, todayISO,
 } from '../lib/mortgage'
 import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, PaidBy } from '../lib/mortgage'
+import {
+  fetchPolicyRate, nextDecision, lastDecision, decisionOutcome,
+  detectChange, currentPoint, readAcknowledged, acknowledge, readSessionHidden, hideForSession,
+  type PolicyRateData, type Acknowledged,
+} from '../lib/riksbank'
+import { daysUntil } from '../lib/date'
 import * as Store from '../lib/mortgage-store'
 import PartDialog from './bolanekoll/PartDialog'
 import ValuationDialog from './bolanekoll/ValuationDialog'
@@ -39,6 +46,22 @@ import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fm
 // The hero reprice notice appears only inside the final month before the
 // villkorsändring — before that, the date lives in the Lånedelar ledger.
 const REPRICE_NOTICE_DAYS = 31
+
+/** "17 jun", or "1 okt 2025" when the date isn't in the current year — a bare
+ * day+month for a past year reads as upcoming. Strips the trailing period
+ * sv-SE puts on most abbreviated months ("1 okt.") so callers can add their
+ * own sentence-final punctuation without doubling it. */
+function fmtRateDate(iso: string): string {
+  const d = new Date(iso + 'T00:00:00')
+  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric'
+  return d.toLocaleDateString('sv-SE', opts).replace(/\.( \d{4})?$/, '$1')
+}
+
+// The change banner is a nudge about NEWS — after this many days the new rate
+// is just "the rate" and the banner stays quiet even if never dismissed
+// (a first visit shouldn't announce a nine-month-old cut).
+const RATE_CHANGE_NEWS_DAYS = 60
 
 // ── Main component ─────────────────────────────────────────────────────────
 
@@ -97,6 +120,34 @@ export default function Bolanekoll() {
   const [contDlg, setContDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [settingsDlg, setSettingsDlg] = useState(false)
 
+  // ── Riksbank policy-rate watcher (plan 70) ──────────────────────────────
+  // Best-effort only: the fetch never blocks the calculator, and a failure
+  // just quietly drops the strip/banner/chart rather than surfacing an error.
+  const [policyRate, setPolicyRate] = useState<PolicyRateData | null>(null)
+  const [rateFailed, setRateFailed] = useState(false)
+  const [rateAck, setRateAck] = useState<Acknowledged | null>(() => readAcknowledged())
+  const [rateHidden, setRateHidden] = useState<Acknowledged | null>(() => readSessionHidden())
+  const [rateRange, setRateRange] = useState<'5y' | 'all'>('5y')
+  useEffect(() => {
+    let cancelled = false
+    fetchPolicyRate().then((d) => { if (!cancelled) setPolicyRate(d) }).catch(() => { if (!cancelled) setRateFailed(true) })
+    return () => { cancelled = true }
+  }, [])
+  const rateNow = useMemo(() => policyRate ? currentPoint(policyRate) : null, [policyRate])
+  // Two dismissal depths (deliberately asymmetric): the easy-to-fat-finger ×
+  // only hides for this session; the read-and-aim "visa inte igen" link is the
+  // permanent ack. An accidental × costs one visit, never the news window.
+  const hideRateChangeForNow = useCallback(() => {
+    if (!rateNow) return
+    hideForSession(rateNow)
+    setRateHidden({ date: rateNow.date, value: rateNow.value })
+  }, [rateNow])
+  const dismissRateChange = useCallback(() => {
+    if (!rateNow) return
+    acknowledge(rateNow)
+    setRateAck({ date: rateNow.date, value: rateNow.value })
+  }, [rateNow])
+
   currencyState.current = settings.currency || 'SEK'
 
   const refresh = useCallback(async () => {
@@ -143,6 +194,27 @@ export default function Bolanekoll() {
   // bare date can't: how much of the loan moves, and off which rate.
   const nextReprice = useMemo(() => loanGroups.find(g => !g.is_catchall && g.days_left != null) ?? null, [loanGroups])
   const archivedParts = useMemo(() => parts.filter(p => p.archived), [parts])
+
+  const nextBesked = useMemo(() => nextDecision(today), [today])
+  const nextBeskedDays = useMemo(() => nextBesked ? daysUntil(nextBesked, today) : null, [nextBesked, today])
+  const rateChangeAge = rateNow ? daysUntil(today, rateNow.date) : null
+  const showRateChangeBanner =
+    detectChange(rateNow, rateAck) && detectChange(rateNow, rateHidden) &&
+    rateChangeAge != null && rateChangeAge <= RATE_CHANGE_NEWS_DAYS
+
+  // Senaste besked — the most recent announcement and what it did. Most
+  // beskeds are holds, so this is the cell that says "they met in June and
+  // did nothing", which the change-based "sedan {date}" can't express.
+  const lastBesked = useMemo(() => lastDecision(today), [today])
+  const lastBeskedOutcome = useMemo(() => {
+    if (!lastBesked || !policyRate) return null
+    const point = decisionOutcome(lastBesked, policyRate.changes)
+    if (!point) return 'oförändrad'
+    const idx = policyRate.changes.findIndex((c) => c.date === point.date)
+    const prev = policyRate.changes[idx - 1]
+    const verb = !prev ? 'ändrade till' : point.value < prev.value ? 'sänkte till' : 'höjde till'
+    return verb + ' ' + fmtPct(point.value)
+  }, [lastBesked, policyRate])
 
   useEffect(() => {
     if (groupsSeeded.current || !loanGroups.length) return
@@ -666,6 +738,78 @@ export default function Bolanekoll() {
             </>
           )}
         </section>
+
+        {/* ── Styrränta (plan 70) — a small card, not a new hero: plan 64 owns
+            hero hierarchy. Best-effort only — a failed fetch quietly drops the
+            whole card rather than showing an error next to the calculator. */}
+        {!rateFailed && (
+          <section className="card rate-card">
+            <div className="card-head">
+              <h2>Styrränta <span className="card-en">· Policy rate</span></h2>
+              {policyRate && policyRate.changes.length >= 2 && (
+                <div className="card-actions">
+                  <Segmented value={rateRange} onChange={setRateRange}
+                    options={[{ v: '5y', label: '5 år' }, { v: 'all', label: 'Allt' }]} />
+                </div>
+              )}
+            </div>
+            {!policyRate || !rateNow ? (
+              <p className="rate-loading">Hämtar styrräntan…</p>
+            ) : (
+              <>
+                {showRateChangeBanner && (() => {
+                  const prev = policyRate.changes[policyRate.changes.length - 2]
+                  const verb = !prev ? 'ändrades' : rateNow.value < prev.value ? 'sänktes' : 'höjdes'
+                  return (
+                    <div className="rate-change-banner">
+                      <span>
+                        Styrräntan {verb}{prev && <> {fmtPct(prev.value)} → {fmtPct(rateNow.value)}</>} den {fmtRateDate(rateNow.date)}.
+                      </span>
+                      <span className="rate-banner-actions">
+                        <button type="button" className="link-btn rate-banner-never" onClick={dismissRateChange}>visa inte igen</button>
+                        <button type="button" className="icon-btn rate-banner-dismiss" title="Dölj för nu" aria-label="Dölj för nu" onClick={hideRateChangeForNow}>
+                          <Icon icon={X} size={14} />
+                        </button>
+                      </span>
+                    </div>
+                  )
+                })()}
+                <div className="rate-strip">
+                  <div className="rate-strip-cell">
+                    <span className="rate-strip-label">Aktuell nivå</span>
+                    <span className="rate-strip-value">{fmtPct(rateNow.value)}</span>
+                    <span className="rate-strip-sub">sedan {fmtRateDate(rateNow.date)}</span>
+                  </div>
+                  {lastBesked && lastBeskedOutcome && (
+                    <div className="rate-strip-cell">
+                      <span className="rate-strip-label">Senaste besked</span>
+                      <span className="rate-strip-value">{fmtRateDate(lastBesked)}</span>
+                      <span className="rate-strip-sub">{lastBeskedOutcome}</span>
+                    </div>
+                  )}
+                  <div className="rate-strip-cell">
+                    <span className="rate-strip-label">Nästa räntebesked</span>
+                    {nextBesked ? (
+                      <>
+                        <span className="rate-strip-value">{fmtRateDate(nextBesked)}</span>
+                        {nextBeskedDays != null && nextBeskedDays >= 0 && (
+                          <span className="rate-strip-sub">om {nextBeskedDays} {nextBeskedDays === 1 ? 'dag' : 'dagar'}</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="rate-strip-sub">se riksbank.se</span>
+                    )}
+                  </div>
+                </div>
+                {policyRate.changes.length >= 2 && (
+                  <div className="chart-wrap rate-chart-wrap">
+                    <RiksbankChart changes={policyRate.changes} range={rateRange} reduceMotion={!!reduceMotion} />
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        )}
 
         {/* ── Projection ── */}
         <section className="card">

@@ -15,6 +15,8 @@ import { useStore } from '../store/useStore'
 import * as mortgageStore from '../lib/mortgage-store'
 import * as monthEndStore from '../lib/manadsavslut-store'
 import { loadBudget } from '../lib/hushallsbudget-store'
+import { fetchPolicyRate, nextDecision, currentPoint, type PolicyRateData } from '../lib/riksbank'
+import { todayISO } from '../lib/date'
 import {
   mortgageStat,
   monthEndStat,
@@ -27,6 +29,12 @@ import {
   type MonthEndStat,
   type BudgetStat,
 } from '../lib/hub-stats'
+
+/** "17 jun" — short sv-SE date for the styrränta stat line (plan 70). Strips
+ * the trailing period sv-SE puts on most abbreviated months ("19 aug."). */
+function fmtShortDate(iso: string): string {
+  return new Date(iso + 'T00:00:00').toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' }).replace(/\.$/, '')
+}
 
 const prefersReducedMotion = () =>
   typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -258,6 +266,17 @@ export default function Home() {
     return () => { alive = false }
   }, [])
 
+  // Styrränta live stat (plan 70) — best-effort, only fetched once the
+  // Bolånekoll tile actually claims a wide slot; the sessionStorage cache in
+  // fetchPolicyRate means this doesn't duplicate Bolånekoll's own fetch.
+  const [policyRate, setPolicyRate] = useState<PolicyRateData | null>(null)
+  useEffect(() => {
+    if (!stats.mortgage) return
+    let alive = true
+    fetchPolicyRate().then((d) => { if (alive) setPolicyRate(d) }).catch(() => {})
+    return () => { alive = false }
+  }, [stats.mortgage])
+
   // Bostadskalkyl's scenarios live in the reactive store (hydrated above).
   const scenarios = useStore((s) => s.scenarios)
   const globalConstants = useStore((s) => s.globalConstants)
@@ -373,6 +392,12 @@ export default function Home() {
           <HubSparkline values={m.spark} />
           {m.ownedPct != null && (
             <span className="stat-sub">Ni äger <Percent value={m.ownedPct} decimals={1} space locale="sv-SE" /></span>
+          )}
+          {policyRate && (
+            <span className="stat-sub">
+              Styrränta <Percent value={currentPoint(policyRate).value} decimals={2} space locale="sv-SE" />
+              {(() => { const next = nextDecision(todayISO()); return next ? <> · nästa besked {fmtShortDate(next)}</> : null })()}
+            </span>
           )}
         </div>
       )
