@@ -1173,7 +1173,7 @@ export default function Bolanekoll() {
               <p className="empty">{payments.length ? 'No payments for this loan part.' : 'No payments yet. Import a statement above, or add one manually.'}</p>
             ) : (
               <div className="table-wrap">
-                <table className="data-table">
+                <table className="data-table table-cards payments-table">
                   <thead><tr><th className="col-date">Date</th><th>Loan part</th><th>Type</th><th className="num">Amount</th><th className="num">Balance</th><th className="col-act"></th></tr></thead>
                   <tbody>
                     {shownPayments.map(p => {
@@ -1195,10 +1195,10 @@ export default function Bolanekoll() {
                             )}
                             {p.date || '—'}
                           </td>
-                          <td>{partNameById(p.loan_part_id)}</td>
-                          <td><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}</td>
-                          <td className="num">{fmtMoney(p.amount)}</td>
-                          <td className="num">{p.balance_after != null ? fmtMoney(p.balance_after) : '—'}</td>
+                          <td className="col-part">{partNameById(p.loan_part_id)}</td>
+                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}</td>
+                          <td className="num col-amount">{fmtMoney(p.amount)}</td>
+                          <td className="num col-balance">{p.balance_after != null ? fmtMoney(p.balance_after) : '—'}</td>
                           <td className="col-act">
                             <button type="button" className={'icon-btn' + (p.is_insats ? ' is-on' : '')} title={settings.track_contributions ? (p.is_insats ? 'Edit insats split' : 'Flag as insats & split') : (p.is_insats ? 'Unflag insats' : 'Flag as insats')} aria-label={p.is_insats ? 'Unflag insats' : 'Flag as insats'} onClick={() => handleStarClick(p)}><Flag size={16} strokeWidth={1.75} fill={p.is_insats ? 'currentColor' : 'none'} aria-hidden /></button>
                             <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button>

@@ -492,6 +492,50 @@ input::placeholder { color: var(--ink-faint); }
 .bk-root .data-table .num, .ma-root .data-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bk-root .data-table .col-date, .ma-root .data-table .col-date { white-space: nowrap; color: var(--ink-mid); }
 
+/* Mobile card-mode (plan 73): ≤600px a `.table-cards` data row renders as a
+   card, never a horizontally-scrolled table row. This block is only the
+   shared plumbing (display resets, card frame); each table's grid areas live
+   in its tool stylesheet. 600px matches the plan-20 mobile threshold. */
+@media (max-width: 600px) {
+  .bk-root .table-cards, .ma-root .table-cards,
+  .bk-root .table-cards tbody, .ma-root .table-cards tbody { display: block; }
+  .bk-root .table-cards thead, .ma-root .table-cards thead { display: none; }
+  .bk-root .table-cards tr, .ma-root .table-cards tr {
+    display: grid; align-items: center; gap: 0.35rem 0.5rem;
+    padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--rule);
+  }
+  .bk-root .table-cards tbody tr:last-child, .ma-root .table-cards tbody tr:last-child { border-bottom: none; }
+  .bk-root .table-cards td, .ma-root .table-cards td {
+    display: block; min-width: 0; padding: 0; border-bottom: none;
+  }
+  /* the desktop squeeze (width: 1%) would collapse the actions grid cell */
+  .bk-root .table-cards .col-act, .ma-root .table-cards .col-act { width: auto; }
+}
+
+/* Edge fade for tables that keep the horizontal-scroll safety net below the
+   desktop width (plan 73): overlay scrollbars render nothing, so fade the
+   clipped edge to make the cut visible. The scroll-driven timeline only
+   activates when the wrap actually overflows, and slides the fade to the
+   trailing edge as you scroll — pure CSS, no fade on tables that fit.
+   Progressive enhancement: unsupported browsers keep the status quo. */
+@property --tw-fade-l { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --tw-fade-r { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@keyframes tw-edge-fade {
+  from { --tw-fade-l: 0px; --tw-fade-r: 28px; }
+  to { --tw-fade-l: 28px; --tw-fade-r: 0px; }
+}
+@media (max-width: 767px) {
+  @supports (animation-timeline: scroll(self x)) {
+    .bk-root .table-wrap, .ma-root .table-wrap {
+      animation: tw-edge-fade linear both;
+      animation-timeline: scroll(self x);
+      mask-image: linear-gradient(90deg,
+        transparent 0, #000 var(--tw-fade-l),
+        #000 calc(100% - var(--tw-fade-r)), transparent 100%);
+    }
+  }
+}
+
 /* Icon button (base; per-tool delete-hover variants stay in each file) */
 .bk-root .icon-btn, .ma-root .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;

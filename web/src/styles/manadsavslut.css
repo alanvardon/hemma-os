@@ -267,6 +267,39 @@ dialog.ma-dialog {
 }
 .ma-toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+/* ── Mobile item cards (plan 73) ────────────────────────────────────────────
+   ≤600px each Poster row is a card (shared plumbing in components.css):
+     line 1  description (wraps, no ellipsis)         charge, right
+     line 2  date · paid-by → owes            owes <owed amount>, right
+     line 3  Treatment control          status chip + row actions, right */
+@media (max-width: 600px) {
+  .ma-root .items-table tr {
+    grid-template-columns: auto auto 1fr auto;
+    grid-template-areas:
+      'desc  desc  desc   charge'
+      'date  payer owes   owed'
+      'type  type  status act';
+  }
+  .ma-root .items-table .col-desc { grid-area: desc; color: var(--ink); font-weight: 550; }
+  .ma-root .items-table .col-charge { grid-area: charge; align-self: start; }
+  .ma-root .items-table .col-date { grid-area: date; }
+  .ma-root .items-table .col-payer { grid-area: payer; white-space: nowrap; }
+  .ma-root .items-table .col-owes { grid-area: owes; }
+  .ma-root .items-table .col-owed { grid-area: owed; }
+  .ma-root .items-table .col-type { grid-area: type; }
+  .ma-root .items-table .col-status { grid-area: status; justify-self: end; }
+  .ma-root .items-table .col-act { grid-area: act; }
+  /* line 2 reads as one quiet sentence: "12 jun · Sam → Ale   owes 125 kr" */
+  .ma-root .items-table .col-date, .ma-root .items-table .col-payer,
+  .ma-root .items-table .col-owes, .ma-root .items-table .col-owed { font-size: 12.5px; color: var(--ink-soft); }
+  .ma-root .items-table .col-date::after { content: ' ·'; color: var(--ink-faint); }
+  .ma-root .items-table .col-payer::after { content: ' →'; color: var(--ink-faint); }
+  .ma-root .items-table .col-owed::before { content: 'owes '; }
+  /* the pending marker moves from the (now mid-card) first cell to the card */
+  .ma-root .items-table tr.is-pending td:first-child { box-shadow: none; }
+  .ma-root .items-table tr.is-pending { box-shadow: inset 2px 0 0 var(--copper); }
+}
+
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 760px) {
   .ma-root .wrap { padding: 1.4rem 1rem 3rem; }

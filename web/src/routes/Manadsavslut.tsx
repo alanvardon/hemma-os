@@ -376,15 +376,15 @@ export default function Manadsavslut() {
               <p className="empty">{items.length ? 'No items match this filter.' : 'No items yet. Import a statement above, or add one manually.'}</p>
             ) : (
               <div className="table-wrap">
-                <table className="data-table">
+                <table className="data-table table-cards items-table">
                   <thead><tr><th className="col-date">Date</th><th>Item</th><th>Paid by</th><th>Owes</th><th>Type</th><th className="num">Charge</th><th className="num">Owed</th><th>Status</th><th className="col-act"></th></tr></thead>
                   <tbody>
                     {filteredItems.map(it => (
                       <tr key={it.id} className={it.paid ? 'is-settled' : it.pending ? 'is-pending' : ''}>
                         <td className="col-date">{it.date_purchased}</td>
-                        <td>{it.description}{it.note && <span className="row-note"> {it.note}</span>}{it.personal_items?.length > 0 && <span className="personal-flag" title="Has personal items carved out before the split">• personal</span>}</td>
-                        <td>{nameOf(it.fronted_by)}</td>
-                        <td>{nameOf(it.owed_by)}</td>
+                        <td className="col-desc">{it.description}{it.note && <span className="row-note"> {it.note}</span>}{it.personal_items?.length > 0 && <span className="personal-flag" title="Has personal items carved out before the split">• personal</span>}</td>
+                        <td className="col-payer">{nameOf(it.fronted_by)}</td>
+                        <td className="col-owes">{nameOf(it.owed_by)}</td>
                         <td className="col-type">
                           {it.paid ? (it.split ? 'Split' : 'All') : (
                             // Pending → toggle shows NEITHER side active (a choice is owed); picking
@@ -395,9 +395,9 @@ export default function Manadsavslut() {
                             </>
                           )}
                         </td>
-                        <td className="num">{fmtMoney(it.enter_amount)}</td>
-                        <td className="num">{fmtMoney(it.amount)}</td>
-                        <td>{it.paid ? <span className="tag tag-settled">Settled</span> : it.pending ? <span className="tag tag-pending">Ask later</span> : <span className="tag tag-open">Open</span>}</td>
+                        <td className="num col-charge">{fmtMoney(it.enter_amount)}</td>
+                        <td className="num col-owed">{fmtMoney(it.amount)}</td>
+                        <td className="col-status">{it.paid ? <span className="tag tag-settled">Settled</span> : it.pending ? <span className="tag tag-pending">Ask later</span> : <span className="tag tag-open">Open</span>}</td>
                         <td className="col-act">
                           {it.paid
                             ? <span className="row-lock" title="Settled — reopen its settlement to edit">🔒</span>

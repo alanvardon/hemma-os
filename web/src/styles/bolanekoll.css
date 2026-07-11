@@ -592,6 +592,45 @@ dialog.bk-dialog {
 }
 .bk-toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+/* ── Mobile payment cards (plan 73) ─────────────────────────────────────────
+   ≤600px each Betalningar row is a card (shared plumbing in components.css):
+     line 1  date + type chip                            amount, right
+     line 2  loan part                       balance <after>, right
+     line 3  row actions, right */
+@media (max-width: 600px) {
+  .bk-root .payments-table tr {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'date kind amount'
+      'part part balance'
+      'act  act  act';
+  }
+  .bk-root .payments-table .col-date { grid-area: date; }
+  .bk-root .payments-table .col-kind { grid-area: kind; }
+  .bk-root .payments-table .col-amount { grid-area: amount; color: var(--ink); font-weight: 550; }
+  .bk-root .payments-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+  .bk-root .payments-table .col-balance { grid-area: balance; font-size: 12.5px; color: var(--ink-soft); }
+  .bk-root .payments-table .col-balance::before { content: 'balance '; }
+  .bk-root .payments-table .col-act { grid-area: act; justify-self: end; }
+  /* the insats marker moves from the (now mid-card) first cell to the card */
+  .bk-root .payments-table tr.is-insats td:first-child { box-shadow: none; }
+  .bk-root .payments-table tr.is-insats { box-shadow: inset 2px 0 0 var(--accent); }
+  /* the expanded insats-allocation row stays a full-width block; the warm
+     band bleeds to the card edges, the text keeps the card inset */
+  .bk-root .payments-table tr.pay-detail { display: block; padding: 0; }
+  .bk-root .payments-table tr.pay-detail td { padding: 0 0.85rem; }
+
+  /* Lånedelar stays a table (3 data cols) — trim cell padding for the room */
+  .bk-root .lanedelar-table th, .bk-root .lanedelar-table td,
+  .bk-root .avslutade-table td { padding-left: 8px; padding-right: 8px; }
+  .bk-root .lanedelar-table tr.ld-member > td:first-child { padding-left: 1.7rem; }
+}
+@media (max-width: 480px) {
+  /* Share is derivable and shown on the group row — give the label the room */
+  .bk-root .lanedelar-table th:nth-child(3),
+  .bk-root .lanedelar-table td:nth-child(3) { display: none; }
+}
+
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 760px) {
   .bk-root .wrap { padding: 1.4rem 1rem 3rem; }
