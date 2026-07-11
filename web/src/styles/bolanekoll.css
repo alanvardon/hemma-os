@@ -613,7 +613,10 @@ dialog.bk-dialog {
     row-gap: 0.3rem;
   }
   .bk-root .payments-table .col-date { grid-area: date; }
-  .bk-root .payments-table .col-kind { grid-area: kind; }
+  .bk-root .payments-table .col-kind { grid-area: kind; white-space: nowrap; }
+  /* the insats chip stacked squashed under the kind chip here — the state is
+     already carried by the accent bar + the filled flag action */
+  .bk-root .payments-table .col-kind .row-flag-insats { display: none; }
   .bk-root .payments-table .col-amount { grid-area: amount; color: var(--ink); font-weight: 600; }
   .bk-root .payments-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
   .bk-root .payments-table .col-balance { grid-area: bal; font-size: 12.5px; color: var(--ink-soft); text-align: left; }
@@ -695,7 +698,8 @@ dialog.bk-dialog {
   .bk-root .contrib-table .col-note { grid-area: note; font-size: 12.5px; color: var(--ink-soft); }
   .bk-root .contrib-table .col-act { grid-area: act; justify-self: end; }
 
-  /* Extra amorteringar flagged in the ledger */
+  /* Extra amorteringar flagged in the ledger — "date · part    amount" with
+     a labelled paid-by line underneath */
   .bk-root .insats-table tr {
     grid-template-columns: auto 1fr auto;
     grid-template-areas:
@@ -703,8 +707,13 @@ dialog.bk-dialog {
       'owner owner owner';
   }
   .bk-root .insats-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); }
+  .bk-root .insats-table .col-part::before { content: '· '; color: var(--ink-faint); }
   .bk-root .insats-table .col-amt { grid-area: amt; color: var(--ink); font-weight: 600; }
   .bk-root .insats-table .col-owner { grid-area: owner; font-size: 12.5px; color: var(--ink-soft); }
+  .bk-root .insats-table .col-owner::before {
+    content: 'paid by '; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
 }
 @media (max-width: 480px) {
   /* Share is derivable and shown on the group row — give the label the room */

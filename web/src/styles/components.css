@@ -197,13 +197,17 @@ input::placeholder { color: var(--ink-faint); }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 1rem;
+  gap: 0.35rem 1rem;
+  /* Long label + nowrap verdict don't fit side-by-side on a phone — let the
+     verdict wrap to its own line inside the pill instead of spilling out. */
+  flex-wrap: wrap;
   padding: 10px 1.1rem;
   background: var(--accent-faint);
   border: 1px solid color-mix(in oklch, var(--accent) 22%, transparent);
   border-radius: var(--r-md);
   font-size: 13px;
 }
+.bank-diff-row .derived-value { white-space: normal; }
 
 /* ── Stress slider ──────────────────────────────────────────── */
 .stress-slider-wrap { margin-top: 0.5rem; }

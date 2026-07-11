@@ -222,6 +222,9 @@ html.calc-layout #root {
   .page-header { flex-wrap: nowrap; }
   .header-brand { flex: 1 1 0; }
   .header-brand > div { min-width: 4.5rem; }
+  /* Verbose words inside header buttons/links yield their space to the
+     title on phones ("Save scenario" → "Save", "‹ Scenarios" → "‹"). */
+  .page-header .hide-sm { display: none; }
   /* The save flash keeps its layout slot otherwise — too dear on one row. */
   .save-state { display: none; }
   .save-state.show { display: inline; }

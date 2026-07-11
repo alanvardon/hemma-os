@@ -143,7 +143,7 @@ export default function ScenariosDashboard() {
             </button>
             {!isEmpty && (
               <button className="btn btn-primary" onClick={() => navigate('/bostadskalkyl/new')}>
-                + New scenario
+                + New<span className="hide-sm"> scenario</span>
               </button>
             )}
           </div>

@@ -77,7 +77,7 @@ export default function Bostadskalkyl() {
     <>
       <header className="page-header">
         <div className="header-brand">
-          <Link className="hub-link" to="/bostadskalkyl">‹ Scenarios</Link>
+          <Link className="hub-link" to="/bostadskalkyl">‹<span className="hide-sm"> Scenarios</span></Link>
           <div>
             {isBound ? (
               <input
@@ -128,7 +128,7 @@ export default function Bostadskalkyl() {
             </button>
           ) : (
             <button className="btn btn-primary" onClick={() => setSavePromptOpen(true)}>
-              Save scenario
+              Save<span className="hide-sm"> scenario</span>
             </button>
           )}
         </div>
