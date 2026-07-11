@@ -315,7 +315,9 @@
     color: var(--ink-soft);
   }
   .bolan-src a { color: var(--accent); text-underline-offset: 2px; }
-  .bolan-row { grid-template-columns: minmax(0, 1fr) auto; }
+  /* Mirror editable rows' amount + remove columns. The empty third track keeps
+     read-only amounts aligned without rendering a misleading remove control. */
+  .bolan-row { grid-template-columns: minmax(0, 1fr) 92px 26px; }
   .b-label-static,
   .b-amount-static {
     padding: 7px 9px;
@@ -323,7 +325,12 @@
     color: var(--ink);
   }
   .b-label-static { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .b-amount-static { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .b-amount-static {
+    grid-column: 2;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
   .link-btn {
     padding: 0;
     border: 0;
@@ -827,6 +834,9 @@
     color: var(--ink);
     box-shadow: var(--shadow-md);
   }
+  /* `display:flex` overrides the UA's closed-dialog `display:none`. Keep the
+     close animation, but never let the invisible dialog intercept the page. */
+  dialog.hb-modal:not([open]) { pointer-events: none; }
   dialog.hb-modal::backdrop {
     background: color-mix(in srgb, var(--ink) 55%, transparent);
     -webkit-backdrop-filter: blur(6px);
