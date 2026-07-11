@@ -248,8 +248,8 @@
     min-width: 0;
   }
 
-  .b-row-label { font-size: 13px !important; padding: 7px 9px !important; }
-  .b-row-amount { text-align: right; font-size: 13px !important; padding: 7px 9px !important; font-variant-numeric: tabular-nums; }
+  .b-row-label { font-size: 13px; padding: 7px 9px !important; }
+  .b-row-amount { text-align: right; font-size: 13px; padding: 7px 9px !important; font-variant-numeric: tabular-nums; }
 
   .b-row-remove {
     width: 26px; height: 26px;
@@ -950,11 +950,11 @@
     align-items: center;
     min-width: 0;
   }
-  .sal-row-label { grid-column: 1; font-size: 13px !important; padding: 7px 9px !important; }
+  .sal-row-label { grid-column: 1; font-size: 13px; padding: 7px 9px !important; }
   .sal-row-amount {
     grid-column: 1;
     text-align: right;
-    font-size: 13px !important;
+    font-size: 13px;
     padding: 7px 9px !important;
     font-variant-numeric: tabular-nums;
   }
