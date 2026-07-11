@@ -18,7 +18,7 @@ export const STORAGE_KEY = 'bostadskalkyl_budget_v1'
 // there's nothing valid so the caller can fall back to the example budget.
 // Idempotent — runs on localStorage blobs and cloud blobs alike (cloud rows
 // were themselves born from a migrated blob).
-function _migrate(raw: unknown): BudgetState | null {
+export function migrateBudget(raw: unknown): BudgetState | null {
   const s = raw as BudgetState
   if (!s || s.version !== 1 || !Array.isArray(s.incomes) || !Array.isArray(s.costs) || !Array.isArray(s.savings)) return null
   if (!Array.isArray(s.people) || s.people.length !== 2) s.people = ['Alan', 'Partner']
@@ -35,7 +35,7 @@ function _migrate(raw: unknown): BudgetState | null {
   s.categories.forEach((c) => { valid[c.id] = true })
   const fallback = s.categories[s.categories.length - 1].id
   s.costs.forEach((r) => {
-    if (r.owner === 'joint' && (!r.category || !valid[r.category])) r.category = fallback
+    if (r.owner === 'joint' && r.source !== 'bolanekoll' && (!r.category || !valid[r.category])) r.category = fallback
   })
   return s
 }
@@ -45,7 +45,7 @@ const store = createToolStateStore<BudgetState>({
   storageKey: STORAGE_KEY,
   cacheKey: 'bostadskalkyl_budget_cache_v1',
   importFlag: 'bostadskalkyl_budget_supabase_imported',
-  merge: _migrate,
+  merge: migrateBudget,
 })
 
 // Read the shared budget. `null` means no budget stored yet, so the caller falls
