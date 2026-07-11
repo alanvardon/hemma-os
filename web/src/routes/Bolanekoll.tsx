@@ -21,7 +21,7 @@ import {
   propertyValue, equity, loanToValue, otherOwner,
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit, insatsPayments,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
-  equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost,
+  equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   contributionSplit, settlement, todayISO,
 } from '../lib/mortgage'
@@ -33,6 +33,8 @@ import {
 } from '../lib/riksbank'
 import { daysUntil } from '../lib/date'
 import * as Store from '../lib/mortgage-store'
+import { loadBudget } from '../lib/hushallsbudget-store'
+import { computeBudget } from '../lib/hushallsbudget'
 import PartDialog from './bolanekoll/PartDialog'
 import ValuationDialog from './bolanekoll/ValuationDialog'
 import PaymentDialog from './bolanekoll/PaymentDialog'
@@ -100,6 +102,11 @@ export default function Bolanekoll() {
   }
   const [bridgePeriod, setBridgePeriod] = useState<'ytd' | '12m' | 'all'>('ytd')
   const [extraAmort, setExtraAmort] = useState('')
+  // Rate what-if: null means "untouched" (field shows the live blended prefill).
+  const [whatIfRate, setWhatIfRate] = useState<string | null>(null)
+  // Whole-household shared costs (joint costs only) pulled from Hushållsbudget,
+  // for the rate what-if's "total per month" chips. null until loaded / no budget.
+  const [householdCosts, setHouseholdCosts] = useState<number | null>(null)
   const [paymentFilter, setPaymentFilter] = useState('all')
   const [payVisible, setPayVisible] = useState(PAY_PAGE)
   const [isDragging, setIsDragging] = useState(false)
@@ -161,6 +168,9 @@ export default function Bolanekoll() {
 
   useEffect(() => { refresh() }, [refresh])
   useEffect(() => { document.title = (settings.property_name || 'Bolånekoll') + ' · Hemma·OS' }, [settings.property_name])
+  // Pull the household's shared-cost total from Hushållsbudget once, for the
+  // rate what-if's "total per month" chips. Read-only: never writes the budget.
+  useEffect(() => { let live = true; loadBudget().then(b => { if (live && b) setHouseholdCosts(computeBudget(b).costsJoint) }); return () => { live = false } }, [])
   // Collapse the ledger back to the first page whenever the part filter changes.
   useEffect(() => { setPayVisible(PAY_PAGE) }, [paymentFilter])
 
@@ -269,6 +279,15 @@ export default function Bolanekoll() {
   const extra = Math.max(0, parseAmount(extraAmort) || 0)
   const base = useMemo(() => monthlyAmortizationRate(parts, payments), [parts, payments])
   const ms = useMemo(() => projectMilestones(parts, payments, valuations, settings, { extraMonthly: extra }), [parts, payments, valuations, settings, extra])
+  // Rate what-if — derive the hypothetical rate rather than seeding via effect, so
+  // the prefill tracks the async-loaded blended rate. Takes `base` (observed
+  // amortization), NOT `extra`: the rate comparison ignores the extra-amortering
+  // input (plan 82, decision 7).
+  const hypRate = whatIfRate == null ? blended : (() => { const n = parseAmount(whatIfRate); return isFinite(n) && n >= 0 ? n : 0 })()
+  // Amortering in the what-if = observed monthly amortering + whatever's typed in
+  // "Extra amortering", so nu/vid read as the full monthly payment (interest +
+  // amortering), not interest alone.
+  const whatIf = useMemo(() => rateWhatIf(balance, blended, hypRate, base + extra, householdCosts ?? 0), [balance, blended, hypRate, base, extra, householdCosts])
 
   const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
@@ -818,6 +837,19 @@ export default function Bolanekoll() {
             <div className="card-actions">
               <label className="proj-field" htmlFor="extraAmort">Extra amortering / mån</label>
               <input type="text" id="extraAmort" className="proj-input" inputMode="decimal" autoComplete="off" placeholder="0" value={extraAmort} onChange={e => setExtraAmort(e.target.value)} />
+              {whatIf && (
+                <>
+                  <label className="proj-field" htmlFor="whatIfRate">Ränta i scenariot / %</label>
+                  <div className="rate-stepper">
+                    <button type="button" className="rate-step" aria-label="−0,01 procentenheter"
+                      onClick={() => setWhatIfRate(Math.max(0, hypRate - 0.01).toFixed(2))}>−</button>
+                    <input type="text" id="whatIfRate" className="proj-input rate-input" inputMode="decimal" autoComplete="off"
+                      value={whatIfRate ?? blended.toFixed(2)} onChange={e => setWhatIfRate(e.target.value)} />
+                    <button type="button" className="rate-step" aria-label="+0,01 procentenheter"
+                      onClick={() => setWhatIfRate((hypRate + 0.01).toFixed(2))}>+</button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
           {!parts.length ? (
@@ -829,11 +861,49 @@ export default function Bolanekoll() {
                   ? 'Interest-only — the balance stays flat. Enter an extra monthly amortering above to see a payoff date.'
                   : 'At ' + fmtMoney(ms.per_month) + '/mo (' + fmtMoney(base) + ' observed + ' + fmtMoney(extra) + ' extra), property value held flat.'}
               </p>
+              <p className="whatif-group-label">Amorteringsplan</p>
               <div className="metric-row">
                 <div className={'metric-chip' + (ms.payoff_months != null ? ' is-accent' : '')}><span className="metric-label">Payoff</span><span className="metric-val">{ms.payoff_months == null ? 'Never' : monthsToWhen(ms.payoff_months)}</span></div>
                 {valuations.length > 0 && <div className="metric-chip"><span className="metric-label">70 % LTV</span><span className="metric-val">{monthsToWhen(ms.ltv70_months)}</span></div>}
                 {valuations.length > 0 && <div className="metric-chip"><span className="metric-label">50 % LTV</span><span className="metric-val">{monthsToWhen(ms.ltv50_months)}</span></div>}
               </div>
+              {whatIf && (
+                <>
+                  <hr className="whatif-divider" />
+                  <p className="whatif-group-label">Betalning till banken</p>
+                  <div className="metric-row whatif-row">
+                    <div className="metric-chip"><span className="metric-label">Nu (Ø {fmtPct(blended)})</span>
+                      <span className="metric-val">{M(whatIf.now.gross)}</span>
+                      {settings.ranteavdrag && <span className="metric-sub">{fmtMoney(whatIf.now.net)} netto</span>}</div>
+                    <div className="metric-chip is-accent"><span className="metric-label">Vid {fmtPct(hypRate)}</span>
+                      <span className="metric-val">{M(whatIf.hyp.gross)}</span>
+                      {settings.ranteavdrag && <span className="metric-sub">{fmtMoney(whatIf.hyp.net)} netto</span>}</div>
+                    <div className={'metric-chip' + (whatIf.delta_month > 0 ? ' is-warn' : whatIf.delta_month < 0 ? ' is-good' : '')}>
+                      <span className="metric-label">Skillnad</span>
+                      <span className="metric-val">{M(whatIf.delta_month, true)}/mån</span>
+                      <span className="metric-sub">{fmtMoney(whatIf.delta_year)} /år</span></div>
+                  </div>
+                </>
+              )}
+              {whatIf?.household && (
+                <>
+                  <hr className="whatif-divider" />
+                  <p className="whatif-group-label">Din andel av hushållets delade kostnader</p>
+                  <div className="metric-row whatif-row">
+                    <div className="metric-chip"><span className="metric-label">Hushåll nu</span>
+                      <span className="metric-val">{M(whatIf.household.now / 2)}</span>
+                      <span className="metric-sub">din andel / mån</span></div>
+                    <div className="metric-chip is-accent"><span className="metric-label">Hushåll vid {fmtPct(hypRate)}</span>
+                      <span className="metric-val">{M(whatIf.household.hyp / 2)}</span>
+                      <span className="metric-sub">din andel / mån</span></div>
+                    <div className={'metric-chip' + (whatIf.delta_month > 0 ? ' is-warn' : whatIf.delta_month < 0 ? ' is-good' : '')}>
+                      <span className="metric-label">Skillnad</span>
+                      <span className="metric-val">{M(whatIf.delta_month / 2, true)}/mån</span>
+                      <span className="metric-sub">{fmtMoney(whatIf.delta_year / 2)} /år</span></div>
+                  </div>
+                  <p className="proj-note whatif-note">Delade kostnader från Hushållsbudget (individuella kostnader och sparande exkluderade). Bolåneraden lämnas orörd — endast ränteskillnaden läggs på.</p>
+                </>
+              )}
             </>
           )}
         </section>

@@ -544,6 +544,52 @@ export function monthlyCost(payments: Payment[], opts?: { ranteavdrag?: boolean 
   })
 }
 
+// ── Rate what-if ─────────────────────────────────────────────────────────────
+// "What would I pay per month at rate X instead of today's blended rate?"
+// Both legs are COMPUTED with the same formula (balance × rate/100 / 12 + the
+// observed monthly amortization) so the delta is a pure rate effect — this is a
+// hypothetical applied to the whole balance, not a forecast (bunden lock-ins
+// are deliberately ignored; see plan 82).
+export interface RateWhatIf {
+  balance: number
+  amortization: number   // observed monthly amortization (rate-independent)
+  base_rate: number      // today's blended rate, %
+  rate: number           // the hypothetical rate, %
+  now: { interest: number; gross: number; deduction: number; net: number }
+  hyp: { interest: number; gross: number; deduction: number; net: number }
+  delta_month: number    // hyp.gross − now.gross (signed)
+  delta_year: number     // delta_month × 12
+  // Whole-household total per month, when the Hushållsbudget shared-cost sum
+  // (joint costs only — individual costs and savings excluded) is passed in.
+  // `now` is those shared costs exactly as budgeted; the household's mortgage
+  // line is a manual entry the user owns, so it is left untouched. `hyp` layers
+  // ONLY the pure rate effect (delta_month) on top, so the household total
+  // shifts with the rate without double-counting or editing the budget.
+  // null when no budget / no shared costs.
+  household: { now: number; hyp: number } | null
+}
+
+export function rateWhatIf(balance: number, baseRate: number, rate: number, amortization: number, householdCosts?: number): RateWhatIf | null {
+  const b = Number(balance) || 0, br = Number(baseRate) || 0
+  const r = Number(rate) || 0, am = Math.max(0, Number(amortization) || 0)
+  if (b <= 0 || br <= 0 || r < 0) return null
+  // Deduction applies the annual-bracket ranteavdrag() to a MONTHLY interest
+  // figure — same convention as monthlyCost() so the two never disagree.
+  const leg = (pct: number) => {
+    const interest = r2(b * pct / 100 / 12)
+    const deduction = ranteavdrag(interest)
+    return { interest, gross: r2(interest + am), deduction, net: r2(interest + am - deduction) }
+  }
+  const now = leg(br), hyp = leg(r)
+  const delta_month = r2(hyp.gross - now.gross)
+  const hc = Math.max(0, Number(householdCosts) || 0)
+  const household = hc > 0 ? { now: r2(hc), hyp: r2(hc + delta_month) } : null
+  return {
+    balance: b, amortization: am, base_rate: br, rate: r, now, hyp,
+    delta_month, delta_year: r2(delta_month * 12), household,
+  }
+}
+
 // ── Rate periods ───────────────────────────────────────────────────────────
 
 export function effectiveRatePeriod(part: LoanPart, periods: RatePeriod[], asOf?: string): RatePeriod | null {
