@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright (plan 79)
+test-results/
+playwright-report/
+blob-report/
