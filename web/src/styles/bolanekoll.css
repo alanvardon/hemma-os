@@ -602,16 +602,15 @@ dialog.bk-dialog {
     text-transform: uppercase; color: var(--ink-soft);
   }
 
-  /* Betalningar: date + amount / loan part / balance — the row actions sit
-     right, vertically centred over the detail lines; the type (and insats)
-     chips get their own line at the bottom of the card */
+  /* Betalningar: date + amount / loan part / balance — the bottom line holds
+     the type (and insats) chips left and the row actions right */
   .bk-root .payments-table tr {
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
       'date date amount'
-      'part part act'
-      'bal  bal  act'
-      'kind kind kind';
+      'part part part'
+      'bal  bal  bal'
+      'kind kind act';
     row-gap: 0.3rem;
   }
   .bk-root .payments-table .col-date { grid-area: date; }
