@@ -2,9 +2,7 @@
 
 ## Product and priorities
 
-Hemma OS is a production application for managing the household and, over time, broader parts of everyday life. Its current focus is household finance. It is built for the repository owner and their partner rather than as a generic SaaS product.
-
-Swedish language, financial rules, dates, number formats, housing practices, and household context are domain requirements, not incidental localisation.
+Hemma OS is a production household-management application for the repository owner and their partner. It currently focuses on finance and is fundamentally Swedish in language, rules, formats, housing practices, and household context.
 
 Prioritise, in order:
 
@@ -12,149 +10,98 @@ Prioritise, in order:
 2. Ease of use, especially on mobile.
 3. Contemporary visual quality and polished interaction.
 
-The product should feel cutting-edge, sharp, cohesive, and exceptionally well made. Do not trade away security, financial meaning, maintainability, or data safety to achieve visual novelty.
+The product should feel sharp, cohesive, and exceptionally well made. Never trade away security, financial meaning, maintainability, or data safety for visual novelty.
 
-## Authority and uncertainty
+## Authority and scope
 
 - The user's latest explicit instruction has highest authority.
-- Treat current application behaviour as intentional and authoritative unless the task changes it.
-- Tests and current code are evidence of shipped behaviour. If they disagree, investigate rather than choosing whichever is convenient.
-- Active planning documents describe product intent and are starting points, not immutable specifications.
-- `planning/completed/` is historical context only. Do not audit completed plans during ordinary implementation, and do not assume they describe exactly what shipped.
-- Suggest improvements freely, but do not implement unrequested product ideas.
-- Stop and ask before deciding unclear financial meaning.
-- Ask before material architectural changes, scope expansion, new dependencies, browser-support trade-offs, material UX deviations, security-boundary changes, or changes to persisted-data semantics.
-- If one decision is blocked, continue safe independent work and return to the blocked part after receiving guidance.
-- Report every meaningful deviation from the requested or planned approach in the completion summary.
+- Treat current behaviour as intentional unless the task changes it. If code and tests disagree, investigate.
+- Active plans describe intent but are not immutable specifications. `planning/completed/` is historical context; do not audit it during ordinary work.
+- Suggest improvements, but do not implement unrequested ideas or cleanup.
+- Ask before changing financial or persisted-data semantics, security boundaries, architecture, dependencies, browser support, material UX, or task scope.
+- If one decision is blocked, continue safe independent work.
+- Report meaningful deviations, risks, and manual checks at completion.
 
-## Repository scope
-
-The primary product is the React/TypeScript/Vite application in `web/`.
-
-- `web/src/routes/`: page-level composition and route-owned UI.
-- `web/src/routes/<tool>/`: components and dialogs specific to one tool.
-- `web/src/components/`: genuinely shared UI primitives and components.
-- `web/src/components/charts/`: shared chart rendering, data preparation, legends, sizing, and themes.
-- `web/src/lib/`: pure domain logic, financial calculations, formatting, persistence adapters, migrations, and reusable utilities.
-- `web/src/store/`: Zustand coordination for Bostadskalkyl scenarios.
-- `web/src/styles/`: shared tokens, global styles, and tool-specific CSS.
-- `supabase/`: schema migrations, RLS and database tests, seed data, configuration, and edge functions.
-- `planning/`: proposed work and decision context.
+The product is the React/TypeScript/Vite app in `web/`, with database work in `supabase/` and proposed work in `planning/`.
 
 ## Architecture
 
-Preserve this direction of responsibility:
+Preserve this responsibility flow:
 
 ```text
-React routes and components
-        -> state coordination
-        -> pure domain logic and persistence adapters
-        -> Supabase and local browser storage
+React routes/components
+  -> state coordination
+  -> pure domain logic and persistence adapters
+  -> Supabase and local browser storage
 ```
 
-- Keep financial and domain calculations pure, typed, deterministic, and independent of React, Zustand, Supabase, and browser APIs.
-- Put new or materially changed financial rules in `web/src/lib/` and cover them with automated tests.
-- Components may perform trivial presentation transformations. Do not hide business rules inside JSX, effects, or event handlers.
-- Route ordinary database access through stores or persistence adapters. Keep authentication behind its existing boundary rather than scattering Supabase calls through components.
-- Decompose code according to cohesion. File length is a warning signal, not a rule. Extract concepts that have clear ownership; do not fragment code merely to reduce line counts.
-- Keep feature-specific components beside their route. Promote them to shared components only when they represent a stable shared primitive or have multiple genuine consumers.
-- Prefer clarity over aggressive DRY. Abstract only when concepts and their change patterns are genuinely shared. Similar-looking financial values may have different meanings, bases, periods, or ownership.
-- Reuse or extend existing buttons, dialogs, fields, cards, charts, toasts, tokens, and other shared UI before creating variants.
-- Preserve the existing CSS and token architecture. Do not introduce Tailwind, CSS-in-JS, a component library, or a new styling system without approval.
-- When existing architecture needs substantial correction, propose a separate refactor. Do not combine it with feature work without approval.
-- Do not perform opportunistic cleanup. Make only changes required by the task; report separate improvement opportunities instead.
+- Keep financial/domain calculations pure, typed, deterministic, and independent of React, Zustand, Supabase, and browser APIs. Put them in `web/src/lib/`.
+- Keep business rules out of JSX, effects, and event handlers. Components may perform trivial display transformations.
+- Route ordinary database access through stores or persistence adapters; preserve the existing authentication boundary.
+- Decompose by cohesion, not line count. Keep feature-specific code beside its route and promote only stable, genuinely shared primitives.
+- Prefer clarity over aggressive DRY. Abstract only concepts with genuinely shared meaning and change patterns.
+- Reuse existing UI primitives and design tokens. Do not introduce a new styling system or component library without approval.
+- Propose substantial refactors separately. Do not perform opportunistic cleanup.
 
-## Financial correctness
+## Financial correctness and data safety
 
-- Never guess at unclear financial semantics. Ask with a concrete interpretation and example calculation.
-- Verify changed Swedish tax, mortgage, amortisation, housing, or legal rules against current authoritative sources such as the responsible Swedish agency. Record the source and effective date/year near statutory constants or in the relevant documentation.
-- Never silently update statutory values during unrelated work.
-- Preserve full precision in calculation logic and round for display unless a domain rule explicitly requires earlier rounding.
-- Use Swedish locale conventions for user-facing money, percentages, dates, and numbers.
-- Clearly distinguish observed values, estimates, forecasts, hypothetical scenarios, and values synced from another tool.
-- Use consistent terminology, time basis, rounding, and formulas wherever the same financial concept appears.
-- Treat wording changes such as ownership share, equity, contribution, paid in, gross, and net as potential semantic changes rather than cosmetic edits.
-- Add golden-value tests for material calculations, including realistic fictional Swedish household data.
-- Test relevant thresholds and edge cases, including zero, missing or malformed data, rounding boundaries, and unusually large values. Test negative values when the domain permits them.
-- Do not silently clamp or correct invalid financial input unless that behaviour is an explicit product decision.
-- Every new or changed user-facing financial result requires automated coverage of its calculation.
+- Never guess unclear financial meaning. Ask with a concrete interpretation and example calculation.
+- Verify changed Swedish tax, mortgage, amortisation, housing, or legal rules against current authoritative sources. Record the source and effective date/year near statutory constants or relevant documentation.
+- Never update statutory values during unrelated work.
+- Preserve calculation precision and round for display unless a domain rule requires otherwise.
+- Use Swedish locale conventions and consistent terminology, formulas, rounding, and time bases.
+- Clearly label observed values, estimates, forecasts, hypotheticals, and cross-tool synced values.
+- Treat financial wording changes as potential semantic changes.
+- Test material calculations with realistic fictional golden values plus relevant thresholds, missing/malformed data, rounding boundaries, and permitted extremes.
+- Do not silently clamp or correct invalid financial input without an explicit product decision.
+- Every new or changed user-facing financial result requires automated calculation coverage.
 
-## Data, privacy, and security
+The application contains real household data. Production data and administration are off limits without specific approval. Local development and fictional seed data may be used.
 
-The application contains real household data. Production data and production administration are off limits unless the user explicitly authorises access for the specific task. Local development data and fictional seed data may be inspected and used for development.
+- Never expose secrets, tokens, `.env` files, personal financial records, or sensitive logs, and never send household data to third parties without approval.
+- Do not weaken authentication, authorisation, CSP, RLS, input safety, or household isolation.
+- Every persisted entity must deliberately choose household- or user-level ownership.
+- Validate and migrate persisted shapes defensively; make repeatable migrations/merge functions idempotent and test malformed or legacy data where relevant.
+- Never edit an applied Supabase migration; create a new one. Schema, RLS, authentication, and security changes require approval and relevant automated tests.
+- Local migrations and read-only local database checks are allowed during an authorised task. Production changes are not.
+- Do not promise offline synchronisation without a real retry/conflict model. Surface save failures when data loss matters.
 
-- Never expose or commit secrets, `.env` files, private keys, session tokens, or personal financial records.
-- Do not log sensitive household data.
-- Do not send household data to third-party services without explicit approval.
-- Do not weaken authentication, authorisation, CSP, RLS, input-safety, or household-isolation controls.
-- Every new persisted entity must deliberately choose and document household-level or user-level ownership.
-- Defensively validate, sanitise, and migrate persisted shapes. Migration/merge functions must be idempotent where repeated execution is possible.
-- Cover relevant legacy, incomplete, and malformed persisted data with tests.
-- Treat applied Supabase migrations as immutable. Create a new migration for every schema or policy change.
-- Security, authentication, RLS, and schema changes require explicit approval plus relevant automated database/security tests.
-- Agents may apply migrations and run read-only database checks against the local Supabase environment during an authorised task. Never apply changes to production without separate explicit approval.
-- Treat local caches as resilience unless a real retry queue and conflict strategy exist. Do not claim guaranteed offline synchronisation.
-- Surface save failures when data loss would matter. Silent best-effort persistence is acceptable only when harmless and intentional.
+## UX quality
 
-## UX and visual quality
-
-- Design mobile-first; the primary day-to-day user often uses a phone. Use desktop space deliberately without making mobile a reduced or secondary experience.
-- User-visible work must be checked at 390x844 mobile and 1440x900 desktop. Also use a 320 px-wide stress check when the change risks wrapping, clipping, dense controls, tables, or charts.
-- Prevent page-level horizontal overflow. A contained chart or data region may scroll only when the affordance is clear and a better responsive representation would be misleading.
-- Preserve the existing visual language, typography, green/copper palette, and shared design tokens unless the task explicitly changes them.
-- Aim for contemporary Scandinavian polish, strong information hierarchy, purposeful motion, and responsive interaction. Performance and immediate usability take precedence over spectacle.
-- Animations must not block interaction or delay access to important information.
-- Preserve layout during loading and hydration where feasible; avoid flashes, jumps, and misleading temporary values.
-- Empty states should explain the concept briefly and provide one obvious primary action.
-- Prefer progressive disclosure for advanced detail while keeping important financial meaning discoverable.
-- Destructive actions need a confirmation or a reliable undo appropriate to the consequence.
-- Keep user-facing copy in clear, concise Swedish. Keep code, comments, test names, commit messages, and technical documentation in English.
-- Use semantic controls, keyboard-operable interactions, visible focus, labelled inputs, adequate contrast, and more than colour alone to communicate meaning.
+- Design mobile-first. Verify user-visible work at 390x844 and 1440x900; add a 320 px stress check when wrapping, tables, charts, or dense controls are at risk.
+- Prevent page-level horizontal overflow. Contained data regions may scroll only with a clear affordance.
+- Preserve the existing typography, green/copper palette, design tokens, and visual language unless the task changes them.
+- Aim for contemporary Scandinavian polish, strong hierarchy, purposeful motion, and responsive interaction. Performance and immediate usability beat spectacle.
+- Avoid layout jumps, misleading loading values, and animations that block interaction.
+- Keep advanced detail discoverable through progressive disclosure; give empty states one clear primary action.
+- Destructive actions need confirmation or reliable undo appropriate to the consequence.
+- Write concise Swedish UI copy. Keep code, comments, tests, commits, and technical documentation in English.
+- Use semantic, keyboard-operable controls with visible focus, labels, adequate contrast, and no colour-only meaning.
 
 ## Development workflow
 
 ### Before editing
 
-1. Confirm the intended base branch and inspect `git status`.
-2. If the worktree contains any existing tracked or untracked changes, stop and ask before editing. Never stash, discard, overwrite, or absorb them without explicit direction.
-3. Start every change, including documentation and small fixes, on a new branch based on current `main`.
-4. Follow established repository and planning conventions: `feat/<plan-number>-<slug>` for planned features and concise `fix/`, `refactor/`, or `docs/` branches for other work.
-5. Do not work directly on `main`; pushes to `main` deploy production.
+1. Confirm the base branch and inspect `git status`.
+2. If any tracked or untracked changes exist, stop and ask. Never stash, discard, overwrite, or absorb them without direction.
+3. Start every change on a new branch from current `main`; never work directly on `main`, which deploys production.
+4. Follow repository conventions: `feat/<plan-number>-<slug>` for planned features and concise `fix/`, `refactor/`, or `docs/` branches otherwise.
 
-### Planning and approval
-
-Scale planning detail to risk. Use a compact plan for ordinary, well-understood changes and a durable planning document for consequential product/design decisions.
-
-Obtain approval before implementing:
-
-- new product features;
-- financial semantics or statutory rules;
-- persisted data, schema migrations, or ownership changes;
-- authentication, security, or RLS changes;
-- cross-cutting architectural changes;
-- material visual redesigns;
-- new runtime or development dependencies;
-- browser compatibility trade-offs; or
-- expanded scope.
-
-Small bug fixes with an established cause may proceed within the authorised task.
+Scale planning to risk. Approval is required before new features; financial, persistence, security, or schema changes; cross-cutting architecture; material redesigns; dependencies; browser trade-offs; or expanded scope. Obvious small bug fixes may proceed within the authorised task.
 
 ### Test-driven implementation
 
-Use red-green-refactor as the default workflow:
+Use red-green-refactor:
 
 1. Write or identify a test that fails for the intended reason.
-2. Implement the smallest coherent change that makes it pass.
-3. Refactor only within task scope while keeping the suite green.
+2. Implement the smallest coherent change that passes.
+3. Refactor only within scope while staying green.
 
-- Every behavioural implementation must add or update appropriate tests.
-- Every bug fix must include a regression test unless genuinely impractical. Explain any exception.
-- Use focused tests during development, then run the complete relevant suite before completion.
-- Do not rewrite tests merely to accommodate an incorrect implementation.
-- If unrelated tests already fail, establish and report the pre-existing failure, then continue only if the task can still be verified safely.
-- Add a DOM/component testing harness only when a concrete interaction needs it, and ask before adding the dependency.
-
-### Required verification
+- Every behavioural change needs appropriate tests; every bug fix needs a regression test unless genuinely impractical.
+- Do not weaken tests to accommodate incorrect behaviour.
+- Use focused tests while developing, then run the complete relevant suite.
+- If unrelated failures pre-exist, prove and report them, then continue only when the task remains safely verifiable.
+- Add a component-test harness only for a concrete need and ask before adding dependencies.
 
 For frontend changes, run from `web/`:
 
@@ -164,33 +111,14 @@ npm run test
 npm run build
 ```
 
-Add relevant Supabase tests, migration checks, security checks, or browser flows based on the change. Documentation-only changes do not require inventing tests, but their commands, paths, and claims must be verified against the repository.
+Add relevant database, migration, security, or browser checks. Documentation-only changes require verified paths, commands, and claims rather than invented tests.
 
-For user-visible changes, start the local app and inspect the actual result in a browser. Verify the changed flow rather than only the landing page, including:
-
-- mobile and desktop layouts;
-- light and dark themes when relevant;
-- overflow, clipping, wrapping, and touch targets;
-- keyboard and focus behaviour;
-- loading, empty, error, and populated states as relevant;
-- animation smoothness and interaction during transitions; and
-- realistic fictional data rather than production records.
-
-Use before/after screenshots when they materially help review a visual change.
+For user-visible work, inspect the changed flow in the running app—not only the landing page. Check mobile/desktop, relevant themes, overflow, touch targets, keyboard/focus behaviour, loading/empty/error/populated states, and animation smoothness using fictional data. Use screenshots when they aid review.
 
 ### Completion and Git
 
-A change is complete only when:
+A change is complete when requested behaviour is implemented, relevant new and full-suite checks pass, important UI is verified, data/security implications are tested, and deviations and remaining risks are reported.
 
-- the requested behaviour is implemented;
-- relevant new tests and the full required suite pass;
-- important UI is verified on mobile and desktop;
-- data and security implications are tested;
-- plan deviations are disclosed; and
-- remaining risks and manual checks are reported clearly.
+After verification, commit the scoped change with an English conventional message, push, and open a ready-for-review PR. Keep one feature/plan per branch and PR; tightly related fixes may join without expanding its purpose. Never merge, deploy, access production data, or administer production. Only the repository owner merges.
 
-After successful verification, commit the scoped changes with an English commit message following repository conventions. Then push the branch and open a ready-for-review PR. One feature or plan should normally map to one branch and one PR; tightly related fixes discovered during that work may be included when they do not expand its purpose.
-
-Never merge a PR. Only the repository owner merges. Never deploy, access production data, or perform production administration without explicit separate approval.
-
-Provide short progress updates at major milestones: investigation, implementation, verification, and decision points.
+Provide short updates at investigation, implementation, verification, and decision points.
