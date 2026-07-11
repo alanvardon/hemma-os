@@ -302,6 +302,11 @@
     border-color: var(--accent-light);
     background: var(--accent-faint);
   }
+  .bolan-card .cat-head::after {
+    content: '';
+    width: 24px;
+    flex-shrink: 0;
+  }
   .cat-name-static {
     flex: 1;
     min-width: 0;
