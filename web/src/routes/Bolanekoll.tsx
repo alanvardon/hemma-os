@@ -890,7 +890,7 @@ export default function Bolanekoll() {
                   <hr className="whatif-divider" />
                   <p className="whatif-group-label">Din andel av hushållets delade kostnader</p>
                   <div className="metric-row whatif-row">
-                    <div className="metric-chip"><span className="metric-label">Hushåll nu</span>
+                    <div className="metric-chip"><span className="metric-label">Hushåll nu (Ø {fmtPct(blended)})</span>
                       <span className="metric-val">{M(whatIf.household.now / 2)}</span>
                       <span className="metric-sub">din andel / mån</span></div>
                     <div className="metric-chip is-accent"><span className="metric-label">Hushåll vid {fmtPct(hypRate)}</span>
