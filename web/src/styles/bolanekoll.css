@@ -605,21 +605,26 @@ dialog.bk-dialog {
     text-transform: uppercase; color: var(--ink-soft);
   }
 
-  /* Betalningar: date + amount / loan part / balance — the bottom line holds
+  /* Betalningar: the amount is the card's display figure — it owns the whole
+     right quadrant beside the date/part/saldo lines; the bottom line holds
      the type (and insats) chips left and the row actions right */
   .bk-root .payments-table tr {
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
       'date date amount'
-      'part part part'
-      'bal  bal  bal'
+      'part part amount'
+      'bal  bal  amount'
       'kind kind act';
     row-gap: 0.3rem;
   }
   .bk-root .payments-table .col-date { grid-area: date; }
   .bk-root .payments-table .col-kind { grid-area: kind; white-space: nowrap; }
   .bk-root .payments-table .col-kind .row-flag { margin-left: 0.35rem; }
-  .bk-root .payments-table .col-amount { grid-area: amount; color: var(--ink); font-weight: 600; font-size: 16px; }
+  .bk-root .payments-table .col-amount {
+    grid-area: amount; align-self: center;
+    font-family: var(--font-display); font-weight: 400;
+    font-size: 1.45rem; letter-spacing: -0.01em; color: var(--ink);
+  }
   .bk-root .payments-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
   .bk-root .payments-table .col-balance { grid-area: bal; font-size: 12.5px; color: var(--ink-soft); text-align: left; }
   .bk-root .payments-table .col-act { grid-area: act; justify-self: end; align-self: center; }
