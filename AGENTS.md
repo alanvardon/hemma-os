@@ -43,8 +43,6 @@ The primary product is the React/TypeScript/Vite application in `web/`.
 
 `orchestrator/` is a separate, temporary project and is outside these development instructions. Do not modify it as part of Hemma OS work unless the user explicitly requests that project.
 
-The root `calc.js` and `calc.test.js` are legacy predecessors of `web/src/lib/calc.ts` and its Vitest coverage. They remain coupled to the temporary orchestrator configuration. Do not treat them as authoritative application code or update/remove them opportunistically.
-
 ## Architecture
 
 Preserve this direction of responsibility:

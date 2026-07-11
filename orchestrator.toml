@@ -28,7 +28,7 @@ flow = "plan >> decompose >> task-build >> docs >> summarize"
 # RED suite before the implementer makes them green. test_paths is the globset the
 # author writes into and the diff-gate freezes during implementation.
 tdd        = true
-test_paths = ["calc.test.js"]
+test_paths = ["web/src/**/*.test.ts"]
 
 
 [stage.builtin.plan]
