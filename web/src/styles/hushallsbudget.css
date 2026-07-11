@@ -556,11 +556,12 @@
 
   .pot-actions { display: flex; gap: 0.6rem; margin-top: 1rem; flex-wrap: wrap; }
   .pot-actions .btn { flex: 1; min-width: 0; }
-  /* .btn labels are nowrap — on a phone flex:1 squeezes the CTA below its
-     text width and the label spills; let each button keep its width and
-     wrap to its own row instead (plan 73 feedback). */
+  /* .btn labels are nowrap — on a phone equal-width buttons squeeze the CTA
+     below its text width. Stack the actions so the primary label keeps its
+     full width (plan 74). */
   @media (max-width: 600px) {
-    .pot-actions .btn { flex: 1 1 auto; }
+    .pot-actions { flex-direction: column; flex-wrap: nowrap; }
+    .pot-actions .btn { flex: none; width: 100%; }
   }
 
   /* ── Summary cards ──────────────────────────────────────────── */
@@ -1136,13 +1137,29 @@ html:has(dialog.hb-modal[open]) { overflow: hidden; }
   .hb-root .mobile-bar { display: block; }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 600px) {
+  /* On a phone, names are the content people need to recognise. Let them
+     wrap while the amount field yields to a compact, still usable width. */
+  .hb-root .b-row,
+  .hb-root .b-row.b-draggable { grid-template-columns: minmax(0, 1fr) 72px auto; }
+  .hb-root .b-row.b-draggable { grid-template-columns: auto minmax(0, 1fr) 72px auto; }
+  .hb-root .b-row-amount { min-width: 0; }
+  .hb-root .b-row .name-display { align-items: flex-start; }
+  .hb-root .b-row .name-text,
+  .hb-root .b-label-static {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+  .hb-root .bolan-row { grid-template-columns: minmax(0, 1fr) 72px 26px; }
+
   /* Income + individual columns go full-width; their rows return to a
      single wide line (label | amount | remove). */
   .hb-root .income-cols { grid-template-columns: 1fr; }
   .hb-root .owner-cols { grid-template-columns: 1fr; }
   .hb-root .income-col .b-row,
-  .hb-root .owner-col .b-row { grid-template-columns: 1fr 110px auto; }
+  .hb-root .owner-col .b-row { grid-template-columns: minmax(0, 1fr) 72px auto; }
   .hb-root .income-col .b-row-amount,
   .hb-root .owner-col .b-row-amount { grid-column: auto; }
   .hb-root .income-col .b-row-remove,
