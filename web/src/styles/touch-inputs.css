@@ -1,0 +1,14 @@
+/* iOS Safari enlarges the viewport when a text-entry control is smaller than
+   16px. Keep desktop density unchanged; coarse pointers get readable controls
+   without disabling pinch zoom. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="hidden"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* The affordability field was sized for 12px digits. Leave enough room for
+     the touch font while the phone field grids collapse to one column. */
+  .afford-input { width: 64px; }
+}
