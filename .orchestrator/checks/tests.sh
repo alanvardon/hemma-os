@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests.sh — deterministic unit-test gate for the orchestrator's task-build.
 #
-# Runs the active React application's unit tests. Exit 0 = green (gate passes),
+# Runs the project's pure-calc unit tests. Exit 0 = green (gate passes),
 # non-zero = red (gate fails → the implement loop retries with the failing
 # output as feedback).
 #
@@ -12,4 +12,4 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-npm --prefix web run test
+node --test calc.test.js
