@@ -98,6 +98,9 @@
     text-transform: uppercase; color: var(--ink-soft); line-height: 1.3;
   }
   .metric-val { font-size: 17px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  /* "/" is a line-break opportunity — keep money + unit ("80 000 kr/år")
+     together when a metric value wraps on mobile */
+  .nobr { white-space: nowrap; }
   .metric-chip.is-accent .metric-val { color: var(--accent); }
   .metric-warn { color: var(--warn); }
   .metric-chip.is-warn { background: var(--warn-faint); border-color: var(--warn-light); }
@@ -616,7 +619,7 @@ dialog.bk-dialog {
   .bk-root .payments-table .col-date { grid-area: date; }
   .bk-root .payments-table .col-kind { grid-area: kind; white-space: nowrap; }
   .bk-root .payments-table .col-kind .row-flag { margin-left: 0.35rem; }
-  .bk-root .payments-table .col-amount { grid-area: amount; color: var(--ink); font-weight: 600; }
+  .bk-root .payments-table .col-amount { grid-area: amount; color: var(--ink); font-weight: 600; font-size: 16px; }
   .bk-root .payments-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
   .bk-root .payments-table .col-balance { grid-area: bal; font-size: 12.5px; color: var(--ink-soft); text-align: left; }
   .bk-root .payments-table .col-act { grid-area: act; justify-self: end; align-self: center; }
@@ -627,6 +630,8 @@ dialog.bk-dialog {
      band bleeds to the card edges, the text keeps the card inset */
   .bk-root .payments-table tr.pay-detail { display: block; padding: 0; }
   .bk-root .payments-table tr.pay-detail td { padding: 0 0.85rem; }
+  /* label on its own line, the per-person chips together underneath */
+  .bk-root .payments-table tr.pay-detail .pay-detail-label { flex-basis: 100%; }
 
   /* Lånedelar: the group row is a folder band (label line, sums line);
      member rows are indented cards under it */
