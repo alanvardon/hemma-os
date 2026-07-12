@@ -553,14 +553,14 @@ input::placeholder { color: var(--ink-faint); }
 }
 
 /* Icon button (base; per-tool delete-hover variants stay in each file) */
-.bk-root .icon-btn, .ma-root .icon-btn {
+.bk-root .icon-btn, .ma-root .icon-btn, .hk-root .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
   background: none; border: 1px solid transparent; cursor: pointer;
   color: var(--ink-soft); line-height: 1;
   width: 28px; height: 28px; padding: 0; border-radius: 6px; margin-left: 2px;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.bk-root .icon-btn:hover, .ma-root .icon-btn:hover { background: var(--accent-faint); color: var(--ink); border-color: var(--rule); }
+.bk-root .icon-btn:hover, .ma-root .icon-btn:hover, .hk-root .icon-btn:hover { background: var(--accent-faint); color: var(--ink); border-color: var(--rule); }
 
 /* Scenarios-dashboard layout (grid, toolbar, cards) lives in dashboard.css. */
 
