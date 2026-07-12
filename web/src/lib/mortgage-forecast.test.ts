@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   expectedCharge, expectedCharges, forecastInterest, reconcileCharge,
-  matchPredictedRows, hasChargeInMonth, partBalance,
+  matchPredictedRows, hasChargeInMonth, pendingCharge, partBalance,
 } from './mortgage'
 import type { LoanPart, Payment, RatePeriod } from './mortgage'
 
@@ -180,6 +180,54 @@ describe('expectedCharge', () => {
     expect(after).toEqual(before)                   // prediction doesn't feed itself
     // …and the ledger balance is untouched for an interest-only part.
     expect(partBalance(part(), [...CLEAN, logged])).toBe(1_000_000)
+  })
+})
+
+describe('pendingCharge (rolls past covered months)', () => {
+  const loggedJuly: Payment = {
+    id: 'pred1', created_at: '', loan_part_id: 'p1', date: '2026-07-27', kind: 'interest',
+    description: 'Förväntad avi', amount: 3000, balance_after: 1_000_000, paid_by: 'joint', source: 'predicted',
+  }
+
+  it('equals expectedCharge while the next month is uncovered', () => {
+    expect(pendingCharge(part(), [period()], CLEAN)).toEqual(expectedCharge(part(), [period()], CLEAN))
+  })
+
+  it('advances to the following month once the predicted month is logged', () => {
+    const c = pendingCharge(part(), [period()], [...CLEAN, loggedJuly])!
+    expect(c.next_date).toBe('2026-08-27')
+    expect(c.days).toBe(31)                         // 27 jul → 27 aug
+    expect(c.balance).toBe(1_000_000)               // interest-only: flat
+    // 1 000 000 × 3.65/100 × 31/365 = 3 100
+    expect(c.interest).toBe(3100)
+    expect(c.rate).toBe(3.65)                       // calibration untouched by the predicted row
+  })
+
+  it('returns to the unclamped billing day after a clamped month', () => {
+    // Billed on the 31st; April clamps to the 30th. Once 30 Apr is logged,
+    // the roll must come back to 31 May — not drift to the 30th forever.
+    const pays = [
+      interestRow('2026-01-31', 3100), interestRow('2026-02-28', 2800), interestRow('2026-03-31', 3100),
+      { ...loggedJuly, id: 'predApr', date: '2026-04-30' },
+    ]
+    const c = pendingCharge(part(), [period()], pays)!
+    expect(c.charge_day).toBe(31)
+    expect(c.next_date).toBe('2026-05-31')
+    expect(c.days).toBe(31)
+  })
+
+  it('steps the balance down by the amortering when rolling an amortizing part', () => {
+    const amortizing = [
+      interestRow('2026-03-27', 3100, { balance_after: 1_000_000 }),
+      interestRow('2026-04-27', 3100, { balance_after: 997_000 }),
+      interestRow('2026-05-27', 3000, { balance_after: 994_000 }),
+      interestRow('2026-06-27', 3100, { balance_after: 991_000 }),
+      { ...loggedJuly, amount: 2981.15, balance_after: 988_000 },
+    ]
+    const c = pendingCharge(part({ start_date: '2026-03-01', start_balance: 1_000_000 }), [period()], amortizing)!
+    expect(c.next_date).toBe('2026-08-27')
+    expect(c.balance).toBe(988_000)                 // 991 000 − 3 000 predicted amortering
+    expect(c.amortization).toBe(3000)
   })
 })
 

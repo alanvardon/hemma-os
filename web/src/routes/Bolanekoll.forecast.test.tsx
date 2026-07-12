@@ -83,10 +83,10 @@ beforeEach(() => {
 })
 
 describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
-  it('logs the expected charge as a predicted row; the part then leaves the block', async () => {
+  it('logs the expected charge as a predicted row; the block rolls to the next month', async () => {
     seedStore(HISTORY)
     // Echo the logged rows back through the store so the post-save refresh()
-    // sees them — that makes the part drop out of the Nästa avisering block.
+    // sees them — that advances the Nästa avisering block to the month after.
     vi.mocked(Store.addPayments).mockImplementation(async (records) => {
       const saved = records.map((r, i) => ({ ...r, id: 'new' + i, created_at: '' } as Payment))
       vi.mocked(Store.listPayments).mockResolvedValue([...HISTORY, ...saved])
@@ -107,10 +107,10 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
       amount: 3000, balance_after: 1_000_000, source: 'predicted',
     })])
     expect(await screen.findByText(/Förväntad avi loggad/)).toBeInTheDocument()
-    // The logged charge disappears from the expected block (it now lives in
-    // the ledger below) — with the only part logged, the block is gone.
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Logga förväntad avi' })).not.toBeInTheDocument())
+    // July is now covered, so the block ROLLS to August (27 jul → 27 aug)
+    // instead of going quiet — there is always a next avisering.
+    expect(await screen.findByText('27 aug')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Logga förväntad avi' })).toBeEnabled()
   })
 
   it('logs ränta AND amortering when the loan amortizes', async () => {
@@ -130,7 +130,13 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const user = userEvent.setup()
     renderBolanekoll()
 
-    await user.click(await screen.findByRole('button', { name: 'Logga förväntad avi' }))
+    const logBtn = await screen.findByRole('button', { name: 'Logga förväntad avi' })
+    // The row splits the amount into kind chips so ränta and amortering are
+    // distinguishable before logging.
+    const chips = document.querySelector('.prognos-chips')!
+    expect(chips.querySelector('.kind-interest')?.textContent).toMatch(/^Ränta /)
+    expect(chips.querySelector('.kind-amortization')?.textContent).toMatch(/^Amortering /)
+    await user.click(logBtn)
 
     expect(Store.addPayments).toHaveBeenCalledTimes(1)
     expect(Store.addPayments).toHaveBeenCalledWith([
@@ -139,13 +145,14 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     ])
   })
 
-  it('hides the block when an interest row already covers the month', async () => {
+  it('shows the month AFTER one already covered, without logging anything', async () => {
     seedStore([...HISTORY, PREDICTED])
     renderBolanekoll()
     // Settle on the ledger showing the predicted row's tag…
     expect((await screen.findAllByText('förväntad')).length).toBeGreaterThan(0)
-    // …then the expected block offers nothing to log.
-    expect(screen.queryByRole('button', { name: 'Logga förväntad avi' })).not.toBeInTheDocument()
+    // …and the block offers August (July is covered by the predicted row).
+    expect(await screen.findByText('27 aug')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Logga förväntad avi' })).toBeEnabled()
     expect(Store.addPayments).not.toHaveBeenCalled()
   })
 })

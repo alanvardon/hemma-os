@@ -724,6 +724,7 @@ export interface ExpectedCharge {
   next_date: string           // day-of-month pattern from history, NOT last+median-gap
   days: number                // daysBetween(last interest date, next_date)
   period_months: number       // charge cadence: 1 (monthly) or 3 (kvartalsvis)
+  charge_day: number          // the UNCLAMPED billing day — day 31 stays 31 even when next_date clamped to the 30th
   balance: number             // partBalanceAsOf(part, payments, last interest date)
   rate: number | null         // the rate the prediction actually uses (%)
   rate_source: 'derived' | 'listed' | null
@@ -813,10 +814,35 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   const interest = rate != null && days > 0 && balance > 0 ? r2(balance * rate / 100 * days / 365) : 0
   const amortization = r2(monthlyAmortizationRate([part], real) * period_months)
   return {
-    loan_part_id: part.id, next_date, days, period_months, balance,
+    loan_part_id: part.id, next_date, days, period_months, charge_day: chargeDay, balance,
     rate, rate_source, rate_type, interest, amortization, gross: r2(interest + amortization),
     confidence, calibration_gap: derived != null && listed != null ? r2(listed - derived) : null,
   }
+}
+
+// The next charge NOT yet in the ledger: expectedCharge rolled forward past
+// months whose interest is already covered (predicted or real), so logging a
+// month makes the block advance to the following one instead of going quiet.
+// Each roll holds the rate flat, steps the balance down by the predicted
+// amortering, and reprices the actual day count of the new interval.
+export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[]): ExpectedCharge | null {
+  const c = expectedCharge(part, periods, payments)
+  if (!c) return null
+  let out = c
+  for (let i = 0; i < 24 && hasChargeInMonth(payments, out.loan_part_id, out.next_date); i++) {
+    const next_date = addMonthsAtDay(out.next_date, out.period_months, out.charge_day)
+    const days = daysBetween(out.next_date, next_date) ?? 0
+    const balance = Math.max(0, r2(out.balance - out.amortization))
+    const interest = out.rate != null && days > 0 && balance > 0 ? r2(balance * out.rate / 100 * days / 365) : 0
+    const bs = bindingStatus(part, periods, next_date)
+    out = {
+      ...out, next_date, days, balance, interest,
+      gross: r2(interest + out.amortization),
+      // A binding can lapse mid-roll: exact only while it still holds.
+      confidence: bs.bound && !bs.expired ? 'exact' : out.rate_source === 'derived' ? 'assumed' : 'unknown',
+    }
+  }
+  return out
 }
 
 export function expectedCharges(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]):

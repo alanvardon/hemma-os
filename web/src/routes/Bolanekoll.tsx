@@ -22,7 +22,7 @@ import {
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit, insatsPayments,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
-  expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, monthKey,
+  expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingCharge, monthKey,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   contributionSplit, settlement, todayISO,
 } from '../lib/mortgage'
@@ -295,11 +295,14 @@ export default function Bolanekoll() {
   // here; writes happen only via the explicit log button / import supersede.
   const prognos = useMemo(() => expectedCharges(parts, periods, payments), [parts, periods, payments])
   const forecast = useMemo(() => forecastInterest(parts, periods, payments), [parts, periods, payments])
-  // Only parts whose next charge is NOT yet in the ledger — a logged predicted
-  // row makes its part drop out of the Nästa avisering block until the month rolls.
+  // The next UNCOVERED charge per part: once a month is logged (or imported),
+  // the Nästa avisering block rolls forward to the following month rather
+  // than going quiet — there is always a next avisering to look at.
   const pendingCharges = useMemo(
-    () => prognos.rows.filter(r => r.interest > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date)),
-    [prognos, payments])
+    () => parts.filter(p => !p.archived)
+      .map(p => pendingCharge(p, periods, payments))
+      .filter((r): r is ExpectedCharge => r != null && r.interest > 0),
+    [parts, periods, payments])
 
   const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
@@ -1290,9 +1293,10 @@ export default function Bolanekoll() {
                       <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
                       {r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
                       <span className="prognos-date">{fmtRateDate(r.next_date)}</span>
-                      <span className="prognos-amt">
-                        ~{fmtMoney(r.gross)}
-                        {r.amortization > 0 && <span className="prognos-amt-sub"> (ränta {fmtMoney(r.interest)} · amort {fmtMoney(r.amortization)})</span>}
+                      <span className="prognos-amt">~{fmtMoney(r.gross)}</span>
+                      <span className="prognos-chips">
+                        <span className="kind-tag kind-interest">Ränta {fmtMoney(r.interest)}</span>
+                        {r.amortization > 0 && <span className="kind-tag kind-amortization">Amortering {fmtMoney(r.amortization)}</span>}
                       </span>
                       <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
                         {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
