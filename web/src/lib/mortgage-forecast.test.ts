@@ -216,13 +216,29 @@ describe('pendingCharge (rolls past covered months)', () => {
     expect(c.days).toBe(31)
   })
 
-  it('steps the balance down by the amortering when rolling an amortizing part', () => {
+  it('holds the month while only ONE of its two transactions is logged', () => {
+    // Amortizing loan with only the ränta logged for July: the amortering
+    // line is still pending, so the month must NOT roll yet.
     const amortizing = [
       interestRow('2026-03-27', 3100, { balance_after: 1_000_000 }),
       interestRow('2026-04-27', 3100, { balance_after: 997_000 }),
       interestRow('2026-05-27', 3000, { balance_after: 994_000 }),
       interestRow('2026-06-27', 3100, { balance_after: 991_000 }),
       { ...loggedJuly, amount: 2981.15, balance_after: 988_000 },
+    ]
+    const c = pendingCharge(part({ start_date: '2026-03-01', start_balance: 1_000_000 }), [period()], amortizing)!
+    expect(c.next_date).toBe('2026-07-27')
+    expect(c.amortization).toBe(3000)
+  })
+
+  it('steps the balance down by the amortering when rolling a fully-logged month', () => {
+    const amortizing = [
+      interestRow('2026-03-27', 3100, { balance_after: 1_000_000 }),
+      interestRow('2026-04-27', 3100, { balance_after: 997_000 }),
+      interestRow('2026-05-27', 3000, { balance_after: 994_000 }),
+      interestRow('2026-06-27', 3100, { balance_after: 991_000 }),
+      { ...loggedJuly, amount: 2981.15, balance_after: 988_000 },
+      { ...loggedJuly, id: 'pred2', kind: 'amortization' as const, amount: 3000, balance_after: 988_000 },
     ]
     const c = pendingCharge(part({ start_date: '2026-03-01', start_balance: 1_000_000 }), [period()], amortizing)!
     expect(c.next_date).toBe('2026-08-27')

@@ -295,14 +295,24 @@ export default function Bolanekoll() {
   // here; writes happen only via the explicit log button / import supersede.
   const prognos = useMemo(() => expectedCharges(parts, periods, payments), [parts, periods, payments])
   const forecast = useMemo(() => forecastInterest(parts, periods, payments), [parts, periods, payments])
-  // The next UNCOVERED charge per part: once a month is logged (or imported),
-  // the Nästa avisering block rolls forward to the following month rather
-  // than going quiet — there is always a next avisering to look at.
+  // The next UNCOVERED charge per part: once a month is fully logged (or
+  // imported), the Nästa avisering block rolls forward to the following month
+  // rather than going quiet — there is always a next avisering to look at.
   const pendingCharges = useMemo(
     () => parts.filter(p => !p.archived)
       .map(p => pendingCharge(p, periods, payments))
       .filter((r): r is ExpectedCharge => r != null && r.interest > 0),
     [parts, periods, payments])
+  // Flattened to ONE entry per upcoming transaction — ränta and amortering
+  // are separate line items, individually loggable and individually guarded.
+  const pendingEntries = useMemo(() => pendingCharges.flatMap(r => {
+    const out: Array<{ charge: ExpectedCharge; kind: 'interest' | 'amortization'; amount: number }> = []
+    if (r.interest > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date, 'interest'))
+      out.push({ charge: r, kind: 'interest', amount: r.interest })
+    if (r.amortization > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date, 'amortization'))
+      out.push({ charge: r, kind: 'amortization', amount: r.amortization })
+    return out
+  }), [pendingCharges, payments])
 
   const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
@@ -557,36 +567,26 @@ export default function Bolanekoll() {
     catch (err) { saveErr(err) }
   }
 
-  // Confirm-to-log (plan 23, decision 5): one click logs the expected charge
-  // as source:'predicted' rows — ränta plus, when the loan amortizes, the
-  // amortering — the "stop typing" deliverable. The next real import replaces
-  // them (or prompts on drift). Rows only ever enter the ledger on this
-  // explicit click, never on visit.
-  async function handleLogPredicted(rows: ExpectedCharge[]) {
-    const toLog = rows.filter(r => r.interest > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date))
+  // Confirm-to-log (plan 23, decision 5): one click logs ONE expected
+  // transaction (a ränta or an amortering line) as a source:'predicted' row —
+  // the "stop typing" deliverable. The next real import replaces it (or
+  // prompts on drift). Rows only ever enter the ledger on this explicit
+  // click, never on visit.
+  async function handleLogPredicted(entries: Array<{ charge: ExpectedCharge; kind: 'interest' | 'amortization'; amount: number }>) {
+    const toLog = entries.filter(e => e.amount > 0 && !hasChargeInMonth(payments, e.charge.loan_part_id, e.charge.next_date, e.kind))
     if (!toLog.length) return
     try {
-      const drafts = toLog.flatMap(r => {
-        // Post-charge saldo: the amortering (if any) has landed by statement time.
-        const balAfter = r.balance - r.amortization
-        const out = [makePayment({
-          loan_part_id: r.loan_part_id, date: r.next_date, kind: 'interest',
-          description: 'Förväntad avi', amount: r.interest, balance_after: balAfter,
-          source: 'predicted',
-        })]
-        if (r.amortization > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date, 'amortization'))
-          out.push(makePayment({
-            loan_part_id: r.loan_part_id, date: r.next_date, kind: 'amortization',
-            description: 'Förväntad avi', amount: r.amortization, balance_after: balAfter,
-            source: 'predicted',
-          }))
-        return out
-      })
-      await Store.addPayments(drafts)
+      await Store.addPayments(toLog.map(e => makePayment({
+        loan_part_id: e.charge.loan_part_id, date: e.charge.next_date, kind: e.kind,
+        description: 'Förväntad avi', amount: e.amount,
+        // Post-charge saldo: the month's amortering (if any) has landed by statement time.
+        balance_after: e.charge.balance - e.charge.amortization,
+        source: 'predicted',
+      })))
       await refresh(); flashSaved()
       showToast(toLog.length === 1
-        ? 'Förväntad avi loggad — nästa import ersätter den med bankens rader.'
-        : toLog.length + ' förväntade avier loggade — nästa import ersätter dem.')
+        ? 'Förväntad rad loggad — nästa import ersätter den med bankens rad.'
+        : toLog.length + ' förväntade rader loggade — nästa import ersätter dem.')
     } catch (err) { saveErr(err) }
   }
 
@@ -1268,49 +1268,47 @@ export default function Bolanekoll() {
           {/* Nästa avisering (plan 23): the upcoming charge lives with the
               transactions it becomes. Only parts NOT yet covered by a row for
               that month show — logging (or importing) makes a part drop out. */}
-          {pendingCharges.length > 0 && (
+          {pendingEntries.length > 0 && (
             <div className="prognos-block">
               <p className="whatif-group-label">Nästa avisering <span className="card-en">· expected next charge</span></p>
               <div className="prognos-head">
                 <div className="metric-chip is-accent">
                   <span className="metric-label">Nästa avisering</span>
-                  <span className="metric-val">~{fmtMoney(pendingCharges.reduce((s, r) => s + r.gross, 0))}</span>
+                  <span className="metric-val">~{fmtMoney(pendingEntries.reduce((s, e) => s + e.amount, 0))}</span>
                   <span className="metric-sub">
-                    ränta {fmtMoney(pendingCharges.reduce((s, r) => s + r.interest, 0))} · amort {fmtMoney(pendingCharges.reduce((s, r) => s + r.amortization, 0))}
+                    ränta {fmtMoney(pendingEntries.filter(e => e.kind === 'interest').reduce((s, e) => s + e.amount, 0))}
+                    {' · amort '}{fmtMoney(pendingEntries.filter(e => e.kind === 'amortization').reduce((s, e) => s + e.amount, 0))}
                   </span>
                 </div>
-                {pendingCharges.length > 1 && (
-                  <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted(pendingCharges)}>
-                    Logga alla förväntade avier
+                {pendingEntries.length > 1 && (
+                  <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted(pendingEntries)}>
+                    Logga alla förväntade rader
                   </button>
                 )}
               </div>
+              {/* Flat list: every upcoming transaction is its own line item —
+                  a ränta row and an amortering row stand alone, each with its
+                  own log button and its own double-log guard. */}
               <ul className="prognos-list">
-                {pendingCharges.map(r => {
-                  const miscalibrated = r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
+                {pendingEntries.map(e => {
+                  const r = e.charge
+                  const isInterest = e.kind === 'interest'
+                  const miscalibrated = isInterest && r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
                   return (
-                    <li key={r.loan_part_id} className="prognos-row">
-                      {/* One line per transaction the avi becomes: ränta first
-                          (carries the meta + log button), amortering under it. */}
-                      <div className="prognos-line">
-                        <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
-                        {r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
-                        <span className="prognos-date">{fmtRateDate(r.next_date)}</span>
-                        <span className="kind-tag kind-interest">Ränta</span>
-                        <span className="prognos-amt">~{fmtMoney(r.interest)}</span>
+                    <li key={r.loan_part_id + ':' + e.kind} className="prognos-row">
+                      <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
+                      {isInterest && r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
+                      <span className="prognos-date">{fmtRateDate(r.next_date)}</span>
+                      <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
+                      <span className="prognos-amt">~{fmtMoney(e.amount)}</span>
+                      {isInterest && (
                         <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
                           {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
                         </span>
-                        <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted([r])}>
-                          Logga förväntad avi
-                        </button>
-                      </div>
-                      {r.amortization > 0 && (
-                        <div className="prognos-line prognos-line-sub">
-                          <span className="kind-tag kind-amortization">Amortering</span>
-                          <span className="prognos-amt">~{fmtMoney(r.amortization)}</span>
-                        </div>
                       )}
+                      <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted([e])}>
+                        Logga förväntad rad
+                      </button>
                       {miscalibrated && (
                         <span className="prognos-caution">
                           listad {fmtPct(r.rate! + r.calibration_gap!)} vs debiterad {fmtPct(r.rate!)} — day-count eller ologgad ränteändring

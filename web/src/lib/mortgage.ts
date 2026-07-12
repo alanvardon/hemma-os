@@ -828,8 +828,14 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
 export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[]): ExpectedCharge | null {
   const c = expectedCharge(part, periods, payments)
   if (!c) return null
+  // A month only rolls once EVERY expected transaction is covered — ränta and,
+  // when the loan amortizes, the amortering. Logging just one of the two keeps
+  // the month visible so the other stays loggable.
+  const covered = (x: ExpectedCharge) =>
+    hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'interest') &&
+    (x.amortization <= 0 || hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'amortization'))
   let out = c
-  for (let i = 0; i < 24 && hasChargeInMonth(payments, out.loan_part_id, out.next_date); i++) {
+  for (let i = 0; i < 24 && covered(out); i++) {
     const next_date = addMonthsAtDay(out.next_date, out.period_months, out.charge_day)
     const days = daysBetween(out.next_date, next_date) ?? 0
     const balance = Math.max(0, r2(out.balance - out.amortization))

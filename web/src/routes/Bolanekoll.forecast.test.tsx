@@ -95,7 +95,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const user = userEvent.setup()
     renderBolanekoll()
 
-    const logBtn = await screen.findByRole('button', { name: 'Logga förväntad avi' })
+    const logBtn = await screen.findByRole('button', { name: 'Logga förväntad rad' })
     expect(logBtn).toBeEnabled()
     await user.click(logBtn)
 
@@ -106,16 +106,16 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
       loan_part_id: 'p1', date: '2026-07-27', kind: 'interest',
       amount: 3000, balance_after: 1_000_000, source: 'predicted',
     })])
-    expect(await screen.findByText(/Förväntad avi loggad/)).toBeInTheDocument()
+    expect(await screen.findByText(/Förväntad rad loggad/)).toBeInTheDocument()
     // July is now covered, so the block ROLLS to August (27 jul → 27 aug)
     // instead of going quiet — there is always a next avisering.
     expect(await screen.findByText('27 aug')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Logga förväntad avi' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Logga förväntad rad' })).toBeEnabled()
   })
 
-  it('logs ränta AND amortering when the loan amortizes', async () => {
-    // Saldo steps down 3 000 kr/month → predicted amortering 3 000 kr rides
-    // along, and both rows carry the post-charge saldo (988 000 kr).
+  it('renders ränta and amortering as separate line items and logs both via Logga alla', async () => {
+    // Saldo steps down 3 000 kr/month → the amortering is its own pending
+    // line item, and both rows carry the post-charge saldo (988 000 kr).
     const amortizing = [
       interestRow('2026-03-27', 3100, { balance_after: 1_000_000 }),
       interestRow('2026-04-27', 3100, { balance_after: 997_000 }),
@@ -130,18 +130,54 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const user = userEvent.setup()
     renderBolanekoll()
 
-    const logBtn = await screen.findByRole('button', { name: 'Logga förväntad avi' })
-    // Ränta and amortering render as SEPARATE lines, each with its kind chip.
-    const row = document.querySelector('.prognos-row')!
-    expect(row.querySelector('.prognos-line .kind-interest')?.textContent).toBe('Ränta')
-    expect(row.querySelector('.prognos-line-sub .kind-amortization')?.textContent).toBe('Amortering')
-    await user.click(logBtn)
+    // Ränta and amortering are SEPARATE line items, each with its own kind
+    // chip and its own log button.
+    await screen.findAllByRole('button', { name: 'Logga förväntad rad' })
+    const rows = document.querySelectorAll('.prognos-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].querySelector('.kind-interest')?.textContent).toBe('Ränta')
+    expect(rows[1].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
+    expect(rows[1].querySelector('button')).not.toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Logga alla förväntade rader' }))
 
     expect(Store.addPayments).toHaveBeenCalledTimes(1)
     expect(Store.addPayments).toHaveBeenCalledWith([
       expect.objectContaining({ kind: 'interest', date: '2026-07-27', source: 'predicted', balance_after: 988_000 }),
       expect.objectContaining({ kind: 'amortization', date: '2026-07-27', source: 'predicted', amount: 3000, balance_after: 988_000 }),
     ])
+  })
+
+  it('logging a single line leaves the other line pending', async () => {
+    const amortizing = [
+      interestRow('2026-03-27', 3100, { balance_after: 1_000_000 }),
+      interestRow('2026-04-27', 3100, { balance_after: 997_000 }),
+      interestRow('2026-05-27', 3000, { balance_after: 994_000 }),
+      interestRow('2026-06-27', 3100, { balance_after: 991_000 }),
+    ]
+    seedStore(amortizing, { ...PART, start_date: '2026-03-01', start_balance: 1_000_000 })
+    vi.mocked(Store.addPayments).mockImplementation(async (records) => {
+      const saved = records.map((r, i) => ({ ...r, id: 'new' + i, created_at: '' } as Payment))
+      vi.mocked(Store.listPayments).mockResolvedValue([...amortizing, ...saved])
+      return saved
+    })
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    // Click the ränta line's own button — only the interest row is written…
+    const buttons = await screen.findAllByRole('button', { name: 'Logga förväntad rad' })
+    await user.click(buttons[0])
+    expect(Store.addPayments).toHaveBeenCalledWith([expect.objectContaining({ kind: 'interest' })])
+    expect(vi.mocked(Store.addPayments).mock.calls[0][0]).toHaveLength(1)
+
+    // …and the amortering line item stays pending for the SAME month (the
+    // block must not roll past a half-logged month).
+    await waitFor(() => {
+      const rows = document.querySelectorAll('.prognos-row')
+      expect(rows).toHaveLength(1)
+      expect(rows[0].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
+    })
+    expect(screen.getByText('27 juli')).toBeInTheDocument()
   })
 
   it('shows the month AFTER one already covered, without logging anything', async () => {
@@ -151,7 +187,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     expect((await screen.findAllByText('förväntad')).length).toBeGreaterThan(0)
     // …and the block offers August (July is covered by the predicted row).
     expect(await screen.findByText('27 aug')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Logga förväntad avi' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Logga förväntad rad' })).toBeEnabled()
     expect(Store.addPayments).not.toHaveBeenCalled()
   })
 })
@@ -205,7 +241,7 @@ describe('Bolånekoll forecast — import supersede (plan 23 phase C)', () => {
   it('shows the read-only reconcile badge when nothing was pre-logged', async () => {
     seedStore(HISTORY) // no predicted row in the ledger
     renderBolanekoll()
-    await screen.findByRole('button', { name: 'Logga förväntad avi' })
+    await screen.findByRole('button', { name: 'Logga förväntad rad' })
 
     await importCsv(CSV(3010))
     // ✓ matched against expectedCharge, not against a predicted row — the
