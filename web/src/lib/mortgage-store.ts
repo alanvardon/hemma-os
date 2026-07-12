@@ -316,12 +316,12 @@ export async function updateLoanPart(id: string, patch: Partial<LoanPart>): Prom
 }
 
 export async function removeLoanPart(id: string): Promise<number> {
-  const { error } = await supabase.from(T.parts).delete().eq('id', id)
+  // Product decision (Plan 94): deleting a loan part permanently deletes its
+  // linked payments and rate periods. The RPC performs that cascade in one
+  // database transaction; the cache must not move until the whole operation
+  // commits successfully.
+  const { error } = await supabase.rpc('delete_mortgage_loan_part', { p_loan_part_id: id })
   if (error) throw toPersistenceError(error)
-  const { error: paymentsError } = await supabase.from(T.payments).delete().eq('loan_part_id', id)
-  if (paymentsError) throw toPersistenceError(paymentsError)
-  const { error: periodsError } = await supabase.from(T.periods).delete().eq('loan_part_id', id)
-  if (periodsError) throw toPersistenceError(periodsError)
   let n = 0
   _patchCache(e => {
     e.loan_parts = e.loan_parts.filter(p => p?.id !== id)

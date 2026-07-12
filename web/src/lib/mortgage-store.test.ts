@@ -40,6 +40,7 @@ beforeEach(async () => {
   Object.keys(mock().tables).forEach((k) => delete mock().tables[k])
   mock().control.fail = false
   mock().control.failing.clear()
+  Object.keys(mock().control.rpcHandlers).forEach((k) => delete mock().control.rpcHandlers[k])
 })
 
 function cache(): Record<string, unknown> {
@@ -113,6 +114,64 @@ describe('write path', () => {
   it('addPayment: cloud error throws', async () => {
     mock().control.failing.add('mortgage_payments')
     await expect(store.addPayment({ loan_part_id: 'p1', date: '2024-02-01', kind: 'amortization', description: '', amount: 1000, balance_after: null, paid_by: 'joint', source: '' })).rejects.toBeTruthy()
+  })
+
+  it('removeLoanPart: one RPC removes the part and all linked history before patching the cache', async () => {
+    const envelope = {
+      version: 4,
+      loan_parts: [{ id: 'p1' }, { id: 'p2' }],
+      payments: [{ id: 'pay1', loan_part_id: 'p1' }, { id: 'pay2', loan_part_id: 'p2' }],
+      valuations: [],
+      rate_periods: [{ id: 'rate1', loan_part_id: 'p1' }, { id: 'rate2', loan_part_id: 'p2' }],
+      contributions: [], settings: {},
+    }
+    mem.set(CACHE_KEY, JSON.stringify(envelope))
+    mock().tables.mortgage_loan_parts = envelope.loan_parts.map((row) => ({ ...row }))
+    mock().tables.mortgage_payments = envelope.payments.map((row) => ({ ...row }))
+    mock().tables.mortgage_rate_periods = envelope.rate_periods.map((row) => ({ ...row }))
+    const calls: unknown[] = []
+    mock().control.rpcHandlers.delete_mortgage_loan_part = (args) => {
+      calls.push(args)
+      const id = (args as { p_loan_part_id: string }).p_loan_part_id
+      mock().tables.mortgage_payments = mock().tables.mortgage_payments.filter((row) => row.loan_part_id !== id)
+      mock().tables.mortgage_rate_periods = mock().tables.mortgage_rate_periods.filter((row) => row.loan_part_id !== id)
+      mock().tables.mortgage_loan_parts = mock().tables.mortgage_loan_parts.filter((row) => row.id !== id)
+      return null
+    }
+
+    await expect(store.removeLoanPart('p1')).resolves.toBe(1)
+
+    expect(calls).toEqual([{ p_loan_part_id: 'p1' }])
+    expect(mock().tables.mortgage_loan_parts).toEqual([{ id: 'p2' }])
+    expect(mock().tables.mortgage_payments).toEqual([{ id: 'pay2', loan_part_id: 'p2' }])
+    expect(mock().tables.mortgage_rate_periods).toEqual([{ id: 'rate2', loan_part_id: 'p2' }])
+    expect(cache()).toMatchObject({
+      loan_parts: [{ id: 'p2' }],
+      payments: [{ id: 'pay2', loan_part_id: 'p2' }],
+      rate_periods: [{ id: 'rate2', loan_part_id: 'p2' }],
+    })
+  })
+
+  it('removeLoanPart: RPC failure leaves the parent, linked history, and cache unchanged', async () => {
+    const envelope = {
+      version: 4,
+      loan_parts: [{ id: 'p1' }], payments: [{ id: 'pay1', loan_part_id: 'p1' }],
+      valuations: [], rate_periods: [{ id: 'rate1', loan_part_id: 'p1' }],
+      contributions: [], settings: {},
+    }
+    mem.set(CACHE_KEY, JSON.stringify(envelope))
+    mock().tables.mortgage_loan_parts = envelope.loan_parts.map((row) => ({ ...row }))
+    mock().tables.mortgage_payments = envelope.payments.map((row) => ({ ...row }))
+    mock().tables.mortgage_rate_periods = envelope.rate_periods.map((row) => ({ ...row }))
+    mock().control.failing.add('delete_mortgage_loan_part')
+    const before = mem.get(CACHE_KEY)
+
+    await expect(store.removeLoanPart('p1')).rejects.toBeTruthy()
+
+    expect(mem.get(CACHE_KEY)).toBe(before)
+    expect(mock().tables.mortgage_loan_parts).toEqual([{ id: 'p1' }])
+    expect(mock().tables.mortgage_payments).toEqual([{ id: 'pay1', loan_part_id: 'p1' }])
+    expect(mock().tables.mortgage_rate_periods).toEqual([{ id: 'rate1', loan_part_id: 'p1' }])
   })
 })
 
