@@ -138,7 +138,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const rows = document.querySelectorAll('.prognos-row')
     expect(rows).toHaveLength(2)
     expect(rows[0].querySelector('.kind-interest')?.textContent).toBe('Ränta')
-    expect(rows[1].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
+    expect(rows[1].querySelector('.kind-amortization')?.textContent).toBe('Betalning')
     expect(rows[1].querySelector('button')).not.toBeNull()
     // The amortering line shows the amorteringsgrad where ränta lines show
     // the rate — a share of the loan's ORIGINAL size (amorteringskravets bas),
@@ -181,7 +181,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     await waitFor(() => {
       const rows = document.querySelectorAll('.prognos-row')
       expect(rows).toHaveLength(1)
-      expect(rows[0].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
+      expect(rows[0].querySelector('.kind-amortization')?.textContent).toBe('Betalning')
     })
     expect(document.querySelector('.prognos-row .col-date')?.textContent).toBe('juli 2026')
   })

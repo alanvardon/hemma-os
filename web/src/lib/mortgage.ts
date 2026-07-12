@@ -152,8 +152,12 @@ export function classifyKind(text: string | null | undefined): PaymentKind {
   const s = String(text ?? '').toLowerCase()
   if (/ränta|ranta|interest/.test(s)) return 'interest'
   if (/amorter|amort|principal|avbetal/.test(s)) return 'amortization'
-  if (/betalning|payment|inbet|överför|overfor|insättning|insattning/.test(s)) return 'payment'
-  if (/\blån\b|\blan\b|utbetalning|disburs|loan|uttag|nyutl/.test(s)) return 'loan'
+  // Account movements must match BEFORE the bare betalning check below —
+  // "inbetalning"/"utbetalning" contain "betalning".
+  if (/inbet|utbetal|payment|överför|overfor|insättning|insattning/.test(s)) return 'payment'
+  // The bank labels the avi's fixed amortering line "Betalning".
+  if (/betalning/.test(s)) return 'amortization'
+  if (/\blån\b|\blan\b|disburs|loan|uttag|nyutl/.test(s)) return 'loan'
   if (/avgift|fee|aviavgift/.test(s)) return 'fee'
   return 'other'
 }
