@@ -1,5 +1,8 @@
 # Hemma OS development guide
 
+Shared guide for any coding agent working in this repository. Tool-specific
+notes live alongside this file (e.g. `CLAUDE.md` imports it and adds its own).
+
 ## Product and scope
 
 Hemma OS is a production household-management application for its owner and partner. It is Swedish in language, financial rules, formats, housing practices, and household context.
@@ -10,9 +13,29 @@ Prioritise, in order:
 2. Ease of use, especially on mobile.
 3. Contemporary, cohesive visual quality.
 
-The React/TypeScript/Vite app lives in `web/`, database work in `supabase/`, and proposed work in `planning/`. Treat current behaviour as intentional unless the task changes it. Active plans describe intent, not immutable specifications; `planning/completed/` is historical context and should not be audited during ordinary work.
+Treat current behaviour as intentional unless the task changes it. Active plans describe intent, not immutable specifications; `planning/completed/` is historical context and should not be audited during ordinary work.
 
 Ask before changes that materially alter financial meaning, persisted data, security, schema, dependencies, architecture, browser support, agreed UX, or task scope. Routine implementation decisions within an authorised task do not require confirmation.
+
+## Repository and stack
+
+```text
+web/                  React/TypeScript/Vite app (all frontend work)
+  src/routes/         one component per tool/page; feature code lives beside its route
+  src/lib/            pure domain logic + per-tool stores (calc.ts, konsult.ts, …) and their *.test.ts
+  src/store/          useStore.ts — the Zustand app store and its persistence
+  src/components/     stable, genuinely shared UI primitives only
+  src/styles/         design tokens and CSS
+  e2e/                Playwright cross-page specs (save-sync.spec.ts)
+supabase/             migrations/, functions/, seed.sql, config.toml, RLS
+planning/             proposed and active work (numbered plan docs)
+planning/completed/   shipped plans — historical context, do not audit
+```
+
+Stack: React 19, TypeScript, Vite, Zustand, React Router, Radix UI, Motion,
+three.js + React Three Fiber (hero scene only), visx (charts). Tests: Vitest
+(node env by default; component tests opt in per file with
+`// @vitest-environment jsdom`), Playwright (e2e), Oxlint.
 
 ## Architecture
 
@@ -58,26 +81,69 @@ The application contains real household data. Production data and administration
 - Use semantic, keyboard-operable controls with visible focus, labels, adequate contrast, and no colour-only meaning.
 - Avoid layout jumps, misleading loading values, and interaction-blocking animation. Use progressive disclosure and give empty states one clear primary action.
 - Destructive actions require confirmation or reliable undo appropriate to the consequence.
-- For material UI work, verify the changed flow at 390x844 and desktop, plus relevant themes and states. Add 320 px, keyboard, loading/error, touch, and animation checks when the change affects them. Use fictional data.
+- For material UI work, verify the changed flow at 390x844 and desktop, plus relevant themes and states. Add 320 px, keyboard, loading/error, touch, and animation checks when the change affects them.
+- Run UI verification against the local dev server only (`npm run dev`, http://localhost:5174), which uses local Supabase with dev auth. Never verify against production or live household data; use fictional data.
+- If the server is unreachable because a stale instance is already holding the port, stop that instance and start a fresh one before testing.
+- Drive interactive verification with Playwright against that dev server (agents with a Playwright MCP server should use it); this is separate from the scripted `e2e/` suite, which runs against a preview build.
+- Leave the dev server running after verification so the owner can review the change before confirming the merge.
+
+## Testing and verify gates
+
+Add automated coverage for behavioural, financial, persistence, and bug-fix changes when practical. Develop calculation and persistence changes test-first. Purely visual fixes may use targeted browser regression evidence when no suitable component harness exists. Ask before adding a test dependency or component-test harness.
+
+Use focused tests while developing, then run the complete relevant suite. Do not weaken tests to accommodate incorrect behaviour. Prove and report unrelated pre-existing failures.
+
+Run before opening a PR, from `web/`:
+
+```sh
+npm run lint    # Oxlint
+npm run test    # Vitest (vitest run)
+npm run build   # tsc -b + vite build — the ONLY real typecheck here
+```
+
+`npm run build` is the only command that actually typechecks; plain
+`tsc --noEmit` is a no-op in this project. Add relevant database, migration,
+security, or browser checks. Documentation-only work requires verified paths,
+commands, and claims rather than invented tests.
+
+### Writes, failures, and cache/cloud disagreement
+
+If a change touches `src/store/useStore.ts`, `src/lib/storage.ts`, or any
+component's data-mutation handlers (save/delete/import), answer this before
+writing the PR: **does it change what happens when a write succeeds, fails, or
+the cache and cloud disagree?** If yes, a pure-function/state-transition unit
+test is not enough — add or extend one of:
+
+- a store-layer test with a mocked Supabase client (see
+  `src/store/useStore.test.ts` and the shared `createSupabaseMock()` in
+  `src/lib/testSupabaseMock.ts`) asserting the success **and** failure path.
+- a component test (`// @vitest-environment jsdom`) asserting the user actually
+  sees the failure — a toast, a dialog staying open, a retry affordance. "The
+  store throws" is not the same as "the user finds out."
+- for a cross-page flow (save → reload → still there), extend
+  `web/e2e/save-sync.spec.ts` rather than a one-off manual Playwright script.
+
+This rule exists because two incidents (a scenario-wipe and a swallowed
+save-error) both passed CI clean and were caught only by later manual audit; in
+both cases the missing test was exactly this kind, not a missing pure-function
+test.
 
 ## Workflow
 
 - Inspect the current branch and `git status` before editing. Preserve unrelated changes; ask only when the task overlaps them or risks overwriting them.
-- Continue on the active task branch for follow-ups. For a new task, start a branch from an up-to-date `main`. Never implement directly on `main`, which deploys production.
+- Continue on the active task branch for follow-ups. For a new task, start a branch from an up-to-date `main`. Never implement directly on `main`, which deploys production. Re-check the branch immediately before each commit — merges move `HEAD`.
 - Use `feat/<plan-number>-<slug>` for planned features and concise `fix/`, `refactor/`, or `docs/` names otherwise.
-- Add automated coverage for behavioural, financial, persistence, and bug-fix changes when practical. Develop calculation and persistence changes test-first. Purely visual fixes may use targeted browser regression evidence when no suitable component harness exists.
-- Use focused tests while developing, then run the complete relevant suite. Do not weaken tests to accommodate incorrect behaviour. Prove and report unrelated pre-existing failures.
-- Ask before adding a test dependency or component-test harness.
+- Keep commits small and focused with imperative English messages. One feature or plan per branch and PR; every PR bases off `main` (no stacked PRs).
+- Attribute agent-authored commits to the agent, not the owner: stage with `git add .`, set the author with `--author`, and do not add a `Co-Authored-By` footer. Use the identity for whichever agent is committing, for example:
+  - Claude: `git commit --author="Claude <claude@anthropic.com>" -m "…"`
+  - ChatGPT / Codex: `git commit --author="ChatGPT <chatgpt@users.noreply.github.com>" -m "…"`
 
-For frontend implementation changes, run from `web/`:
+### Plan lifecycle
 
-```sh
-npm run lint
-npm run test
-npm run build
-```
-
-Add relevant database, migration, security, or browser checks. Documentation-only work requires verified paths, commands, and claims rather than invented tests.
+Plans live as numbered markdown files in `planning/` with a short metadata
+header (Status, Owner, Source, Touches). When a plan's PR is opened, move its
+file into `planning/completed/`. When planning a batch, keep the
+`planning/README.md` index in sync.
 
 ## Completion and Git
 
