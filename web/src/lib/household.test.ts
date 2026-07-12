@@ -28,9 +28,16 @@ describe('claimHousehold', () => {
     expect(await store.claimHousehold()).toBe('household-123')
   })
 
-  it('fails closed to null on an RPC error', async () => {
+  it('rejects through the persistence contract on an RPC error', async () => {
     mock().control.failing.add('claim_household')
-    expect(await store.claimHousehold()).toBeNull()
+    await expect(store.claimHousehold()).rejects.toMatchObject({
+      category: 'unknown',
+      message: 'Kunde inte spara ändringen. Försök igen.',
+    })
+  })
+
+  it('rejects when the RPC resolves without a household id', async () => {
+    await expect(store.claimHousehold()).rejects.toMatchObject({ category: 'unknown' })
   })
 })
 
@@ -64,25 +71,28 @@ describe('listInvites', () => {
 })
 
 describe('createInvite / removeInvite', () => {
-  it('createInvite: success returns null (no error)', async () => {
-    expect(await store.createInvite('New@Example.com')).toBeNull()
+  it('createInvite: resolves on success', async () => {
+    await expect(store.createInvite('New@Example.com')).resolves.toBeUndefined()
     expect(mock().tables.household_invites[0].email).toBe('new@example.com')
   })
 
-  it('createInvite: cloud error returns the error message (does not throw)', async () => {
+  it('createInvite: cloud error rejects without exposing the backend message', async () => {
     mock().control.failing.add('household_invites')
-    expect(await store.createInvite('new@example.com')).toBe('mock: household_invites insert failed')
+    await expect(store.createInvite('new@example.com')).rejects.toMatchObject({
+      category: 'unknown',
+      message: 'Kunde inte spara ändringen. Försök igen.',
+    })
   })
 
-  it('removeInvite: success returns null', async () => {
+  it('removeInvite: resolves on success', async () => {
     mock().tables.household_invites = [{ email: 'a@x.com' }]
-    expect(await store.removeInvite('a@x.com')).toBeNull()
+    await expect(store.removeInvite('a@x.com')).resolves.toBeUndefined()
     expect(mock().tables.household_invites).toHaveLength(0)
   })
 
-  it('removeInvite: cloud error returns the error message', async () => {
+  it('removeInvite: cloud error rejects explicitly', async () => {
     mock().control.failing.add('household_invites')
-    expect(await store.removeInvite('a@x.com')).toBe('mock: household_invites delete failed')
+    await expect(store.removeInvite('a@x.com')).rejects.toMatchObject({ category: 'unknown' })
   })
 })
 
@@ -128,23 +138,34 @@ describe('pendingInviteToJoin', () => {
 })
 
 describe('acceptInvite', () => {
-  it('success returns null (no error)', async () => {
-    expect(await store.acceptInvite()).toBeNull()
+  it('resolves on success', async () => {
+    await expect(store.acceptInvite()).resolves.toBeUndefined()
   })
 
-  it('cloud error returns the error message (does not throw)', async () => {
+  it('cloud error rejects explicitly', async () => {
     mock().control.failing.add('accept_invite')
-    expect(await store.acceptInvite()).toBe('mock: rpc accept_invite failed')
+    await expect(store.acceptInvite()).rejects.toMatchObject({ category: 'unknown' })
   })
 })
 
 describe('leaveHousehold', () => {
-  it('success returns null (no error)', async () => {
-    expect(await store.leaveHousehold()).toBeNull()
+  it('resolves on success', async () => {
+    await expect(store.leaveHousehold()).resolves.toBeUndefined()
   })
 
-  it('cloud error returns the error message (does not throw)', async () => {
+  it('cloud error rejects explicitly', async () => {
     mock().control.failing.add('leave_household')
-    expect(await store.leaveHousehold()).toBe('mock: rpc leave_household failed')
+    await expect(store.leaveHousehold()).rejects.toMatchObject({ category: 'unknown' })
+  })
+})
+
+describe('signOut', () => {
+  it('resolves on success', async () => {
+    await expect(store.signOut()).resolves.toBeUndefined()
+  })
+
+  it('rejects explicitly on an auth error', async () => {
+    mock().control.failing.add('signOut')
+    await expect(store.signOut()).rejects.toMatchObject({ category: 'unknown' })
   })
 })

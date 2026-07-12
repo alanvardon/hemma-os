@@ -2,9 +2,11 @@ import { create } from 'zustand'
 import { DEFAULT_INPUTS, DEFAULT_CONSTANTS, type Inputs, type Constants } from '../lib/calc'
 import * as storage from '../lib/storage'
 import type { Scenario, LineItem } from '../lib/storage'
+import { reportPersistenceError } from '../lib/persistence-error'
 
 const sumAmounts = (items: LineItem[]): number => items.reduce((s, i) => s + (i.amount || 0), 0)
 const nowISO = () => new Date().toISOString()
+const persist = (operation: Promise<void>): void => { void operation.catch(reportPersistenceError) }
 
 // Deep copy so a scenario / global / draft never share a constants reference
 // (editing one would otherwise leak into the others).
@@ -86,7 +88,7 @@ export const useStore = create<AppState>((set, get) => ({
         sc.id === s.activeScenarioId ? { ...sc, inputs, savedAt: nowISO() } : sc,
       )
       set({ inputs, scenarios })
-      storage.saveScenarios(scenarios)
+      persist(storage.saveScenarios(scenarios))
     } else {
       set({ inputs, draftInputs: inputs })
       storage.saveDraft(inputs)
@@ -102,7 +104,7 @@ export const useStore = create<AppState>((set, get) => ({
         sc.id === s.activeScenarioId ? { ...sc, constants: cloneConstants(c), savedAt: nowISO() } : sc,
       )
       set({ constants: c, scenarios })
-      storage.saveScenarios(scenarios)
+      persist(storage.saveScenarios(scenarios))
     } else {
       set({ constants: c, draftConstants: c })
       storage.saveDraftConstants(c)
@@ -111,7 +113,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   setGlobalConstants: (c) => {
     set({ globalConstants: cloneConstants(c) })
-    storage.saveGlobalConstants(c)
+    persist(storage.saveGlobalConstants(c))
   },
 
   hydrate: async () => {
@@ -184,7 +186,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
     const scenarios = [...get().scenarios, scenario]
     set({ scenarios, mode: 'bound', activeScenarioId: scenario.id, draftInputs: null, draftConstants: null })
-    storage.saveScenarios(scenarios)
+    persist(storage.saveScenarios(scenarios))
     storage.clearDraft()
     storage.clearDraftConstants()
     return scenario.id
@@ -193,7 +195,7 @@ export const useStore = create<AppState>((set, get) => ({
   renameScenario: (id, name) => {
     const scenarios = get().scenarios.map((s) => (s.id === id ? { ...s, name } : s))
     set({ scenarios })
-    storage.saveScenarios(scenarios)
+    persist(storage.saveScenarios(scenarios))
   },
 
   duplicateScenario: (id) => {
@@ -207,7 +209,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
     const scenarios = [...get().scenarios, copy]
     set({ scenarios })
-    storage.saveScenarios(scenarios)
+    persist(storage.saveScenarios(scenarios))
     return copy.id
   },
 
@@ -218,15 +220,15 @@ export const useStore = create<AppState>((set, get) => ({
     set({ scenarios: remaining })
     // saveScenarios is upsert-only (plan 43), so the removed row must be deleted
     // explicitly rather than inferred from its absence in the list.
-    storage.saveScenarios(remaining)
-    storage.deleteScenarios([id])
+    persist(storage.saveScenarios(remaining))
+    persist(storage.deleteScenarios([id]))
     return { deleted }
   },
 
   restoreScenario: ({ deleted }) => {
     const scenarios = [...get().scenarios, deleted]
     set({ scenarios })
-    storage.saveScenarios(scenarios)
+    persist(storage.saveScenarios(scenarios))
   },
 
   discardDraft: () => {
@@ -239,14 +241,14 @@ export const useStore = create<AppState>((set, get) => ({
   // driftkostnad (matches legacy: add/label → saveDriftItems, no apply).
   setDriftItems: (items) => {
     set({ driftItems: items })
-    storage.saveDriftItems(items)
+    persist(storage.saveDriftItems(items))
   },
 
   // Apply — amount edits + removes write the monthly sum into driftkostnad
   // (incl. 0, so clearing items doesn't leave a stale value).
   applyDriftItems: (items) => {
     set({ driftItems: items })
-    storage.saveDriftItems(items)
+    persist(storage.saveDriftItems(items))
     get().setField('driftkostnad', sumAmounts(items))
   },
 
@@ -257,6 +259,6 @@ export const useStore = create<AppState>((set, get) => ({
 
   setSavingsItems: (items) => {
     set({ savingsItems: items })
-    storage.saveSavingsItems(items)
+    persist(storage.saveSavingsItems(items))
   },
 }))

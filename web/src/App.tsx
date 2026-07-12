@@ -9,6 +9,7 @@ import Lonevaxling from './routes/Lonevaxling'
 import Bolanekoll from './routes/Bolanekoll'
 import Manadsavslut from './routes/Manadsavslut'
 import Hushallsbudget from './routes/Hushallsbudget'
+import PersistenceNotice from './components/PersistenceNotice'
 
 function Layout() {
   return (
@@ -72,6 +73,7 @@ export default function App() {
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
       <AuthGate>
         <RouterProvider router={router} />
+        <PersistenceNotice />
       </AuthGate>
     </ThemeContext.Provider>
   )

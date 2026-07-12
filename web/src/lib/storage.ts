@@ -5,7 +5,8 @@
 // per-device localStorage by design (scratch buffers + device state). Every
 // exported signature is unchanged, so useStore.ts is untouched. supabase-js
 // never throws — it returns { data, error } — so reads fall back to a
-// write-through cache and the fire-and-forget writes swallow failures.
+// write-through cache. Cloud mutations reject explicitly when Supabase does not
+// accept them; their callers surface a stable user-facing error.
 //
 // Legacy v1 keys (KEYS.scenarios / globalConstants / driftItems / savingsItems)
 // become read-only one-time import SOURCES + backups; NEW *_cache keys hold the
@@ -15,6 +16,7 @@ import type { Inputs, Constants } from './calc'
 import { supabase } from './supabase'
 import { genId } from './id'
 import { makeImportOnce } from './store-helpers'
+import { toPersistenceError } from './persistence-error'
 
 const KEYS = {
   scenarios: 'bostadskalkyl_scenarios_v1',
@@ -117,8 +119,8 @@ export async function loadScenarios(): Promise<Scenario[]> {
 // data-loss trap — on a fresh device the hydrate read can fail quietly, leaving
 // the list `[]`; the first save would then delete the whole household's cloud
 // scenarios (plan 43 / audit C1). Real deletions go through deleteScenarios().
-// Never rejects — the store fires this and forgets; the optimistic cache holds
-// the latest and the next successful save reconciles cloud.
+// The optimistic cache is updated first, but cache-only is not reported as a
+// successful cloud save.
 //
 // Trade-off: a scenario deleted on device A can be re-upserted by device B
 // holding a stale copy (resurrection). That is strictly safer than the old
@@ -127,17 +129,27 @@ export async function saveScenarios(scenarios: Scenario[]): Promise<void> {
   _writeScenCache(scenarios)
   try {
     const rows = scenarios.map(toRow)
-    if (rows.length) await supabase.from(SCEN_TABLE).upsert(rows, { onConflict: 'id' })
-  } catch { /* offline — cache holds the latest */ }
+    if (rows.length) {
+      const { error } = await supabase.from(SCEN_TABLE).upsert(rows, { onConflict: 'id' })
+      if (error) throw error
+    }
+  } catch (error) {
+    throw toPersistenceError(error)
+  }
 }
 
 // Explicit deletion — the ONLY path that removes cloud rows. Array `.in()` filter
 // so supabase-js quotes the ids itself (no string interpolation — a legacy id
-// containing `,` or `)` can't corrupt the filter). Never rejects.
+// containing `,` or `)` can't corrupt the filter).
 export async function deleteScenarios(ids: string[]): Promise<void> {
   const clean = ids.filter(Boolean)
   if (!clean.length) return
-  try { await supabase.from(SCEN_TABLE).delete().in('id', clean) } catch { /* offline */ }
+  try {
+    const { error } = await supabase.from(SCEN_TABLE).delete().in('id', clean)
+    if (error) throw error
+  } catch (error) {
+    throw toPersistenceError(error)
+  }
 }
 
 export function loadSession(): Promise<Session | null> {
@@ -246,14 +258,18 @@ function _loadPrefs(): Promise<Prefs> {
   return p
 }
 
-// Read current blob, merge the patched slice, upsert. Never rejects (callers
-// fire-and-forget). Merges against the cloud current so a sibling slice isn't
+// Read current blob, merge the patched slice, then upsert. Merges against the cloud current so a sibling slice isn't
 // clobbered (whole-blob last-write-wins across concurrent edits — accepted).
 async function _savePrefs(patch: Partial<Prefs>): Promise<void> {
   const current = await _loadPrefs()
   const merged: Prefs = { ...current, ...patch }
   _writePrefsCache(merged)
-  try { await supabase.from(STATE).upsert({ tool: PREFS_TOOL, data: merged }, { onConflict: 'household_id,tool' }) } catch { /* offline */ }
+  try {
+    const { error } = await supabase.from(STATE).upsert({ tool: PREFS_TOOL, data: merged }, { onConflict: 'household_id,tool' })
+    if (error) throw error
+  } catch (error) {
+    throw toPersistenceError(error)
+  }
 }
 
 // Global default constants — seed new scenarios + back saved scenarios that

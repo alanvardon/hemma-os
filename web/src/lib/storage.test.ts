@@ -8,6 +8,7 @@ const rows: Record<string, unknown>[] = []
 // Records how delete().in() was called, so a test can assert it passes an ARRAY
 // of ids (supabase-js quotes them) rather than an interpolated string filter.
 let lastDeleteIn: { col: string; ids: unknown } | null = null
+let mutationError: { message: string; code?: string } | null = null
 vi.mock('./supabase', () => {
   const makeQuery = () => {
     const q: Record<string, unknown> = {}
@@ -17,6 +18,7 @@ vi.mock('./supabase', () => {
       order: () => Promise.resolve({ data: rows.slice(), error: null }),
       maybeSingle: () => Promise.resolve({ data: null, error: null }),
       upsert: (r: Record<string, unknown> | Record<string, unknown>[]) => {
+        if (mutationError) return Promise.resolve({ data: null, error: mutationError })
         for (const x of Array.isArray(r) ? r : [r]) {
           const i = rows.findIndex((y) => y.id === x.id)
           if (i >= 0) rows[i] = x; else rows.push(x)
@@ -26,6 +28,7 @@ vi.mock('./supabase', () => {
       delete: () => ({
         in: (col: string, ids: string[]) => {
           lastDeleteIn = { col, ids }
+          if (mutationError) return Promise.resolve({ data: null, error: mutationError })
           const drop = new Set(ids.map(String))
           for (let i = rows.length - 1; i >= 0; i--) if (drop.has(String(rows[i].id))) rows.splice(i, 1)
           return Promise.resolve({ data: null, error: null })
@@ -37,11 +40,11 @@ vi.mock('./supabase', () => {
   return { supabase: { from: () => makeQuery() } }
 })
 
-import { loadScenarios, saveScenarios, deleteScenarios } from './storage'
+import { loadScenarios, saveScenarios, deleteScenarios, saveGlobalConstants } from './storage'
 
 // Tests run in the `node` env (no localStorage); storage's internal cache/flag
 // localStorage use safely no-ops there, so we only reset the mocked table.
-beforeEach(() => { rows.length = 0; lastDeleteIn = null })
+beforeEach(() => { rows.length = 0; lastDeleteIn = null; mutationError = null })
 
 describe('scenarios cloud mapping (savedAt ↔ saved_at)', () => {
   it('writes saved_at (snake) and reads back savedAt (camel)', async () => {
@@ -63,6 +66,13 @@ describe('saveScenarios is upsert-only (plan 43 — never deletes)', () => {
       { id: 'b', name: 'B', savedAt: '2026-03-01', inputs: DEFAULT_INPUTS },
     ])
     expect(rows.map((r) => r.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('rejects when an upsert resolves with an error', async () => {
+    mutationError = { message: 'new row violates check constraint private_raw_text', code: '23514' }
+    await expect(saveScenarios([
+      { id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS },
+    ])).rejects.toMatchObject({ category: 'validation' })
   })
 
   it('saving a shorter list does NOT delete the omitted rows', async () => {
@@ -103,6 +113,14 @@ describe('deleteScenarios (the only path that removes cloud rows)', () => {
     expect(rows.map((r) => r.id)).toEqual(['b'])
   })
 
+  it('rejects when a delete resolves with an error', async () => {
+    mutationError = { message: 'delete denied' }
+    await expect(deleteScenarios(['a'])).rejects.toMatchObject({
+      category: 'unknown',
+      message: 'Kunde inte spara ändringen. Försök igen.',
+    })
+  })
+
   it('passes an array to .in() (no interpolated string filter)', async () => {
     await deleteScenarios(['id,with)chars', 'plain'])
     expect(lastDeleteIn?.col).toBe('id')
@@ -114,5 +132,13 @@ describe('deleteScenarios (the only path that removes cloud rows)', () => {
     await deleteScenarios([])
     expect(lastDeleteIn).toBeNull()
     expect(rows.map((r) => r.id)).toEqual(['a'])
+  })
+})
+
+describe('prefs cloud writes', () => {
+  it('rejects when the prefs upsert resolves with an error', async () => {
+    mutationError = { message: 'Failed to fetch' }
+    await expect(saveGlobalConstants({} as Parameters<typeof saveGlobalConstants>[0]))
+      .rejects.toMatchObject({ category: 'offline' })
   })
 })

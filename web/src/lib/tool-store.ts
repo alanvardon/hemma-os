@@ -4,9 +4,9 @@
    (keyed by (household_id, tool)), with a localStorage write-through cache for
    offline and a one-time first-login import from the pre-Supabase blob.
 
-   supabase-js never throws — it returns { data, error } — so reads fall back to
-   the cache on error and writes swallow failures; the cache carries offline
-   edits until the next successful save. This is the extraction of the
+   Reads fall back to the cache on error. Writes retain an optimistic local
+   cache but reject explicitly when the cloud does not accept the mutation.
+   This is the extraction of the
    previously-triplicated `_readCache`/`_writeCache`/`_readLegacy`/
    `_importLocalOnce`/`load`/`save` skeleton; only the per-tool `merge`
    (validate/migrate) function and the three key strings differ between tools.
@@ -17,6 +17,7 @@
 
 import { supabase } from './supabase'
 import { makeImportOnce } from './store-helpers'
+import { toPersistenceError } from './persistence-error'
 
 export interface ToolStateStoreConfig<T> {
   /** `tool_state.tool` discriminator, e.g. 'konsultkalkyl'. */
@@ -86,13 +87,16 @@ export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolState
     return merged
   }
 
-  // Persist the whole blob. Optimistic cache, then upsert (household_id fills
-  // from the column default; conflict key = (household_id, tool)). Never rejects
-  // — the caller fires this and forgets; an offline write lives on in the cache
-  // until the next successful save.
+  // Persist the whole blob. The local cache remains optimistic, but a rejected
+  // cloud write is explicit: cache-only is not the same as saved.
   async function save(data: T): Promise<void> {
     writeCache(data)
-    try { await supabase.from(table).upsert({ tool, data }, { onConflict: 'household_id,tool' }) } catch { /* offline */ }
+    try {
+      const { error } = await supabase.from(table).upsert({ tool, data }, { onConflict: 'household_id,tool' })
+      if (error) throw error
+    } catch (error) {
+      throw toPersistenceError(error)
+    }
   }
 
   return { load, save, readCache, writeCache, readLegacy, importLocalOnce }

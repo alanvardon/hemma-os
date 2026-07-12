@@ -16,6 +16,7 @@
 import { defaultSettings, makeRatePeriod } from './mortgage'
 import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping } from './mortgage'
 import { supabase } from './supabase'
+import { toPersistenceError } from './persistence-error'
 import { genId } from './id'
 import { makeImportOnce, stamp } from './store-helpers'
 
@@ -301,14 +302,14 @@ export async function listLoanParts(): Promise<LoanPart[]> {
 export async function addLoanPart(record: Omit<LoanPart, 'id' | 'created_at'>): Promise<LoanPart> {
   const saved = stamp(record, 'part') as LoanPart
   const { error } = await supabase.from(T.parts).insert(_row(saved, COLS.parts))
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache(e => { e.loan_parts.push(saved) })
   return saved
 }
 
 export async function updateLoanPart(id: string, patch: Partial<LoanPart>): Promise<LoanPart | null> {
   const { error } = await supabase.from(T.parts).update(_pick(patch, COLS.parts)).eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let found: LoanPart | null = null
   _patchCache(e => { e.loan_parts = e.loan_parts.map(p => { if (p?.id === id) { found = { ...p, ...patch }; return found } return p }) })
   return found
@@ -316,9 +317,11 @@ export async function updateLoanPart(id: string, patch: Partial<LoanPart>): Prom
 
 export async function removeLoanPart(id: string): Promise<number> {
   const { error } = await supabase.from(T.parts).delete().eq('id', id)
-  await supabase.from(T.payments).delete().eq('loan_part_id', id)
-  await supabase.from(T.periods).delete().eq('loan_part_id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
+  const { error: paymentsError } = await supabase.from(T.payments).delete().eq('loan_part_id', id)
+  if (paymentsError) throw toPersistenceError(paymentsError)
+  const { error: periodsError } = await supabase.from(T.periods).delete().eq('loan_part_id', id)
+  if (periodsError) throw toPersistenceError(periodsError)
   let n = 0
   _patchCache(e => {
     e.loan_parts = e.loan_parts.filter(p => p?.id !== id)
@@ -342,7 +345,7 @@ export async function listPayments(): Promise<Payment[]> {
 export async function addPayment(record: Omit<Payment, 'id' | 'created_at'>): Promise<Payment> {
   const saved = stamp(record, 'pay') as Payment
   const { error } = await supabase.from(T.payments).insert(_row(saved, COLS.payments))
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache(e => { e.payments.push(saved) })
   return saved
 }
@@ -350,14 +353,14 @@ export async function addPayment(record: Omit<Payment, 'id' | 'created_at'>): Pr
 export async function addPayments(records: Array<Omit<Payment, 'id' | 'created_at'>>): Promise<Payment[]> {
   const saved = records.map(r => stamp(r, 'pay') as Payment)
   const { error } = await supabase.from(T.payments).insert(saved.map(r => _row(r, COLS.payments)))
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache(e => { e.payments = e.payments.concat(saved) })
   return saved
 }
 
 export async function updatePayment(id: string, patch: Partial<Payment>): Promise<Payment | null> {
   const { error } = await supabase.from(T.payments).update(_pick(patch, COLS.payments)).eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let found: Payment | null = null
   _patchCache(e => { e.payments = e.payments.map(p => { if (p?.id === id) { found = { ...p, ...patch }; return found } return p }) })
   return found
@@ -365,7 +368,7 @@ export async function updatePayment(id: string, patch: Partial<Payment>): Promis
 
 export async function removePayment(id: string): Promise<number> {
   const { error } = await supabase.from(T.payments).delete().eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let n = 0
   _patchCache(e => { e.payments = e.payments.filter(p => p?.id !== id); n = e.payments.length })
   return n
@@ -373,7 +376,7 @@ export async function removePayment(id: string): Promise<number> {
 
 export async function removePayments(ids: string[]): Promise<number> {
   const { error } = await supabase.from(T.payments).delete().in('id', ids)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   const drop = new Set(ids)
   let removed = 0
   _patchCache(e => { const before = e.payments.length; e.payments = e.payments.filter(p => !(p && drop.has(p.id))); removed = before - e.payments.length })
@@ -393,14 +396,14 @@ export async function listValuations(): Promise<Valuation[]> {
 export async function addValuation(record: Omit<Valuation, 'id' | 'created_at'>): Promise<Valuation> {
   const saved = stamp(record, 'val') as Valuation
   const { error } = await supabase.from(T.valuations).insert(_row(saved, COLS.valuations))
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache(e => { e.valuations.push(saved) })
   return saved
 }
 
 export async function updateValuation(id: string, patch: Partial<Valuation>): Promise<Valuation | null> {
   const { error } = await supabase.from(T.valuations).update(_pick(patch, COLS.valuations)).eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let found: Valuation | null = null
   _patchCache(e => { e.valuations = e.valuations.map(v => { if (v?.id === id) { found = { ...v, ...patch }; return found } return v }) })
   return found
@@ -408,7 +411,7 @@ export async function updateValuation(id: string, patch: Partial<Valuation>): Pr
 
 export async function removeValuation(id: string): Promise<number> {
   const { error } = await supabase.from(T.valuations).delete().eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let n = 0
   _patchCache(e => { e.valuations = e.valuations.filter(v => v?.id !== id); n = e.valuations.length })
   return n
@@ -427,14 +430,14 @@ export async function listRatePeriods(): Promise<RatePeriod[]> {
 export async function addRatePeriod(record: Omit<RatePeriod, 'id' | 'created_at'>): Promise<RatePeriod> {
   const saved = stamp(record, 'rate') as RatePeriod
   const { error } = await supabase.from(T.periods).insert(_row(saved, COLS.periods))
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache(e => { e.rate_periods.push(saved) })
   return saved
 }
 
 export async function updateRatePeriod(id: string, patch: Partial<RatePeriod>): Promise<RatePeriod | null> {
   const { error } = await supabase.from(T.periods).update(_pick(patch, COLS.periods)).eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let found: RatePeriod | null = null
   _patchCache(e => { e.rate_periods = e.rate_periods.map(r => { if (r?.id === id) { found = { ...r, ...patch }; return found } return r }) })
   return found
@@ -442,7 +445,7 @@ export async function updateRatePeriod(id: string, patch: Partial<RatePeriod>): 
 
 export async function removeRatePeriod(id: string): Promise<number> {
   const { error } = await supabase.from(T.periods).delete().eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let n = 0
   _patchCache(e => { e.rate_periods = e.rate_periods.filter(r => r?.id !== id); n = e.rate_periods.length })
   return n
@@ -461,14 +464,14 @@ export async function listContributions(): Promise<Contribution[]> {
 export async function addContribution(record: Omit<Contribution, 'id' | 'created_at'>): Promise<Contribution> {
   const saved = stamp(record, 'contrib') as Contribution
   const { error } = await supabase.from(T.contributions).insert(_row(saved, COLS.contributions))
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache(e => { e.contributions.push(saved) })
   return saved
 }
 
 export async function updateContribution(id: string, patch: Partial<Contribution>): Promise<Contribution | null> {
   const { error } = await supabase.from(T.contributions).update(_pick(patch, COLS.contributions)).eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let found: Contribution | null = null
   _patchCache(e => { e.contributions = e.contributions.map(c => { if (c?.id === id) { found = { ...c, ...patch }; return found } return c }) })
   return found
@@ -476,7 +479,7 @@ export async function updateContribution(id: string, patch: Partial<Contribution
 
 export async function removeContribution(id: string): Promise<number> {
   const { error } = await supabase.from(T.contributions).delete().eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let n = 0
   _patchCache(e => { e.contributions = e.contributions.filter(c => c?.id !== id); n = e.contributions.length })
   return n
@@ -496,7 +499,7 @@ export async function saveSettings(patch: Partial<MortgageSettings>): Promise<Mo
   const current = await getSettings()
   const merged = { ...defaultSettings(), ...current, ...patch }
   const { error } = await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data: merged }, { onConflict: 'household_id,tool' })
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache(e => { e.settings = merged })
   return merged
 }
@@ -525,7 +528,7 @@ async function _mergeInsert<T extends { id?: string; created_at?: string }>(tabl
   }
   if (toAdd.length) {
     const { error } = await supabase.from(table).insert(toAdd.map(r => _row(r, cols)))
-    if (error) throw error
+    if (error) throw toPersistenceError(error)
   }
   return toAdd
 }

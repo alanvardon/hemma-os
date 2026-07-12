@@ -16,6 +16,7 @@
 import { defaultSettings, normalizePersonalEntries, personalSums } from './manadsavslut'
 import type { Item, Payment, MonthEndSettings, PersonalEntry } from './manadsavslut'
 import { supabase } from './supabase'
+import { toPersistenceError } from './persistence-error'
 import { genId } from './id'
 import { makeImportOnce, stamp } from './store-helpers'
 
@@ -202,7 +203,7 @@ export async function listItems(): Promise<Item[]> {
 export async function addItem(record: Omit<Item, 'id' | 'created_at'>): Promise<Item> {
   const saved = normalizeItem(stamp(record, 'item') as Item)
   const { error } = await supabase.from(ITEMS).insert(_itemRow(saved))
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache((e) => { e.items = [saved, ...e.items.filter((i) => i.id !== saved.id)] })
   return saved
 }
@@ -211,7 +212,7 @@ export async function addItems(records: Omit<Item, 'id' | 'created_at'>[]): Prom
   const saved = (records || []).map((r) => normalizeItem(stamp(r, 'item') as Item))
   if (!saved.length) return []
   const { error } = await supabase.from(ITEMS).insert(saved.map(_itemRow))
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache((e) => {
     const ids = new Set(saved.map((s) => s.id))
     e.items = [...saved, ...e.items.filter((i) => !ids.has(i.id))]
@@ -221,7 +222,7 @@ export async function addItems(records: Omit<Item, 'id' | 'created_at'>[]): Prom
 
 export async function updateItem(id: string, patch: Partial<Item>): Promise<Item | null> {
   const { data, error } = await supabase.from(ITEMS).update(_itemPatch(patch)).eq('id', id).select().maybeSingle()
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   if (!data) return null
   const saved = normalizeItem(data as Item)
   _patchCache((e) => { e.items = e.items.map((i) => (i.id === id ? saved : i)) })
@@ -230,7 +231,7 @@ export async function updateItem(id: string, patch: Partial<Item>): Promise<Item
 
 export async function removeItem(id: string): Promise<number> {
   const { error } = await supabase.from(ITEMS).delete().eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let n = 0
   _patchCache((e) => { e.items = e.items.filter((i) => i.id !== id); n = e.items.length })
   return n
@@ -239,7 +240,7 @@ export async function removeItem(id: string): Promise<number> {
 export async function removeItems(ids: string[]): Promise<number> {
   if (!ids || !ids.length) return 0
   const { error } = await supabase.from(ITEMS).delete().in('id', ids)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let removed = 0
   _patchCache((e) => {
     const drop = new Set(ids)
@@ -277,7 +278,7 @@ export async function settle(draft: Omit<Payment, 'id' | 'created_at'>): Promise
     p_note: payment.note ?? '',
     p_created_at: payment.created_at,
   })
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache((e) => {
     e.payments = [payment, ...e.payments.filter((p) => p.id !== payment.id)]
     const ids = new Set(itemIds)
@@ -290,7 +291,7 @@ export async function settle(draft: Omit<Payment, 'id' | 'created_at'>): Promise
 // `unsettle_payment` RPC — the atomic mirror of settle (plan 48).
 export async function removePayment(id: string): Promise<number> {
   const { error } = await supabase.rpc('unsettle_payment', { p_id: id })
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   let n = 0
   _patchCache((e) => {
     e.payments = e.payments.filter((p) => p.id !== id); n = e.payments.length
@@ -313,7 +314,7 @@ export async function saveSettings(patch: Partial<MonthEndSettings>): Promise<Mo
   const current = await getSettings()
   const merged = { ...defaultSettings(), ...current, ...(patch || {}) }
   const { error } = await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data: merged }, { onConflict: 'household_id,tool' })
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _patchCache((e) => { e.settings = merged })
   return merged
 }
@@ -360,11 +361,11 @@ export async function importJSON(text: string): Promise<{ items: number; payment
 
   if (newItems.length) {
     const { error } = await supabase.from(ITEMS).insert(newItems.map(_itemRow))
-    if (error) throw error
+    if (error) throw toPersistenceError(error)
   }
   if (newPays.length) {
     const { error } = await supabase.from(PAYMENTS).insert(newPays.map(_paymentRow))
-    if (error) throw error
+    if (error) throw toPersistenceError(error)
   }
   if (parsed.settings && typeof parsed.settings === 'object') {
     await saveSettings(parsed.settings as Partial<MonthEndSettings>)

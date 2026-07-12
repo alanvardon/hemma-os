@@ -6,6 +6,7 @@ import {
 } from '../lib/hushallsbudget'
 import type { BudgetState, BudgetResult, Owner, Row, SalarySubmission, IncomeItem } from '../lib/hushallsbudget'
 import { loadBudget, saveBudget } from '../lib/hushallsbudget-store'
+import { reportPersistenceError } from '../lib/persistence-error'
 import { mortgageMonthlyFigures } from '../lib/mortgage'
 import { loadMortgageSyncSnapshot } from '../lib/mortgage-store'
 import * as salaryStore from '../lib/salary-store'
@@ -516,7 +517,9 @@ export default function Hushallsbudget() {
   // and skip the load-induced render itself (state === the object we loaded).
   useEffect(() => {
     if (loadedRef.current === null || state === loadedRef.current) return
-    const t = setTimeout(() => { void saveBudget(state); flashSaved() }, 250)
+    const t = setTimeout(() => {
+      void saveBudget(state).then(flashSaved).catch(reportPersistenceError)
+    }, 250)
     return () => clearTimeout(t)
   }, [state, flashSaved])
 

@@ -13,6 +13,7 @@ import Segmented from '../components/Segmented'
 import { usePersonNames } from '../components/usePersonNames'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
+import { persistenceErrorMessage } from '../lib/persistence-error'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   parseCsv, parseAmount, autoMapColumns, classifyKind,
@@ -106,11 +107,7 @@ export default function Bolanekoll() {
   // mutation below must catch and surface it, or a failed save looks
   // successful (optimistic cache) until the next cloud read silently drops it.
   function saveErr(err: unknown) {
-    // supabase-js throws plain {message, ...} objects (not Error instances) for
-    // Postgrest/network errors, so read .message directly rather than gating on
-    // `instanceof Error` — that check is false for them and prints "[object Object]".
-    const message = (err as { message?: string } | null)?.message
-    showToast('Kunde inte spara — ' + (message || String(err)))
+    showToast(persistenceErrorMessage(err))
   }
   const [bridgePeriod, setBridgePeriod] = useState<'ytd' | '12m' | 'all'>('ytd')
   const [extraAmort, setExtraAmort] = useState('')

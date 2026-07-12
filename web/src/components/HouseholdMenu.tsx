@@ -10,7 +10,6 @@ import AnimatedDialog from './AnimatedDialog'
 import { supabase } from '../lib/supabase'
 import {
   acceptInvite,
-  claimHousehold,
   createInvite,
   leaveHousehold,
   listInvites,
@@ -21,6 +20,7 @@ import {
   type Invite,
   type Member,
 } from '../lib/household'
+import { persistenceErrorMessage } from '../lib/persistence-error'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -87,9 +87,13 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
   async function onAccept() {
     setBusy(true)
     setActionError('')
-    const err = await acceptInvite()
-    if (err) { setBusy(false); setActionError('Kunde inte gå med — försök igen.'); return }
-    window.location.reload()
+    try {
+      await acceptInvite()
+      window.location.reload()
+    } catch {
+      setBusy(false)
+      setActionError('Kunde inte gå med — försök igen.')
+    }
   }
 
   // Leave the current household (two-step confirm). Reloads on success so the
@@ -98,18 +102,14 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
     if (!confirmLeave) { setConfirmLeave(true); setActionError(''); return }
     setBusy(true)
     setActionError('')
-    const err = await leaveHousehold()
-    if (err) {
+    try {
+      await leaveHousehold()
+      window.location.reload()
+    } catch {
       setBusy(false)
       setConfirmLeave(false)
-      setActionError(
-        err.includes('last member')
-          ? 'Du är ensam i hushållet och kan inte lämna det.'
-          : 'Kunde inte lämna hushållet — försök igen.',
-      )
-      return
+      setActionError('Kunde inte lämna hushållet — försök igen.')
     }
-    window.location.reload()
   }
 
   async function refreshInvites() {
@@ -124,21 +124,33 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
     if (addr === email?.toLowerCase()) { setError('Det är du.'); return }
     if (invites.some((i) => i.email === addr)) { setError('Redan inbjuden.'); return }
     setBusy(true)
-    const err = await createInvite(addr)
-    setBusy(false)
-    if (err) { setError('Kunde inte bjuda in — försök igen.'); return }
-    setInvite('')
-    // A fresh account may already be waiting on the invite — make sure it's
-    // consumed if they've signed in; otherwise it just lists as pending.
-    await claimHousehold()
-    await refreshInvites()
+    try {
+      await createInvite(addr)
+      setInvite('')
+      await refreshInvites()
+    } catch {
+      setError('Kunde inte bjuda in — försök igen.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function onRemove(addr: string) {
     setBusy(true)
-    await removeInvite(addr)
-    setBusy(false)
-    await refreshInvites()
+    setActionError('')
+    try {
+      await removeInvite(addr)
+      await refreshInvites()
+    } catch (error) {
+      setActionError(persistenceErrorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onSignOut() {
+    setActionError('')
+    try { await signOut() } catch (error) { setActionError(persistenceErrorMessage(error)) }
   }
 
   return (
@@ -165,7 +177,7 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
           <p className="const-group-title">Inloggad</p>
           <div className="hh-account-row">
             <span className="hh-email">{email ?? '…'}</span>
-            <button type="button" className="btn btn-ghost hh-signout" onClick={signOut}>Logga ut</button>
+            <button type="button" className="btn btn-ghost hh-signout" onClick={() => void onSignOut()}>Logga ut</button>
           </div>
         </section>
 
