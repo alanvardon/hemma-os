@@ -138,6 +138,9 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     expect(rows[0].querySelector('.kind-interest')?.textContent).toBe('Ränta')
     expect(rows[1].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
     expect(rows[1].querySelector('button')).not.toBeNull()
+    // The amortering line shows the amorteringstakt where ränta lines show
+    // the rate: 3 000 × 12 / 991 000 = 3,63 % per year.
+    expect(rows[1].querySelector('.prognos-rate')?.textContent).toBe('3,63 %')
 
     await user.click(screen.getByRole('button', { name: 'Logga alla förväntade rader' }))
 

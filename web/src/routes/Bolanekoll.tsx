@@ -1294,10 +1294,14 @@ export default function Bolanekoll() {
                   const r = e.charge
                   const isInterest = e.kind === 'interest'
                   const miscalibrated = isInterest && r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
+                  // Amorteringstakt: the annualized amortering as % of the
+                  // balance — same convention as amorteringskravet's 1–2 %.
+                  const amortPct = r.balance > 0 ? (r.amortization / r.period_months) * 12 / r.balance * 100 : 0
                   return (
                     <li key={r.loan_part_id + ':' + e.kind} className="prognos-row">
                       <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
                       {isInterest && r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
+                      {!isInterest && amortPct > 0 && <span className="prognos-rate">{fmtPct(amortPct)}</span>}
                       <span className="prognos-date">{fmtRateDate(r.next_date)}</span>
                       <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
                       <span className="prognos-amt">~{fmtMoney(e.amount)}</span>
