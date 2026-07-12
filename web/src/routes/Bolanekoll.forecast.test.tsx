@@ -107,9 +107,11 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
       amount: 3000, balance_after: 1_000_000, source: 'predicted',
     })])
     expect(await screen.findByText(/Förväntad rad loggad/)).toBeInTheDocument()
-    // July is now covered, so the block ROLLS to August (27 jul → 27 aug)
-    // instead of going quiet — there is always a next avisering.
-    expect(await screen.findByText('27 aug')).toBeInTheDocument()
+    // July is now covered, so the block ROLLS to August instead of going
+    // quiet — there is always a next avisering. Pending rows show a MONTH,
+    // not a date: the bank sets the exact day, so a date is false precision.
+    await waitFor(() =>
+      expect(document.querySelector('.prognos-row .prognos-date')?.textContent).toBe('aug'))
     expect(screen.getByRole('button', { name: 'Logga förväntad rad' })).toBeEnabled()
   })
 
@@ -181,7 +183,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
       expect(rows).toHaveLength(1)
       expect(rows[0].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
     })
-    expect(screen.getByText('27 juli')).toBeInTheDocument()
+    expect(document.querySelector('.prognos-row .prognos-date')?.textContent).toBe('juli')
   })
 
   it('shows the month AFTER one already covered, without logging anything', async () => {
@@ -190,9 +192,35 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     // Settle on the ledger showing the predicted row's tag…
     expect((await screen.findAllByText('förväntad')).length).toBeGreaterThan(0)
     // …and the block offers August (July is covered by the predicted row).
-    expect(await screen.findByText('27 aug')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(document.querySelector('.prognos-row .prognos-date')?.textContent).toBe('aug'))
     expect(screen.getByRole('button', { name: 'Logga förväntad rad' })).toBeEnabled()
     expect(Store.addPayments).not.toHaveBeenCalled()
+  })
+
+  it('expands a read-only preview of the coming months via Visa kommande månader', async () => {
+    seedStore(HISTORY)
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    // Collapsed by default: only the next (loggable) month is shown.
+    await screen.findByRole('button', { name: 'Logga förväntad rad' })
+    expect(document.querySelectorAll('.prognos-row')).toHaveLength(1)
+
+    const toggle = screen.getByRole('button', { name: /Visa kommande månader/ })
+    await user.click(toggle)
+
+    // 12-month horizon on a monthly interest-only part → 11 future rows after
+    // the pending July one, month labels only, and NO log buttons — only the
+    // next month is due.
+    const future = document.querySelectorAll('.prognos-row.is-future')
+    expect(future).toHaveLength(11)
+    expect(future[0].querySelector('.prognos-date')?.textContent).toBe('aug')
+    expect(future[0].querySelector('button')).toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Logga förväntad rad' })).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: 'Dölj kommande månader' }))
+    expect(document.querySelectorAll('.prognos-row.is-future')).toHaveLength(0)
   })
 })
 

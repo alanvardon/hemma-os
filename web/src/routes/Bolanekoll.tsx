@@ -22,7 +22,7 @@ import {
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit, insatsPayments,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
-  expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingCharge, monthKey,
+  expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   contributionSplit, settlement, todayISO,
 } from '../lib/mortgage'
@@ -57,6 +57,17 @@ const REPRICE_NOTICE_DAYS = 31
 function fmtRateDate(iso: string): string {
   const d = new Date(iso + 'T00:00:00')
   const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric'
+  return d.toLocaleDateString('sv-SE', opts).replace(/\.( \d{4})?$/, '$1')
+}
+
+/** Month-only label for a not-yet-logged expected charge — the bank sets the
+ * exact billing date, so a specific day would be false precision. "sep", or
+ * "jan 2027" when the month isn't in the current year. Once the row is
+ * logged, the ledger shows it with a concrete date. */
+function fmtChargeMonth(iso: string): string {
+  const d = new Date(iso + 'T00:00:00')
+  const opts: Intl.DateTimeFormatOptions = { month: 'short' }
   if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric'
   return d.toLocaleDateString('sv-SE', opts).replace(/\.( \d{4})?$/, '$1')
 }
@@ -298,11 +309,12 @@ export default function Bolanekoll() {
   // The next UNCOVERED charge per part: once a month is fully logged (or
   // imported), the Nästa avisering block rolls forward to the following month
   // rather than going quiet — there is always a next avisering to look at.
-  const pendingCharges = useMemo(
+  const pendingSeries = useMemo(
     () => parts.filter(p => !p.archived)
-      .map(p => pendingCharge(p, periods, payments))
-      .filter((r): r is ExpectedCharge => r != null && r.interest > 0),
+      .map(p => pendingChargeSeries(p, periods, payments))
+      .filter(s => s.length > 0 && s[0].interest > 0),
     [parts, periods, payments])
+  const pendingCharges = useMemo(() => pendingSeries.map(s => s[0]), [pendingSeries])
   // Flattened to ONE entry per upcoming transaction — ränta and amortering
   // are separate line items, individually loggable and individually guarded.
   const pendingEntries = useMemo(() => pendingCharges.flatMap(r => {
@@ -313,6 +325,20 @@ export default function Bolanekoll() {
       out.push({ charge: r, kind: 'amortization', amount: r.amortization })
     return out
   }), [pendingCharges, payments])
+  // The months AFTER the loggable one — a read-only preview of the coming
+  // year's avier (rate held flat, balance stepping down each period).
+  const futureEntries = useMemo(() => pendingSeries.flatMap(s => s.slice(1))
+    .flatMap(r => {
+      const out: Array<{ charge: ExpectedCharge; kind: 'interest' | 'amortization'; amount: number }> = []
+      if (r.interest > 0) out.push({ charge: r, kind: 'interest', amount: r.interest })
+      if (r.amortization > 0) out.push({ charge: r, kind: 'amortization', amount: r.amortization })
+      return out
+    })
+    .sort((a, b) => a.charge.next_date.localeCompare(b.charge.next_date)
+      || a.charge.loan_part_id.localeCompare(b.charge.loan_part_id)
+      || (a.kind === b.kind ? 0 : a.kind === 'interest' ? -1 : 1)),
+  [pendingSeries])
+  const [showFuture, setShowFuture] = useState(false)
 
   const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
@@ -1304,7 +1330,7 @@ export default function Bolanekoll() {
                       <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
                       {isInterest && r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
                       {!isInterest && amortPct > 0 && <span className="prognos-rate">{fmtPct(amortPct)}</span>}
-                      <span className="prognos-date">{fmtRateDate(r.next_date)}</span>
+                      <span className="prognos-date">{fmtChargeMonth(r.next_date)}</span>
                       <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
                       <span className="prognos-amt">~{fmtMoney(e.amount)}</span>
                       {isInterest && (
@@ -1324,6 +1350,35 @@ export default function Bolanekoll() {
                   )
                 })}
               </ul>
+              {futureEntries.length > 0 && (
+                <>
+                  <button type="button" className="btn btn-ghost prognos-more-btn" onClick={() => setShowFuture(v => !v)}>
+                    {showFuture ? 'Dölj kommande månader' : `Visa kommande månader (${futureEntries.length})`}
+                  </button>
+                  {showFuture && (
+                    /* Read-only preview of the coming year's avier: rate held
+                       flat, balance stepping down by amorteringen each period.
+                       Nothing here is loggable — only the next month is due. */
+                    <ul className="prognos-list prognos-future">
+                      {futureEntries.map(e => {
+                        const r = e.charge
+                        const isInterest = e.kind === 'interest'
+                        const amortPct = r.original_balance > 0 ? (r.amortization / r.period_months) * 12 / r.original_balance * 100 : 0
+                        return (
+                          <li key={r.loan_part_id + ':' + e.kind + ':' + r.next_date} className="prognos-row is-future">
+                            <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
+                            {isInterest && r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
+                            {!isInterest && amortPct > 0 && <span className="prognos-rate">{fmtPct(amortPct)}</span>}
+                            <span className="prognos-date">{fmtChargeMonth(r.next_date)}</span>
+                            <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
+                            <span className="prognos-amt">~{fmtMoney(e.amount)}</span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </>
+              )}
             </div>
           )}
           <motion.div key={paymentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}

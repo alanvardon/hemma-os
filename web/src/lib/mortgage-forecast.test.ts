@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   expectedCharge, expectedCharges, forecastInterest, reconcileCharge,
-  matchPredictedRows, hasChargeInMonth, pendingCharge, partBalance,
+  matchPredictedRows, hasChargeInMonth, pendingCharge, pendingChargeSeries, partBalance,
 } from './mortgage'
 import type { LoanPart, Payment, RatePeriod } from './mortgage'
 
@@ -263,6 +263,43 @@ describe('pendingCharge (rolls past covered months)', () => {
     expect(c.next_date).toBe('2026-08-27')
     expect(c.balance).toBe(988_000)                 // 991 000 − 3 000 predicted amortering
     expect(c.amortization).toBe(3000)
+  })
+})
+
+describe('pendingChargeSeries (coming-months preview)', () => {
+  it('projects a year of avier from the pending one, months chained by cadence', () => {
+    const s = pendingChargeSeries(part(), [period()], CLEAN)
+    expect(s).toHaveLength(12)                        // monthly cadence → 12 avier
+    expect(s[0]).toEqual(pendingCharge(part(), [period()], CLEAN))
+    expect(s[1].next_date).toBe('2026-08-27')
+    expect(s[11].next_date).toBe('2027-06-27')
+    // Interest-only: balance flat, each month repriced on its own day count
+    // (27 jul → 27 aug = 31 days → 3 100 kr at 3.65 %).
+    expect(s[1].balance).toBe(1_000_000)
+    expect(s[1].interest).toBe(3100)
+  })
+
+  it('steps the balance down by the amortering month over month', () => {
+    const amortizing = [
+      interestRow('2026-03-27', 3100, { balance_after: 1_000_000 }),
+      interestRow('2026-04-27', 3100, { balance_after: 997_000 }),
+      interestRow('2026-05-27', 3000, { balance_after: 994_000 }),
+      interestRow('2026-06-27', 3100, { balance_after: 991_000 }),
+    ]
+    const s = pendingChargeSeries(part({ start_date: '2026-03-01', start_balance: 1_000_000 }), [period()], amortizing)
+    expect(s[0].balance).toBe(991_000)
+    expect(s[1].balance).toBe(988_000)                // −3 000 per month
+    expect(s[2].balance).toBe(985_000)
+    expect(s[11].balance).toBe(958_000)
+  })
+
+  it('kvartalsvis cadence yields 4 avier over a 12-month horizon', () => {
+    const quarterly = [
+      interestRow('2025-12-27', 9100), interestRow('2026-03-27', 9000), interestRow('2026-06-27', 9200),
+    ]
+    const s = pendingChargeSeries(part(), [period()], quarterly)
+    expect(s).toHaveLength(4)
+    expect(s.map(c => c.next_date)).toEqual(['2026-09-27', '2026-12-27', '2027-03-27', '2027-06-27'])
   })
 })
 

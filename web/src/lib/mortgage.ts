@@ -848,18 +848,39 @@ export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: P
     hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'interest') &&
     (x.amortization <= 0 || hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'amortization'))
   let out = c
-  for (let i = 0; i < 24 && covered(out); i++) {
-    const next_date = addMonthsAtDay(out.next_date, out.period_months, out.charge_day)
-    const days = daysBetween(out.next_date, next_date) ?? 0
-    const balance = Math.max(0, r2(out.balance - out.amortization))
-    const interest = out.rate != null && days > 0 && balance > 0 ? r2(balance * out.rate / 100 * days / 365) : 0
-    const bs = bindingStatus(part, periods, next_date)
-    out = {
-      ...out, next_date, days, balance, interest,
-      gross: r2(interest + out.amortization),
-      // A binding can lapse mid-roll: exact only while it still holds.
-      confidence: bs.bound && !bs.expired ? 'exact' : out.rate_source === 'derived' ? 'assumed' : 'unknown',
-    }
+  for (let i = 0; i < 24 && covered(out); i++) out = rollChargeOnce(part, periods, out)
+  return out
+}
+
+// One roll step: advance next_date by the cadence, step the balance down by
+// the predicted amortering, reprice the new interval's actual day count.
+function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedCharge): ExpectedCharge {
+  const next_date = addMonthsAtDay(out.next_date, out.period_months, out.charge_day)
+  const days = daysBetween(out.next_date, next_date) ?? 0
+  const balance = Math.max(0, r2(out.balance - out.amortization))
+  const interest = out.rate != null && days > 0 && balance > 0 ? r2(balance * out.rate / 100 * days / 365) : 0
+  const bs = bindingStatus(part, periods, next_date)
+  return {
+    ...out, next_date, days, balance, interest,
+    gross: r2(interest + out.amortization),
+    // A binding can lapse mid-roll: exact only while it still holds.
+    confidence: bs.bound && !bs.expired ? 'exact' : out.rate_source === 'derived' ? 'assumed' : 'unknown',
+  }
+}
+
+// The pending charge plus the avier after it: months ahead projected with the
+// rate held flat and the balance stepping down by the amortering each period.
+// [0] is pendingCharge (loggable); the rest are a read-only preview. Stops
+// early when the loan is paid off — a 0 kr avi is noise, not information.
+export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payments: Payment[], months = 12): ExpectedCharge[] {
+  const first = pendingCharge(part, periods, payments)
+  if (!first) return []
+  const out = [first]
+  const n = Math.max(1, Math.round(months / first.period_months))
+  for (let i = 1; i < n; i++) {
+    const next = rollChargeOnce(part, periods, out[out.length - 1])
+    if (next.balance <= 0) break
+    out.push(next)
   }
   return out
 }
