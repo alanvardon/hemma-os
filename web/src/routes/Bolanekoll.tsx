@@ -266,7 +266,7 @@ export default function Bolanekoll() {
   const partActs = (p: LoanPart) => (
     <>
       <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPartDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button>
-      <button type="button" className="icon-btn" data-del-part title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this loan part and all its payments? This can’t be undone.')) handleDeletePart(p.id) }}><Icon icon={X} /></button>
+      <button type="button" className="icon-btn" data-del-part title="Ta bort" aria-label="Ta bort" onClick={() => { if (confirm('Ta bort lånedelen och alla dess betalningar och ränteperioder? Det går inte att ångra.')) handleDeletePart(p.id) }}><Icon icon={X} /></button>
     </>
   )
 

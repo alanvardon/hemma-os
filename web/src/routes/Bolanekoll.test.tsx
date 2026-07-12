@@ -19,6 +19,9 @@ import * as Store from '../lib/mortgage-store'
 import { defaultSettings } from '../lib/mortgage'
 
 vi.mock('../lib/mortgage-store')
+vi.mock('@number-flow/react', () => ({
+  default: ({ value }: { value: number }) => <span>{value}</span>,
+}))
 
 // Bolanekoll reads useViewTransitionState (useToolPageActive), which needs a
 // data router — mount it as the sole route of an in-memory one.
@@ -34,6 +37,7 @@ function renderBolanekoll() {
 // return undefined by default, which would crash the mount — so give every read a
 // benign empty result. Individual tests override the one write they care about.
 beforeEach(() => {
+  vi.stubGlobal('confirm', vi.fn(() => true))
   vi.mocked(Store.cachedSnapshot).mockReturnValue({
     version: 1,
     loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [],
@@ -99,5 +103,30 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     // The mirror of the failure case: the dialog closes on success.
     expect(dialog.open).toBe(false)
     expect(screen.queryByText(/sparades inte i molnet/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the failure and retains the loan part when atomic deletion rejects', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Lånedel 1', loan_number: '123',
+      start_balance: 500000, start_date: '2026-01-01', archived: false,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, loan_parts: [part], payments: [], valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.removeLoanPart).mockRejectedValueOnce({ message: 'Failed to fetch' })
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Ta bort' }))
+
+    expect(confirm).toHaveBeenCalledWith(
+      'Ta bort lånedelen och alla dess betalningar och ränteperioder? Det går inte att ångra.',
+    )
+    expect(Store.removeLoanPart).toHaveBeenCalledWith('p1')
+    expect(await screen.findByText('Ingen anslutning. Ändringen sparades inte i molnet.')).toBeInTheDocument()
+    expect(screen.getAllByText('Lånedel 1').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Loan part deleted.')).not.toBeInTheDocument()
   })
 })

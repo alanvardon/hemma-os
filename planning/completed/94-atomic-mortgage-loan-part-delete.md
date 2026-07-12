@@ -1,6 +1,6 @@
 # Plan 94 — Make mortgage loan-part deletion atomic
 
-**Status:** proposed · **Priority:** Medium · **Effort:** S–M · **Owner model:**
+**Status:** completed · **Priority:** Medium · **Effort:** S–M · **Owner model:**
 GPT-5.6 Sol — owns the financial deletion decision checkpoint, transactional RPC,
 RLS safety, and rollback tests · **Requires approval:** migration/RPC or
 foreign-key behavior
