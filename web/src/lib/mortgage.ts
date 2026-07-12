@@ -812,7 +812,18 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
     bs.bound && !bs.expired ? 'exact' : rate_source === 'derived' ? 'assumed' : 'unknown'
 
   const interest = rate != null && days > 0 && balance > 0 ? r2(balance * rate / 100 * days / 365) : 0
-  const amortization = r2(monthlyAmortizationRate([part], real) * period_months)
+  // The bank charges a FIXED amortering per avi, so predict the full amount
+  // from the recent real amortering rows (median of the trailing 3; one-off
+  // insatser excluded — they don't repeat). The balance-timeline drop is only
+  // the fallback for ledgers without explicit amortering rows: it dilutes the
+  // charge across months outside the amortering history and underestimates.
+  const amorts = real.filter(p => p?.loan_part_id === part.id && p.kind === 'amortization'
+    && !p.is_insats && Math.abs(Number(p.amount)) > 0 && p.date)
+    .sort((a, b) => a.date.localeCompare(b.date)).slice(-3)
+    .map(p => Math.abs(Number(p.amount))).sort((a, b) => a - b)
+  const amortization = amorts.length
+    ? r2(amorts[amorts.length >> 1])
+    : r2(monthlyAmortizationRate([part], real) * period_months)
   return {
     loan_part_id: part.id, next_date, days, period_months, charge_day: chargeDay, balance,
     rate, rate_source, rate_type, interest, amortization, gross: r2(interest + amortization),

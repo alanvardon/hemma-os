@@ -169,6 +169,22 @@ describe('expectedCharge', () => {
     expect(c.gross).toBe(Math.round((c.interest + 3000) * 100) / 100)
   })
 
+  it('predicts the FULL amortering per avi from recent amortering rows, ignoring insatser', () => {
+    // Explicit amortering rows exist → use their charge amount (median of the
+    // trailing 3), NOT the diluted balance-timeline drop. The 50 000 kr extra
+    // amortering is flagged is_insats and must not skew the prediction.
+    const pays = [
+      ...CLEAN,
+      interestRow('2026-04-27', 3000, { id: 'a1', kind: 'amortization' }),
+      interestRow('2026-05-27', 3000, { id: 'a2', kind: 'amortization' }),
+      interestRow('2026-06-27', 3100, { id: 'a3', kind: 'amortization' }),
+      interestRow('2026-06-15', 50_000, { id: 'x1', kind: 'amortization', is_insats: true }),
+    ]
+    const c = expectedCharge(part(), [period()], pays)!
+    expect(c.amortization).toBe(3000)               // median of 3 000 / 3 000 / 3 100
+    expect(c.gross).toBe(c.interest + 3000)
+  })
+
   it('ignores logged predictions when calibrating (round-trip invariance)', () => {
     const before = expectedCharge(part(), [period()], CLEAN)!
     const logged: Payment = {
