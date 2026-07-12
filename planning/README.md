@@ -243,3 +243,17 @@ This order deliberately ships bounded correctness/security fixes before the
 larger sync redesign and leaves structural cleanup until behavior is proven.
 Plans 94–96 require the approvals documented in their files. Each implementation
 remains its own branch and PR from current `main`.
+
+---
+
+# Student Loan forecast — 2026-07-12 (standalone)
+
+| File | Priority | Scope | Summary | Owner | Effort |
+|------|----------|-------|---------|-------|--------|
+| [102-student-loan-decision-forecast.md](102-student-loan-decision-forecast.md) | High | UK Plan 1 Student Loan | Effective-dated overseas rules, currency-correct cash flows, independent forecast paths, scenarios, break-even triggers, seeded probability analysis and adaptive reassessment | Codex | L |
+
+Standalone financial-model upgrade based on the confirmed post-2006
+England/Wales Plan 1 loan, steady expected earnings and lowest-expected-cost
+objective. Both deterministic scenarios and probability analysis are in scope.
+Implementation requires owner confirmation of formulas and default forecast
+ranges because it materially changes the payoff recommendation.
