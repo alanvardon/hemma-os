@@ -42,6 +42,7 @@ export async function maybeDevSignIn(): Promise<void> {
     // First run after a fresh `supabase db reset`: the user doesn't exist yet.
     // Create it (auto-confirmed locally — enable_confirmations = false in
     // supabase/config.toml), which also signs it in.
-    await supabase.auth.signUp(creds)
+    const { error: signUpError } = await supabase.auth.signUp(creds)
+    if (signUpError) throw signUpError
   }
 }

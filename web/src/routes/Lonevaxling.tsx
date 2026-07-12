@@ -7,6 +7,7 @@ import Collapse from '../components/Collapse'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { useSaveFlash } from '../components/useSaveFlash'
+import { reportPersistenceError } from '../lib/persistence-error'
 import {
   type LonevaxlingInputs,
   type LonevaxlingResult,
@@ -112,8 +113,7 @@ export default function Lonevaxling() {
   const result = useMemo(() => computeLonevaxling(inputs), [inputs])
 
   function saveToStorage(inp: LonevaxlingInputs) {
-    lonevaxlingStore.save(inp)
-    flashSaved()
+    void lonevaxlingStore.save(inp).then(flashSaved).catch(reportPersistenceError)
   }
 
   function handleChange(key: keyof LonevaxlingInputs, raw: string) {

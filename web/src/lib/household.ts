@@ -2,9 +2,11 @@
    All membership writes live in the security-definer `claim_household` RPC; the
    client only ever touches `household_invites` (scoped by RLS to the caller's
    household / own email) and calls the two RPCs. supabase-js never throws — it
-   returns { data, error } — so every helper resolves and callers check `error`. */
+   returns { data, error } — every mutation checks it and rejects through the
+   shared persistence error contract. */
 
 import { supabase } from './supabase'
+import { toPersistenceError } from './persistence-error'
 
 export interface Member {
   user_id: string
@@ -19,11 +21,17 @@ export interface Invite {
 
 // Ensure the signed-in user has a household: join a pending invite, else create
 // their own. Idempotent — safe to call on every sign-in. Returns the household
-// id, or null on error (caller can still render; stores fall back to cache).
-export async function claimHousehold(): Promise<string | null> {
-  const { data, error } = await supabase.rpc('claim_household')
-  if (error) return null
-  return (data as string | null) ?? null
+// id. Provisioning failure is a hard gate: callers must not mount tools without
+// a confirmed household id.
+export async function claimHousehold(): Promise<string> {
+  try {
+    const { data, error } = await supabase.rpc('claim_household')
+    if (error) throw error
+    if (typeof data !== 'string' || !data) throw new Error('Household claim returned no id')
+    return data
+  } catch (error) {
+    throw toPersistenceError(error)
+  }
 }
 
 // The current household's members WITH their emails, via the security-definer
@@ -46,16 +54,23 @@ export async function listInvites(): Promise<Invite[]> {
 
 // Invite an email into the current household. household_id is filled by the
 // column default (current_household()); the inv_write with_check re-pins it.
-// Returns an error message on failure, or null on success.
-export async function createInvite(email: string): Promise<string | null> {
-  const { error } = await supabase.from('household_invites').insert({ email: email.trim().toLowerCase() })
-  return error ? error.message : null
+export async function createInvite(email: string): Promise<void> {
+  try {
+    const { error } = await supabase.from('household_invites').insert({ email: email.trim().toLowerCase() })
+    if (error) throw error
+  } catch (error) {
+    throw toPersistenceError(error)
+  }
 }
 
 // Withdraw a pending invite (inv_delete policy scopes it to your household).
-export async function removeInvite(email: string): Promise<string | null> {
-  const { error } = await supabase.from('household_invites').delete().eq('email', email)
-  return error ? error.message : null
+export async function removeInvite(email: string): Promise<void> {
+  try {
+    const { error } = await supabase.from('household_invites').delete().eq('email', email)
+    if (error) throw error
+  } catch (error) {
+    throw toPersistenceError(error)
+  }
 }
 
 // Is there a pending invite addressed to ME, for a household I'm NOT already in?
@@ -78,21 +93,33 @@ export async function pendingInviteToJoin(): Promise<boolean> {
 
 // Move me into the household that invited my email (accept_invite RPC). The old
 // household is abandoned in place, not purged. Returns an error message on
-// failure, or null on success — callers should then fully reload so every store
-// re-reads under the new household.
-export async function acceptInvite(): Promise<string | null> {
-  const { error } = await supabase.rpc('accept_invite')
-  return error ? error.message : null
+// failure — callers should then fully reload so every store re-reads under the
+// new household.
+export async function acceptInvite(): Promise<void> {
+  try {
+    const { error } = await supabase.rpc('accept_invite')
+    if (error) throw error
+  } catch (error) {
+    throw toPersistenceError(error)
+  }
 }
 
 // Leave my current household (leave_household RPC). Refused for the last member.
-// Returns an error message on failure, or null on success; on next sign-in
-// claim_household provisions a fresh private household.
-export async function leaveHousehold(): Promise<string | null> {
-  const { error } = await supabase.rpc('leave_household')
-  return error ? error.message : null
+// On next sign-in claim_household provisions a fresh private household.
+export async function leaveHousehold(): Promise<void> {
+  try {
+    const { error } = await supabase.rpc('leave_household')
+    if (error) throw error
+  } catch (error) {
+    throw toPersistenceError(error)
+  }
 }
 
 export async function signOut(): Promise<void> {
-  try { await supabase.auth.signOut() } catch { /* already gone */ }
+  try {
+    const { error } = await supabase.auth.signOut()
+    if (error) throw error
+  } catch (error) {
+    throw toPersistenceError(error)
+  }
 }

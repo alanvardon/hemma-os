@@ -146,7 +146,9 @@ export function createSupabaseMock() {
     from,
     rpc,
     auth: {
-      signOut: async () => {},
+      signOut: async () => shouldFail('signOut')
+        ? { error: { message: 'mock: sign out failed' } }
+        : { error: null },
       getUser: async () => ({ data: { user: control.user }, error: null }),
     },
   }

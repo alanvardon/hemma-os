@@ -50,7 +50,7 @@ beforeEach(() => {
 describe('Bolanekoll — save failures surface to the user (regression for audit H2 / PR #237)', () => {
   it('shows an error toast and keeps the dialog open when addLoanPart rejects', async () => {
     // supabase-js throws plain {message} objects (not Error instances); mirror
-    // that so the test also pins saveErr()'s .message-reading behaviour.
+    // that so the test also pins the stable offline-category copy.
     vi.mocked(Store.addLoanPart).mockRejectedValueOnce({ message: 'Failed to fetch' })
     const user = userEvent.setup()
     renderBolanekoll()
@@ -65,7 +65,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     await user.click(screen.getByRole('button', { name: 'Save' }))
 
     // (a) the error message renders somewhere in the DOM…
-    expect(await screen.findByText(/Kunde inte spara/i)).toBeInTheDocument()
+    expect(await screen.findByText('Ingen anslutning. Ändringen sparades inte i molnet.')).toBeInTheDocument()
     // (b) …and the dialog is STILL OPEN with the typed value intact — a
     // successful save would have closed it via setPartDlg({ open: false }).
     // The `open` attribute is the load-bearing check: DialogShell keeps the
@@ -98,6 +98,6 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     expect(await screen.findByText('Loan part added.')).toBeInTheDocument()
     // The mirror of the failure case: the dialog closes on success.
     expect(dialog.open).toBe(false)
-    expect(screen.queryByText(/Kunde inte spara/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/sparades inte i molnet/i)).not.toBeInTheDocument()
   })
 })

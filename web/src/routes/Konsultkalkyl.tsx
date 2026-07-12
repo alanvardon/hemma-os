@@ -10,6 +10,7 @@ import Collapse from '../components/Collapse'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { useSaveFlash } from '../components/useSaveFlash'
+import { reportPersistenceError } from '../lib/persistence-error'
 
 // NOTE: uses U+00A0 no-break space (not lib/format's plain space) so amounts
 // don't wrap mid-number; no Math.round — every call site pre-rounds.
@@ -70,8 +71,7 @@ export default function Konsultkalkyl() {
   function handleChange(key: keyof KonsultInputs, value: string) {
     const next = { ...inputs, [key]: parseFormatted(value) }
     setInputs(next)
-    konsultStore.save(next)
-    flashSaved()
+    void konsultStore.save(next).then(flashSaved).catch(reportPersistenceError)
   }
 
   function handleBlur(e: React.FocusEvent<HTMLInputElement>, key: keyof KonsultInputs, kind: FieldKind) {
@@ -81,7 +81,7 @@ export default function Konsultkalkyl() {
   function handleReset() {
     const d = defaultInputs()
     setInputs(d)
-    konsultStore.save(d)
+    void konsultStore.save(d).then(flashSaved).catch(reportPersistenceError)
     setResetKey((k) => k + 1)
   }
 

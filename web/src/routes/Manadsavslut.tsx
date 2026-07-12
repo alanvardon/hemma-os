@@ -22,6 +22,7 @@ import ThemeToggle from '../components/ThemeToggle'
 import { usePersonNames } from '../components/usePersonNames'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
+import { persistenceErrorMessage } from '../lib/persistence-error'
 import ItemDialog from './manadsavslut/ItemDialog'
 import SettleDialog from './manadsavslut/SettleDialog'
 import SettingsDialog from './manadsavslut/SettingsDialog'
@@ -176,7 +177,7 @@ export default function Manadsavslut() {
   // A failed cloud write now throws (the pre-Supabase store never did); report it
   // via a toast instead of leaving an unhandled rejection + a half-updated UI.
   function saveErr(err: unknown) {
-    showToast(err instanceof Error && err.message ? 'Couldn’t save — ' + err.message : 'Couldn’t save — you may be offline.')
+    showToast(persistenceErrorMessage(err))
   }
   async function handleSaveItem(rec: Omit<Item, 'id' | 'created_at'>) {
     try {

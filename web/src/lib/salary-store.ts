@@ -15,6 +15,7 @@
 
 import type { SalarySubmission } from './hushallsbudget'
 import { supabase } from './supabase'
+import { toPersistenceError } from './persistence-error'
 import { genId } from './id'
 import { makeImportOnce } from './store-helpers'
 
@@ -155,7 +156,7 @@ export async function add(record: SalarySubmission): Promise<SalarySubmission> {
     created_at: record.created_at || new Date().toISOString(),
   }
   const { error } = await supabase.from(TABLE).insert(_row(saved))
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   _writeCache([saved, ..._readCache().filter((r) => r.id !== saved.id)])
   return saved
 }
@@ -163,7 +164,7 @@ export async function add(record: SalarySubmission): Promise<SalarySubmission> {
 // Drop one record by id; resolves the remaining (cached) count.
 export async function remove(id: string): Promise<number> {
   const { error } = await supabase.from(TABLE).delete().eq('id', id)
-  if (error) throw error
+  if (error) throw toPersistenceError(error)
   const rows = _readCache().filter((r) => r.id !== id)
   _writeCache(rows)
   return rows.length
@@ -206,7 +207,7 @@ export async function importJSON(text: string): Promise<number> {
 
   if (toAdd.length) {
     const { error } = await supabase.from(TABLE).insert(toAdd.map(_row))
-    if (error) throw error
+    if (error) throw toPersistenceError(error)
     _writeCache(_sortedDesc([...toAdd, ..._readCache()]))
   }
   return toAdd.length

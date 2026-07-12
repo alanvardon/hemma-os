@@ -145,6 +145,13 @@
   margin: 14px 0 0;
 }
 
+.auth-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  margin-top: 1.25rem;
+}
+
 .auth-reset {
   margin-top: 22px;
 }

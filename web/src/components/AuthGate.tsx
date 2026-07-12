@@ -6,7 +6,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
-import { claimHousehold } from '../lib/household'
+import { claimHousehold, signOut } from '../lib/household'
+import { persistenceErrorMessage } from '../lib/persistence-error'
 import { useTheme } from '../App'
 import auroraMp4 from '../assets/auth/aurora.mp4'
 import auroraPosterAvif from '../assets/auth/aurora-poster.avif'
@@ -14,13 +15,17 @@ import auroraPosterJpg from '../assets/auth/aurora-poster.jpg'
 
 // undefined = still restoring the persisted session (brief); null = signed out.
 type SessionState = Session | null | undefined
+type ProvisioningState = 'loading' | 'ready' | 'error'
 
 export default function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionState>(undefined)
   // A signed-in user might not have a household yet (fresh account / invitee).
   // Gate the app on claim_household so the tool stores never read before one
-  // exists. `ready` flips true once the claim resolves for this user.
-  const [ready, setReady] = useState(false)
+  // exists. A failed claim stays closed until Retry succeeds or the user signs
+  // out.
+  const [provisioning, setProvisioning] = useState<ProvisioningState>('loading')
+  const [provisioningError, setProvisioningError] = useState('')
+  const [retryCount, setRetryCount] = useState(0)
   const claimedFor = useRef<string | null>(null)
 
   useEffect(() => {
@@ -30,7 +35,9 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       // test user so we skip the magic-link screen. Gated on DEV + dynamically
       // imported, so devAuth (and its credentials) are excluded from prod builds.
       if (import.meta.env.DEV && !data.session) {
-        void import('../lib/devAuth').then((m) => m.maybeDevSignIn())
+        void import('../lib/devAuth').then((m) => m.maybeDevSignIn()).catch(() => {
+          // Local-only convenience failed; the normal login screen remains.
+        })
       }
     })
     const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s))
@@ -40,24 +47,31 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!session) {
       claimedFor.current = null
-      setReady(false)
+      setProvisioning('loading')
+      setProvisioningError('')
       return
     }
     const uid = session.user.id
     if (claimedFor.current === uid) {
-      setReady(true)
+      setProvisioning('ready')
       return
     }
     let alive = true
-    claimHousehold().then((hid) => {
-      if (!alive) return
-      // Cache success so a token refresh doesn't re-claim; on failure leave it
-      // unset (retry next auth event) but still let the app render off cache.
-      if (hid !== null) claimedFor.current = uid
-      setReady(true)
-    })
+    setProvisioning('loading')
+    setProvisioningError('')
+    claimHousehold()
+      .then(() => {
+        if (!alive) return
+        claimedFor.current = uid
+        setProvisioning('ready')
+      })
+      .catch((error) => {
+        if (!alive) return
+        setProvisioningError(persistenceErrorMessage(error))
+        setProvisioning('error')
+      })
     return () => { alive = false }
-  }, [session])
+  }, [session, retryCount])
 
   if (session === undefined) {
     // Restoring session — keep it blank rather than flashing the login screen.
@@ -66,10 +80,49 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
   if (session === null) return <MagicLinkScreen />
 
+  if (provisioning === 'error') {
+    return (
+      <ProvisioningErrorScreen
+        message={provisioningError}
+        onRetry={() => setRetryCount((n) => n + 1)}
+      />
+    )
+  }
+
   // Session present but the household claim hasn't resolved yet — brief splash.
-  if (!ready) return <div className="auth-splash" aria-hidden="true" />
+  if (provisioning !== 'ready') return <div className="auth-splash" aria-hidden="true" />
 
   return <>{children}</>
+}
+
+function ProvisioningErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { theme } = useTheme()
+  const [signOutError, setSignOutError] = useState('')
+
+  async function handleSignOut() {
+    setSignOutError('')
+    try {
+      await signOut()
+    } catch (error) {
+      setSignOutError(persistenceErrorMessage(error))
+    }
+  }
+
+  return (
+    <div className="auth-screen">
+      {theme === 'dark' && <AuroraBackdrop />}
+      <div className="auth-card" role="alert">
+        <p className="auth-kicker">Hemma·OS</p>
+        <h1 className="auth-title">Hushållet kunde inte öppnas</h1>
+        <p className="auth-lead">{message || 'Försök igen om en stund.'}</p>
+        <div className="auth-recovery-actions">
+          <button type="button" className="btn btn-primary" onClick={onRetry}>Försök igen</button>
+          <button type="button" className="btn btn-ghost" onClick={() => void handleSignOut()}>Logga ut</button>
+        </div>
+        {signOutError && <p className="auth-error">{signOutError}</p>}
+      </div>
+    </div>
+  )
 }
 
 /* Aurora backdrop (plan 34) — real Lofoten footage behind the login card,
@@ -119,9 +172,8 @@ function MagicLinkScreen() {
     setStatus('sending')
     setError('')
     // Hardening (plan 46): the server-side hook_before_user_created is the real
-    // signup gate now — it rejects new accounts with no pending invite and
-    // returns a friendly Swedish 403 message, which surfaces below via
-    // error.message. Always requesting shouldCreateUser: true is safe: existing
+    // signup gate now. Backend details are deliberately not rendered. Always
+    // requesting shouldCreateUser: true is safe: existing
     // users (the seeded couple) sign in as normal, invited partners self-onboard,
     // and strangers get the hook's rejection instead of a silent no-op email.
     const { error } = await supabase.auth.signInWithOtp({
@@ -135,7 +187,7 @@ function MagicLinkScreen() {
     })
     if (error) {
       setStatus('error')
-      setError(error.message)
+      setError('Kunde inte skicka inloggningslänken. Försök igen.')
     } else {
       setStatus('sent')
     }

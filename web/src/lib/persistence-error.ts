@@ -1,0 +1,63 @@
+export type PersistenceErrorCategory =
+  | 'offline'
+  | 'auth'
+  | 'conflict'
+  | 'validation'
+  | 'unknown'
+
+interface BackendErrorLike {
+  code?: string
+  message?: string
+  status?: number
+}
+
+const USER_MESSAGES: Record<PersistenceErrorCategory, string> = {
+  offline: 'Ingen anslutning. Ändringen sparades inte i molnet.',
+  auth: 'Din session har gått ut. Logga in igen.',
+  conflict: 'Ändringen krockade med en nyare version. Ladda om och försök igen.',
+  validation: 'Ändringen kunde inte sparas. Kontrollera uppgifterna och försök igen.',
+  unknown: 'Kunde inte spara ändringen. Försök igen.',
+}
+
+export class PersistenceError extends Error {
+  readonly category: PersistenceErrorCategory
+
+  constructor(category: PersistenceErrorCategory) {
+    super(USER_MESSAGES[category])
+    this.name = 'PersistenceError'
+    this.category = category
+  }
+}
+
+function classify(error: unknown): PersistenceErrorCategory {
+  if (error instanceof PersistenceError) return error.category
+  if (error instanceof TypeError) return 'offline'
+
+  const backend = (error && typeof error === 'object' ? error : {}) as BackendErrorLike
+  const code = backend.code?.toUpperCase() ?? ''
+  const message = backend.message?.toLowerCase() ?? ''
+
+  if (backend.status === 401 || backend.status === 403 || code.includes('JWT') || message.includes('jwt')) return 'auth'
+  if (backend.status === 409 || code === '23505') return 'conflict'
+  if (backend.status === 0 || message.includes('fetch') || message.includes('network') || message.includes('offline')) return 'offline'
+  if (backend.status === 400 || code.startsWith('22') || code.startsWith('23')) return 'validation'
+  return 'unknown'
+}
+
+export function toPersistenceError(error: unknown): PersistenceError {
+  return error instanceof PersistenceError ? error : new PersistenceError(classify(error))
+}
+
+export function persistenceErrorMessage(error: unknown): string {
+  return toPersistenceError(error).message
+}
+
+export const PERSISTENCE_ERROR_EVENT = 'hemma:persistence-error'
+
+/** Report an already-handled background write failure to the app-level notice. */
+export function reportPersistenceError(error: unknown): void {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(PERSISTENCE_ERROR_EVENT, {
+    detail: { message: persistenceErrorMessage(error) },
+  }))
+}

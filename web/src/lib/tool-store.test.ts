@@ -69,6 +69,18 @@ describe('createToolStateStore', () => {
     expect(JSON.parse(mem.get('cache')!)).toEqual({ a: 1, b: 2 })
   })
 
+  it('reports an upsert that resolves with an error as a failed save', async () => {
+    state.fail = true
+    const saved = { a: 1, b: 2 }
+
+    await expect(makeStore().save(saved)).rejects.toMatchObject({
+      name: 'PersistenceError',
+      category: 'unknown',
+      message: 'Kunde inte spara ändringen. Försök igen.',
+    })
+    expect(JSON.parse(mem.get('cache')!)).toEqual(saved)
+  })
+
   it('load returns the merged cloud blob and refreshes the cache', async () => {
     state.row = { tool: 't', data: { a: 5, b: 9, junk: 'x' } }
     const loaded = await makeStore().load()
