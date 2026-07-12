@@ -378,8 +378,8 @@
   .prognos-table .col-kind { white-space: nowrap; }
   .prognos-table .col-rate { color: var(--ink-soft); }
   /* "Logga alla" sits on the same row as the total chip, pushed to the card's
-     right edge. */
-  .prognos-log-all { margin-left: auto; }
+     right edge and aligned to the chip's bottom. */
+  .prognos-log-all { margin-left: auto; align-self: flex-end; }
   .conf-badge {
     font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
     color: var(--ink-soft); background: var(--paper-warm);
