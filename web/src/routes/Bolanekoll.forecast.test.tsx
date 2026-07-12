@@ -111,7 +111,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     // quiet — there is always a next avisering. Pending rows show a MONTH,
     // not a date: the bank sets the exact day, so a date is false precision.
     await waitFor(() =>
-      expect(document.querySelector('.prognos-row .prognos-date')?.textContent).toBe('aug'))
+      expect(document.querySelector('.prognos-row .prognos-date')?.textContent).toBe('aug 2026'))
     expect(screen.getByRole('button', { name: 'Logga förväntad rad' })).toBeEnabled()
   })
 
@@ -183,7 +183,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
       expect(rows).toHaveLength(1)
       expect(rows[0].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
     })
-    expect(document.querySelector('.prognos-row .prognos-date')?.textContent).toBe('juli')
+    expect(document.querySelector('.prognos-row .prognos-date')?.textContent).toBe('juli 2026')
   })
 
   it('shows the month AFTER one already covered, without logging anything', async () => {
@@ -193,7 +193,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     expect((await screen.findAllByText('förväntad')).length).toBeGreaterThan(0)
     // …and the block offers August (July is covered by the predicted row).
     await waitFor(() =>
-      expect(document.querySelector('.prognos-row .prognos-date')?.textContent).toBe('aug'))
+      expect(document.querySelector('.prognos-row .prognos-date')?.textContent).toBe('aug 2026'))
     expect(screen.getByRole('button', { name: 'Logga förväntad rad' })).toBeEnabled()
     expect(Store.addPayments).not.toHaveBeenCalled()
   })
@@ -246,7 +246,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     // next month is due.
     const future = document.querySelectorAll('.prognos-row.is-future')
     expect(future).toHaveLength(11)
-    expect(future[0].querySelector('.prognos-date')?.textContent).toBe('aug')
+    expect(future[0].querySelector('.prognos-date')?.textContent).toBe('aug 2026')
     expect(future[0].querySelector('button')).toBeNull()
     expect(screen.getAllByRole('button', { name: 'Logga förväntad rad' })).toHaveLength(1)
 

@@ -61,15 +61,15 @@ function fmtRateDate(iso: string): string {
   return d.toLocaleDateString('sv-SE', opts).replace(/\.( \d{4})?$/, '$1')
 }
 
-/** Month-only label for a not-yet-logged expected charge — the bank sets the
- * exact billing date, so a specific day would be false precision. "sep", or
- * "jan 2027" when the month isn't in the current year. Once the row is
- * logged, the ledger shows it with a concrete date. */
+/** Month-and-year label for a not-yet-logged expected charge — the bank sets
+ * the exact billing date, so a specific day would be false precision, but the
+ * month alone is ambiguous across years. "sep 2026". Once the row is logged,
+ * the ledger shows it with a concrete date. */
 function fmtChargeMonth(iso: string): string {
   const d = new Date(iso + 'T00:00:00')
-  const opts: Intl.DateTimeFormatOptions = { month: 'short' }
-  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric'
-  return d.toLocaleDateString('sv-SE', opts).replace(/\.( \d{4})?$/, '$1')
+  return d
+    .toLocaleDateString('sv-SE', { month: 'short', year: 'numeric' })
+    .replace(/\./g, '')
 }
 
 // The change banner is a nudge about NEWS — after this many days the new rate
