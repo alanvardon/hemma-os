@@ -10,6 +10,7 @@ import StudentLoan from './routes/StudentLoan'
 import Bolanekoll from './routes/Bolanekoll'
 import Manadsavslut from './routes/Manadsavslut'
 import Hushallsbudget from './routes/Hushallsbudget'
+import Huskalendern from './routes/Huskalendern'
 import PersistenceNotice from './components/PersistenceNotice'
 
 function Layout() {
@@ -53,6 +54,7 @@ const router = createHashRouter([
       { path: '/bolanekoll', element: <Bolanekoll /> },
       { path: '/manadsavslut', element: <Manadsavslut /> },
       { path: '/hushallsbudget', element: <Hushallsbudget /> },
+      { path: '/huskalendern', element: <Huskalendern /> },
       // Catch-all: unknown hashes (incl. the magic-link `#access_token…`
       // callback, which supabase-js consumes on load) fall back to the hub
       // instead of React Router's error page — plan 16a.

@@ -15,6 +15,7 @@ import { useStore } from '../store/useStore'
 import * as mortgageStore from '../lib/mortgage-store'
 import * as monthEndStore from '../lib/manadsavslut-store'
 import { loadBudget } from '../lib/hushallsbudget-store'
+import * as houseStore from '../lib/huskalendern-store'
 import { fetchPolicyRate, nextDecision, currentPoint, type PolicyRateData } from '../lib/riksbank'
 import { todayISO } from '../lib/date'
 import {
@@ -22,12 +23,14 @@ import {
   monthEndStat,
   budgetStat,
   scenarioStat,
+  houseStat,
   orderTools,
   markOpened,
   readLastOpened,
   type MortgageStat,
   type MonthEndStat,
   type BudgetStat,
+  type HouseStat,
 } from '../lib/hub-stats'
 
 /** "17 jun" — short sv-SE date for the styrränta stat line (plan 70). Strips
@@ -125,6 +128,19 @@ const STANDARD_TOOLS: ToolDef[] = [
     ),
   },
   {
+    path: '/huskalendern',
+    name: 'Huskalendern',
+    desc: "Husets minne — logga vad som gjorts och håll koll på när avtal och underhåll går ut, som en tidslinje runt idag.",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4 10.5 12 4l8 6.5" pathLength="1"/>
+        <path d="M6 9.5V20h12V9.5" pathLength="1"/>
+        <path d="M12 12v3.5" pathLength="1"/>
+        <path d="M10 14.5l2 1.5 2-1.5" pathLength="1"/>
+      </svg>
+    ),
+  },
+  {
     path: '/lonevaxling',
     name: 'Löneväxling',
     desc: "Salary sacrifice into pension — at what salary it pays off, the tax you save now and what it's worth net at payout. Sweden, 2026.",
@@ -157,6 +173,7 @@ interface HubStats {
   mortgage: MortgageStat | null
   monthEnd: MonthEndStat | null
   budget: BudgetStat | null
+  house: HouseStat | null
 }
 
 // One dismissal of the scroll cue holds for the whole session.
@@ -191,6 +208,7 @@ export default function Home() {
     '/manadsavslut': useToolCardActive('/manadsavslut'),
     '/bolanekoll': useToolCardActive('/bolanekoll'),
     '/lonevaxling': useToolCardActive('/lonevaxling'),
+    '/huskalendern': useToolCardActive('/huskalendern'),
     '/student-loan': useToolCardActive('/student-loan'),
   }
 
@@ -252,9 +270,10 @@ export default function Home() {
         mortgage: mortgageStat(m.loan_parts, m.payments, m.valuations),
         monthEnd: monthEndStat(me.items, me.payments, me.settings, new Date()),
         budget: null,
+        house: houseStat(houseStore.cachedSnapshot().items, todayISO()),
       }
     } catch {
-      return { mortgage: null, monthEnd: null, budget: null }
+      return { mortgage: null, monthEnd: null, budget: null, house: null }
     }
   })
   useEffect(() => {
@@ -268,12 +287,14 @@ export default function Home() {
       monthEndStore.listItems(),
       monthEndStore.listPayments(),
       monthEndStore.getSettings(),
-    ]).then(([budget, parts, mortgagePays, valuations, items, monthEndPays, maSettings]) => {
+      houseStore.listItems(),
+    ]).then(([budget, parts, mortgagePays, valuations, items, monthEndPays, maSettings, houseItems]) => {
       if (!alive) return
       setStats({
         mortgage: mortgageStat(parts, mortgagePays, valuations),
         monthEnd: monthEndStat(items, monthEndPays, maSettings, new Date()),
         budget: budgetStat(budget),
+        house: houseStat(houseItems, todayISO()),
       })
     })
     return () => { alive = false }
@@ -446,6 +467,27 @@ export default function Home() {
             {b.equal
               ? <Money value={b.a} signed />
               : <><MoneyCompact value={b.a} signed /> · <MoneyCompact value={b.b} signed /></>}
+          </span>
+        </div>
+      )
+    }
+    if (path === '/huskalendern' && stats.house) {
+      const h = stats.house
+      if (h.attention > 0) {
+        return (
+          <div className="card-stat">
+            <span className="stat-label">Behöver ses över</span>
+            <span className="stat-value"><Num value={h.attention} /> {h.attention === 1 ? 'sak' : 'saker'}</span>
+          </div>
+        )
+      }
+      return (
+        <div className="card-stat">
+          <span className="stat-label">Nästa</span>
+          <span className="stat-value">
+            {h.next
+              ? <>{h.next.title}{h.next.days === 0 ? ' · idag' : <> · om <Num value={h.next.days} /> {h.next.days === 1 ? 'dag' : 'dagar'}</>}</>
+              : 'Inget planerat'}
           </span>
         </div>
       )

@@ -11,6 +11,7 @@ import type { Item as MonthEndItem, Payment as MonthEndPayment, MonthEndSettings
 import { computeBudget, type BudgetState } from './hushallsbudget'
 import { derive, type Constants } from './calc'
 import type { Scenario } from './storage'
+import { needsAttention, nextMilestone, type HouseItem } from './huskalendern'
 
 // ── Bolånekoll ───────────────────────────────────────────────────────────────
 
@@ -109,6 +110,23 @@ export function scenarioStat(scenarios: Scenario[], globalConstants: Constants):
   if (!list.length) return null
   const monthly = list.length === 1 ? derive(list[0].inputs, list[0].constants ?? globalConstants).totalMonthly : null
   return { count: list.length, monthly }
+}
+
+// ── Huskalendern ───────────────────────────────────────────────────────────
+
+export interface HouseStat {
+  /** How many items need attention (soon/overdue) — the "N saker" flag. */
+  attention: number
+  /** The nearest upcoming milestone, shown when nothing needs attention. */
+  next: { title: string; days: number } | null
+}
+
+export function houseStat(items: HouseItem[], today: string): HouseStat | null {
+  const list = items || []
+  if (!list.length) return null
+  const attention = needsAttention(list, today).length
+  const nm = nextMilestone(list, today)
+  return { attention, next: nm ? { title: nm.title, days: nm.days } : null }
 }
 
 // ── Last-opened ordering ─────────────────────────────────────────────────────
