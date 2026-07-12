@@ -4,7 +4,7 @@
 // it (silently within tolerance, blocked on drift until the user confirms).
 // The mock boundary is mortgage-store, matching Bolanekoll.test.tsx — the pure
 // forecast math itself is pinned in lib/mortgage-forecast.test.ts.
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -196,6 +196,37 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
       expect(document.querySelector('.prognos-row .prognos-date')?.textContent).toBe('aug'))
     expect(screen.getByRole('button', { name: 'Logga förväntad rad' })).toBeEnabled()
     expect(Store.addPayments).not.toHaveBeenCalled()
+  })
+
+  it('filters the expected charges by loan part via the toggle', async () => {
+    // Two parts, each with its own ränta history → two pending charges. The
+    // block's loan-part toggle should narrow the list to one part.
+    const part2: LoanPart = { ...PART, id: 'p2', label: 'Lånedel 2' }
+    const period2: RatePeriod = { ...PERIOD, id: 'r2', loan_part_id: 'p2', rate: 4 }
+    const p2Rows = HISTORY.map(r => ({ ...r, id: r.id + '-p2', loan_part_id: 'p2' }))
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 1, loan_parts: [PART, part2], payments: [...HISTORY, ...p2Rows],
+      valuations: [], rate_periods: [PERIOD, period2], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([PART, part2])
+    vi.mocked(Store.listPayments).mockResolvedValue([...HISTORY, ...p2Rows])
+    vi.mocked(Store.listValuations).mockResolvedValue([])
+    vi.mocked(Store.listRatePeriods).mockResolvedValue([PERIOD, period2])
+    vi.mocked(Store.listContributions).mockResolvedValue([])
+    vi.mocked(Store.getSettings).mockResolvedValue(defaultSettings())
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    // Both parts show up front (All).
+    await screen.findAllByRole('button', { name: 'Logga förväntad rad' })
+    const parts = () => [...document.querySelectorAll('.prognos-row .prognos-part')].map(n => n.textContent)
+    expect(parts()).toEqual(['Lånedel 1', 'Lånedel 2'])
+
+    // Scope to the expected-charge toggle (the payments filter carries the same
+    // labels) and pick Lånedel 2.
+    const filter = screen.getByRole('radiogroup', { name: 'Filter expected charges' })
+    await user.click(within(filter).getByRole('radio', { name: 'Lånedel 2' }))
+    await waitFor(() => expect(parts()).toEqual(['Lånedel 2']))
   })
 
   it('expands a read-only preview of the coming months via Visa kommande månader', async () => {

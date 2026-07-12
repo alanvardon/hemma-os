@@ -339,6 +339,23 @@ export default function Bolanekoll() {
       || (a.kind === b.kind ? 0 : a.kind === 'interest' ? -1 : 1)),
   [pendingSeries])
   const [showFuture, setShowFuture] = useState(false)
+  // Loan-part filter for the expected-charge block — only the parts that
+  // actually have an upcoming charge appear as options (a part with nothing
+  // pending would filter to an empty list).
+  const [prognosFilter, setPrognosFilter] = useState<string>('all')
+  const prognosParts = useMemo(() => {
+    const ids = new Set(pendingSeries.map(s => s[0].loan_part_id))
+    return parts.filter(p => ids.has(p.id))
+  }, [pendingSeries, parts])
+  // A part can drop out once its charge is logged — fall back to All so the
+  // toggle never points at a part that has vanished from the options.
+  const effPrognosFilter = prognosParts.some(p => p.id === prognosFilter) ? prognosFilter : 'all'
+  const shownPending = useMemo(
+    () => effPrognosFilter === 'all' ? pendingEntries : pendingEntries.filter(e => e.charge.loan_part_id === effPrognosFilter),
+    [pendingEntries, effPrognosFilter])
+  const shownFuture = useMemo(
+    () => effPrognosFilter === 'all' ? futureEntries : futureEntries.filter(e => e.charge.loan_part_id === effPrognosFilter),
+    [futureEntries, effPrognosFilter])
 
   const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
@@ -1277,18 +1294,27 @@ export default function Bolanekoll() {
               month show — logging (or importing) makes a part drop out. */}
           {pendingEntries.length > 0 && (
             <div className="prognos-block">
-              <p className="whatif-group-label">Nästa avisering <span className="card-en">· expected next charge</span></p>
+              <div className="card-head">
+                <h2>Nästa avisering <span className="card-en">· expected next charge</span></h2>
+                <span className="count-pill">{shownPending.length}</span>
+                {prognosParts.length > 1 && (
+                  <div className="card-actions">
+                    <Segmented value={effPrognosFilter} onChange={setPrognosFilter} ariaLabel="Filter expected charges"
+                      options={[{ v: 'all', label: 'All' }, ...prognosParts.map(p => ({ v: p.id, label: p.label || 'part' }))]} />
+                  </div>
+                )}
+              </div>
               <div className="prognos-head">
                 <div className="metric-chip is-accent">
                   <span className="metric-label">Nästa avisering</span>
-                  <span className="metric-val">~{fmtMoney(pendingEntries.reduce((s, e) => s + e.amount, 0))}</span>
+                  <span className="metric-val">~{fmtMoney(shownPending.reduce((s, e) => s + e.amount, 0))}</span>
                   <span className="metric-sub">
-                    ränta {fmtMoney(pendingEntries.filter(e => e.kind === 'interest').reduce((s, e) => s + e.amount, 0))}
-                    {' · amort '}{fmtMoney(pendingEntries.filter(e => e.kind === 'amortization').reduce((s, e) => s + e.amount, 0))}
+                    ränta {fmtMoney(shownPending.filter(e => e.kind === 'interest').reduce((s, e) => s + e.amount, 0))}
+                    {' · amort '}{fmtMoney(shownPending.filter(e => e.kind === 'amortization').reduce((s, e) => s + e.amount, 0))}
                   </span>
                 </div>
-                {pendingEntries.length > 1 && (
-                  <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted(pendingEntries)}>
+                {shownPending.length > 1 && (
+                  <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted(shownPending)}>
                     Logga alla förväntade rader
                   </button>
                 )}
@@ -1297,7 +1323,7 @@ export default function Bolanekoll() {
                   a ränta row and an amortering row stand alone, each with its
                   own log button and its own double-log guard. */}
               <ul className="prognos-list">
-                {pendingEntries.map(e => {
+                {shownPending.map(e => {
                   const r = e.charge
                   const isInterest = e.kind === 'interest'
                   const miscalibrated = isInterest && r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
@@ -1331,17 +1357,17 @@ export default function Bolanekoll() {
                   )
                 })}
               </ul>
-              {futureEntries.length > 0 && (
+              {shownFuture.length > 0 && (
                 <>
                   <button type="button" className="btn btn-ghost prognos-more-btn" onClick={() => setShowFuture(v => !v)}>
-                    {showFuture ? 'Dölj kommande månader' : `Visa kommande månader (${futureEntries.length})`}
+                    {showFuture ? 'Dölj kommande månader' : `Visa kommande månader (${shownFuture.length})`}
                   </button>
                   {showFuture && (
                     /* Read-only preview of the coming year's avier: rate held
                        flat, balance stepping down by amorteringen each period.
                        Nothing here is loggable — only the next month is due. */
                     <ul className="prognos-list prognos-future">
-                      {futureEntries.map(e => {
+                      {shownFuture.map(e => {
                         const r = e.charge
                         const isInterest = e.kind === 'interest'
                         const amortPct = r.original_balance > 0 ? (r.amortization / r.period_months) * 12 / r.original_balance * 100 : 0
