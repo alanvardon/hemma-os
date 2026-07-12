@@ -262,7 +262,6 @@
   .data-table tr.is-insats td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
   .icon-btn.is-on { color: var(--accent); }
   .insats-extra { margin-top: 1rem; }
-  .insats-alloc { font-variant-numeric: tabular-nums; }
   .form-hint.is-warn { color: var(--warn); }
   /* Expandable insats rows — reveal the per-owner allocation.
      Revealed rows animate height inside each cell (CellReveal): the td keeps

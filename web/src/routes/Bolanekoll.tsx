@@ -1581,16 +1581,29 @@ export default function Bolanekoll() {
                   <table className="data-table table-cards insats-table">
                     <thead><tr><th className="col-date">Date</th><th>Owner</th><th>Loan part</th><th className="num">Amount</th></tr></thead>
                     <tbody>
-                      {insatsPays.map(p => (
-                        <tr key={p.id}>
-                          <td className="col-date">{p.date || '—'}</td>
-                          <td className="col-owner">{p.paid_split
-                            ? <span className="insats-alloc">{nameOf('a')} {fmtMoney(p.paid_split.a)} · {nameOf('b')} {fmtMoney(p.paid_split.b)}</span>
-                            : (p.paid_by === 'joint' ? 'Gemensam · Joint' : nameOf(p.paid_by === 'b' ? 'b' : 'a'))}</td>
-                          <td className="col-part">{partNameById(p.loan_part_id)}</td>
-                          <td className="num col-amt">{fmtMoney(p.amount)}</td>
-                        </tr>
-                      ))}
+                      {/* A split payment becomes one row PER owner — each owner
+                          on its own line, their share in the Amount column. The
+                          amount never rides along in the owner name. */}
+                      {insatsPays.flatMap(p => {
+                        const rows = p.paid_split
+                          ? [
+                              { key: p.id + ':a', owner: nameOf('a'), amount: p.paid_split.a },
+                              { key: p.id + ':b', owner: nameOf('b'), amount: p.paid_split.b },
+                            ]
+                          : [{
+                              key: p.id,
+                              owner: p.paid_by === 'joint' ? 'Gemensam · Joint' : nameOf(p.paid_by === 'b' ? 'b' : 'a'),
+                              amount: p.amount,
+                            }]
+                        return rows.map(row => (
+                          <tr key={row.key}>
+                            <td className="col-date">{p.date || '—'}</td>
+                            <td className="col-owner">{row.owner}</td>
+                            <td className="col-part">{partNameById(p.loan_part_id)}</td>
+                            <td className="num col-amt">{fmtMoney(row.amount)}</td>
+                          </tr>
+                        ))
+                      })}
                     </tbody>
                   </table>
                 </div>
