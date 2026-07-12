@@ -165,3 +165,81 @@ landmine documented in the plan: the store's `_migrate` force-categorises
 category-less joint rows on every load and must be guarded or it teleports the
 synced rows into user categories. Branch/PR convention as always: own branch,
 base main.
+
+## Plan 90 — Branded error & offline pages
+
+| File | Scope | Summary | Owner model | Effort |
+|------|-------|---------|-------------|--------|
+| [90-error-pages-offline-ux.md](90-error-pages-offline-ux.md) | app-wide (router, offline UX) | Replace React Router's default "Unexpected Application Error" page + the browser's offline page with branded surfaces: (1) `errorElement` crash boundary that leads with "Du är offline", (2) global offline banner, (3) unify Hushållsbudget `alert()` → toast, (4) `vite-plugin-pwa` offline shell fallback | Split — Opus for Layer 4 (SW ↔ strict CSP + `base:'./'` scope + cache-on-deploy) + Sonnet for Layers 1–3 | M |
+
+Standalone; blocks nothing. Layers 1–3 ship as one PR; **Layer 4 (service
+worker) is a separate PR** so its caching behavior is verified in isolation.
+Source: user report 2026-07-12 (ugly page when the network dropped). Branch/PR
+convention as always: own branch, base main.
+
+## Plan 91 — Replace native `confirm()` with a themed dialog
+
+| File | Scope | Summary | Owner model | Effort |
+|------|-------|---------|-------------|--------|
+| [91-confirm-dialog-native-dialog-replacement.md](91-confirm-dialog-native-dialog-replacement.md) | app-wide (all tools) | Kill all 19 native `window.confirm()` calls (deletes, bulk, multi-line decisions): new `ConfirmDialog` on DialogShell + promise-based `useConfirm()` provider so `if (confirm(…))` → `if (await confirm({…}))` with minimal churn; danger-styled themed dialog in both light/dark; plus the 3 leftover Hushållsbudget `alert()`s not owned by plan 90 → toast | Split — Opus for the component + `useConfirm()` API/promise semantics; Sonnet fans out the ~19 call-site swaps | M |
+
+Standalone; **coordinate with plan 90 on Hushållsbudget** — 90 Layer 3 converts
+that route's two save/delete-failure `alert()`s to a toast; 91 must not
+double-convert lines 221/331. Either order works. Source: user report 2026-07-12
+("dialog boxes are standard browser dialog boxes … when delete"). Undo-toast for
+reversible single deletes is deliberately deferred to plan 92. Branch/PR
+convention as always: own branch, base main.
+
+## Plan 92 — Undo toast for reversible single-row deletes
+
+| File | Scope | Summary | Owner model | Effort |
+|------|-------|---------|-------------|--------|
+| [92-undo-toast-reversible-deletes.md](92-undo-toast-reversible-deletes.md) | bolånekoll · månadsavslut · hushållsbudget | For the 6 reversible leaf deletes (payment, valuation, contribution, rate period, month-end item, salary submission): drop the confirmation, delete immediately, show a 6s "Deleted · Ångra" toast that re-inserts the exact row (`id`/`created_at` preserved by `stamp()`). New `restore*` store fns + a shared `useUndo()` hook; also migrate ScenariosDashboard's hand-rolled undo onto it. Cascade/bulk/non-delete stay on plan 91's ConfirmDialog | Split — Opus for `restore*` + `useUndo()` (identity-preservation + delete-now semantics); Sonnet wires the toast per route | M |
+
+**Build order: 91 → 92.** 91 gives every delete a ConfirmDialog; 92 then removes
+the confirm for the reversible leaf subset and swaps in delete-now + undo. Both
+edit the same call sites for that subset, so land 91 first, then rebase 92.
+Source: follow-up deferred out of plan 91. Branch/PR convention as always: own
+branch, base main.
+
+---
+
+# Security, persistence & structure review — 2026-07-12 (plans 93–101)
+
+Code-level review of `web/`, every Supabase migration, the store layer, emitted
+assets, CSS boundaries, and critical tests. No confirmed cross-household access
+or service-role leak was found. The top risk is silent data loss: several
+Supabase writes ignore resolved `{ error }` results, while the cache is described
+as eventual sync without a replay queue.
+
+| File | Priority | Scope | Summary | Owner model | Effort | Depends on |
+|------|----------|-------|---------|-------------|--------|------------|
+| [93-supabase-write-errors-auth-gate.md](93-supabase-write-errors-auth-gate.md) | High | persistence + auth | Check every mutation result, fail household provisioning closed, and map raw backend errors to stable UI copy | GPT-5.6 Sol | M | — |
+| [94-atomic-mortgage-loan-part-delete.md](94-atomic-mortgage-loan-part-delete.md) | Medium | bolånekoll | Replace parent-first three-request delete with one confirmed, household-scoped transaction | GPT-5.6 Sol | S–M | 93; product decision |
+| [95-household-lifecycle-concurrency.md](95-household-lifecycle-concurrency.md) | Medium | membership/invites | Serialize final-member leave and define deterministic multiple-invite behavior | GPT-5.6 Sol | S–M | product decision |
+| [96-live-supabase-security-verification.md](96-live-supabase-security-verification.md) | Medium | deployed boundary | Read-only parity/grants/RLS/Auth-hook/header/secret verification; no production data | GPT-5.6 Sol | M | approval/access |
+| [97-durable-sync-cache-isolation.md](97-durable-sync-cache-isolation.md) | High | all cloud stores | Durable household-scoped outbox, dirty-cache reconciliation, deletion tombstones, shared-device cleanup | GPT-5.6 Sol | L | 93 |
+| [98-optimistic-concurrency-tool-state.md](98-optimistic-concurrency-tool-state.md) | Medium | blobs + row stores | Use server revisions to detect partner/device conflicts; split or atomically patch shared prefs | GPT-5.6 Sol | M–L | 93, 97 |
+| [99-typed-persistence-boundaries.md](99-typed-persistence-boundaries.md) | Low–Med | storage/import/domain seams | Runtime-validate JSON/cache/import rows and brand high-risk ids/dates | GPT-5.6 Terra | M–L | preferably 93, 97–98 |
+| [100-route-css-scoping.md](100-route-css-scoping.md) | Low | all route CSS | Scope tool selectors, remove import-order coupling, add a selector audit | GPT-5.6 Terra | M | coordinate with UI plans |
+| [101-route-store-decomposition.md](101-route-store-decomposition.md) | Low | large routes/stores | Incrementally extract orchestration and stable row-store mechanics after semantics are fixed | GPT-5.6 Sol | L | 93, 97–98 |
+
+## Recommended sequence
+
+Execute the files in numeric order:
+
+1. **93** — establish truthful persistence failures and a fail-closed AuthGate.
+2. **94** — make the known mortgage deletion operation atomic.
+3. **95** — close household lifecycle races.
+4. **96** — verify the live boundary before further schema/sync expansion.
+5. **97** — add durable replay and household-scoped cache isolation.
+6. **98** — add conflict detection on top of the durable sync contract.
+7. **99** — validate persistence boundaries and strengthen ids/dates.
+8. **100** — isolate route CSS after the data-safety work is stable.
+9. **101** — decompose routes/stores last, so it abstracts the corrected
+   persistence behavior rather than preserving the old one.
+
+This order deliberately ships bounded correctness/security fixes before the
+larger sync redesign and leaves structural cleanup until behavior is proven.
+Plans 94–96 require the approvals documented in their files. Each implementation
+remains its own branch and PR from current `main`.
