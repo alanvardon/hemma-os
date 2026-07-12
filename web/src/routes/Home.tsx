@@ -135,6 +135,18 @@ const STANDARD_TOOLS: ToolDef[] = [
       </svg>
     ),
   },
+  {
+    path: '/student-loan',
+    name: 'Student Loan',
+    desc: 'When, if ever, is it worth clearing a UK Plan 1 student loan from Sweden — a present-value payoff verdict against the write-off date.',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M3 8.5 12 4l9 4.5-9 4.5-9-4.5Z" pathLength="1"/>
+        <path d="M7 10.5V16c0 1.5 2.2 2.5 5 2.5s5-1 5-2.5v-5.5" pathLength="1"/>
+        <path d="M20.5 8.5V15" pathLength="1"/>
+      </svg>
+    ),
+  },
 ]
 
 // Wide-eligible tools, in priority order. A tool takes a wide slot only when its
@@ -179,6 +191,7 @@ export default function Home() {
     '/manadsavslut': useToolCardActive('/manadsavslut'),
     '/bolanekoll': useToolCardActive('/bolanekoll'),
     '/lonevaxling': useToolCardActive('/lonevaxling'),
+    '/student-loan': useToolCardActive('/student-loan'),
   }
 
   // Two-beat open: PAN the clicked card to the centre of the screen, THEN start
