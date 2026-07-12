@@ -366,7 +366,7 @@ function ownerPercents(s: Partial<MortgageSettings>): { a: number; b: number } {
 
 // ── Month helpers ──────────────────────────────────────────────────────────
 
-function monthKey(d: string | null | undefined): string {
+export function monthKey(d: string | null | undefined): string {
   const s = String(d ?? '').trim()
   let m = /(\d{4})[-/](\d{2})/.exec(s)
   if (m) return m[1] + '-' + m[2]
@@ -713,6 +713,174 @@ export function derivedRate(part: LoanPart, payments: Payment[], opts?: { traili
   let num = 0, den = 0
   for (const p of use) { num += p.rate * p.days; den += p.days }
   return den > 0 ? r2(num / den * 100) : null
+}
+
+// ── Expected next charge (plan 23) ─────────────────────────────────────────
+// Forecast + reconcile for the near-identical monthly Ränta/Amortering entry:
+// arithmetic (balance × rate × days/365) on stored data, never rate forecasting.
+
+export interface ExpectedCharge {
+  loan_part_id: string
+  next_date: string           // day-of-month pattern from history, NOT last+median-gap
+  days: number                // daysBetween(last interest date, next_date)
+  period_months: number       // charge cadence: 1 (monthly) or 3 (kvartalsvis)
+  balance: number             // partBalanceAsOf(part, payments, last interest date)
+  rate: number | null         // the rate the prediction actually uses (%)
+  rate_source: 'derived' | 'listed' | null
+  rate_type: 'rörlig' | 'bunden' | null
+  interest: number            // balance × rate/100 × days/365
+  amortization: number        // observed monthly amortization × period (0 for interest-only)
+  gross: number               // interest + amortization
+  confidence: 'exact' | 'assumed' | 'unknown'
+  calibration_gap: number | null  // listed rate − derived rate (pp); diagnostic only
+}
+
+// next_date arithmetic: banks charge on a fixed day-of-month, so raw gaps
+// alternate 28/30/31 days — adding a median gap to the last date would drift
+// off the real charge day and corrupt `days`. Period months + charge day
+// instead, clamped to month end (the 31st in a 30-day month → the 30th).
+function addMonthsAtDay(fromDate: string, months: number, day: number): string {
+  let y = +fromDate.slice(0, 4), m = +fromDate.slice(5, 7) + months
+  while (m > 12) { m -= 12; y++ }
+  const dim = new Date(y, m, 0).getDate()
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(Math.min(day, dim)).padStart(2, '0')
+}
+
+// Mode of day-of-month across the part's interest rows; ties → most recent wins.
+function chargeDayMode(sortedDates: string[]): number {
+  const count: Record<number, number> = {}, lastSeen: Record<number, number> = {}
+  sortedDates.forEach((d, i) => {
+    const day = +d.slice(8, 10)
+    count[day] = (count[day] || 0) + 1
+    lastSeen[day] = i
+  })
+  let best = +sortedDates[sortedDates.length - 1].slice(8, 10)
+  for (const k of Object.keys(count)) {
+    const day = +k
+    if (count[day] > count[best] || (count[day] === count[best] && lastSeen[day] > lastSeen[best])) best = day
+  }
+  return best
+}
+
+// Median gap between interest rows, snapped to whole months: monthly (≤ 45
+// days) or kvartalsvis. Cold start (< 2 rows) assumes monthly.
+function chargePeriodMonths(sortedDates: string[]): number {
+  const gaps: number[] = []
+  for (let i = 1; i < sortedDates.length; i++) {
+    const g = daysBetween(sortedDates[i - 1], sortedDates[i])
+    if (g != null && g > 0) gaps.push(g)
+  }
+  if (!gaps.length) return 1
+  gaps.sort((a, b) => a - b)
+  const mid = gaps.length >> 1
+  const median = gaps.length % 2 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2
+  return median <= 45 ? 1 : 3
+}
+
+export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[]): ExpectedCharge | null {
+  if (!part) return null
+  // Calibrate on REAL rows only — the bank stays ground truth. Including a
+  // logged prediction would advance next_date past it and feed the derived
+  // rate its own output; excluding it keeps the forecast fixed until a real
+  // import supersedes the predicted row.
+  const real = payments.filter(p => p?.source !== 'predicted')
+  const ints = real.filter(p => p?.loan_part_id === part.id && p.kind === 'interest' && p.date && Math.abs(Number(p.amount)) > 0)
+    .map(p => String(p.date)).sort()
+  // Nothing to compute from: neither an interest row nor a rate period.
+  if (!ints.length && !effectiveRatePeriod(part, periods)) return null
+
+  const lastDate = ints.length ? ints[ints.length - 1] : todayISO()
+  const period_months = chargePeriodMonths(ints)
+  const chargeDay = ints.length ? chargeDayMode(ints) : +lastDate.slice(8, 10)
+  const next_date = addMonthsAtDay(lastDate, period_months, chargeDay)
+  const days = daysBetween(lastDate, next_date) ?? 0
+  const balance = partBalanceAsOf(part, real, lastDate)
+
+  // Predict with the trailing derived rate (encodes what the bank actually
+  // bills, incl. its day-count convention); listed rate only as the thin-history
+  // fallback — predicting listed on a 360-day-basis bank would flag drift every
+  // single month. The gap between the two stays as a diagnostic.
+  const derived = derivedRate(part, real)
+  const listed = effectiveRate(part, periods, next_date)
+  const rate = derived ?? listed ?? null
+  const rate_source: ExpectedCharge['rate_source'] = derived != null ? 'derived' : listed != null ? 'listed' : null
+  const rate_type = effectiveRatePeriod(part, periods, next_date)?.rate_type ?? null
+
+  const bs = bindingStatus(part, periods, next_date)
+  const confidence: ExpectedCharge['confidence'] =
+    bs.bound && !bs.expired ? 'exact' : rate_source === 'derived' ? 'assumed' : 'unknown'
+
+  const interest = rate != null && days > 0 && balance > 0 ? r2(balance * rate / 100 * days / 365) : 0
+  const amortization = r2(monthlyAmortizationRate([part], real) * period_months)
+  return {
+    loan_part_id: part.id, next_date, days, period_months, balance,
+    rate, rate_source, rate_type, interest, amortization, gross: r2(interest + amortization),
+    confidence, calibration_gap: derived != null && listed != null ? r2(listed - derived) : null,
+  }
+}
+
+export function expectedCharges(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]):
+  { rows: ExpectedCharge[]; total_interest: number; total_gross: number } {
+  const rows = (parts || []).filter(p => p && !p.archived)
+    .map(p => expectedCharge(p, periods, payments))
+    .filter((r): r is ExpectedCharge => r != null)
+  return {
+    rows,
+    total_interest: r2(rows.reduce((s, r) => s + r.interest, 0)),
+    total_gross: r2(rows.reduce((s, r) => s + r.gross, 0)),
+  }
+}
+
+// Forward annual view for ränteavdrag planning: rolls expectedCharge forward,
+// holding balance and rate flat. Caveat: a flat balance slightly overstates
+// interest for an amortizing part — acceptable because the household's parts
+// are interest-only and the figure is labelled an estimate.
+export function forecastInterest(parts: LoanPart[], periods: RatePeriod[], payments: Payment[], months = 12):
+  { interest: number; deduction: number; net: number; assumed: boolean } {
+  const { rows } = expectedCharges(parts, periods, payments)
+  const interest = r2(rows.reduce((s, r) => s + r.interest * (months / r.period_months), 0))
+  const deduction = ranteavdrag(interest)
+  return { interest, deduction, net: r2(interest - deduction), assumed: rows.some(r => r.confidence !== 'exact') }
+}
+
+// Expected vs actual, tolerance max(50 kr, 1 %): inside it a real import
+// silently supersedes the predicted row; outside it the drift IS the alarm
+// (rate reset, fee, extra amortering).
+export function reconcileCharge(expected: ExpectedCharge | number, actualInterest: number):
+  { expected: number; actual: number; drift: number; ok: boolean } {
+  const exp = r2(typeof expected === 'number' ? expected : expected.interest)
+  const actual = r2(Math.abs(Number(actualInterest) || 0))
+  const drift = r2(actual - exp)
+  return { expected: exp, actual, drift, ok: Math.abs(drift) <= Math.max(50, exp * 0.01) + 1e-9 }
+}
+
+// Pairs each incoming kind:'interest' draft with an existing source:'predicted'
+// row on the same loan_part_id + month. Deliberately NOT flagDuplicates: its
+// fingerprint includes the exact date, and the import triage feeds it blank
+// candidate dates, so that path can never collide with a dated predicted row.
+export function matchPredictedRows(payments: Payment[], drafts: Array<Partial<Payment>>):
+  Array<{ draftIndex: number; predicted: Payment; recon: ReturnType<typeof reconcileCharge> }> {
+  const preds = (payments || []).filter(p =>
+    p?.source === 'predicted' && p.kind === 'interest' && p.loan_part_id && monthKey(p.date))
+  const used = new Set<string>()
+  const out: Array<{ draftIndex: number; predicted: Payment; recon: ReturnType<typeof reconcileCharge> }> = []
+  ;(drafts || []).forEach((d, i) => {
+    if (!d || d.kind !== 'interest' || !d.loan_part_id || !monthKey(d.date)) return
+    const hit = preds.find(p => !used.has(p.id) && p.loan_part_id === d.loan_part_id && monthKey(p.date) === monthKey(d.date))
+    if (!hit) return
+    used.add(hit.id)
+    out.push({ draftIndex: i, predicted: hit, recon: reconcileCharge(hit.amount, Number(d.amount) || 0) })
+  })
+  return out
+}
+
+// Double-log guard for confirm-to-log: any interest row (predicted or real)
+// already covering that part + month disables the button.
+export function hasInterestInMonth(payments: Payment[], loanPartId: string | null, date: string): boolean {
+  const mk = monthKey(date)
+  if (!mk || !loanPartId) return false
+  return (payments || []).some(p =>
+    p?.kind === 'interest' && p.loan_part_id === loanPartId && monthKey(p.date) === mk)
 }
 
 // ── Amorteringskrav ────────────────────────────────────────────────────────

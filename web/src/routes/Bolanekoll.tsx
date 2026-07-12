@@ -22,10 +22,11 @@ import {
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit, insatsPayments,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
+  expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasInterestInMonth, monthKey,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   contributionSplit, settlement, todayISO,
 } from '../lib/mortgage'
-import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, PaidBy } from '../lib/mortgage'
+import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, PaidBy, ExpectedCharge } from '../lib/mortgage'
 import {
   fetchPolicyRate, nextDecision, lastDecision, decisionOutcome,
   detectChange, currentPoint, readAcknowledged, acknowledge, readSessionHidden, hideForSession,
@@ -289,6 +290,12 @@ export default function Bolanekoll() {
   // amortering), not interest alone.
   const whatIf = useMemo(() => rateWhatIf(balance, blended, hypRate, base + extra, householdCosts ?? 0), [balance, blended, hypRate, base, extra, householdCosts])
 
+  // Expected next charge (plan 23): arithmetic from stored data — balance ×
+  // rate × days/365 — calibrated against the real charge history. Read-only
+  // here; writes happen only via the explicit log button / import supersede.
+  const prognos = useMemo(() => expectedCharges(parts, periods, payments), [parts, periods, payments])
+  const forecast = useMemo(() => forecastInterest(parts, periods, payments), [parts, periods, payments])
+
   const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
     return Math.abs(r.drift) >= Math.max(r.start_balance * 0.01, 5000)
@@ -322,17 +329,36 @@ export default function Bolanekoll() {
     const assigns = assignPaymentsToPart(loanNumbers, parts, { selectedPartId: fallback, auto })
     const candidates = parsed.rows.map((row, i) => {
       const specText = (mapping.specification != null ? row[mapping.specification] : '')?.trim() || ''
+      const date = (mapping.date != null ? row[mapping.date] : '')?.trim() || ''
       const amt = mapping.amount == null ? NaN : parseAmount(row[mapping.amount])
       const bal = mapping.balance == null ? NaN : parseAmount(row[mapping.balance])
       const amount = isFinite(amt) ? Math.abs(amt) : 0
       const balance_after = isFinite(bal) ? Math.abs(bal) : null
       const hasAmount = amount > 0 || balance_after != null
       const a = assigns[i]
-      return { specText, kind: classifyKind(specText), amount, balance_after, hasAmount, loan_part_id: a?.loan_part_id ?? null, partMatched: a?.matched ?? false }
+      return { specText, date, kind: classifyKind(specText), amount, balance_after, hasAmount, loan_part_id: a?.loan_part_id ?? null, partMatched: a?.matched ?? false }
     })
     const dupInput = candidates.map(c => ({ date: '', loan_part_id: c.loan_part_id, kind: c.kind, amount: c.amount }))
     const dups = flagDuplicates(payments, dupInput)
-    return candidates.map((c, i) => ({ ...c, duplicate: !!dups[i], classification: (dups[i] || !c.hasAmount ? 'skip' : 'include') as 'include' | 'skip' }))
+    // Reconcile incoming interest rows against the forecast (plan 23): a row
+    // that pairs with a logged predicted row gets the supersede badge; without
+    // one, an interest row landing in the expected month still gets a
+    // read-only ✓ matched / ⚠ drift check against expectedCharge.
+    const predMatches = new Map(matchPredictedRows(payments,
+      candidates.map(c => ({ loan_part_id: c.loan_part_id, date: c.date, kind: c.kind, amount: c.amount })),
+    ).map(m => [m.draftIndex, m]))
+    const expByPart = new Map(prognos.rows.map(r => [r.loan_part_id, r]))
+    return candidates.map((c, i) => {
+      let recon: TriageRow['recon'] = null
+      const pm = predMatches.get(i)
+      const exp = c.loan_part_id ? expByPart.get(c.loan_part_id) : undefined
+      if (pm) recon = { drift: pm.recon.drift, ok: pm.recon.ok, predicted: true }
+      else if (c.kind === 'interest' && c.amount > 0 && exp && exp.interest > 0 && monthKey(c.date) === monthKey(exp.next_date)) {
+        const r = reconcileCharge(exp, c.amount)
+        recon = { drift: r.drift, ok: r.ok, predicted: false }
+      }
+      return { ...c, recon, duplicate: !!dups[i], classification: (dups[i] || !c.hasAmount ? 'skip' : 'include') as 'include' | 'skip' }
+    })
   }
   async function loadFile(file: File): Promise<ImportCfg> {
     const text = await file.text()
@@ -367,26 +393,44 @@ export default function Bolanekoll() {
         return makePayment({ loan_part_id: t.loan_part_id, date: (importCfg.mapping.date != null ? row[importCfg.mapping.date] : '')?.trim() || '', kind: t.kind, description: t.specText, amount: t.amount, balance_after: t.balance_after, source: 'import:' + importCfg.file.name })
       })
     if (!drafts.length) { showToast('Nothing selected to add.'); return }
+    // Supersede (plan 23): actuals always win. A predicted row matched within
+    // tolerance is replaced silently; drift outside it requires an explicit
+    // go-ahead — the drift itself is the alarm (rate reset, fee, extra
+    // amortering) — and on confirm the actual still replaces the prediction.
+    const matches = matchPredictedRows(payments, drafts)
+    const drifted = matches.filter(m => !m.recon.ok)
+    if (drifted.length) {
+      const lines = drifted.map(m =>
+        (partNameById(m.predicted.loan_part_id) + ': förväntad ' + fmtMoney(m.recon.expected) + ' → faktisk ' + fmtMoney(m.recon.actual) + ' (drift ' + fmtMoney(Math.abs(m.recon.drift)) + ')'))
+      if (!confirm('Räntan avviker från prognosen — ränteändring, avgift eller extra amortering?\n\n' + lines.join('\n') + '\n\nErsätt de förväntade raderna med de importerade beloppen?')) return
+    }
+    const predictedIds = [...new Set(matches.map(m => m.predicted.id))]
     try {
       const sig = headerSignature(importCfg.parsed.headers)
       await Store.saveSettings({ import_presets: { ...settings.import_presets, [sig]: mappingToNames(importCfg.parsed.headers, importCfg.mapping) } })
+      if (predictedIds.length) await Store.removePayments(predictedIds)
       const savedRows = await Store.addPayments(drafts)
       await refresh(); flashSaved()
-      showToast('Added ' + savedRows.length + ' row' + (savedRows.length === 1 ? '' : 's') + ' from “' + importCfg.file.name + '”.')
+      showToast('Added ' + savedRows.length + ' row' + (savedRows.length === 1 ? '' : 's')
+        + (predictedIds.length ? ' · replaced ' + predictedIds.length + ' predicted row' + (predictedIds.length === 1 ? '' : 's') : '')
+        + ' from “' + importCfg.file.name + '”.')
       if (importCfg.queue.length) { const cfg = await loadFile(importCfg.queue[0]); setImportCfg({ ...cfg, queue: importCfg.queue.slice(1), qIdx: importCfg.qIdx + 1 }) }
       else setImportCfg(null)
     } catch (err) { saveErr(err) }
   }
   const triageSummary = useMemo(() => {
     if (!importCfg) return ''
-    let add = 0, skip = 0, invalid = 0, dup = 0, ints = 0
+    let add = 0, skip = 0, invalid = 0, dup = 0, ints = 0, matched = 0, drifted = 0
     importCfg.triage.forEach(t => {
       if (!t.hasAmount) { invalid++; return }
       if (t.classification === 'skip') { skip++; return }
       add++; if (t.kind === 'interest') ints++; if (t.duplicate) dup++
+      if (t.recon) { if (t.recon.ok) matched++; else drifted++ }
     })
     const out = [add + ' row' + (add === 1 ? '' : 's') + ' to add']
     if (ints) out.push(ints + ' ränta')
+    if (matched) out.push('✓ ' + matched + ' matchar prognosen')
+    if (drifted) out.push('⚠ ' + drifted + ' med drift')
     if (dup) out.push(dup + ' possible duplicate' + (dup === 1 ? '' : 's'))
     if (skip) out.push(skip + ' skipped')
     if (invalid) out.push(invalid + ' without an amount')
@@ -503,6 +547,26 @@ export default function Bolanekoll() {
   async function handleSaveSettings(patch: Partial<MortgageSettings>) {
     try { await Store.saveSettings(patch); await refresh(); flashSaved(); setSettingsDlg(false); showToast('Settings saved.') }
     catch (err) { saveErr(err) }
+  }
+
+  // Confirm-to-log (plan 23, decision 5): one click logs the expected charge
+  // as a source:'predicted' interest row — the "stop typing" deliverable. The
+  // next real import silently replaces it (or prompts on drift). Rows only
+  // ever enter the ledger on this explicit click, never on visit.
+  async function handleLogPredicted(rows: ExpectedCharge[]) {
+    const toLog = rows.filter(r => r.interest > 0 && !hasInterestInMonth(payments, r.loan_part_id, r.next_date))
+    if (!toLog.length) return
+    try {
+      await Store.addPayments(toLog.map(r => makePayment({
+        loan_part_id: r.loan_part_id, date: r.next_date, kind: 'interest',
+        description: 'Förväntad avi', amount: r.interest, balance_after: r.balance,
+        source: 'predicted',
+      })))
+      await refresh(); flashSaved()
+      showToast(toLog.length === 1
+        ? 'Förväntad avi loggad — nästa import ersätter den med bankens rad.'
+        : toLog.length + ' förväntade avier loggade — nästa import ersätter dem.')
+    } catch (err) { saveErr(err) }
   }
 
   async function clearPayments() {
@@ -861,6 +925,57 @@ export default function Bolanekoll() {
                   ? 'Interest-only — the balance stays flat. Enter an extra monthly amortering above to see a payoff date.'
                   : 'At ' + fmtMoney(ms.per_month) + '/mo (' + fmtMoney(base) + ' observed + ' + fmtMoney(extra) + ' extra), property value held flat.'}
               </p>
+              {prognos.rows.length > 0 && (() => {
+                const loggable = prognos.rows.filter(r => r.interest > 0 && !hasInterestInMonth(payments, r.loan_part_id, r.next_date))
+                return (
+                  <>
+                    <p className="whatif-group-label">Nästa avi <span className="card-en">· expected next charge</span></p>
+                    <div className="prognos-head">
+                      <div className="metric-chip is-accent">
+                        <span className="metric-label">Nästa avi</span>
+                        <span className="metric-val">~{fmtMoney(prognos.total_gross)}</span>
+                        <span className="metric-sub">ränta {fmtMoney(prognos.total_interest)} · amort {fmtMoney(prognos.total_gross - prognos.total_interest)}</span>
+                      </div>
+                      {prognos.rows.length > 1 && (
+                        <button type="button" className="btn btn-ghost prognos-log-btn" disabled={!loggable.length} onClick={() => handleLogPredicted(loggable)}>
+                          {loggable.length ? 'Logga alla förväntade avier' : 'Alla loggade'}
+                        </button>
+                      )}
+                    </div>
+                    <ul className="prognos-list">
+                      {prognos.rows.map(r => {
+                        const logged = hasInterestInMonth(payments, r.loan_part_id, r.next_date)
+                        const miscalibrated = r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
+                        return (
+                          <li key={r.loan_part_id} className="prognos-row">
+                            <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
+                            {r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
+                            <span className="prognos-date">{fmtRateDate(r.next_date)}</span>
+                            <span className="prognos-amt">~{fmtMoney(r.gross)}</span>
+                            <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
+                              {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
+                            </span>
+                            <button type="button" className="btn btn-ghost prognos-log-btn" disabled={logged || r.interest <= 0} onClick={() => handleLogPredicted([r])}>
+                              {logged ? 'Loggad' : 'Logga förväntad avi'}
+                            </button>
+                            {miscalibrated && (
+                              <span className="prognos-caution">
+                                listad {fmtPct(r.rate! + r.calibration_gap!)} vs debiterad {fmtPct(r.rate!)} — day-count eller ologgad ränteändring
+                              </span>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                    <p className="proj-note prognos-forward">
+                      ~{fmtMoney(forecast.interest)} ränta över 12 mån
+                      {settings.ranteavdrag && <> · ~{fmtMoney(forecast.net)} efter avdrag</>}
+                      {forecast.assumed && <span className="prognos-assumed"> (förutsatt oförändrade räntor)</span>}
+                    </p>
+                    <hr className="whatif-divider" />
+                  </>
+                )
+              })()}
               <p className="whatif-group-label">Amorteringsplan</p>
               <div className="metric-row">
                 <div className={'metric-chip' + (ms.payoff_months != null ? ' is-accent' : '')}><span className="metric-label">Payoff</span><span className="metric-val">{ms.payoff_months == null ? 'Never' : monthsToWhen(ms.payoff_months)}</span></div>
@@ -987,6 +1102,9 @@ export default function Bolanekoll() {
                           <td className="col-desc">
                             {t.specText || kindLabel(t.kind)}
                             {t.duplicate && <span className="row-flag">possible duplicate</span>}
+                            {t.recon && (t.recon.ok
+                              ? <span className="row-flag row-flag-match">✓ {t.recon.predicted ? 'ersätter förväntad avi' : 'matchar prognosen'}</span>
+                              : <span className="row-flag row-flag-drift">⚠ drift {fmtMoney(Math.abs(t.recon.drift))}{t.recon.predicted ? ' (förväntad ' + fmtMoney(t.amount - t.recon.drift) + ')' : ''}</span>)}
                             {auto && t.hasAmount && <span className={'row-flag' + (t.partMatched ? ' row-flag-refund' : '')}>{(t.partMatched ? '→ ' : 'no loan # → ') + partNameById(t.loan_part_id)}</span>}
                           </td>
                           <td className="num col-amt">{t.hasAmount && t.amount ? fmtMoney(t.amount) : '—'}</td>
@@ -1196,7 +1314,7 @@ export default function Bolanekoll() {
                             {p.date || '—'}
                           </td>
                           <td className="col-part">{partNameById(p.loan_part_id)}</td>
-                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}</td>
+                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.source === 'predicted' && <span className="row-flag row-flag-predicted">förväntad</span>}{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}</td>
                           <td className="num col-amount">{fmtMoney(p.amount)}</td>
                           <td className="num col-balance">{p.balance_after != null ? fmtMoney(p.balance_after) : '—'}</td>
                           <td className="col-act">

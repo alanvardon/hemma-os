@@ -252,6 +252,11 @@
   }
   .row-flag-refund { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
   .row-flag-kop { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
+  /* Forecast reconcile badges (plan 23): ✓ match reuses accent, ⚠ drift keeps
+     the base warn look; the ledger's predicted tag is deliberately muted —
+     it marks a placeholder, not news. */
+  .row-flag-match { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
+  .row-flag-predicted { color: var(--ink-soft); background: var(--paper-warm); border-color: var(--rule); font-style: italic; }
   .row-flag-insats { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
   .data-table tr.is-purchase td { background: var(--accent-faint); }
   .data-table tr.is-insats td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
@@ -364,6 +369,30 @@
     color: var(--ink-soft); margin: 0 0 0.5rem;
   }
   .whatif-row { margin-top: 0.75rem; }
+  /* Expected next charge (plan 23): total chip + per-part rows with the
+     confidence badge, the log button and the amber calibration diagnostic. */
+  .prognos-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+  .prognos-list { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.35rem; }
+  .prognos-row {
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+    font-size: 13px; padding: 0.4rem 0.1rem; border-bottom: 1px solid var(--rule);
+  }
+  .prognos-row:last-child { border-bottom: none; }
+  .prognos-part { font-weight: 600; }
+  .prognos-rate, .prognos-date { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .prognos-amt { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .conf-badge {
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
+    color: var(--ink-soft); background: var(--paper-warm);
+    border: 1px solid var(--rule); border-radius: 999px; padding: 1px 7px;
+  }
+  .conf-badge.is-exact { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
+  .conf-badge.is-unknown { color: var(--warn); background: var(--warn-faint); border-color: var(--warn-light); }
+  .prognos-log-btn { margin-left: auto; font-size: 12px; padding: 0.25rem 0.7rem; }
+  .prognos-log-btn:disabled { opacity: 0.5; cursor: default; }
+  .prognos-caution { flex-basis: 100%; font-size: 12px; color: var(--warn); }
+  .prognos-forward { margin-bottom: 0; }
+  .prognos-assumed { color: var(--ink-faint); }
   .whatif-note { margin-top: 0.55rem; margin-bottom: 0; font-size: 12px; }
   .rate-stepper { display: inline-flex; align-items: stretch; gap: 4px; }
   .rate-step {
