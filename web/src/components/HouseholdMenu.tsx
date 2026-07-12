@@ -14,11 +14,12 @@ import {
   leaveHousehold,
   listInvites,
   listMembers,
-  pendingInviteToJoin,
+  pendingInviteStatus,
   removeInvite,
   signOut,
   type Invite,
   type Member,
+  type PendingInviteStatus,
 } from '../lib/household'
 import { persistenceErrorMessage } from '../lib/persistence-error'
 
@@ -58,7 +59,7 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
   const [email, setEmail] = useState<string | null>(null)
   const [members, setMembers] = useState<Member[]>([])
   const [invites, setInvites] = useState<Invite[]>([])
-  const [invitedElsewhere, setInvitedElsewhere] = useState(false)
+  const [inviteStatus, setInviteStatus] = useState<PendingInviteStatus>('none')
   const [invite, setInvite] = useState('')
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -73,11 +74,11 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
     setError('')
     setActionError('')
     supabase.auth.getUser().then(({ data }) => { if (alive) setEmail(data.user?.email ?? null) })
-    Promise.all([listMembers(), listInvites(), pendingInviteToJoin()]).then(([m, i, pending]) => {
+    Promise.all([listMembers(), listInvites(), pendingInviteStatus()]).then(([m, i, pending]) => {
       if (!alive) return
       setMembers(m)
       setInvites(i)
-      setInvitedElsewhere(pending)
+      setInviteStatus(pending)
     })
     return () => { alive = false }
   }, [open])
@@ -90,9 +91,9 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
     try {
       await acceptInvite()
       window.location.reload()
-    } catch {
+    } catch (error) {
       setBusy(false)
-      setActionError('Kunde inte gå med — försök igen.')
+      setActionError(persistenceErrorMessage(error))
     }
   }
 
@@ -160,16 +161,27 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
         <button type="button" className="modal-close" aria-label="Stäng" onClick={onClose}>×</button>
       </div>
       <div className="modal-body">
-        {invitedElsewhere && (
+        {inviteStatus !== 'none' && (
           <section className="hh-section hh-invite-banner">
-            <p className="hh-banner-title">Du är inbjuden till ett annat hushåll</p>
-            <p className="modal-note hh-banner-note">
-              Gå med för att dela data med hushållet som bjöd in dig. Ditt nuvarande
-              hushåll lämnas orört.
+            <p className="hh-banner-title">
+              {inviteStatus === 'ambiguous' ? 'Flera hushåll har bjudit in dig' : 'Du är inbjuden till ett annat hushåll'}
             </p>
-            <button type="button" className="btn btn-primary" onClick={onAccept} disabled={busy}>
-              Gå med i hushållet
-            </button>
+            {inviteStatus === 'ambiguous' ? (
+              <p className="modal-note hh-banner-note">
+                Du kan gå med när bara en aktiv inbjudan återstår. Be hushållen du
+                inte vill gå med i att ta bort sina inbjudningar.
+              </p>
+            ) : (
+              <>
+                <p className="modal-note hh-banner-note">
+                  Gå med för att dela data med hushållet som bjöd in dig. Om du är
+                  ensam i ditt nuvarande hushåll måste det vara tomt på sparad data.
+                </p>
+                <button type="button" className="btn btn-primary" onClick={onAccept} disabled={busy}>
+                  Gå med i hushållet
+                </button>
+              </>
+            )}
             {actionError && <p className="auth-error hh-error">{actionError}</p>}
           </section>
         )}
@@ -264,7 +276,7 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
               {confirmLeave ? 'Bekräfta' : 'Lämna'}
             </button>
           </div>
-          {!invitedElsewhere && actionError && (
+          {inviteStatus === 'none' && actionError && (
             <p className="auth-error hh-error">{actionError}</p>
           )}
         </section>

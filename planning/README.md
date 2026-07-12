@@ -216,7 +216,7 @@ as eventual sync without a replay queue.
 |------|----------|-------|---------|-------------|--------|------------|
 | [93-supabase-write-errors-auth-gate.md](93-supabase-write-errors-auth-gate.md) | High | persistence + auth | Check every mutation result, fail household provisioning closed, and map raw backend errors to stable UI copy | GPT-5.6 Sol | M | — |
 | [94-atomic-mortgage-loan-part-delete.md](completed/94-atomic-mortgage-loan-part-delete.md) | Medium | bolånekoll | Replace parent-first three-request delete with one confirmed, household-scoped transaction | GPT-5.6 Sol | S–M | 93; product decision |
-| [95-household-lifecycle-concurrency.md](95-household-lifecycle-concurrency.md) | Medium | membership/invites | Serialize final-member leave and define deterministic multiple-invite behavior | GPT-5.6 Sol | S–M | product decision |
+| [95-household-lifecycle-concurrency.md](completed/95-household-lifecycle-concurrency.md) | Medium | membership/invites | Serialize final-member leave and define deterministic multiple-invite behavior | GPT-5.6 Sol | S–M | product decision |
 | [96-live-supabase-security-verification.md](96-live-supabase-security-verification.md) | Medium | deployed boundary | Read-only parity/grants/RLS/Auth-hook/header/secret verification; no production data | GPT-5.6 Sol | M | approval/access |
 | [97-durable-sync-cache-isolation.md](97-durable-sync-cache-isolation.md) | High | all cloud stores | Durable household-scoped outbox, dirty-cache reconciliation, deletion tombstones, shared-device cleanup | GPT-5.6 Sol | L | 93 |
 | [98-optimistic-concurrency-tool-state.md](98-optimistic-concurrency-tool-state.md) | Medium | blobs + row stores | Use server revisions to detect partner/device conflicts; split or atomically patch shared prefs | GPT-5.6 Sol | M–L | 93, 97 |
@@ -241,7 +241,7 @@ Execute the files in numeric order:
 
 This order deliberately ships bounded correctness/security fixes before the
 larger sync redesign and leaves structural cleanup until behavior is proven.
-Plans 95–96 require the approvals documented in their files. Each implementation
+Plan 96 requires the approval documented in its file. Each implementation
 remains its own branch and PR from current `main`.
 
 ---

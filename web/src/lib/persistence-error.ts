@@ -3,6 +3,8 @@ export type PersistenceErrorCategory =
   | 'auth'
   | 'conflict'
   | 'validation'
+  | 'invite_ambiguous'
+  | 'household_has_data'
   | 'unknown'
 
 interface BackendErrorLike {
@@ -16,6 +18,8 @@ const USER_MESSAGES: Record<PersistenceErrorCategory, string> = {
   auth: 'Din session har gått ut. Logga in igen.',
   conflict: 'Ändringen krockade med en nyare version. Ladda om och försök igen.',
   validation: 'Ändringen kunde inte sparas. Kontrollera uppgifterna och försök igen.',
+  invite_ambiguous: 'Flera hushåll har bjudit in dig. Be ett hushåll ta bort sin inbjudan innan du fortsätter.',
+  household_has_data: 'Du kan inte gå med i ett annat hushåll medan du är ensam i ett hushåll med sparad data.',
   unknown: 'Kunde inte spara ändringen. Försök igen.',
 }
 
@@ -37,6 +41,8 @@ function classify(error: unknown): PersistenceErrorCategory {
   const code = backend.code?.toUpperCase() ?? ''
   const message = backend.message?.toLowerCase() ?? ''
 
+  if (code === 'P0003') return 'invite_ambiguous'
+  if (code === 'P0004') return 'household_has_data'
   if (backend.status === 401 || backend.status === 403 || code.includes('JWT') || message.includes('jwt')) return 'auth'
   if (backend.status === 409 || code === '23505') return 'conflict'
   if (backend.status === 0 || message.includes('fetch') || message.includes('network') || message.includes('offline')) return 'offline'

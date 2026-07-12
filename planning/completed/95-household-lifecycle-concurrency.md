@@ -1,6 +1,6 @@
 # Plan 95 — Serialize household leave and invite acceptance
 
-**Status:** proposed · **Priority:** Medium · **Effort:** S–M · **Owner model:**
+**Status:** completed · **Priority:** Medium · **Effort:** S–M · **Owner model:**
 GPT-5.6 Sol — owns database locking, SECURITY DEFINER review, concurrency tests,
 and multi-invite decision handling · **Requires approval:** migration changes
 

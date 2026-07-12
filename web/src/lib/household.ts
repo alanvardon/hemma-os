@@ -73,28 +73,38 @@ export async function removeInvite(email: string): Promise<void> {
   }
 }
 
-// Is there a pending invite addressed to ME, for a household I'm NOT already in?
+export type PendingInviteStatus = 'none' | 'single' | 'ambiguous'
+
+// How many distinct households currently have an active invite addressed to
+// ME? The SQL RPC is authoritative, but exposing ambiguity before the click
+// avoids presenting an action that the server must reject. A stale invite from
+// my current household still counts toward ambiguity when another household
+// also invited me: the user must never silently choose between active invites.
 // This is the "signed in before being invited" case (plan 50): claim_household
 // won't touch me because I already have a household, so the invite sits pending
 // until I accept it explicitly. Uses the inv_read_own policy (invites to my
 // email) and hh_read (my own household row) — both RLS-scoped to me.
-export async function pendingInviteToJoin(): Promise<boolean> {
+export async function pendingInviteStatus(): Promise<PendingInviteStatus> {
   const { data: me } = await supabase.auth.getUser()
   const email = me.user?.email?.toLowerCase()
-  if (!email) return false
+  if (!email) return 'none'
   const [{ data: hh }, { data: inv, error }] = await Promise.all([
     supabase.from('households').select('id'),
     supabase.from('household_invites').select('household_id').ilike('email', email),
   ])
-  if (error || !inv) return false
+  if (error || !inv) return 'none'
   const mine = new Set((hh ?? []).map((h) => h.id as string))
-  return inv.some((i) => !mine.has(i.household_id as string))
+  const invitingHouseholds = new Set(inv.map((i) => i.household_id as string))
+  const hasExternal = [...invitingHouseholds].some((id) => !mine.has(id))
+  if (!hasExternal) return 'none'
+  return invitingHouseholds.size > 1 ? 'ambiguous' : 'single'
 }
 
-// Move me into the household that invited my email (accept_invite RPC). The old
-// household is abandoned in place, not purged. Returns an error message on
-// failure — callers should then fully reload so every store re-reads under the
-// new household.
+// Move me into the one household that invited my email (accept_invite RPC).
+// Multiple active targets are rejected. If I am the sole member of my current
+// household, the move is allowed only when it has no persisted household data;
+// that empty shell is then removed. Callers fully reload after success so every
+// store re-reads under the new household.
 export async function acceptInvite(): Promise<void> {
   try {
     const { error } = await supabase.rpc('accept_invite')
