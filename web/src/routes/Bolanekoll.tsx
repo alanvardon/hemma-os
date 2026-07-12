@@ -1270,30 +1270,11 @@ export default function Bolanekoll() {
 
         {/* ── Payments ── */}
         <section className="card">
-          <div className="card-head">
-            <h2>Betalningar <span className="card-en">· Payments</span></h2>
-            <span className="count-pill">{filteredPayments.length}</span>
-            <div className="card-actions">
-              <Segmented value={paymentFilter} onChange={setPaymentFilter} ariaLabel="Filter payments"
-                options={[{ v: 'all', label: 'All' }, ...parts.map(p => ({ v: p.id, label: p.label || 'part' }))]} />
-              <button type="button" className="btn btn-ghost" onClick={() => setPayDlg({ open: true, id: null })}>+ Add payment</button>
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger className="icon-btn" aria-label="More payment actions" title="More actions">
-                  <Icon icon={EllipsisVertical} size={16} />
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content className="kebab-menu" align="end" sideOffset={6}>
-                    <DropdownMenu.Item className="kebab-item kebab-danger" disabled={!filteredPayments.length} onSelect={clearPayments}>
-                      {paymentFilter === 'all' ? 'Delete all' : 'Delete ' + partNameById(paymentFilter)}
-                    </DropdownMenu.Item>
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            </div>
-          </div>
           {/* Nästa avisering (plan 23): the upcoming charge lives with the
-              transactions it becomes. Only parts NOT yet covered by a row for
-              that month show — logging (or importing) makes a part drop out. */}
+              transactions it becomes, and leads the card — the Betalningar
+              header and its controls sit further down, directly above the
+              ledger they act on. Only parts NOT yet covered by a row for that
+              month show — logging (or importing) makes a part drop out. */}
           {pendingEntries.length > 0 && (
             <div className="prognos-block">
               <p className="whatif-group-label">Nästa avisering <span className="card-en">· expected next charge</span></p>
@@ -1381,6 +1362,27 @@ export default function Bolanekoll() {
               )}
             </div>
           )}
+          <div className="card-head">
+            <h2>Betalningar <span className="card-en">· Payments</span></h2>
+            <span className="count-pill">{filteredPayments.length}</span>
+            <div className="card-actions">
+              <Segmented value={paymentFilter} onChange={setPaymentFilter} ariaLabel="Filter payments"
+                options={[{ v: 'all', label: 'All' }, ...parts.map(p => ({ v: p.id, label: p.label || 'part' }))]} />
+              <button type="button" className="btn btn-ghost" onClick={() => setPayDlg({ open: true, id: null })}>+ Add payment</button>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger className="icon-btn" aria-label="More payment actions" title="More actions">
+                  <Icon icon={EllipsisVertical} size={16} />
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content className="kebab-menu" align="end" sideOffset={6}>
+                    <DropdownMenu.Item className="kebab-item kebab-danger" disabled={!filteredPayments.length} onSelect={clearPayments}>
+                      {paymentFilter === 'all' ? 'Delete all' : 'Delete ' + partNameById(paymentFilter)}
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            </div>
+          </div>
           <motion.div key={paymentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}>
             {!filteredPayments.length ? (
