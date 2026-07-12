@@ -22,10 +22,11 @@ import {
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit, insatsPayments,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
+  expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   contributionSplit, settlement, todayISO,
 } from '../lib/mortgage'
-import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, PaidBy } from '../lib/mortgage'
+import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, PaidBy, ExpectedCharge } from '../lib/mortgage'
 import {
   fetchPolicyRate, nextDecision, lastDecision, decisionOutcome,
   detectChange, currentPoint, readAcknowledged, acknowledge, readSessionHidden, hideForSession,
@@ -56,6 +57,17 @@ const REPRICE_NOTICE_DAYS = 31
 function fmtRateDate(iso: string): string {
   const d = new Date(iso + 'T00:00:00')
   const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' }
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric'
+  return d.toLocaleDateString('sv-SE', opts).replace(/\.( \d{4})?$/, '$1')
+}
+
+/** Month-only label for a not-yet-logged expected charge — the bank sets the
+ * exact billing date, so a specific day would be false precision. "sep", or
+ * "jan 2027" when the month isn't in the current year. Once the row is
+ * logged, the ledger shows it with a concrete date. */
+function fmtChargeMonth(iso: string): string {
+  const d = new Date(iso + 'T00:00:00')
+  const opts: Intl.DateTimeFormatOptions = { month: 'short' }
   if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric'
   return d.toLocaleDateString('sv-SE', opts).replace(/\.( \d{4})?$/, '$1')
 }
@@ -289,6 +301,62 @@ export default function Bolanekoll() {
   // amortering), not interest alone.
   const whatIf = useMemo(() => rateWhatIf(balance, blended, hypRate, base + extra, householdCosts ?? 0), [balance, blended, hypRate, base, extra, householdCosts])
 
+  // Expected next charge (plan 23): arithmetic from stored data — balance ×
+  // rate × days/365 — calibrated against the real charge history. Read-only
+  // here; writes happen only via the explicit log button / import supersede.
+  const prognos = useMemo(() => expectedCharges(parts, periods, payments), [parts, periods, payments])
+  const forecast = useMemo(() => forecastInterest(parts, periods, payments), [parts, periods, payments])
+  // The next UNCOVERED charge per part: once a month is fully logged (or
+  // imported), the Nästa avisering block rolls forward to the following month
+  // rather than going quiet — there is always a next avisering to look at.
+  const pendingSeries = useMemo(
+    () => parts.filter(p => !p.archived)
+      .map(p => pendingChargeSeries(p, periods, payments))
+      .filter(s => s.length > 0 && s[0].interest > 0),
+    [parts, periods, payments])
+  const pendingCharges = useMemo(() => pendingSeries.map(s => s[0]), [pendingSeries])
+  // Flattened to ONE entry per upcoming transaction — ränta and amortering
+  // are separate line items, individually loggable and individually guarded.
+  const pendingEntries = useMemo(() => pendingCharges.flatMap(r => {
+    const out: Array<{ charge: ExpectedCharge; kind: 'interest' | 'amortization'; amount: number }> = []
+    if (r.interest > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date, 'interest'))
+      out.push({ charge: r, kind: 'interest', amount: r.interest })
+    if (r.amortization > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date, 'amortization'))
+      out.push({ charge: r, kind: 'amortization', amount: r.amortization })
+    return out
+  }), [pendingCharges, payments])
+  // The months AFTER the loggable one — a read-only preview of the coming
+  // year's avier (rate held flat, balance stepping down each period).
+  const futureEntries = useMemo(() => pendingSeries.flatMap(s => s.slice(1))
+    .flatMap(r => {
+      const out: Array<{ charge: ExpectedCharge; kind: 'interest' | 'amortization'; amount: number }> = []
+      if (r.interest > 0) out.push({ charge: r, kind: 'interest', amount: r.interest })
+      if (r.amortization > 0) out.push({ charge: r, kind: 'amortization', amount: r.amortization })
+      return out
+    })
+    .sort((a, b) => a.charge.next_date.localeCompare(b.charge.next_date)
+      || a.charge.loan_part_id.localeCompare(b.charge.loan_part_id)
+      || (a.kind === b.kind ? 0 : a.kind === 'interest' ? -1 : 1)),
+  [pendingSeries])
+  const [showFuture, setShowFuture] = useState(false)
+  // Loan-part filter for the expected-charge block — only the parts that
+  // actually have an upcoming charge appear as options (a part with nothing
+  // pending would filter to an empty list).
+  const [prognosFilter, setPrognosFilter] = useState<string>('all')
+  const prognosParts = useMemo(() => {
+    const ids = new Set(pendingSeries.map(s => s[0].loan_part_id))
+    return parts.filter(p => ids.has(p.id))
+  }, [pendingSeries, parts])
+  // A part can drop out once its charge is logged — fall back to All so the
+  // toggle never points at a part that has vanished from the options.
+  const effPrognosFilter = prognosParts.some(p => p.id === prognosFilter) ? prognosFilter : 'all'
+  const shownPending = useMemo(
+    () => effPrognosFilter === 'all' ? pendingEntries : pendingEntries.filter(e => e.charge.loan_part_id === effPrognosFilter),
+    [pendingEntries, effPrognosFilter])
+  const shownFuture = useMemo(
+    () => effPrognosFilter === 'all' ? futureEntries : futureEntries.filter(e => e.charge.loan_part_id === effPrognosFilter),
+    [futureEntries, effPrognosFilter])
+
   const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
     return Math.abs(r.drift) >= Math.max(r.start_balance * 0.01, 5000)
@@ -322,17 +390,36 @@ export default function Bolanekoll() {
     const assigns = assignPaymentsToPart(loanNumbers, parts, { selectedPartId: fallback, auto })
     const candidates = parsed.rows.map((row, i) => {
       const specText = (mapping.specification != null ? row[mapping.specification] : '')?.trim() || ''
+      const date = (mapping.date != null ? row[mapping.date] : '')?.trim() || ''
       const amt = mapping.amount == null ? NaN : parseAmount(row[mapping.amount])
       const bal = mapping.balance == null ? NaN : parseAmount(row[mapping.balance])
       const amount = isFinite(amt) ? Math.abs(amt) : 0
       const balance_after = isFinite(bal) ? Math.abs(bal) : null
       const hasAmount = amount > 0 || balance_after != null
       const a = assigns[i]
-      return { specText, kind: classifyKind(specText), amount, balance_after, hasAmount, loan_part_id: a?.loan_part_id ?? null, partMatched: a?.matched ?? false }
+      return { specText, date, kind: classifyKind(specText), amount, balance_after, hasAmount, loan_part_id: a?.loan_part_id ?? null, partMatched: a?.matched ?? false }
     })
     const dupInput = candidates.map(c => ({ date: '', loan_part_id: c.loan_part_id, kind: c.kind, amount: c.amount }))
     const dups = flagDuplicates(payments, dupInput)
-    return candidates.map((c, i) => ({ ...c, duplicate: !!dups[i], classification: (dups[i] || !c.hasAmount ? 'skip' : 'include') as 'include' | 'skip' }))
+    // Reconcile incoming interest rows against the forecast (plan 23): a row
+    // that pairs with a logged predicted row gets the supersede badge; without
+    // one, an interest row landing in the expected month still gets a
+    // read-only ✓ matched / ⚠ drift check against expectedCharge.
+    const predMatches = new Map(matchPredictedRows(payments,
+      candidates.map(c => ({ loan_part_id: c.loan_part_id, date: c.date, kind: c.kind, amount: c.amount })),
+    ).map(m => [m.draftIndex, m]))
+    const expByPart = new Map(prognos.rows.map(r => [r.loan_part_id, r]))
+    return candidates.map((c, i) => {
+      let recon: TriageRow['recon'] = null
+      const pm = predMatches.get(i)
+      const exp = c.loan_part_id ? expByPart.get(c.loan_part_id) : undefined
+      if (pm) recon = { drift: pm.recon.drift, ok: pm.recon.ok, predicted: true }
+      else if (c.kind === 'interest' && c.amount > 0 && exp && exp.interest > 0 && monthKey(c.date) === monthKey(exp.next_date)) {
+        const r = reconcileCharge(exp, c.amount)
+        recon = { drift: r.drift, ok: r.ok, predicted: false }
+      }
+      return { ...c, recon, duplicate: !!dups[i], classification: (dups[i] || !c.hasAmount ? 'skip' : 'include') as 'include' | 'skip' }
+    })
   }
   async function loadFile(file: File): Promise<ImportCfg> {
     const text = await file.text()
@@ -367,26 +454,44 @@ export default function Bolanekoll() {
         return makePayment({ loan_part_id: t.loan_part_id, date: (importCfg.mapping.date != null ? row[importCfg.mapping.date] : '')?.trim() || '', kind: t.kind, description: t.specText, amount: t.amount, balance_after: t.balance_after, source: 'import:' + importCfg.file.name })
       })
     if (!drafts.length) { showToast('Nothing selected to add.'); return }
+    // Supersede (plan 23): actuals always win. A predicted row matched within
+    // tolerance is replaced silently; drift outside it requires an explicit
+    // go-ahead — the drift itself is the alarm (rate reset, fee, extra
+    // amortering) — and on confirm the actual still replaces the prediction.
+    const matches = matchPredictedRows(payments, drafts)
+    const drifted = matches.filter(m => !m.recon.ok)
+    if (drifted.length) {
+      const lines = drifted.map(m =>
+        (partNameById(m.predicted.loan_part_id) + ': förväntad ' + fmtMoney(m.recon.expected) + ' → faktisk ' + fmtMoney(m.recon.actual) + ' (drift ' + fmtMoney(Math.abs(m.recon.drift)) + ')'))
+      if (!confirm('Räntan avviker från prognosen — ränteändring, avgift eller extra amortering?\n\n' + lines.join('\n') + '\n\nErsätt de förväntade raderna med de importerade beloppen?')) return
+    }
+    const predictedIds = [...new Set(matches.map(m => m.predicted.id))]
     try {
       const sig = headerSignature(importCfg.parsed.headers)
       await Store.saveSettings({ import_presets: { ...settings.import_presets, [sig]: mappingToNames(importCfg.parsed.headers, importCfg.mapping) } })
+      if (predictedIds.length) await Store.removePayments(predictedIds)
       const savedRows = await Store.addPayments(drafts)
       await refresh(); flashSaved()
-      showToast('Added ' + savedRows.length + ' row' + (savedRows.length === 1 ? '' : 's') + ' from “' + importCfg.file.name + '”.')
+      showToast('Added ' + savedRows.length + ' row' + (savedRows.length === 1 ? '' : 's')
+        + (predictedIds.length ? ' · replaced ' + predictedIds.length + ' predicted row' + (predictedIds.length === 1 ? '' : 's') : '')
+        + ' from “' + importCfg.file.name + '”.')
       if (importCfg.queue.length) { const cfg = await loadFile(importCfg.queue[0]); setImportCfg({ ...cfg, queue: importCfg.queue.slice(1), qIdx: importCfg.qIdx + 1 }) }
       else setImportCfg(null)
     } catch (err) { saveErr(err) }
   }
   const triageSummary = useMemo(() => {
     if (!importCfg) return ''
-    let add = 0, skip = 0, invalid = 0, dup = 0, ints = 0
+    let add = 0, skip = 0, invalid = 0, dup = 0, ints = 0, matched = 0, drifted = 0
     importCfg.triage.forEach(t => {
       if (!t.hasAmount) { invalid++; return }
       if (t.classification === 'skip') { skip++; return }
       add++; if (t.kind === 'interest') ints++; if (t.duplicate) dup++
+      if (t.recon) { if (t.recon.ok) matched++; else drifted++ }
     })
     const out = [add + ' row' + (add === 1 ? '' : 's') + ' to add']
     if (ints) out.push(ints + ' ränta')
+    if (matched) out.push('✓ ' + matched + ' matchar prognosen')
+    if (drifted) out.push('⚠ ' + drifted + ' med drift')
     if (dup) out.push(dup + ' possible duplicate' + (dup === 1 ? '' : 's'))
     if (skip) out.push(skip + ' skipped')
     if (invalid) out.push(invalid + ' without an amount')
@@ -503,6 +608,29 @@ export default function Bolanekoll() {
   async function handleSaveSettings(patch: Partial<MortgageSettings>) {
     try { await Store.saveSettings(patch); await refresh(); flashSaved(); setSettingsDlg(false); showToast('Settings saved.') }
     catch (err) { saveErr(err) }
+  }
+
+  // Confirm-to-log (plan 23, decision 5): one click logs ONE expected
+  // transaction (a ränta or an amortering line) as a source:'predicted' row —
+  // the "stop typing" deliverable. The next real import replaces it (or
+  // prompts on drift). Rows only ever enter the ledger on this explicit
+  // click, never on visit.
+  async function handleLogPredicted(entries: Array<{ charge: ExpectedCharge; kind: 'interest' | 'amortization'; amount: number }>) {
+    const toLog = entries.filter(e => e.amount > 0 && !hasChargeInMonth(payments, e.charge.loan_part_id, e.charge.next_date, e.kind))
+    if (!toLog.length) return
+    try {
+      await Store.addPayments(toLog.map(e => makePayment({
+        loan_part_id: e.charge.loan_part_id, date: e.charge.next_date, kind: e.kind,
+        description: 'Förväntad avi', amount: e.amount,
+        // Post-charge saldo: the month's amortering (if any) has landed by statement time.
+        balance_after: e.charge.balance - e.charge.amortization,
+        source: 'predicted',
+      })))
+      await refresh(); flashSaved()
+      showToast(toLog.length === 1
+        ? 'Förväntad rad loggad — nästa import ersätter den med bankens rad.'
+        : toLog.length + ' förväntade rader loggade — nästa import ersätter dem.')
+    } catch (err) { saveErr(err) }
   }
 
   async function clearPayments() {
@@ -861,6 +989,16 @@ export default function Bolanekoll() {
                   ? 'Interest-only — the balance stays flat. Enter an extra monthly amortering above to see a payoff date.'
                   : 'At ' + fmtMoney(ms.per_month) + '/mo (' + fmtMoney(base) + ' observed + ' + fmtMoney(extra) + ' extra), property value held flat.'}
               </p>
+              {prognos.rows.length > 0 && (
+                <>
+                  <p className="proj-note prognos-forward">
+                    ~{fmtMoney(forecast.interest)} ränta över 12 mån
+                    {settings.ranteavdrag && <> · ~{fmtMoney(forecast.net)} efter avdrag</>}
+                    {forecast.assumed && <span className="prognos-assumed"> (förutsatt oförändrade räntor)</span>}
+                  </p>
+                  <hr className="whatif-divider" />
+                </>
+              )}
               <p className="whatif-group-label">Amorteringsplan</p>
               <div className="metric-row">
                 <div className={'metric-chip' + (ms.payoff_months != null ? ' is-accent' : '')}><span className="metric-label">Payoff</span><span className="metric-val">{ms.payoff_months == null ? 'Never' : monthsToWhen(ms.payoff_months)}</span></div>
@@ -987,6 +1125,9 @@ export default function Bolanekoll() {
                           <td className="col-desc">
                             {t.specText || kindLabel(t.kind)}
                             {t.duplicate && <span className="row-flag">possible duplicate</span>}
+                            {t.recon && (t.recon.ok
+                              ? <span className="row-flag row-flag-match">✓ {t.recon.predicted ? 'ersätter förväntad avi' : 'matchar prognosen'}</span>
+                              : <span className="row-flag row-flag-drift">⚠ drift {fmtMoney(Math.abs(t.recon.drift))}{t.recon.predicted ? ' (förväntad ' + fmtMoney(t.amount - t.recon.drift) + ')' : ''}</span>)}
                             {auto && t.hasAmount && <span className={'row-flag' + (t.partMatched ? ' row-flag-refund' : '')}>{(t.partMatched ? '→ ' : 'no loan # → ') + partNameById(t.loan_part_id)}</span>}
                           </td>
                           <td className="num col-amt">{t.hasAmount && t.amount ? fmtMoney(t.amount) : '—'}</td>
@@ -1146,6 +1287,107 @@ export default function Bolanekoll() {
 
         {/* ── Payments ── */}
         <section className="card">
+          {/* Nästa avisering (plan 23): the upcoming charge lives with the
+              transactions it becomes, and leads the card — the Betalningar
+              header and its controls sit further down, directly above the
+              ledger they act on. Only parts NOT yet covered by a row for that
+              month show — logging (or importing) makes a part drop out. */}
+          {pendingEntries.length > 0 && (
+            <div className="prognos-block">
+              <div className="card-head">
+                <h2>Nästa avisering <span className="card-en">· expected next charge</span></h2>
+                <span className="count-pill">{shownPending.length}</span>
+                {prognosParts.length > 1 && (
+                  <div className="card-actions">
+                    <Segmented value={effPrognosFilter} onChange={setPrognosFilter} ariaLabel="Filter expected charges"
+                      options={[{ v: 'all', label: 'All' }, ...prognosParts.map(p => ({ v: p.id, label: p.label || 'part' }))]} />
+                  </div>
+                )}
+              </div>
+              <div className="prognos-head">
+                <div className="metric-chip is-accent">
+                  <span className="metric-label">Nästa avisering</span>
+                  <span className="metric-val">~{fmtMoney(shownPending.reduce((s, e) => s + e.amount, 0))}</span>
+                  <span className="metric-sub">
+                    ränta {fmtMoney(shownPending.filter(e => e.kind === 'interest').reduce((s, e) => s + e.amount, 0))}
+                    {' · amort '}{fmtMoney(shownPending.filter(e => e.kind === 'amortization').reduce((s, e) => s + e.amount, 0))}
+                  </span>
+                </div>
+                {shownPending.length > 1 && (
+                  <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted(shownPending)}>
+                    Logga alla förväntade rader
+                  </button>
+                )}
+              </div>
+              {/* Flat list: every upcoming transaction is its own line item —
+                  a ränta row and an amortering row stand alone, each with its
+                  own log button and its own double-log guard. */}
+              <ul className="prognos-list">
+                {shownPending.map(e => {
+                  const r = e.charge
+                  const isInterest = e.kind === 'interest'
+                  const miscalibrated = isInterest && r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
+                  // Amorteringsgrad: annualized amortering as % of the loan's
+                  // ORIGINAL size — amorteringskravets bas. Dividing by the
+                  // current balance would drift the 1/2/3 % tiers upward as
+                  // the loan amortizes.
+                  const amortPct = r.original_balance > 0 ? (r.amortization / r.period_months) * 12 / r.original_balance * 100 : 0
+                  return (
+                    <li key={r.loan_part_id + ':' + e.kind} className="prognos-row">
+                      <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
+                      {isInterest && r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
+                      {!isInterest && amortPct > 0 && <span className="prognos-rate">{fmtPct(amortPct)}</span>}
+                      <span className="prognos-date">{fmtChargeMonth(r.next_date)}</span>
+                      <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
+                      <span className="prognos-amt">~{fmtMoney(e.amount)}</span>
+                      {isInterest && (
+                        <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
+                          {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
+                        </span>
+                      )}
+                      <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted([e])}>
+                        Logga förväntad rad
+                      </button>
+                      {miscalibrated && (
+                        <span className="prognos-caution">
+                          listad {fmtPct(r.rate! + r.calibration_gap!)} vs debiterad {fmtPct(r.rate!)} — day-count eller ologgad ränteändring
+                        </span>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+              {shownFuture.length > 0 && (
+                <>
+                  <button type="button" className="btn btn-ghost prognos-more-btn" onClick={() => setShowFuture(v => !v)}>
+                    {showFuture ? 'Dölj kommande månader' : `Visa kommande månader (${shownFuture.length})`}
+                  </button>
+                  {showFuture && (
+                    /* Read-only preview of the coming year's avier: rate held
+                       flat, balance stepping down by amorteringen each period.
+                       Nothing here is loggable — only the next month is due. */
+                    <ul className="prognos-list prognos-future">
+                      {shownFuture.map(e => {
+                        const r = e.charge
+                        const isInterest = e.kind === 'interest'
+                        const amortPct = r.original_balance > 0 ? (r.amortization / r.period_months) * 12 / r.original_balance * 100 : 0
+                        return (
+                          <li key={r.loan_part_id + ':' + e.kind + ':' + r.next_date} className="prognos-row is-future">
+                            <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
+                            {isInterest && r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
+                            {!isInterest && amortPct > 0 && <span className="prognos-rate">{fmtPct(amortPct)}</span>}
+                            <span className="prognos-date">{fmtChargeMonth(r.next_date)}</span>
+                            <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
+                            <span className="prognos-amt">~{fmtMoney(e.amount)}</span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           <div className="card-head">
             <h2>Betalningar <span className="card-en">· Payments</span></h2>
             <span className="count-pill">{filteredPayments.length}</span>
@@ -1196,7 +1438,7 @@ export default function Bolanekoll() {
                             {p.date || '—'}
                           </td>
                           <td className="col-part">{partNameById(p.loan_part_id)}</td>
-                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}</td>
+                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.source === 'predicted' && <span className="row-flag row-flag-predicted">förväntad</span>}{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}</td>
                           <td className="num col-amount">{fmtMoney(p.amount)}</td>
                           <td className="num col-balance">{p.balance_after != null ? fmtMoney(p.balance_after) : '—'}</td>
                           <td className="col-act">
