@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   expectedCharge, expectedCharges, forecastInterest, reconcileCharge,
-  matchPredictedRows, hasInterestInMonth, partBalance,
+  matchPredictedRows, hasChargeInMonth, partBalance,
 } from './mortgage'
 import type { LoanPart, Payment, RatePeriod } from './mortgage'
 
@@ -152,6 +152,23 @@ describe('expectedCharge', () => {
     expect(c.interest).toBeGreaterThan(0)
   })
 
+  it('predicts the amortering from the observed monthly balance drop', () => {
+    // Same 27th-of-month cadence, but the saldo steps down 3 000 kr/month —
+    // monthlyAmortizationRate reads the drop off the balance timeline. The
+    // part is anchored where the history starts: an earlier start_date with
+    // start_balance 0 would put zero-months in front and zero out the drop.
+    const pays = [
+      interestRow('2026-03-27', 3100, { balance_after: 1_000_000 }),
+      interestRow('2026-04-27', 3100, { balance_after: 997_000 }),
+      interestRow('2026-05-27', 3000, { balance_after: 994_000 }),
+      interestRow('2026-06-27', 3100, { balance_after: 991_000 }),
+    ]
+    const c = expectedCharge(part({ start_date: '2026-03-01', start_balance: 1_000_000 }), [period()], pays)!
+    expect(c.balance).toBe(991_000)
+    expect(c.amortization).toBe(3000)
+    expect(c.gross).toBe(Math.round((c.interest + 3000) * 100) / 100)
+  })
+
   it('ignores logged predictions when calibrating (round-trip invariance)', () => {
     const before = expectedCharge(part(), [period()], CLEAN)!
     const logged: Payment = {
@@ -228,7 +245,7 @@ describe('matchPredictedRows', () => {
   it('pairs an interest draft with the predicted row on the same part + month', () => {
     const drafts: Array<Partial<Payment>> = [
       { loan_part_id: 'p1', date: '2026-07-25', kind: 'interest', amount: 3010 },      // matches (same month)
-      { loan_part_id: 'p1', date: '2026-07-25', kind: 'amortization', amount: 3010 },  // wrong kind
+      { loan_part_id: 'p1', date: '2026-07-25', kind: 'amortization', amount: 3010 },  // no predicted amortering row
       { loan_part_id: 'p2', date: '2026-07-25', kind: 'interest', amount: 3010 },      // wrong part
       { loan_part_id: 'p1', date: '2026-08-27', kind: 'interest', amount: 3010 },      // wrong month
     ]
@@ -237,6 +254,17 @@ describe('matchPredictedRows', () => {
     expect(m[0].draftIndex).toBe(0)
     expect(m[0].predicted.id).toBe('pred1')
     expect(m[0].recon).toEqual({ expected: 3000, actual: 3010, drift: 10, ok: true })
+  })
+
+  it('pairs ränta and amortering drafts each with the predicted row of ITS kind', () => {
+    const predictedAmort: Payment = { ...predicted, id: 'pred2', kind: 'amortization', amount: 3000 }
+    const m = matchPredictedRows([predicted, predictedAmort], [
+      { loan_part_id: 'p1', date: '2026-07-27', kind: 'amortization', amount: 3000 },
+      { loan_part_id: 'p1', date: '2026-07-27', kind: 'interest', amount: 3010 },
+    ])
+    expect(m).toHaveLength(2)
+    expect(m.find(x => x.draftIndex === 0)!.predicted.id).toBe('pred2')  // amort ↔ amort
+    expect(m.find(x => x.draftIndex === 1)!.predicted.id).toBe('pred1')  // ränta ↔ ränta
   })
 
   it('ignores non-predicted existing rows and consumes each predicted row once', () => {
@@ -258,16 +286,20 @@ describe('matchPredictedRows', () => {
   })
 })
 
-describe('hasInterestInMonth (double-log guard)', () => {
-  it('sees both real and predicted interest rows in the month', () => {
+describe('hasChargeInMonth (double-log guard)', () => {
+  it('sees both real and predicted rows of the asked kind in the month', () => {
     const predicted: Payment = {
       id: 'pred1', created_at: '', loan_part_id: 'p1', date: '2026-07-27', kind: 'interest',
       description: '', amount: 3000, balance_after: null, paid_by: 'joint', source: 'predicted',
     }
-    expect(hasInterestInMonth([...CLEAN, predicted], 'p1', '2026-07-01')).toBe(true)  // predicted counts
-    expect(hasInterestInMonth(CLEAN, 'p1', '2026-06-15')).toBe(true)                  // real counts
-    expect(hasInterestInMonth(CLEAN, 'p1', '2026-07-15')).toBe(false)                 // nothing logged yet
-    expect(hasInterestInMonth(CLEAN, 'p2', '2026-06-15')).toBe(false)                 // other part
-    expect(hasInterestInMonth(CLEAN, null, '2026-06-15')).toBe(false)
+    expect(hasChargeInMonth([...CLEAN, predicted], 'p1', '2026-07-01')).toBe(true)  // predicted counts
+    expect(hasChargeInMonth(CLEAN, 'p1', '2026-06-15')).toBe(true)                  // real counts
+    expect(hasChargeInMonth(CLEAN, 'p1', '2026-07-15')).toBe(false)                 // nothing logged yet
+    expect(hasChargeInMonth(CLEAN, 'p2', '2026-06-15')).toBe(false)                 // other part
+    expect(hasChargeInMonth(CLEAN, null, '2026-06-15')).toBe(false)
+    // Kind-scoped: an interest row does not cover the amortering slot.
+    expect(hasChargeInMonth(CLEAN, 'p1', '2026-06-15', 'amortization')).toBe(false)
+    const amort: Payment = { ...predicted, id: 'a1', kind: 'amortization' }
+    expect(hasChargeInMonth([amort], 'p1', '2026-07-15', 'amortization')).toBe(true)
   })
 })

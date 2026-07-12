@@ -22,7 +22,7 @@ import {
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit, insatsPayments,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
-  expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasInterestInMonth, monthKey,
+  expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, monthKey,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   contributionSplit, settlement, todayISO,
 } from '../lib/mortgage'
@@ -295,6 +295,11 @@ export default function Bolanekoll() {
   // here; writes happen only via the explicit log button / import supersede.
   const prognos = useMemo(() => expectedCharges(parts, periods, payments), [parts, periods, payments])
   const forecast = useMemo(() => forecastInterest(parts, periods, payments), [parts, periods, payments])
+  // Only parts whose next charge is NOT yet in the ledger — a logged predicted
+  // row makes its part drop out of the Nästa avisering block until the month rolls.
+  const pendingCharges = useMemo(
+    () => prognos.rows.filter(r => r.interest > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date)),
+    [prognos, payments])
 
   const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
@@ -550,21 +555,34 @@ export default function Bolanekoll() {
   }
 
   // Confirm-to-log (plan 23, decision 5): one click logs the expected charge
-  // as a source:'predicted' interest row — the "stop typing" deliverable. The
-  // next real import silently replaces it (or prompts on drift). Rows only
-  // ever enter the ledger on this explicit click, never on visit.
+  // as source:'predicted' rows — ränta plus, when the loan amortizes, the
+  // amortering — the "stop typing" deliverable. The next real import replaces
+  // them (or prompts on drift). Rows only ever enter the ledger on this
+  // explicit click, never on visit.
   async function handleLogPredicted(rows: ExpectedCharge[]) {
-    const toLog = rows.filter(r => r.interest > 0 && !hasInterestInMonth(payments, r.loan_part_id, r.next_date))
+    const toLog = rows.filter(r => r.interest > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date))
     if (!toLog.length) return
     try {
-      await Store.addPayments(toLog.map(r => makePayment({
-        loan_part_id: r.loan_part_id, date: r.next_date, kind: 'interest',
-        description: 'Förväntad avi', amount: r.interest, balance_after: r.balance,
-        source: 'predicted',
-      })))
+      const drafts = toLog.flatMap(r => {
+        // Post-charge saldo: the amortering (if any) has landed by statement time.
+        const balAfter = r.balance - r.amortization
+        const out = [makePayment({
+          loan_part_id: r.loan_part_id, date: r.next_date, kind: 'interest',
+          description: 'Förväntad avi', amount: r.interest, balance_after: balAfter,
+          source: 'predicted',
+        })]
+        if (r.amortization > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date, 'amortization'))
+          out.push(makePayment({
+            loan_part_id: r.loan_part_id, date: r.next_date, kind: 'amortization',
+            description: 'Förväntad avi', amount: r.amortization, balance_after: balAfter,
+            source: 'predicted',
+          }))
+        return out
+      })
+      await Store.addPayments(drafts)
       await refresh(); flashSaved()
       showToast(toLog.length === 1
-        ? 'Förväntad avi loggad — nästa import ersätter den med bankens rad.'
+        ? 'Förväntad avi loggad — nästa import ersätter den med bankens rader.'
         : toLog.length + ' förväntade avier loggade — nästa import ersätter dem.')
     } catch (err) { saveErr(err) }
   }
@@ -925,57 +943,16 @@ export default function Bolanekoll() {
                   ? 'Interest-only — the balance stays flat. Enter an extra monthly amortering above to see a payoff date.'
                   : 'At ' + fmtMoney(ms.per_month) + '/mo (' + fmtMoney(base) + ' observed + ' + fmtMoney(extra) + ' extra), property value held flat.'}
               </p>
-              {prognos.rows.length > 0 && (() => {
-                const loggable = prognos.rows.filter(r => r.interest > 0 && !hasInterestInMonth(payments, r.loan_part_id, r.next_date))
-                return (
-                  <>
-                    <p className="whatif-group-label">Nästa avi <span className="card-en">· expected next charge</span></p>
-                    <div className="prognos-head">
-                      <div className="metric-chip is-accent">
-                        <span className="metric-label">Nästa avi</span>
-                        <span className="metric-val">~{fmtMoney(prognos.total_gross)}</span>
-                        <span className="metric-sub">ränta {fmtMoney(prognos.total_interest)} · amort {fmtMoney(prognos.total_gross - prognos.total_interest)}</span>
-                      </div>
-                      {prognos.rows.length > 1 && (
-                        <button type="button" className="btn btn-ghost prognos-log-btn" disabled={!loggable.length} onClick={() => handleLogPredicted(loggable)}>
-                          {loggable.length ? 'Logga alla förväntade avier' : 'Alla loggade'}
-                        </button>
-                      )}
-                    </div>
-                    <ul className="prognos-list">
-                      {prognos.rows.map(r => {
-                        const logged = hasInterestInMonth(payments, r.loan_part_id, r.next_date)
-                        const miscalibrated = r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
-                        return (
-                          <li key={r.loan_part_id} className="prognos-row">
-                            <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
-                            {r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
-                            <span className="prognos-date">{fmtRateDate(r.next_date)}</span>
-                            <span className="prognos-amt">~{fmtMoney(r.gross)}</span>
-                            <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
-                              {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
-                            </span>
-                            <button type="button" className="btn btn-ghost prognos-log-btn" disabled={logged || r.interest <= 0} onClick={() => handleLogPredicted([r])}>
-                              {logged ? 'Loggad' : 'Logga förväntad avi'}
-                            </button>
-                            {miscalibrated && (
-                              <span className="prognos-caution">
-                                listad {fmtPct(r.rate! + r.calibration_gap!)} vs debiterad {fmtPct(r.rate!)} — day-count eller ologgad ränteändring
-                              </span>
-                            )}
-                          </li>
-                        )
-                      })}
-                    </ul>
-                    <p className="proj-note prognos-forward">
-                      ~{fmtMoney(forecast.interest)} ränta över 12 mån
-                      {settings.ranteavdrag && <> · ~{fmtMoney(forecast.net)} efter avdrag</>}
-                      {forecast.assumed && <span className="prognos-assumed"> (förutsatt oförändrade räntor)</span>}
-                    </p>
-                    <hr className="whatif-divider" />
-                  </>
-                )
-              })()}
+              {prognos.rows.length > 0 && (
+                <>
+                  <p className="proj-note prognos-forward">
+                    ~{fmtMoney(forecast.interest)} ränta över 12 mån
+                    {settings.ranteavdrag && <> · ~{fmtMoney(forecast.net)} efter avdrag</>}
+                    {forecast.assumed && <span className="prognos-assumed"> (förutsatt oförändrade räntor)</span>}
+                  </p>
+                  <hr className="whatif-divider" />
+                </>
+              )}
               <p className="whatif-group-label">Amorteringsplan</p>
               <div className="metric-row">
                 <div className={'metric-chip' + (ms.payoff_months != null ? ' is-accent' : '')}><span className="metric-label">Payoff</span><span className="metric-val">{ms.payoff_months == null ? 'Never' : monthsToWhen(ms.payoff_months)}</span></div>
@@ -1285,6 +1262,55 @@ export default function Bolanekoll() {
               </DropdownMenu.Root>
             </div>
           </div>
+          {/* Nästa avisering (plan 23): the upcoming charge lives with the
+              transactions it becomes. Only parts NOT yet covered by a row for
+              that month show — logging (or importing) makes a part drop out. */}
+          {pendingCharges.length > 0 && (
+            <div className="prognos-block">
+              <p className="whatif-group-label">Nästa avisering <span className="card-en">· expected next charge</span></p>
+              <div className="prognos-head">
+                <div className="metric-chip is-accent">
+                  <span className="metric-label">Nästa avisering</span>
+                  <span className="metric-val">~{fmtMoney(pendingCharges.reduce((s, r) => s + r.gross, 0))}</span>
+                  <span className="metric-sub">
+                    ränta {fmtMoney(pendingCharges.reduce((s, r) => s + r.interest, 0))} · amort {fmtMoney(pendingCharges.reduce((s, r) => s + r.amortization, 0))}
+                  </span>
+                </div>
+                {pendingCharges.length > 1 && (
+                  <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted(pendingCharges)}>
+                    Logga alla förväntade avier
+                  </button>
+                )}
+              </div>
+              <ul className="prognos-list">
+                {pendingCharges.map(r => {
+                  const miscalibrated = r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
+                  return (
+                    <li key={r.loan_part_id} className="prognos-row">
+                      <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
+                      {r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
+                      <span className="prognos-date">{fmtRateDate(r.next_date)}</span>
+                      <span className="prognos-amt">
+                        ~{fmtMoney(r.gross)}
+                        {r.amortization > 0 && <span className="prognos-amt-sub"> (ränta {fmtMoney(r.interest)} · amort {fmtMoney(r.amortization)})</span>}
+                      </span>
+                      <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
+                        {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
+                      </span>
+                      <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted([r])}>
+                        Logga förväntad avi
+                      </button>
+                      {miscalibrated && (
+                        <span className="prognos-caution">
+                          listad {fmtPct(r.rate! + r.calibration_gap!)} vs debiterad {fmtPct(r.rate!)} — day-count eller ologgad ränteändring
+                        </span>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
           <motion.div key={paymentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}>
             {!filteredPayments.length ? (

@@ -854,19 +854,20 @@ export function reconcileCharge(expected: ExpectedCharge | number, actualInteres
   return { expected: exp, actual, drift, ok: Math.abs(drift) <= Math.max(50, exp * 0.01) + 1e-9 }
 }
 
-// Pairs each incoming kind:'interest' draft with an existing source:'predicted'
-// row on the same loan_part_id + month. Deliberately NOT flagDuplicates: its
-// fingerprint includes the exact date, and the import triage feeds it blank
-// candidate dates, so that path can never collide with a dated predicted row.
+// Pairs each incoming ränta/amortering draft with an existing
+// source:'predicted' row of the SAME kind on the same loan_part_id + month.
+// Deliberately NOT flagDuplicates: its fingerprint includes the exact date,
+// and the import triage feeds it blank candidate dates, so that path can
+// never collide with a dated predicted row.
 export function matchPredictedRows(payments: Payment[], drafts: Array<Partial<Payment>>):
   Array<{ draftIndex: number; predicted: Payment; recon: ReturnType<typeof reconcileCharge> }> {
   const preds = (payments || []).filter(p =>
-    p?.source === 'predicted' && p.kind === 'interest' && p.loan_part_id && monthKey(p.date))
+    p?.source === 'predicted' && (p.kind === 'interest' || p.kind === 'amortization') && p.loan_part_id && monthKey(p.date))
   const used = new Set<string>()
   const out: Array<{ draftIndex: number; predicted: Payment; recon: ReturnType<typeof reconcileCharge> }> = []
   ;(drafts || []).forEach((d, i) => {
-    if (!d || d.kind !== 'interest' || !d.loan_part_id || !monthKey(d.date)) return
-    const hit = preds.find(p => !used.has(p.id) && p.loan_part_id === d.loan_part_id && monthKey(p.date) === monthKey(d.date))
+    if (!d || (d.kind !== 'interest' && d.kind !== 'amortization') || !d.loan_part_id || !monthKey(d.date)) return
+    const hit = preds.find(p => !used.has(p.id) && p.kind === d.kind && p.loan_part_id === d.loan_part_id && monthKey(p.date) === monthKey(d.date))
     if (!hit) return
     used.add(hit.id)
     out.push({ draftIndex: i, predicted: hit, recon: reconcileCharge(hit.amount, Number(d.amount) || 0) })
@@ -874,13 +875,13 @@ export function matchPredictedRows(payments: Payment[], drafts: Array<Partial<Pa
   return out
 }
 
-// Double-log guard for confirm-to-log: any interest row (predicted or real)
-// already covering that part + month disables the button.
-export function hasInterestInMonth(payments: Payment[], loanPartId: string | null, date: string): boolean {
+// Double-log guard for confirm-to-log: a row of that kind (predicted or real)
+// already covering the part + month means the charge is accounted for.
+export function hasChargeInMonth(payments: Payment[], loanPartId: string | null, date: string, kind: PaymentKind = 'interest'): boolean {
   const mk = monthKey(date)
   if (!mk || !loanPartId) return false
   return (payments || []).some(p =>
-    p?.kind === 'interest' && p.loan_part_id === loanPartId && monthKey(p.date) === mk)
+    p?.kind === kind && p.loan_part_id === loanPartId && monthKey(p.date) === mk)
 }
 
 // ── Amorteringskrav ────────────────────────────────────────────────────────

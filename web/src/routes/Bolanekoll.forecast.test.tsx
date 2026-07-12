@@ -54,13 +54,13 @@ function renderBolanekoll() {
   return render(<RouterProvider router={router} />)
 }
 
-function seedStore(payments: Payment[]) {
+function seedStore(payments: Payment[], part: LoanPart = PART) {
   vi.mocked(Store.cachedSnapshot).mockReturnValue({
     version: 1,
-    loan_parts: [PART], payments, valuations: [], rate_periods: [PERIOD], contributions: [],
+    loan_parts: [part], payments, valuations: [], rate_periods: [PERIOD], contributions: [],
     settings: defaultSettings(),
   })
-  vi.mocked(Store.listLoanParts).mockResolvedValue([PART])
+  vi.mocked(Store.listLoanParts).mockResolvedValue([part])
   vi.mocked(Store.listPayments).mockResolvedValue(payments)
   vi.mocked(Store.listValuations).mockResolvedValue([])
   vi.mocked(Store.listRatePeriods).mockResolvedValue([PERIOD])
@@ -83,10 +83,10 @@ beforeEach(() => {
 })
 
 describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
-  it('logs the expected charge as a predicted row and then disables the button', async () => {
+  it('logs the expected charge as a predicted row; the part then leaves the block', async () => {
     seedStore(HISTORY)
     // Echo the logged rows back through the store so the post-save refresh()
-    // sees them — that flips the button to its logged/disabled state.
+    // sees them — that makes the part drop out of the Nästa avisering block.
     vi.mocked(Store.addPayments).mockImplementation(async (records) => {
       const saved = records.map((r, i) => ({ ...r, id: 'new' + i, created_at: '' } as Payment))
       vi.mocked(Store.listPayments).mockResolvedValue([...HISTORY, ...saved])
@@ -99,22 +99,53 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     expect(logBtn).toBeEnabled()
     await user.click(logBtn)
 
-    // One interest row, next month's charge date, source 'predicted',
-    // balance carried forward — bank stays ground truth.
+    // Interest-only part → one interest row, next month's charge date,
+    // source 'predicted', balance carried forward — bank stays ground truth.
     expect(Store.addPayments).toHaveBeenCalledTimes(1)
     expect(Store.addPayments).toHaveBeenCalledWith([expect.objectContaining({
       loan_part_id: 'p1', date: '2026-07-27', kind: 'interest',
       amount: 3000, balance_after: 1_000_000, source: 'predicted',
     })])
     expect(await screen.findByText(/Förväntad avi loggad/)).toBeInTheDocument()
-    // Double-log guard: the row for the month now exists, so the button locks.
-    expect(await screen.findByRole('button', { name: 'Loggad' })).toBeDisabled()
+    // The logged charge disappears from the expected block (it now lives in
+    // the ledger below) — with the only part logged, the block is gone.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Logga förväntad avi' })).not.toBeInTheDocument())
   })
 
-  it('never double-logs when an interest row already covers the month', async () => {
+  it('logs ränta AND amortering when the loan amortizes', async () => {
+    // Saldo steps down 3 000 kr/month → predicted amortering 3 000 kr rides
+    // along, and both rows carry the post-charge saldo (988 000 kr).
+    const amortizing = [
+      interestRow('2026-03-27', 3100, { balance_after: 1_000_000 }),
+      interestRow('2026-04-27', 3100, { balance_after: 997_000 }),
+      interestRow('2026-05-27', 3000, { balance_after: 994_000 }),
+      interestRow('2026-06-27', 3100, { balance_after: 991_000 }),
+    ]
+    // Anchor the part where the history starts so the balance timeline has no
+    // leading zero-months (start_balance 0 would zero out the observed drop).
+    seedStore(amortizing, { ...PART, start_date: '2026-03-01', start_balance: 1_000_000 })
+    vi.mocked(Store.addPayments).mockImplementation(async (records) =>
+      records.map((r, i) => ({ ...r, id: 'new' + i, created_at: '' } as Payment)))
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Logga förväntad avi' }))
+
+    expect(Store.addPayments).toHaveBeenCalledTimes(1)
+    expect(Store.addPayments).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: 'interest', date: '2026-07-27', source: 'predicted', balance_after: 988_000 }),
+      expect.objectContaining({ kind: 'amortization', date: '2026-07-27', source: 'predicted', amount: 3000, balance_after: 988_000 }),
+    ])
+  })
+
+  it('hides the block when an interest row already covers the month', async () => {
     seedStore([...HISTORY, PREDICTED])
     renderBolanekoll()
-    expect(await screen.findByRole('button', { name: 'Loggad' })).toBeDisabled()
+    // Settle on the ledger showing the predicted row's tag…
+    expect((await screen.findAllByText('förväntad')).length).toBeGreaterThan(0)
+    // …then the expected block offers nothing to log.
+    expect(screen.queryByRole('button', { name: 'Logga förväntad avi' })).not.toBeInTheDocument()
     expect(Store.addPayments).not.toHaveBeenCalled()
   })
 })
@@ -129,7 +160,7 @@ describe('Bolånekoll forecast — import supersede (plan 23 phase C)', () => {
       records.map((r, i) => ({ ...r, id: 'new' + i, created_at: '' } as Payment)))
     const user = userEvent.setup()
     renderBolanekoll()
-    await screen.findByRole('button', { name: 'Loggad' }) // page settled
+    await screen.findAllByText('förväntad') // page settled: predicted row visible in the ledger
 
     await importCsv(CSV(3010)) // drift 10 kr — inside max(50 kr, 1 %)
     // Triage announces the supersede before anything is written.
@@ -151,7 +182,7 @@ describe('Bolånekoll forecast — import supersede (plan 23 phase C)', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const user = userEvent.setup()
     renderBolanekoll()
-    await screen.findByRole('button', { name: 'Loggad' })
+    await screen.findAllByText('förväntad') // page settled: predicted row visible in the ledger
 
     await importCsv(CSV(3175)) // drift 175 kr — outside max(50 kr, 1 %)
     expect(await screen.findByText(/drift 175 kr/)).toBeInTheDocument()
