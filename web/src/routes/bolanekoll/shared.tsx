@@ -47,8 +47,12 @@ export function monthsToWhen(months: number | null): string {
 
 export interface TriageRow {
   classification: 'include' | 'skip'
-  specText: string; kind: Payment['kind']; amount: number; balance_after: number | null
+  specText: string; date: string; kind: Payment['kind']; amount: number; balance_after: number | null
   hasAmount: boolean; loan_part_id: string | null; partMatched: boolean; duplicate: boolean
+  // Forecast reconcile (plan 23): how this interest row compares to the
+  // expected charge — predicted:true when it will supersede a logged
+  // source:'predicted' row, false for the read-only ✓/⚠ badge. null = n/a.
+  recon: { drift: number; ok: boolean; predicted: boolean } | null
 }
 export interface ImportCfg {
   file: File; parsed: CsvResult; mapping: ColMapping; importPart: string
