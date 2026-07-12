@@ -1,0 +1,237 @@
+/* huskalendern.css — Huskalendern (plan 71): the vertical timeline around
+   "Idag". Self-contained and scoped under `.hk-root` / `.hk-dialog` so the
+   generic class names (.card/.wrap/.segmented/.form-*) don't leak — the same
+   faithful-port scoping the other tools use. Shell primitives here mirror the
+   shared ones in components.css; the timeline chrome is Huskalendern-specific.
+   Green/copper palette + tokens only. */
+
+/* ── Shell primitives (mirror components.css, scoped to .hk-root) ──────────── */
+.hk-root .wrap {
+  max-width: 940px; width: 100%;
+  margin: 0 auto; padding: 2rem 2.5rem 5rem;
+  display: flex; flex-direction: column; gap: 1.5rem;
+}
+.hk-root .card {
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 1.5rem 1.6rem;
+}
+.hk-root .link-btn {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--accent); font: inherit; font-weight: 550; text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.hk-root .link-btn:hover { color: var(--accent-light); }
+
+/* ── Attention strip (pinned above the timeline) ──────────────────────────── */
+.hk-attention {
+  background: var(--warn-faint);
+  border: 1px solid var(--warn-light);
+  border-radius: var(--r-lg);
+  padding: 1rem 1.2rem 1.1rem;
+  position: sticky; top: 0.6rem; z-index: 5;
+}
+.hk-attention-head {
+  display: flex; align-items: center; gap: 0.5rem;
+  color: var(--warn); font-weight: 650; font-size: 14px;
+  margin-bottom: 0.7rem;
+}
+.hk-attention-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.hk-att-btn {
+  display: inline-flex; align-items: center; gap: 0.55rem;
+  font: inherit; font-size: 13px; cursor: pointer;
+  background: var(--paper-card); border: 1px solid var(--rule);
+  border-radius: 999px; padding: 5px 13px; color: var(--ink);
+}
+.hk-att-btn:hover { border-color: var(--warn-light); }
+.hk-att-item.is-overdue .hk-att-btn { border-color: var(--warn); }
+.hk-att-title { font-weight: 550; }
+.hk-att-due { color: var(--warn); font-weight: 600; font-size: 12px; }
+
+/* ── Empty state (plan 62) ────────────────────────────────────────────────── */
+.hk-empty h2 {
+  font-family: var(--font-display); font-weight: 400; font-size: 1.5rem;
+  letter-spacing: -0.01em; color: var(--ink); margin: 0 0 0.7rem;
+}
+.hk-empty-lead { color: var(--ink-mid); font-size: 15px; line-height: 1.55; margin: 0 0 1.2rem; max-width: 52ch; }
+.hk-empty-cta { color: var(--ink-soft); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; margin: 0 0 0.6rem; }
+.hk-example-row { display: flex; flex-wrap: wrap; gap: 0.55rem; }
+.hk-example {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  font: inherit; font-size: 13.5px; font-weight: 550; cursor: pointer;
+  color: var(--accent); background: var(--accent-faint);
+  border: 1px solid var(--accent-light); border-radius: 999px; padding: 6px 14px;
+}
+.hk-example:hover { border-color: var(--accent); }
+.hk-example .lucide, .hk-example svg { color: var(--accent); }
+.hk-example-manual { border-radius: 999px; }
+
+/* ── Timeline ─────────────────────────────────────────────────────────────── */
+.hk-timeline {
+  position: relative;
+  padding-left: 0.2rem;
+}
+/* One continuous rail behind every dot; the dot column is 40px wide, its centre
+   at 20px, so the 2px rail sits at left:19px. */
+.hk-timeline::before {
+  content: ''; position: absolute; top: 6px; bottom: 6px; left: 19px;
+  width: 2px; background: var(--rule); border-radius: 2px;
+}
+.hk-year { position: relative; }
+.hk-year-marker { position: relative; padding: 0.7rem 0 0.6rem 3rem; }
+.hk-year-marker span {
+  position: relative; z-index: 1;
+  font-size: 12px; font-weight: 650; letter-spacing: 0.04em;
+  color: var(--ink-soft); background: var(--paper-warm);
+  border: 1px solid var(--rule); border-radius: 999px; padding: 2px 11px;
+}
+
+.hk-nodes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.8rem; }
+.hk-node {
+  position: relative;
+  display: grid; grid-template-columns: 40px 1fr auto; align-items: start;
+  gap: 0.6rem;
+}
+
+/* Dot on the rail */
+.hk-dot {
+  grid-column: 1;
+  width: 30px; height: 30px; margin: 2px 0 0 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--paper-card);
+  border: 2px solid var(--rule); color: var(--ink-soft);
+  z-index: 1; box-shadow: 0 0 0 3px var(--paper);
+}
+
+/* Entry card */
+.hk-card { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.hk-card-top { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.hk-date { font-size: 12.5px; font-weight: 600; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.hk-kind {
+  font-size: 10.5px; font-weight: 650; letter-spacing: 0.03em; text-transform: uppercase;
+  color: var(--ink-soft); background: var(--paper-warm);
+  border: 1px solid var(--rule); border-radius: 4px; padding: 1px 6px;
+}
+.hk-title { font-size: 15px; font-weight: 550; color: var(--ink); line-height: 1.3; }
+.hk-meta { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; font-size: 12.5px; color: var(--ink-soft); }
+.hk-vendor { color: var(--ink-mid); }
+.hk-cost { font-variant-numeric: tabular-nums; }
+.hk-rel { color: var(--accent); font-weight: 550; }
+.hk-notes { margin: 0.2rem 0 0; font-size: 12.5px; color: var(--ink-soft); font-style: italic; }
+
+.hk-actions { grid-column: 3; display: flex; gap: 0.1rem; align-items: center; }
+
+/* Past milestones: muted/ink, they're history. */
+.hk-node.is-past .hk-title { color: var(--ink-mid); }
+.hk-node.is-past .hk-dot { border-color: var(--ink-faint); color: var(--ink-faint); }
+
+/* Soft (interval) future projections: dashed dot + estimate styling. */
+.hk-node.is-soft .hk-dot { border-style: dashed; background: var(--paper); }
+.hk-node.is-soft .hk-title { color: var(--ink-mid); }
+
+/* Flags (plan 61/63): soon = amber/copper, overdue = red/warn. */
+.hk-flag {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase;
+  border-radius: 4px; padding: 1px 7px;
+}
+.hk-flag.is-soon { color: var(--copper); background: var(--warn-faint); border: 1px solid var(--warn-light); }
+.hk-flag.is-overdue { color: var(--warn); background: var(--warn-faint); border: 1px solid var(--warn); }
+.hk-node.is-soon .hk-dot { border-color: var(--copper); color: var(--copper); }
+.hk-node.is-overdue .hk-dot { border-color: var(--warn); color: var(--warn); }
+.hk-node.is-soon .hk-rel { color: var(--copper); }
+.hk-node.is-overdue .hk-rel { color: var(--warn); }
+
+/* "Idag" divider — the anchor line, visually distinct. */
+.hk-today {
+  grid-template-columns: 40px 1fr; align-items: center; gap: 0.6rem;
+  margin: 0.3rem 0;
+}
+.hk-today-dot {
+  grid-column: 1; justify-self: center;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 4px var(--accent-faint), 0 0 0 5px var(--paper);
+  margin-left: 5px;
+}
+.hk-today-label {
+  grid-column: 2;
+  font-family: var(--font-display); font-size: 1.05rem; font-weight: 500;
+  color: var(--accent); letter-spacing: -0.01em;
+}
+
+/* ── Toast ────────────────────────────────────────────────────────────────── */
+.hk-toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 12px);
+  background: var(--ink); color: var(--paper);
+  font-size: 13.5px; font-weight: 550;
+  padding: 10px 18px; border-radius: 999px; box-shadow: var(--shadow-md);
+  opacity: 0; pointer-events: none; transition: opacity 0.22s, transform 0.22s; z-index: 100;
+}
+.hk-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ── Mobile (≤600px) ──────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .hk-root .wrap { padding: 1.4rem 1.1rem 4rem; }
+  .hk-timeline::before { left: 17px; }
+  .hk-node { grid-template-columns: 36px 1fr auto; gap: 0.45rem; }
+  .hk-dot { width: 28px; height: 28px; margin-left: 3px; }
+  .hk-year-marker { padding-left: 2.4rem; }
+  .hk-title { font-size: 14.5px; }
+}
+
+/* ── Dialog (mirrors .ma-dialog chrome, scoped to .hk-dialog) ──────────────── */
+dialog.hk-dialog {
+  border: 1px solid var(--rule); border-radius: var(--r-lg);
+  background: var(--paper-card); color: var(--ink);
+  box-shadow: var(--shadow-md); padding: 0;
+  width: min(520px, calc(100vw - 2rem)); max-width: 100%;
+}
+.hk-dialog::backdrop { background: var(--modal-backdrop); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
+@media (prefers-reduced-motion: no-preference) {
+  dialog.hk-dialog {
+    transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+      overlay 0.22s ease allow-discrete, display 0.22s ease allow-discrete;
+  }
+  dialog.hk-dialog:not([open]) { opacity: 0; transform: translateY(8px) scale(0.985); }
+  @starting-style { dialog.hk-dialog[open] { opacity: 0; transform: translateY(8px) scale(0.985); } }
+  .hk-dialog::backdrop { transition: opacity 0.22s ease, overlay 0.22s ease allow-discrete, display 0.22s ease allow-discrete; }
+  .hk-dialog:not([open])::backdrop { opacity: 0; }
+  @starting-style { .hk-dialog[open]::backdrop { opacity: 0; } }
+}
+.hk-dialog .dialog-body { padding: 1.5rem 1.6rem 1.4rem; }
+.hk-dialog .dialog-title { font-family: var(--font-display); font-weight: 400; font-size: 1.5rem; letter-spacing: -0.01em; margin-bottom: 1.1rem; color: var(--ink); }
+.hk-dialog .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem 1rem; }
+.hk-dialog .form-field { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+.hk-dialog .form-field.form-wide { grid-column: 1 / -1; }
+.hk-dialog .form-field > span { font-size: 12px; font-weight: 600; letter-spacing: 0.02em; color: var(--ink-soft); text-transform: uppercase; }
+.hk-dialog .form-field input[type="text"],
+.hk-dialog .form-field input[type="date"] {
+  font-family: var(--font-ui); font-size: 14px; color: var(--ink);
+  background: var(--input-bg); border: 1px solid var(--rule);
+  border-radius: var(--r-sm); padding: 9px 11px; width: 100%;
+}
+.hk-dialog .form-field input:focus { outline: none; border-color: var(--accent-light); box-shadow: var(--ring); background: var(--input-focus-bg); }
+.hk-dialog .segmented { display: inline-flex; background: var(--input-bg); border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 3px; gap: 2px; flex-wrap: wrap; }
+.hk-dialog .segmented .seg {
+  position: relative;
+  font-family: var(--font-ui); font-size: 13px; font-weight: 550;
+  color: var(--ink-soft); background: none; border: none; cursor: pointer;
+  padding: 6px 12px; border-radius: 6px; transition: color 0.15s; white-space: nowrap;
+}
+.hk-dialog .segmented .seg:hover { color: var(--ink-mid); }
+.hk-dialog .segmented .seg.is-active { color: var(--on-accent); }
+.hk-dialog .segmented-sm { padding: 2px; }
+.hk-dialog .segmented-sm .seg { font-size: 12px; padding: 3px 8px; }
+.hk-dialog .seg-pill { position: absolute; inset: 0; z-index: 0; background: var(--accent); border-radius: 6px; }
+.hk-dialog .seg-label { position: relative; z-index: 1; }
+/* Responsive segmented: pills on wide, native <select> on narrow — the
+   .seg-select is hidden by default and swaps in below 640px (matches
+   manadsavslut.css). Without this the select renders alongside the pills. */
+.hk-dialog .seg-select { display: none; font-family: var(--font-ui); font-size: 13px; color: var(--ink); background: var(--input-bg); border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 5px 8px; cursor: pointer; width: 100%; }
+@media (max-width: 640px) {
+  .hk-dialog .segmented-responsive { display: none; }
+  .hk-dialog .seg-select { display: inline-block; }
+}
+.hk-dialog .form-hint { font-size: 12.5px; color: var(--ink-soft); margin-top: 0.9rem; line-height: 1.5; }
+.hk-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.3rem; }
