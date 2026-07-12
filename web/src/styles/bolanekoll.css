@@ -372,14 +372,14 @@
   /* Expected next charge (plan 23): total chip + per-part rows with the
      confidence badge, the log button and the amber calibration diagnostic. */
   .prognos-block { margin-bottom: 1.1rem; padding-bottom: 0.35rem; border-bottom: 1px solid var(--rule); }
-  .prognos-head { display: flex; flex-direction: column; align-items: flex-start; gap: 0.6rem; margin-bottom: 0.75rem; }
+  .prognos-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
   /* Expected-charge rows share the Betalningar table shell; the rate/grad
      (Sats) and the confidence badge each own their own column. */
   .prognos-table .col-kind { white-space: nowrap; }
   .prognos-table .col-rate { color: var(--ink-soft); }
-  /* "Logga alla" sits on its own line under the total chip, hugging its text
-     and pushed to the right edge of the card. */
-  .prognos-log-all { align-self: flex-end; }
+  /* "Logga alla" sits on the same row as the total chip, pushed to the card's
+     right edge. */
+  .prognos-log-all { margin-left: auto; }
   .conf-badge {
     font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
     color: var(--ink-soft); background: var(--paper-warm);
