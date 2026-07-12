@@ -1439,17 +1439,23 @@ export default function Bolanekoll() {
                       <Fragment key={p.id}>
                         <tr className={(p.is_insats ? 'is-insats' : '') + (isExp ? ' is-expanded' : '')}>
                           <td className="col-date">
-                            {p.is_insats && (
-                              <motion.button
-                                type="button"
-                                className="icon-btn expand-btn"
-                                title={isExp ? 'Hide allocation' : 'Show allocation'}
-                                aria-expanded={isExp}
-                                onClick={() => toggleExpandPay(p.id)}
-                                animate={{ rotate: isExp ? 90 : 0 }}
-                                transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
-                              ><Icon icon={ChevronRight} size={12} /></motion.button>
-                            )}
+                            {/* The chevron slot is reserved on EVERY row (empty
+                                on non-insats rows) so the date text always
+                                starts at the same x — insats rows no longer
+                                shunt their date to the right. */}
+                            <span className="pay-date-slot">
+                              {p.is_insats && (
+                                <motion.button
+                                  type="button"
+                                  className="icon-btn expand-btn"
+                                  title={isExp ? 'Hide allocation' : 'Show allocation'}
+                                  aria-expanded={isExp}
+                                  onClick={() => toggleExpandPay(p.id)}
+                                  animate={{ rotate: isExp ? 90 : 0 }}
+                                  transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+                                ><Icon icon={ChevronRight} size={12} /></motion.button>
+                              )}
+                            </span>
                             {p.date || '—'}
                           </td>
                           <td className="col-part">{partNameById(p.loan_part_id)}</td>

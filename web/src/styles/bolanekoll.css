@@ -268,6 +268,12 @@
      zero vertical padding and .cell-pad carries it, so the tween covers the
      full row height instead of snapping open around a padded cell. */
   .expand-btn { color: var(--accent); margin-left: -4px; margin-right: 2px; }
+  /* Reserve the chevron's width on every payment-date cell so insats and
+     non-insats rows share one date baseline (the toggle only shows on insats
+     rows, but the gutter is always there). */
+  .payments-table .col-date { display: flex; align-items: center; }
+  .payments-table .pay-date-slot { flex: 0 0 20px; display: inline-flex; align-items: center; }
+  .payments-table .pay-date-slot .expand-btn { width: 20px; height: 20px; margin: 0; }
   .data-table tr.is-expanded.is-insats td { box-shadow: none; }
   .data-table tr.pay-detail td {
     background: var(--paper-warm); box-shadow: inset 2px 0 0 var(--accent);
