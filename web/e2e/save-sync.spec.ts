@@ -146,7 +146,9 @@ test('a failed save shows a toast, keeps the dialog + input, adds no phantom row
   await dialog.getByRole('button', { name: 'Save' }).click()
 
   // The user must SEE the failure…
-  await expect(page.locator('.bk-toast.show')).toContainText('Kunde inte spara')
+  await expect(page.locator('.bk-toast.show')).toHaveText(
+    'Ingen anslutning. Ändringen sparades inte i molnet.',
+  )
   // …the dialog must stay open with the typed data intact (nothing lost)…
   await expect(dialog).toBeVisible()
   await expect(dialog.getByLabel('Label')).toHaveValue('Spöklån')
