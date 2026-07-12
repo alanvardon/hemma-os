@@ -1290,20 +1290,27 @@ export default function Bolanekoll() {
                   const miscalibrated = r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
                   return (
                     <li key={r.loan_part_id} className="prognos-row">
-                      <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
-                      {r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
-                      <span className="prognos-date">{fmtRateDate(r.next_date)}</span>
-                      <span className="prognos-amt">~{fmtMoney(r.gross)}</span>
-                      <span className="prognos-chips">
-                        <span className="kind-tag kind-interest">Ränta {fmtMoney(r.interest)}</span>
-                        {r.amortization > 0 && <span className="kind-tag kind-amortization">Amortering {fmtMoney(r.amortization)}</span>}
-                      </span>
-                      <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
-                        {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
-                      </span>
-                      <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted([r])}>
-                        Logga förväntad avi
-                      </button>
+                      {/* One line per transaction the avi becomes: ränta first
+                          (carries the meta + log button), amortering under it. */}
+                      <div className="prognos-line">
+                        <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
+                        {r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
+                        <span className="prognos-date">{fmtRateDate(r.next_date)}</span>
+                        <span className="kind-tag kind-interest">Ränta</span>
+                        <span className="prognos-amt">~{fmtMoney(r.interest)}</span>
+                        <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
+                          {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
+                        </span>
+                        <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted([r])}>
+                          Logga förväntad avi
+                        </button>
+                      </div>
+                      {r.amortization > 0 && (
+                        <div className="prognos-line prognos-line-sub">
+                          <span className="kind-tag kind-amortization">Amortering</span>
+                          <span className="prognos-amt">~{fmtMoney(r.amortization)}</span>
+                        </div>
+                      )}
                       {miscalibrated && (
                         <span className="prognos-caution">
                           listad {fmtPct(r.rate! + r.calibration_gap!)} vs debiterad {fmtPct(r.rate!)} — day-count eller ologgad ränteändring

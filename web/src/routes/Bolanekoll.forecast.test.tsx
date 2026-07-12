@@ -131,11 +131,10 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     renderBolanekoll()
 
     const logBtn = await screen.findByRole('button', { name: 'Logga förväntad avi' })
-    // The row splits the amount into kind chips so ränta and amortering are
-    // distinguishable before logging.
-    const chips = document.querySelector('.prognos-chips')!
-    expect(chips.querySelector('.kind-interest')?.textContent).toMatch(/^Ränta /)
-    expect(chips.querySelector('.kind-amortization')?.textContent).toMatch(/^Amortering /)
+    // Ränta and amortering render as SEPARATE lines, each with its kind chip.
+    const row = document.querySelector('.prognos-row')!
+    expect(row.querySelector('.prognos-line .kind-interest')?.textContent).toBe('Ränta')
+    expect(row.querySelector('.prognos-line-sub .kind-amortization')?.textContent).toBe('Amortering')
     await user.click(logBtn)
 
     expect(Store.addPayments).toHaveBeenCalledTimes(1)

@@ -373,13 +373,15 @@
      confidence badge, the log button and the amber calibration diagnostic. */
   .prognos-block { margin-bottom: 1.1rem; padding-bottom: 0.35rem; border-bottom: 1px solid var(--rule); }
   .prognos-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
-  .prognos-chips { display: inline-flex; gap: 0.35rem; flex-wrap: wrap; }
   .prognos-list { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.35rem; }
   .prognos-row {
-    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
-    font-size: 13px; padding: 0.4rem 0.1rem; border-bottom: 1px solid var(--rule);
+    display: flex; flex-direction: column; gap: 0.3rem;
+    padding: 0.45rem 0.1rem; border-bottom: 1px solid var(--rule);
   }
   .prognos-row:last-child { border-bottom: none; }
+  .prognos-line { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; font-size: 13px; }
+  /* The amortering line indents to read as part of the avi above it. */
+  .prognos-line-sub { padding-left: 1.5rem; }
   .prognos-part { font-weight: 600; }
   .prognos-rate, .prognos-date { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
   .prognos-amt { font-weight: 600; font-variant-numeric: tabular-nums; }
