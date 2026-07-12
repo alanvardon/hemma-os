@@ -61,15 +61,15 @@ function fmtRateDate(iso: string): string {
   return d.toLocaleDateString('sv-SE', opts).replace(/\.( \d{4})?$/, '$1')
 }
 
-/** Month-only label for a not-yet-logged expected charge — the bank sets the
- * exact billing date, so a specific day would be false precision. "sep", or
- * "jan 2027" when the month isn't in the current year. Once the row is
- * logged, the ledger shows it with a concrete date. */
+/** Month-and-year label for a not-yet-logged expected charge — the bank sets
+ * the exact billing date, so a specific day would be false precision, but the
+ * month alone is ambiguous across years. "sep 2026". Once the row is logged,
+ * the ledger shows it with a concrete date. */
 function fmtChargeMonth(iso: string): string {
   const d = new Date(iso + 'T00:00:00')
-  const opts: Intl.DateTimeFormatOptions = { month: 'short' }
-  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric'
-  return d.toLocaleDateString('sv-SE', opts).replace(/\.( \d{4})?$/, '$1')
+  return d
+    .toLocaleDateString('sv-SE', { month: 'short', year: 'numeric' })
+    .replace(/\./g, '')
 }
 
 // The change banner is a nudge about NEWS — after this many days the new rate
@@ -1314,77 +1314,92 @@ export default function Bolanekoll() {
                   </span>
                 </div>
                 {shownPending.length > 1 && (
-                  <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted(shownPending)}>
+                  <button type="button" className="btn btn-ghost prognos-log-btn prognos-log-all" onClick={() => handleLogPredicted(shownPending)}>
                     Logga alla förväntade rader
                   </button>
                 )}
               </div>
-              {/* Flat list: every upcoming transaction is its own line item —
-                  a ränta row and an amortering row stand alone, each with its
-                  own log button and its own double-log guard. */}
-              <ul className="prognos-list">
-                {shownPending.map(e => {
-                  const r = e.charge
-                  const isInterest = e.kind === 'interest'
-                  const miscalibrated = isInterest && r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
-                  // Amorteringsgrad: annualized amortering as % of the loan's
-                  // ORIGINAL size — amorteringskravets bas. Dividing by the
-                  // current balance would drift the 1/2/3 % tiers upward as
-                  // the loan amortizes.
-                  const amortPct = r.original_balance > 0 ? (r.amortization / r.period_months) * 12 / r.original_balance * 100 : 0
-                  return (
-                    <li key={r.loan_part_id + ':' + e.kind} className="prognos-row">
-                      <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
-                      {isInterest && r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
-                      {!isInterest && amortPct > 0 && <span className="prognos-rate">{fmtPct(amortPct)}</span>}
-                      <span className="prognos-date">{fmtChargeMonth(r.next_date)}</span>
-                      <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
-                      <span className="prognos-amt">~{fmtMoney(e.amount)}</span>
-                      {isInterest && (
-                        <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
-                          {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
-                        </span>
-                      )}
-                      <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted([e])}>
-                        Logga förväntad rad
-                      </button>
-                      {miscalibrated && (
-                        <span className="prognos-caution">
-                          listad {fmtPct(r.rate! + r.calibration_gap!)} vs debiterad {fmtPct(r.rate!)} — day-count eller ologgad ränteändring
-                        </span>
-                      )}
-                    </li>
-                  )
-                })}
-              </ul>
-              {shownFuture.length > 0 && (
-                <>
-                  <button type="button" className="btn btn-ghost prognos-more-btn" onClick={() => setShowFuture(v => !v)}>
-                    {showFuture ? 'Dölj kommande månader' : `Visa kommande månader (${shownFuture.length})`}
-                  </button>
-                  {showFuture && (
-                    /* Read-only preview of the coming year's avier: rate held
-                       flat, balance stepping down by amorteringen each period.
-                       Nothing here is loggable — only the next month is due. */
-                    <ul className="prognos-list prognos-future">
-                      {shownFuture.map(e => {
-                        const r = e.charge
-                        const isInterest = e.kind === 'interest'
-                        const amortPct = r.original_balance > 0 ? (r.amortization / r.period_months) * 12 / r.original_balance * 100 : 0
-                        return (
-                          <li key={r.loan_part_id + ':' + e.kind + ':' + r.next_date} className="prognos-row is-future">
-                            <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
-                            {isInterest && r.rate != null && <span className="prognos-rate">{fmtPct(r.rate)}</span>}
-                            {!isInterest && amortPct > 0 && <span className="prognos-rate">{fmtPct(amortPct)}</span>}
-                            <span className="prognos-date">{fmtChargeMonth(r.next_date)}</span>
+              {/* Same table shell as Betalningar below: every upcoming
+                  transaction is its own row — a ränta row and an amortering
+                  row stand alone, each with its own log button and double-log
+                  guard. The coming-months preview appends read-only rows to
+                  the SAME tbody when expanded. */}
+              <div className="table-wrap">
+                <table className="data-table table-cards prognos-table">
+                  <thead><tr><th className="col-date">Månad</th><th>Lånedel</th><th>Typ</th><th className="num">Sats</th><th className="num">Belopp</th><th>Status</th><th className="col-act"></th></tr></thead>
+                  <tbody>
+                    {shownPending.map(e => {
+                      const r = e.charge
+                      const isInterest = e.kind === 'interest'
+                      const miscalibrated = isInterest && r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
+                      // Amorteringsgrad: annualized amortering as % of the loan's
+                      // ORIGINAL size — amorteringskravets bas. Dividing by the
+                      // current balance would drift the 1/2/3 % tiers upward as
+                      // the loan amortizes.
+                      const amortPct = r.original_balance > 0 ? (r.amortization / r.period_months) * 12 / r.original_balance * 100 : 0
+                      const pct = isInterest ? r.rate : (amortPct > 0 ? amortPct : null)
+                      return (
+                        <Fragment key={r.loan_part_id + ':' + e.kind}>
+                          <tr className="prognos-row">
+                            <td className="col-date">{fmtChargeMonth(r.next_date)}</td>
+                            <td className="col-part">{partNameById(r.loan_part_id)}</td>
+                            <td className="col-kind">
+                              <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
+                            </td>
+                            <td className="num col-rate">{pct != null ? fmtPct(pct) : '—'}</td>
+                            <td className="num col-amount">~{fmtMoney(e.amount)}</td>
+                            <td className="col-status">
+                              {isInterest && (
+                                <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
+                                  {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
+                                </span>
+                              )}
+                            </td>
+                            <td className="col-act">
+                              <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted([e])}>
+                                Logga förväntad rad
+                              </button>
+                            </td>
+                          </tr>
+                          {miscalibrated && (
+                            <tr className="prognos-detail">
+                              <td colSpan={7}>
+                                listad {fmtPct(r.rate! + r.calibration_gap!)} vs debiterad {fmtPct(r.rate!)} — day-count eller ologgad ränteändring
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      )
+                    })}
+                    {/* Read-only preview of the coming year's avier: rate held
+                        flat, balance stepping down by amorteringen each period.
+                        Nothing here is loggable — only the next month is due. */}
+                    {showFuture && shownFuture.map(e => {
+                      const r = e.charge
+                      const isInterest = e.kind === 'interest'
+                      const amortPct = r.original_balance > 0 ? (r.amortization / r.period_months) * 12 / r.original_balance * 100 : 0
+                      const pct = isInterest ? r.rate : (amortPct > 0 ? amortPct : null)
+                      return (
+                        <tr key={r.loan_part_id + ':' + e.kind + ':' + r.next_date} className="prognos-row is-future">
+                          <td className="col-date">{fmtChargeMonth(r.next_date)}</td>
+                          <td className="col-part">{partNameById(r.loan_part_id)}</td>
+                          <td className="col-kind">
                             <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
-                            <span className="prognos-amt">~{fmtMoney(e.amount)}</span>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  )}
-                </>
+                          </td>
+                          <td className="num col-rate">{pct != null ? fmtPct(pct) : '—'}</td>
+                          <td className="num col-amount">~{fmtMoney(e.amount)}</td>
+                          <td className="col-status" />
+                          <td className="col-act" />
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {shownFuture.length > 0 && (
+                <button type="button" className="btn btn-ghost prognos-more-btn" onClick={() => setShowFuture(v => !v)}>
+                  {showFuture ? 'Dölj kommande månader' : `Visa kommande månader (${shownFuture.length})`}
+                </button>
               )}
             </div>
           )}
@@ -1424,17 +1439,23 @@ export default function Bolanekoll() {
                       <Fragment key={p.id}>
                         <tr className={(p.is_insats ? 'is-insats' : '') + (isExp ? ' is-expanded' : '')}>
                           <td className="col-date">
-                            {p.is_insats && (
-                              <motion.button
-                                type="button"
-                                className="icon-btn expand-btn"
-                                title={isExp ? 'Hide allocation' : 'Show allocation'}
-                                aria-expanded={isExp}
-                                onClick={() => toggleExpandPay(p.id)}
-                                animate={{ rotate: isExp ? 90 : 0 }}
-                                transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
-                              ><Icon icon={ChevronRight} size={12} /></motion.button>
-                            )}
+                            {/* The chevron slot is reserved on EVERY row (empty
+                                on non-insats rows) so the date text always
+                                starts at the same x — insats rows no longer
+                                shunt their date to the right. */}
+                            <span className="pay-date-slot">
+                              {p.is_insats && (
+                                <motion.button
+                                  type="button"
+                                  className="icon-btn expand-btn"
+                                  title={isExp ? 'Hide allocation' : 'Show allocation'}
+                                  aria-expanded={isExp}
+                                  onClick={() => toggleExpandPay(p.id)}
+                                  animate={{ rotate: isExp ? 90 : 0 }}
+                                  transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+                                ><Icon icon={ChevronRight} size={12} /></motion.button>
+                              )}
+                            </span>
                             {p.date || '—'}
                           </td>
                           <td className="col-part">{partNameById(p.loan_part_id)}</td>
@@ -1566,16 +1587,29 @@ export default function Bolanekoll() {
                   <table className="data-table table-cards insats-table">
                     <thead><tr><th className="col-date">Date</th><th>Owner</th><th>Loan part</th><th className="num">Amount</th></tr></thead>
                     <tbody>
-                      {insatsPays.map(p => (
-                        <tr key={p.id}>
-                          <td className="col-date">{p.date || '—'}</td>
-                          <td className="col-owner">{p.paid_split
-                            ? <span className="insats-alloc">{nameOf('a')} {fmtMoney(p.paid_split.a)} · {nameOf('b')} {fmtMoney(p.paid_split.b)}</span>
-                            : (p.paid_by === 'joint' ? 'Gemensam · Joint' : nameOf(p.paid_by === 'b' ? 'b' : 'a'))}</td>
-                          <td className="col-part">{partNameById(p.loan_part_id)}</td>
-                          <td className="num col-amt">{fmtMoney(p.amount)}</td>
-                        </tr>
-                      ))}
+                      {/* A split payment becomes one row PER owner — each owner
+                          on its own line, their share in the Amount column. The
+                          amount never rides along in the owner name. */}
+                      {insatsPays.flatMap(p => {
+                        const rows = p.paid_split
+                          ? [
+                              { key: p.id + ':a', owner: nameOf('a'), amount: p.paid_split.a },
+                              { key: p.id + ':b', owner: nameOf('b'), amount: p.paid_split.b },
+                            ]
+                          : [{
+                              key: p.id,
+                              owner: p.paid_by === 'joint' ? 'Gemensam · Joint' : nameOf(p.paid_by === 'b' ? 'b' : 'a'),
+                              amount: p.amount,
+                            }]
+                        return rows.map(row => (
+                          <tr key={row.key}>
+                            <td className="col-date">{p.date || '—'}</td>
+                            <td className="col-owner">{row.owner}</td>
+                            <td className="col-part">{partNameById(p.loan_part_id)}</td>
+                            <td className="num col-amt">{fmtMoney(row.amount)}</td>
+                          </tr>
+                        ))
+                      })}
                     </tbody>
                   </table>
                 </div>

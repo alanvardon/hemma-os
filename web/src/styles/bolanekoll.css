@@ -262,13 +262,18 @@
   .data-table tr.is-insats td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
   .icon-btn.is-on { color: var(--accent); }
   .insats-extra { margin-top: 1rem; }
-  .insats-alloc { font-variant-numeric: tabular-nums; }
   .form-hint.is-warn { color: var(--warn); }
   /* Expandable insats rows — reveal the per-owner allocation.
      Revealed rows animate height inside each cell (CellReveal): the td keeps
      zero vertical padding and .cell-pad carries it, so the tween covers the
      full row height instead of snapping open around a padded cell. */
   .expand-btn { color: var(--accent); margin-left: -4px; margin-right: 2px; }
+  /* Reserve the chevron's width on every payment-date cell so insats and
+     non-insats rows share one date baseline (the toggle only shows on insats
+     rows, but the gutter is always there). */
+  .payments-table .col-date { display: flex; align-items: center; }
+  .payments-table .pay-date-slot { flex: 0 0 20px; display: inline-flex; align-items: center; }
+  .payments-table .pay-date-slot .expand-btn { width: 20px; height: 20px; margin: 0; }
   .data-table tr.is-expanded.is-insats td { box-shadow: none; }
   .data-table tr.pay-detail td {
     background: var(--paper-warm); box-shadow: inset 2px 0 0 var(--accent);
@@ -373,15 +378,13 @@
      confidence badge, the log button and the amber calibration diagnostic. */
   .prognos-block { margin-bottom: 1.1rem; padding-bottom: 0.35rem; border-bottom: 1px solid var(--rule); }
   .prognos-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
-  .prognos-list { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.35rem; }
-  .prognos-row {
-    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
-    font-size: 13px; padding: 0.4rem 0.1rem; border-bottom: 1px solid var(--rule);
-  }
-  .prognos-row:last-child { border-bottom: none; }
-  .prognos-part { font-weight: 600; }
-  .prognos-rate, .prognos-date { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-  .prognos-amt { font-weight: 600; font-variant-numeric: tabular-nums; }
+  /* Expected-charge rows share the Betalningar table shell; the rate/grad
+     (Sats) and the confidence badge each own their own column. */
+  .prognos-table .col-kind { white-space: nowrap; }
+  .prognos-table .col-rate { color: var(--ink-soft); }
+  /* "Logga alla" sits on the same row as the total chip, pushed to the card's
+     right edge and aligned to the chip's bottom. */
+  .prognos-log-all { margin-left: auto; align-self: flex-end; }
   .conf-badge {
     font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
     color: var(--ink-soft); background: var(--paper-warm);
@@ -389,15 +392,18 @@
   }
   .conf-badge.is-exact { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
   .conf-badge.is-unknown { color: var(--warn); background: var(--warn-faint); border-color: var(--warn-light); }
-  .prognos-log-btn { margin-left: auto; font-size: 12px; padding: 0.25rem 0.7rem; }
+  .prognos-log-btn { font-size: 12px; padding: 0.25rem 0.7rem; white-space: nowrap; }
   .prognos-log-btn:disabled { opacity: 0.5; cursor: default; }
-  .prognos-caution { flex-basis: 100%; font-size: 12px; color: var(--warn); }
-  .prognos-more-btn { font-size: 12px; padding: 0.25rem 0.7rem; margin-bottom: 0.5rem; }
+  /* Calibration diagnostic: a warn-tinted detail row under its charge, the
+     amber note bleeding the full table width. */
+  .prognos-table tr.prognos-detail td {
+    padding-top: 0; font-size: 12px; color: var(--warn); border-bottom: 1px solid var(--rule);
+  }
+  .prognos-more-btn { font-size: 12px; padding: 0.25rem 0.7rem; margin-top: 0.9rem; margin-bottom: 0.5rem; }
   /* Coming months are a read-only preview — dimmed so the loggable month owns
      the visual weight. */
-  .prognos-future { margin-top: 0.25rem; }
-  .prognos-row.is-future { opacity: 0.65; }
-  .prognos-row.is-future .prognos-amt { font-weight: 500; }
+  .prognos-table tr.is-future td { opacity: 0.65; }
+  .prognos-table tr.is-future .col-amount { font-weight: 500; }
   .prognos-forward { margin-bottom: 0; }
   .prognos-assumed { color: var(--ink-faint); }
   .whatif-note { margin-top: 0.55rem; margin-bottom: 0; font-size: 12px; }
@@ -673,6 +679,32 @@ dialog.bk-dialog {
   .bk-root .payments-table tr.pay-detail td { padding: 0 0.85rem; }
   /* label on its own line, the per-person chips together underneath */
   .bk-root .payments-table tr.pay-detail .pay-detail-label { flex-basis: 100%; }
+
+  /* Nästa avisering: same card shape as Betalningar — the amount owns the
+     right quadrant, the type chip + rate lead, the log button sits bottom-right */
+  .bk-root .prognos-table tr {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'date   date   amount'
+      'part   part   amount'
+      'status status amount'
+      'kind   rate   act';
+    row-gap: 0.3rem;
+  }
+  .bk-root .prognos-table .col-date { grid-area: date; }
+  .bk-root .prognos-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+  .bk-root .prognos-table .col-kind { grid-area: kind; }
+  .bk-root .prognos-table .col-rate { grid-area: rate; justify-self: start; align-self: center; text-align: left; font-size: 12.5px; }
+  .bk-root .prognos-table .col-status { grid-area: status; }
+  .bk-root .prognos-table .col-status:empty { display: none; }
+  .bk-root .prognos-table .col-amount {
+    grid-area: amount; align-self: center;
+    font-family: var(--font-display); font-weight: 400;
+    font-size: 1.45rem; letter-spacing: -0.01em; color: var(--ink);
+  }
+  .bk-root .prognos-table .col-act { grid-area: act; justify-self: end; align-self: center; }
+  /* the calibration note spans the whole card */
+  .bk-root .prognos-table tr.prognos-detail { display: block; padding: 0.1rem 0.8rem 0.7rem; }
 
   /* Lånedelar: the group row is a folder band (label line, sums line);
      member rows are indented cards under it */
