@@ -63,4 +63,17 @@ describe('AuthGate household provisioning', () => {
     expect(signOut).toHaveBeenCalledOnce()
     expect(screen.queryByText('Skyddad route')).not.toBeInTheDocument()
   })
+
+  it('explains how to resolve multiple active household invitations', async () => {
+    vi.mocked(claimHousehold).mockRejectedValue({
+      code: 'P0003', message: 'ambiguous household invitations',
+    })
+
+    render(<AuthGate><div>Skyddad route</div></AuthGate>)
+
+    expect(await screen.findByText(
+      'Flera hushåll har bjudit in dig. Be ett hushåll ta bort sin inbjudan innan du fortsätter.',
+    )).toBeInTheDocument()
+    expect(screen.queryByText('Skyddad route')).not.toBeInTheDocument()
+  })
 })

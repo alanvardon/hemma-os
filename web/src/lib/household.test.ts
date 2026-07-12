@@ -96,44 +96,64 @@ describe('createInvite / removeInvite', () => {
   })
 })
 
-describe('pendingInviteToJoin', () => {
-  it('true when an invite to my email is for a household I am NOT in', async () => {
+describe('pendingInviteStatus', () => {
+  it('single when exactly one other household invited me', async () => {
     mock().control.user = { id: 'me', email: 'Me@Example.com' }
     mock().tables.households = [{ id: 'hh-mine' }]
     mock().tables.household_invites = [{ household_id: 'hh-other', email: 'me@example.com' }]
-    expect(await store.pendingInviteToJoin()).toBe(true)
+    expect(await store.pendingInviteStatus()).toBe('single')
   })
 
   it('false when the only invite to my email is for the household I am already in', async () => {
     mock().control.user = { id: 'me', email: 'me@example.com' }
     mock().tables.households = [{ id: 'hh-mine' }]
     mock().tables.household_invites = [{ household_id: 'hh-mine', email: 'me@example.com' }]
-    expect(await store.pendingInviteToJoin()).toBe(false)
+    expect(await store.pendingInviteStatus()).toBe('none')
   })
 
   it('matches the invite email case-insensitively', async () => {
     mock().control.user = { id: 'me', email: 'me@example.com' }
     mock().tables.households = [{ id: 'hh-mine' }]
     mock().tables.household_invites = [{ household_id: 'hh-other', email: 'ME@Example.com' }]
-    expect(await store.pendingInviteToJoin()).toBe(true)
+    expect(await store.pendingInviteStatus()).toBe('single')
   })
 
   it('false when there is no invite to my email', async () => {
     mock().control.user = { id: 'me', email: 'me@example.com' }
     mock().tables.households = [{ id: 'hh-mine' }]
     mock().tables.household_invites = [{ household_id: 'hh-other', email: 'someone@else.com' }]
-    expect(await store.pendingInviteToJoin()).toBe(false)
+    expect(await store.pendingInviteStatus()).toBe('none')
   })
 
   it('false when signed out (no email)', async () => {
     mock().control.user = null
-    expect(await store.pendingInviteToJoin()).toBe(false)
+    expect(await store.pendingInviteStatus()).toBe('none')
   })
 
   it('fails closed to false on a cloud error', async () => {
     mock().control.user = { id: 'me', email: 'me@example.com' }
     mock().control.failing.add('household_invites')
-    expect(await store.pendingInviteToJoin()).toBe(false)
+    expect(await store.pendingInviteStatus()).toBe('none')
+  })
+
+  it('ambiguous when multiple households have active invites for me', async () => {
+    mock().control.user = { id: 'me', email: 'me@example.com' }
+    mock().tables.households = [{ id: 'hh-mine' }]
+    mock().tables.household_invites = [
+      { household_id: 'hh-other-a', email: 'me@example.com' },
+      { household_id: 'hh-other-b', email: 'me@example.com' },
+    ]
+    expect(await store.pendingInviteStatus()).toBe('ambiguous')
+  })
+
+  it('ambiguous when a stale same-household invite exists beside another invite', async () => {
+    mock().control.user = { id: 'me', email: 'me@example.com' }
+    mock().tables.households = [{ id: 'hh-mine' }]
+    mock().tables.household_invites = [
+      { household_id: 'hh-mine', email: 'me@example.com' },
+      { household_id: 'hh-other', email: 'me@example.com' },
+    ]
+    expect(await store.pendingInviteStatus()).toBe('ambiguous')
   })
 })
 

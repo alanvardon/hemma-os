@@ -1,126 +1,157 @@
--- test-household-lifecycle.sql — SQL-level proof for the plan 50 / 51 RPCs.
---
--- The web test suite mocks supabase-js, so it can't prove what matters here:
--- that the SECURITY DEFINER functions re-derive identity from auth.uid() /
--- the JWT and touch only the caller's rows. This script does, in the Supabase
--- SQL Editor. Paste the WHOLE file and run it — it seeds two users, exercises
--- every path, RAISEs on any wrong result, and ROLLS BACK at the end so it
--- leaves no trace. Success = it runs to "ALL PASS" with no exception.
---
--- Impersonation: we drive auth.uid()/auth.jwt() by setting request.jwt.claims
--- (the same GUC PostgREST sets per request), so the functions run exactly as
--- they would for a signed-in caller.
-
+-- Plan 95 functional/security proof (replaces the pre-concurrency Plan 50/51
+-- script). Run against local Supabase after reset, then run the companion
+-- test-household-lifecycle-concurrency.sql for genuine two-session coverage.
+-- All fixtures are fictional and the outer transaction rolls back everything.
 begin;
 
 do $$
 declare
-  uid_a uuid := gen_random_uuid();  -- Anna — invites Bo, later stays behind
-  uid_b uuid := gen_random_uuid();  -- Bo — signed in early, stranded, then joins
-  mail_a text := 'anna.test@example.com';
-  mail_b text := 'bo.test@example.com';
-  hh_a uuid;  -- Anna's (shared) household
-  hh_b uuid;  -- Bo's stranded solo household
-  got uuid;
-  cnt int;
+  u_data uuid := gen_random_uuid(); u_empty uuid := gen_random_uuid();
+  u_ambig uuid := gen_random_uuid(); u_claim uuid := gen_random_uuid();
+  u_same uuid := gen_random_uuid(); u_move uuid := gen_random_uuid();
+  u_stay uuid := gen_random_uuid(); u_hostile uuid := gen_random_uuid();
+  h_data uuid := gen_random_uuid(); h_empty uuid := gen_random_uuid();
+  h_ambig uuid := gen_random_uuid(); h_same uuid := gen_random_uuid();
+  h_shared uuid := gen_random_uuid(); h_hostile uuid := gen_random_uuid();
+  h_target_a uuid := gen_random_uuid(); h_target_b uuid := gen_random_uuid();
+  before_households integer; got uuid; cnt integer;
 begin
-  -- Minimal auth.users rows so the household_members.user_id FK is satisfied.
-  -- (aud/role are the only extra NOT NULLs on a standard GoTrue schema.)
-  insert into auth.users (id, email, aud, role)
-    values (uid_a, mail_a, 'authenticated', 'authenticated'),
-           (uid_b, mail_b, 'authenticated', 'authenticated');
+  -- Definer functions pin search_path and expose lifecycle entry points only to
+  -- authenticated. The private data predicate is not directly client-callable.
+  select count(*) into cnt
+  from pg_catalog.pg_proc p
+  join pg_catalog.pg_namespace n on n.oid=p.pronamespace
+  where (n.nspname,p.proname) in (
+    ('public','claim_household'),('public','accept_invite'),
+    ('public','leave_household'),('private','household_has_persisted_data')
+  ) and (not p.prosecdef or not coalesce(p.proconfig,'{}') @> array['search_path=""']);
+  if cnt<>0 then raise exception 'FAIL security: % lifecycle functions lack definer/empty search_path',cnt; end if;
+  if has_function_privilege('anon','public.claim_household()','execute')
+    or has_function_privilege('anon','public.accept_invite()','execute')
+    or has_function_privilege('anon','public.leave_household()','execute')
+    or has_function_privilege('authenticated','private.household_has_persisted_data(uuid)','execute')
+  then raise exception 'FAIL security: lifecycle grants are too broad'; end if;
+  if not has_function_privilege('authenticated','public.claim_household()','execute')
+    or not has_function_privilege('authenticated','public.accept_invite()','execute')
+    or not has_function_privilege('authenticated','public.leave_household()','execute')
+  then raise exception 'FAIL security: authenticated lifecycle grant missing'; end if;
 
-  -- Helper to impersonate a user for the subsequent RPC calls.
-  -- (inlined below via set_config since a nested function isn't worth it)
+  -- Every standard household-owned table must carry the FK that makes the
+  -- household FOR UPDATE lock authoritative against concurrent inserts.
+  select count(*) into cnt
+  from pg_catalog.pg_attribute a
+  join pg_catalog.pg_class c on c.oid = a.attrelid
+  join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'public' and c.relkind in ('r', 'p')
+    and a.attname = 'household_id' and a.attnum > 0 and not a.attisdropped
+    and not exists (
+      select 1 from pg_catalog.pg_constraint fk
+      where fk.contype = 'f' and fk.conrelid = c.oid
+        and a.attnum = any(fk.conkey)
+        and fk.confrelid = 'public.households'::regclass
+    );
+  if cnt <> 0 then raise exception 'FAIL invariant: % household-owned tables lack households FK', cnt; end if;
 
-  -- ── Setup: Anna owns a household; Bo signed in early and got his own ──
-  perform set_config('request.jwt.claims',
-    json_build_object('sub', uid_a, 'email', mail_a)::text, true);
-  select public.claim_household() into hh_a;
+  insert into auth.users(id,email,aud,role) values
+    (u_data,'data.plan95@example.com','authenticated','authenticated'),
+    (u_empty,'empty.plan95@example.com','authenticated','authenticated'),
+    (u_ambig,'ambig.plan95@example.com','authenticated','authenticated'),
+    (u_claim,'claim.plan95@example.com','authenticated','authenticated'),
+    (u_same,'same.plan95@example.com','authenticated','authenticated'),
+    (u_move,'move.plan95@example.com','authenticated','authenticated'),
+    (u_stay,'stay.plan95@example.com','authenticated','authenticated'),
+    (u_hostile,'hostile.plan95@example.com','authenticated','authenticated');
+  insert into public.households(id,name) values
+    (h_data,'Data origin'),(h_empty,'Empty origin'),(h_ambig,'Ambiguous origin'),
+    (h_same,'Same target'),(h_shared,'Shared origin'),(h_hostile,'Hostile origin'),
+    (h_target_a,'Target A'),(h_target_b,'Target B');
+  insert into public.household_members(household_id,user_id,role) values
+    (h_data,u_data,'owner'),(h_empty,u_empty,'owner'),(h_ambig,u_ambig,'owner'),
+    (h_same,u_same,'owner'),(h_shared,u_move,'owner'),(h_shared,u_stay,'member'),
+    (h_hostile,u_hostile,'owner');
+  insert into public.tool_state(household_id,tool,data) values
+    (h_data,'plan95','{}'),(h_shared,'plan95','{}');
+  insert into public.household_invites(household_id,email,created_at) values
+    (h_target_a,'data.plan95@example.com',now()),
+    (h_target_a,'empty.plan95@example.com',now()),
+    (h_target_b,'empty.plan95@example.com',now()-interval '31 days'),
+    (h_target_a,'ambig.plan95@example.com',now()),
+    (h_target_b,'ambig.plan95@example.com',now()),
+    (h_target_a,'claim.plan95@example.com',now()),
+    (h_target_b,'claim.plan95@example.com',now()),
+    (h_same,'same.plan95@example.com',now()),
+    (h_target_a,'move.plan95@example.com',now()),
+    (h_target_a,'someone.else@example.com',now());
 
-  perform set_config('request.jwt.claims',
-    json_build_object('sub', uid_b, 'email', mail_b)::text, true);
-  select public.claim_household() into hh_b;
+  perform set_config('request.jwt.claims','{}',true);
+  begin perform public.accept_invite(); raise exception 'FAIL unauthenticated accept succeeded';
+  exception when others then if sqlerrm not like '%not authenticated%' then raise; end if; end;
+  begin perform public.leave_household(); raise exception 'FAIL unauthenticated leave succeeded';
+  exception when others then if sqlerrm not like '%not authenticated%' then raise; end if; end;
 
-  if hh_a = hh_b then
-    raise exception 'FAIL setup: Anna and Bo should be in separate households';
-  end if;
+  -- Multiple active targets: accept rejects and changes nothing.
+  perform set_config('request.jwt.claims',json_build_object('sub',u_ambig,'email','ambig.plan95@example.com')::text,true);
+  begin perform public.accept_invite(); raise exception 'FAIL ambiguous accept succeeded';
+  exception when sqlstate 'P0003' then null; end;
+  select count(*) into cnt from public.household_invites where email='ambig.plan95@example.com';
+  if cnt<>2 then raise exception 'FAIL ambiguous accept consumed invites'; end if;
+  select household_id into got from public.household_members where user_id=u_ambig;
+  if got<>h_ambig then raise exception 'FAIL ambiguous accept moved membership'; end if;
 
-  -- ── Repro the stranding: Anna invites Bo's email ─────────────────────
-  perform set_config('request.jwt.claims',
-    json_build_object('sub', uid_a, 'email', mail_a)::text, true);
-  insert into public.household_invites (household_id, email) values (hh_a, mail_b);
+  -- First-sign-in claim follows the same ambiguity rule and creates nothing.
+  select count(*) into before_households from public.households;
+  perform set_config('request.jwt.claims',json_build_object('sub',u_claim,'email','claim.plan95@example.com')::text,true);
+  begin perform public.claim_household(); raise exception 'FAIL ambiguous claim succeeded';
+  exception when sqlstate 'P0003' then null; end;
+  select count(*) into cnt from public.household_members where user_id=u_claim;
+  if cnt<>0 then raise exception 'FAIL ambiguous claim created membership'; end if;
+  select count(*) into cnt from public.households;
+  if cnt<>before_households then raise exception 'FAIL ambiguous claim created household'; end if;
+  select count(*) into cnt from public.household_invites where email='claim.plan95@example.com';
+  if cnt<>2 then raise exception 'FAIL ambiguous claim consumed invites'; end if;
 
-  -- claim_household is a no-op for Bo now (he already has a membership), which
-  -- is exactly the bug plan 50 repairs — the invite would sit pending forever.
-  perform set_config('request.jwt.claims',
-    json_build_object('sub', uid_b, 'email', mail_b)::text, true);
-  select public.claim_household() into got;
-  if got <> hh_b then
-    raise exception 'FAIL: claim_household should NOT move an already-provisioned user (got %, want %)', got, hh_b;
-  end if;
+  -- A sole member with persisted data cannot move; all state and invite remain.
+  perform set_config('request.jwt.claims',json_build_object('sub',u_data,'email','data.plan95@example.com')::text,true);
+  begin perform public.accept_invite(); raise exception 'FAIL data-bearing solo move succeeded';
+  exception when sqlstate 'P0004' then null; end;
+  select household_id into got from public.household_members where user_id=u_data;
+  if got<>h_data then raise exception 'FAIL blocked move changed membership'; end if;
+  if not exists(select 1 from public.tool_state where household_id=h_data) then raise exception 'FAIL blocked move changed data'; end if;
+  if not exists(select 1 from public.household_invites where household_id=h_target_a and email='data.plan95@example.com') then raise exception 'FAIL blocked move consumed invite'; end if;
 
-  -- ── accept_invite: Bo clicks Accept ──────────────────────────────────
+  -- A data-free solo household is removed; only the exact active invite is consumed.
+  perform set_config('request.jwt.claims',json_build_object('sub',u_empty,'email','empty.plan95@example.com')::text,true);
   select public.accept_invite() into got;
-  if got <> hh_a then
-    raise exception 'FAIL accept_invite: Bo should now be in Anna''s household (got %, want %)', got, hh_a;
-  end if;
+  if got<>h_target_a then raise exception 'FAIL data-free move target'; end if;
+  if exists(select 1 from public.households where id=h_empty) then raise exception 'FAIL empty old household remains'; end if;
+  if not exists(select 1 from public.household_invites where household_id=h_target_b and email='empty.plan95@example.com') then raise exception 'FAIL expired unrelated invite consumed'; end if;
 
-  -- Exactly one membership for Bo, in Anna's household.
-  select count(*) into cnt from public.household_members where user_id = uid_b;
-  if cnt <> 1 then
-    raise exception 'FAIL accept_invite: Bo should have exactly 1 membership, has %', cnt;
-  end if;
-  select household_id into got from public.household_members where user_id = uid_b;
-  if got <> hh_a then
-    raise exception 'FAIL accept_invite: Bo''s membership is in the wrong household';
-  end if;
+  -- Same-household acceptance consumes only the stale invite and preserves role.
+  perform set_config('request.jwt.claims',json_build_object('sub',u_same,'email','same.plan95@example.com')::text,true);
+  select public.accept_invite() into got;
+  if got<>h_same then raise exception 'FAIL same-household target'; end if;
+  if not exists(select 1 from public.household_members where user_id=u_same and household_id=h_same and role='owner') then raise exception 'FAIL same-household membership changed'; end if;
 
-  -- Invite consumed.
-  select count(*) into cnt from public.household_invites where lower(email) = lower(mail_b);
-  if cnt <> 0 then
-    raise exception 'FAIL accept_invite: invite should be consumed, % remain', cnt;
-  end if;
+  -- A member may move out of a data-bearing household when another member stays.
+  perform set_config('request.jwt.claims',json_build_object('sub',u_move,'email','move.plan95@example.com')::text,true);
+  select public.accept_invite() into got;
+  if got<>h_target_a then raise exception 'FAIL shared-household move target'; end if;
+  if not exists(select 1 from public.household_members where user_id=u_stay and household_id=h_shared) then raise exception 'FAIL shared household stranded'; end if;
+  if not exists(select 1 from public.tool_state where household_id=h_shared) then raise exception 'FAIL shared data changed'; end if;
 
-  -- Old household abandoned in place, not purged.
-  perform 1 from public.households where id = hh_b;
-  if not found then
-    raise exception 'FAIL accept_invite: Bo''s old household should remain (abandon-in-place), it was deleted';
-  end if;
+  -- Hostile caller has no target parameter and cannot act on another email's invite.
+  perform set_config('request.jwt.claims',json_build_object('sub',u_hostile,'email','hostile.plan95@example.com')::text,true);
+  begin perform public.accept_invite(); raise exception 'FAIL hostile accept succeeded';
+  exception when others then if sqlerrm not like '%no invite%' then raise; end if; end;
+  if not exists(select 1 from public.household_invites where email='someone.else@example.com') then raise exception 'FAIL hostile caller consumed invite'; end if;
 
-  -- ── leave_household: Bo (non-last member) leaves Anna's household ─────
-  -- Anna + Bo are both in hh_a now, so Bo may leave.
-  perform set_config('request.jwt.claims',
-    json_build_object('sub', uid_b, 'email', mail_b)::text, true);
-  perform public.leave_household();
-  select count(*) into cnt from public.household_members where user_id = uid_b;
-  if cnt <> 0 then
-    raise exception 'FAIL leave_household: Bo should have no membership after leaving, has %', cnt;
-  end if;
-
-  -- ── leave_household: last member is refused ──────────────────────────
-  -- Anna is now alone in hh_a; leaving would strand the data → must raise.
-  perform set_config('request.jwt.claims',
-    json_build_object('sub', uid_a, 'email', mail_a)::text, true);
+  -- Expired-only and no-invite paths are both refused.
   begin
-    perform public.leave_household();
-    raise exception 'FAIL leave_household: last member should NOT be able to leave';
-  exception
-    when others then
-      if sqlerrm not like '%last member%' then raise; end if;  -- expected refusal
-  end;
+    perform set_config('request.jwt.claims',json_build_object('sub',u_empty,'email','empty.plan95@example.com')::text,true);
+    perform public.accept_invite(); raise exception 'FAIL expired-only invite accepted';
+  exception when others then if sqlerrm not like '%no invite%' then raise; end if; end;
 
-  -- ── accept_invite with no pending invite is refused ──────────────────
-  begin
-    perform public.accept_invite();
-    raise exception 'FAIL accept_invite: should raise when no invite is pending';
-  exception
-    when others then
-      if sqlerrm not like '%no invite%' then raise; end if;  -- expected refusal
-  end;
-
-  raise notice 'ALL PASS — accept_invite / leave_household / claim_household behave as specified';
-end;
-$$;
+  raise notice 'ALL PASS — Plan 95 lifecycle policy and isolation';
+end; $$;
 
 rollback;
