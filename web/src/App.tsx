@@ -6,6 +6,7 @@ import ScenariosDashboard from './routes/ScenariosDashboard'
 import Bostadskalkyl from './routes/Bostadskalkyl'
 import Konsultkalkyl from './routes/Konsultkalkyl'
 import Lonevaxling from './routes/Lonevaxling'
+import StudentLoan from './routes/StudentLoan'
 import Bolanekoll from './routes/Bolanekoll'
 import Manadsavslut from './routes/Manadsavslut'
 import Hushallsbudget from './routes/Hushallsbudget'
@@ -48,6 +49,7 @@ const router = createHashRouter([
       { path: '/bostadskalkyl/:id', element: <Bostadskalkyl /> },
       { path: '/konsultkalkyl', element: <Konsultkalkyl /> },
       { path: '/lonevaxling', element: <Lonevaxling /> },
+      { path: '/student-loan', element: <StudentLoan /> },
       { path: '/bolanekoll', element: <Bolanekoll /> },
       { path: '/manadsavslut', element: <Manadsavslut /> },
       { path: '/hushallsbudget', element: <Hushallsbudget /> },

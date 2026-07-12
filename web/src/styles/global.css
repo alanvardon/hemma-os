@@ -122,10 +122,11 @@ html.calc-layout #root {
   min-height: 0;
 }
 
-/* Restore the flex/height chain for transition-wrapper divs in Konsultkalkyl
-   and Löneväxling — these wrappers carry .vt-page and must propagate the
-   flex-column-fill that a bare <> fragment gives Bostadskalkyl for free. */
-.kk-root, .lv-root {
+/* Restore the flex/height chain for transition-wrapper divs in Konsultkalkyl,
+   Löneväxling and Student Loan — these wrappers carry .vt-page and must
+   propagate the flex-column-fill that a bare <> fragment gives Bostadskalkyl
+   for free. */
+.kk-root, .lv-root, .sl-root {
   display: flex;
   flex-direction: column;
   flex: 1;

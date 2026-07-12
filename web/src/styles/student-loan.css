@@ -1,0 +1,61 @@
+/* student-loan.css — Student Loan tracker route styles (plan 17).
+   Tokens, reset, shared components (.page-header, .btn, .section, .field,
+   .konsult-layout, .hero-card, .verdict, .ledger, .lr, .mini-readout,
+   .stress-slider-*, .toggle, .chart-card / .chart-overlay-*) are in
+   tokens.css / global.css / components.css / konsultkalkyl.css / charts.css.
+   Only classes unique to this route live here. English UI copy is
+   intentional — the one Swedish-copy exception (this is a UK-specific tool). */
+
+/* ── Threshold toggle row ────────────────────────────────────── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--rule);
+}
+.toggle-row-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--ink-mid);
+  line-height: 1.4;
+}
+.toggle-row-sub {
+  display: block;
+  font-weight: 400;
+  color: var(--ink-faint);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+/* ── PV-vs-nominal insight line ──────────────────────────────── */
+.sl-insight {
+  margin-top: 1.1rem;
+  padding-top: 1rem;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+.sl-insight strong { color: var(--ink); font-weight: 600; }
+
+/* ── SLC sanity-check line ───────────────────────────────────── */
+.sl-sanity {
+  margin-top: 0.7rem;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+/* ── Entrance animation — extra chart card between hero and ledger ── */
+@media (prefers-reduced-motion: no-preference) {
+  .ledger-col > *:nth-child(3) { animation-delay: 0.14s; }
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .toggle-row { align-items: flex-start; }
+}
