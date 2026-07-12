@@ -726,6 +726,7 @@ export interface ExpectedCharge {
   period_months: number       // charge cadence: 1 (monthly) or 3 (kvartalsvis)
   charge_day: number          // the UNCLAMPED billing day — day 31 stays 31 even when next_date clamped to the 30th
   balance: number             // partBalanceAsOf(part, payments, last interest date)
+  original_balance: number    // the loan's ORIGINAL size — amorteringskravets 1/2/3 % is a share of this, not of the current balance
   rate: number | null         // the rate the prediction actually uses (%)
   rate_source: 'derived' | 'listed' | null
   rate_type: 'rörlig' | 'bunden' | null
@@ -826,6 +827,7 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
     : r2(monthlyAmortizationRate([part], real) * period_months)
   return {
     loan_part_id: part.id, next_date, days, period_months, charge_day: chargeDay, balance,
+    original_balance: partOriginal(part, real),
     rate, rate_source, rate_type, interest, amortization, gross: r2(interest + amortization),
     confidence, calibration_gap: derived != null && listed != null ? r2(listed - derived) : null,
   }

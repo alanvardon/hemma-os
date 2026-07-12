@@ -165,6 +165,9 @@ describe('expectedCharge', () => {
     ]
     const c = expectedCharge(part({ start_date: '2026-03-01', start_balance: 1_000_000 }), [period()], pays)!
     expect(c.balance).toBe(991_000)
+    // Amorteringskravets bas: the ORIGINAL loan size, so the 1/2/3 % tiers
+    // stay pinned as the balance shrinks (3 000 × 12 / 1 000 000 = 3,6 %).
+    expect(c.original_balance).toBe(1_000_000)
     expect(c.amortization).toBe(3000)
     expect(c.gross).toBe(Math.round((c.interest + 3000) * 100) / 100)
   })

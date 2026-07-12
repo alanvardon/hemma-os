@@ -1294,9 +1294,11 @@ export default function Bolanekoll() {
                   const r = e.charge
                   const isInterest = e.kind === 'interest'
                   const miscalibrated = isInterest && r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
-                  // Amorteringstakt: the annualized amortering as % of the
-                  // balance — same convention as amorteringskravet's 1–2 %.
-                  const amortPct = r.balance > 0 ? (r.amortization / r.period_months) * 12 / r.balance * 100 : 0
+                  // Amorteringsgrad: annualized amortering as % of the loan's
+                  // ORIGINAL size — amorteringskravets bas. Dividing by the
+                  // current balance would drift the 1/2/3 % tiers upward as
+                  // the loan amortizes.
+                  const amortPct = r.original_balance > 0 ? (r.amortization / r.period_months) * 12 / r.original_balance * 100 : 0
                   return (
                     <li key={r.loan_part_id + ':' + e.kind} className="prognos-row">
                       <span className="prognos-part">{partNameById(r.loan_part_id)}</span>
