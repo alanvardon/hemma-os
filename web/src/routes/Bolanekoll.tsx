@@ -1314,7 +1314,7 @@ export default function Bolanekoll() {
                   </span>
                 </div>
                 {shownPending.length > 1 && (
-                  <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted(shownPending)}>
+                  <button type="button" className="btn btn-ghost prognos-log-btn prognos-log-all" onClick={() => handleLogPredicted(shownPending)}>
                     Logga alla förväntade rader
                   </button>
                 )}
@@ -1326,7 +1326,7 @@ export default function Bolanekoll() {
                   the SAME tbody when expanded. */}
               <div className="table-wrap">
                 <table className="data-table table-cards prognos-table">
-                  <thead><tr><th className="col-date">Månad</th><th>Lånedel</th><th>Typ</th><th className="num">Belopp</th><th>Status</th><th className="col-act"></th></tr></thead>
+                  <thead><tr><th className="col-date">Månad</th><th>Lånedel</th><th>Typ</th><th className="num">Sats</th><th className="num">Belopp</th><th>Status</th><th className="col-act"></th></tr></thead>
                   <tbody>
                     {shownPending.map(e => {
                       const r = e.charge
@@ -1345,8 +1345,8 @@ export default function Bolanekoll() {
                             <td className="col-part">{partNameById(r.loan_part_id)}</td>
                             <td className="col-kind">
                               <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
-                              {pct != null && <span className="prognos-rate">{fmtPct(pct)}</span>}
                             </td>
+                            <td className="num col-rate">{pct != null ? fmtPct(pct) : '—'}</td>
                             <td className="num col-amount">~{fmtMoney(e.amount)}</td>
                             <td className="col-status">
                               {isInterest && (
@@ -1363,7 +1363,7 @@ export default function Bolanekoll() {
                           </tr>
                           {miscalibrated && (
                             <tr className="prognos-detail">
-                              <td colSpan={6}>
+                              <td colSpan={7}>
                                 listad {fmtPct(r.rate! + r.calibration_gap!)} vs debiterad {fmtPct(r.rate!)} — day-count eller ologgad ränteändring
                               </td>
                             </tr>
@@ -1385,8 +1385,8 @@ export default function Bolanekoll() {
                           <td className="col-part">{partNameById(r.loan_part_id)}</td>
                           <td className="col-kind">
                             <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
-                            {pct != null && <span className="prognos-rate">{fmtPct(pct)}</span>}
                           </td>
+                          <td className="num col-rate">{pct != null ? fmtPct(pct) : '—'}</td>
                           <td className="num col-amount">~{fmtMoney(e.amount)}</td>
                           <td className="col-status" />
                           <td className="col-act" />

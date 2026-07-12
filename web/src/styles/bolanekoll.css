@@ -372,12 +372,14 @@
   /* Expected next charge (plan 23): total chip + per-part rows with the
      confidence badge, the log button and the amber calibration diagnostic. */
   .prognos-block { margin-bottom: 1.1rem; padding-bottom: 0.35rem; border-bottom: 1px solid var(--rule); }
-  .prognos-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+  .prognos-head { display: flex; flex-direction: column; align-items: flex-start; gap: 0.6rem; margin-bottom: 0.75rem; }
   /* Expected-charge rows share the Betalningar table shell; the rate/grad
-     sits beside the type chip and the confidence badge owns the Status col. */
+     (Sats) and the confidence badge each own their own column. */
   .prognos-table .col-kind { white-space: nowrap; }
-  .prognos-table .col-kind .prognos-rate { margin-left: 0.4rem; }
-  .prognos-rate { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .prognos-table .col-rate { color: var(--ink-soft); }
+  /* "Logga alla" sits on its own line under the total chip, hugging its text
+     and left-aligned rather than trailing (or stretching across) the row. */
+  .prognos-log-all { align-self: flex-start; }
   .conf-badge {
     font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
     color: var(--ink-soft); background: var(--paper-warm);
@@ -392,7 +394,7 @@
   .prognos-table tr.prognos-detail td {
     padding-top: 0; font-size: 12px; color: var(--warn); border-bottom: 1px solid var(--rule);
   }
-  .prognos-more-btn { font-size: 12px; padding: 0.25rem 0.7rem; margin-bottom: 0.5rem; }
+  .prognos-more-btn { font-size: 12px; padding: 0.25rem 0.7rem; margin-top: 0.9rem; margin-bottom: 0.5rem; }
   /* Coming months are a read-only preview — dimmed so the loggable month owns
      the visual weight. */
   .prognos-table tr.is-future td { opacity: 0.65; }
@@ -681,12 +683,13 @@ dialog.bk-dialog {
       'date   date   amount'
       'part   part   amount'
       'status status amount'
-      'kind   kind   act';
+      'kind   rate   act';
     row-gap: 0.3rem;
   }
   .bk-root .prognos-table .col-date { grid-area: date; }
   .bk-root .prognos-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
   .bk-root .prognos-table .col-kind { grid-area: kind; }
+  .bk-root .prognos-table .col-rate { grid-area: rate; justify-self: start; align-self: center; text-align: left; font-size: 12.5px; }
   .bk-root .prognos-table .col-status { grid-area: status; }
   .bk-root .prognos-table .col-status:empty { display: none; }
   .bk-root .prognos-table .col-amount {
