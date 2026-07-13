@@ -310,6 +310,27 @@ describe('pendingChargeSeries (coming-months preview)', () => {
     expect(s[11].balance).toBe(958_000)
   })
 
+  it('a bunden rate ending mid-horizon caps the preview at the villkorsändringsdag', () => {
+    // Rate is bound until 31 Aug 2026 with no successor period: the Jul and
+    // Aug avier are known, everything after would just repeat the old rate —
+    // noise, not information. The preview must stop, not run 12 months.
+    const bunden = period({ rate_type: 'bunden', end_date: '2026-08-31' })
+    const s = pendingChargeSeries(part(), [bunden], CLEAN)
+    expect(s.map(c => c.next_date)).toEqual(['2026-07-27', '2026-08-27'])
+    expect(s.every(c => c.confidence === 'exact')).toBe(true)
+  })
+
+  it('a bunden rate followed by an open rörlig period keeps the full horizon', () => {
+    // Knowledge does NOT end at the binding when a later period covers the
+    // dates after it — the preview continues (rate held flat, ≈ est.).
+    const periods = [
+      period({ rate_type: 'bunden', end_date: '2026-08-31' }),
+      period({ id: 'r2', start_date: '2026-09-01', rate: 4.1, rate_type: 'rörlig' }),
+    ]
+    const s = pendingChargeSeries(part(), periods, CLEAN)
+    expect(s).toHaveLength(12)
+  })
+
   it('kvartalsvis cadence yields 4 avier over a 12-month horizon', () => {
     const quarterly = [
       interestRow('2025-12-27', 9100), interestRow('2026-03-27', 9000), interestRow('2026-06-27', 9200),

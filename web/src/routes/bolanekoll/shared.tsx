@@ -24,7 +24,10 @@ export function CellReveal({ reduce, children }: { reduce: boolean | null; child
 
 // ── Formatters (faithful to mortgagetracker.js) ──────────────────────────────
 
-const KIND_LABELS: Record<string, string> = { interest: 'Ränta', amortization: 'Amortering', payment: 'Betalning', loan: 'Lån', fee: 'Avgift', other: 'Övrigt' }
+// 'Betalning' is the bank's own word for the fixed amortering line on the avi;
+// kind 'payment' (in-/utbetalningar, transfers) is labelled 'Inbetalning' so
+// the two can't be confused in the ledger.
+const KIND_LABELS: Record<string, string> = { interest: 'Ränta', amortization: 'Betalning', payment: 'Inbetalning', loan: 'Lån', fee: 'Avgift', other: 'Övrigt' }
 export function kindLabel(k: string): string { return KIND_LABELS[k] || k || '—' }
 // Payments ledger paginates: show the most recent PAY_PAGE, reveal more on click.
 export const PAY_PAGE = 20

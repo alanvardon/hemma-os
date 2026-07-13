@@ -14,6 +14,14 @@ import { defaultSettings } from '../lib/mortgage'
 import type { LoanPart, Payment, RatePeriod } from '../lib/mortgage'
 
 vi.mock('../lib/mortgage-store')
+// The Riksbank strip fetches via the local Supabase Edge Function — with the
+// local stack running, live data reaches the test and renders a visx chart
+// jsdom can't host (no ResizeObserver). Reject the fetch so the strip stays
+// quietly absent and the test is deterministic with or without local services.
+vi.mock('../lib/riksbank', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../lib/riksbank')>(),
+  fetchPolicyRate: vi.fn().mockRejectedValue(new Error('no network in tests')),
+}))
 // NumberFlow's getSnapshotBeforeUpdate needs browser layout APIs jsdom lacks —
 // with a seeded ledger the dashboard renders Money/Percent everywhere, so swap
 // them for plain spans (these tests assert flows, not number animation).
