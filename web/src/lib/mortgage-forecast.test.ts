@@ -141,6 +141,28 @@ describe('expectedCharge', () => {
     expect(expectedCharge(part(), [expired], CLEAN)!.confidence).toBe('assumed')
   })
 
+  it('a bunden part predicts on its contractual rate, not the lagging derived estimate', () => {
+    // Locked at a bunden 3.93 %, but the billed history derives to only 3.50 %
+    // (an old rate, or a low-billed month still inside the averaging window —
+    // the ~2 % cold undershoot seen on the household's parts). For the binding
+    // period the contractual rate is ground truth, so the forecast must use
+    // 3.93 %, not the derived estimate.
+    const lowBilled = [
+      interestRow('2026-03-27', 2972.60, { id: 'lb0' }),   // 3.50 % history (seed)
+      interestRow('2026-04-27', 2972.60, { id: 'lb1' }),   // 31 d: 1M × 3.50 % × 31/365
+      interestRow('2026-05-27', 2876.71, { id: 'lb2' }),   // 30 d: 1M × 3.50 % × 30/365
+      interestRow('2026-06-27', 2972.60, { id: 'lb3' }),   // 31 d
+    ]
+    const bunden = period({ rate: 3.93, rate_type: 'bunden', end_date: '2027-12-31' })
+    const c = expectedCharge(part(), [bunden], lowBilled)!
+    expect(c.charge_basis).toBe('days')
+    expect(c.rate).toBe(3.93)                             // the contractual rate…
+    expect(c.rate_source).toBe('listed')                 // …not the derived 3.50 %
+    expect(c.confidence).toBe('exact')
+    // 1 000 000 × 3.93 % × 30/365 = 3 230.14 — not the derived 2 876.71
+    expect(c.interest).toBe(3230.14)
+  })
+
   it('returns null only when there is neither an interest row nor a rate period', () => {
     expect(expectedCharge(part(), [], [])).toBeNull()
     // Rate period but no history: cold start off today, listed rate, unknown.

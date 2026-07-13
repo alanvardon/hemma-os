@@ -869,17 +869,25 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   }
   const balance = partBalanceAsOf(part, real, lastDate)
 
-  // Predict with the trailing derived rate (encodes what the bank actually
-  // bills, incl. its day-count convention); listed rate only as the thin-history
-  // fallback — predicting listed on a 360-day-basis bank would flag drift every
-  // single month. The gap between the two stays as a diagnostic.
+  const bs = bindingStatus(part, periods, next_date)
+
+  // Rate selection. A part locked into a bunden rate: the contractual (listed)
+  // rate IS ground truth for the binding period, so use it directly. The
+  // auto-derived rate only estimates it and lags a step behind any recent
+  // change or a low-billed month still inside the averaging window (a uniform
+  // ~2 % undershoot on the household's parts). Otherwise predict with the
+  // trailing derived rate — it encodes what the bank actually bills, incl. its
+  // day-count convention (predicting listed on a 360-day-basis rörlig part would
+  // flag drift every single month); listed is the thin-history fallback. The
+  // gap between the two stays as a diagnostic.
   const derived = derivedRate(part, real)
   const listed = effectiveRate(part, periods, next_date)
-  const rate = derived ?? listed ?? null
-  const rate_source: ExpectedCharge['rate_source'] = derived != null ? 'derived' : listed != null ? 'listed' : null
+  const lockedBunden = bs.bound && !bs.expired && listed != null
+  const rate = lockedBunden ? listed : (derived ?? listed ?? null)
+  const rate_source: ExpectedCharge['rate_source'] =
+    lockedBunden ? 'listed' : derived != null ? 'derived' : listed != null ? 'listed' : null
   const rate_type = effectiveRatePeriod(part, periods, next_date)?.rate_type ?? null
 
-  const bs = bindingStatus(part, periods, next_date)
   const confidence: ExpectedCharge['confidence'] =
     bs.bound && !bs.expired ? 'exact' : rate_source === 'derived' ? 'assumed' : 'unknown'
 
