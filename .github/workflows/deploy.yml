@@ -55,6 +55,8 @@ jobs:
           # repo Settings → Secrets and variables → Actions.
           VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          # Build stamp (plan 100): footer version + the in-app update notice.
+          VITE_BUILD_SHA: ${{ github.sha }}
         run: npm --prefix web run build
 
       - name: Assemble the Hemma·OS site

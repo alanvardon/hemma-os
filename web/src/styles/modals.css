@@ -172,6 +172,41 @@
   transform: translate(-50%, 0);
 }
 
+/* ── Update notice (plan 100) — "Ny version finns · Ladda om" ─────────── */
+.update-notice {
+  position: fixed;
+  z-index: 1200;
+  left: 50%;
+  bottom: calc(1.25rem + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  /* left: 50% halves the shrink-to-fit space — size to content instead. */
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  padding: 8px 10px 8px 16px;
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.update-notice-close {
+  border: 0;
+  background: none;
+  color: var(--ink-soft);
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.update-notice-close:hover { background: color-mix(in srgb, var(--ink) 8%, transparent) }
+
 @media (max-width: 900px) {
   .undo-toast { bottom: calc(4.5rem + env(safe-area-inset-bottom)); }
 }

@@ -32,6 +32,7 @@ import {
   type BudgetStat,
   type HouseStat,
 } from '../lib/hub-stats'
+import { BUILD_SHA } from '../lib/version'
 
 /** "17 jun" — short sv-SE date for the styrränta stat line (plan 70). Strips
  * the trailing period sv-SE puts on most abbreviated months ("19 aug."). */
@@ -617,7 +618,7 @@ export default function Home() {
       <footer className="site-footer">
         <span className="footer-badge"><span className="pulse" />Local-first · Synced via Supabase</span>
         <span className="footer-soon">Kommer snart: Kalender · Matplan</span>
-        <span>Hemma·OS · built by the Vardon family</span>
+        <span>Hemma·OS · built by the Vardon family{BUILD_SHA && <span className="footer-build" title="Deployad commit"> · v. {BUILD_SHA.slice(0, 7)}</span>}</span>
       </footer>
     </div>
     </>
