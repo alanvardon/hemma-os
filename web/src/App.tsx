@@ -12,6 +12,7 @@ import Manadsavslut from './routes/Manadsavslut'
 import Hushallsbudget from './routes/Hushallsbudget'
 import Huskalendern from './routes/Huskalendern'
 import PersistenceNotice from './components/PersistenceNotice'
+import UpdateNotice from './components/UpdateNotice'
 
 function Layout() {
   return (
@@ -79,6 +80,9 @@ export default function App() {
         <RouterProvider router={router} />
         <PersistenceNotice />
       </AuthGate>
+      {/* Outside AuthGate: a stale bundle should offer a reload even from the
+          login screen (plan 100). */}
+      <UpdateNotice />
     </ThemeContext.Provider>
   )
 }

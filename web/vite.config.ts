@@ -68,12 +68,32 @@ function cspMeta(isDev: boolean, supabaseOrigin: string): Plugin {
   }
 }
 
+// Emits bk-assets/version.json next to the hashed bundles so the running app
+// can ask "which build is deployed right now?" (plan 100). Only when the build
+// carries a SHA — local builds stay stampless and the in-app checker disabled.
+function emitVersion(sha: string): Plugin {
+  return {
+    name: 'hemma-emit-version',
+    apply: 'build',
+    generateBundle() {
+      if (!sha) return
+      this.emitFile({
+        type: 'asset',
+        fileName: 'bk-assets/version.json',
+        source: JSON.stringify({ sha, builtAt: new Date().toISOString() }),
+      })
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig(({ mode, command }) => {
   const isDev = command === 'serve'
   // loadEnv merges .env files + matching process.env (CI passes
   // VITE_SUPABASE_URL as a real env var), so this resolves in both.
   const env = loadEnv(mode, process.cwd(), '')
+  // The deploy workflow passes the commit SHA; anywhere else this is ''.
+  const buildSha = env.VITE_BUILD_SHA || ''
   const supabaseOrigin = (() => {
     try {
       return new URL(env.VITE_SUPABASE_URL || 'http://localhost:54321').origin
@@ -83,7 +103,7 @@ export default defineConfig(({ mode, command }) => {
   })()
 
   return {
-    plugins: [react(), cspMeta(isDev, supabaseOrigin)],
+    plugins: [react(), cspMeta(isDev, supabaseOrigin), emitVersion(buildSha)],
     // Served as bostadskalkyl.html alongside the hub + the other 5 calculators in
     // the Hemma site. Relative base ('./') makes every asset URL relative to the
     // html file, so the build works whether the site is published at the domain

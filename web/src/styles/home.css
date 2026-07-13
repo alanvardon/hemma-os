@@ -707,6 +707,12 @@ a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
   gap: 7px;
 }
 
+/* Deployed-commit stamp (plan 100) — which build am I running? */
+.footer-build {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
 .footer-badge .pulse {
   display: inline-block;
   width: 7px; height: 7px;
