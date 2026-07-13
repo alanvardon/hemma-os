@@ -378,6 +378,63 @@ describe('billing-day change (days-basis bank)', () => {
   })
 })
 
+describe('end-of-month billing (Danske: last day of month, weekend-rolled)', () => {
+  // This bank charges on the LAST day of each month, pushed to the next banking
+  // day when month-end is a weekend — so the ledger dates land on the 28th–31st
+  // OR on the 1st–2nd of the next month (a rolled month-end), never a fixed
+  // mid-month day. Charges are 100 kr × interval days (days basis, 3.65 %).
+  //   31 Jan (Sat) → 2 Feb · 28 Feb (Sat) → 2 Mar · 31 Mar · 30 Apr ·
+  //   31 May (Sun) → 1 Jun · 30 Jun
+  const eom = [
+    interestRow('2026-02-02', 3100, { id: 'e0' }),          // Jan month-end, rolled Sat→Mon (seed)
+    interestRow('2026-03-02', 2800, { id: 'e1' }),          // Feb, rolled: 28 d → 2 800
+    interestRow('2026-03-31', 2900, { id: 'e2' }),          // Mar: 29 d → 2 900
+    interestRow('2026-04-30', 3000, { id: 'e3' }),          // Apr: 30 d → 3 000
+    interestRow('2026-06-01', 3200, { id: 'e4' }),          // May, rolled Sun→Mon: 32 d → 3 200
+    interestRow('2026-06-30', 2900, { id: 'e5' }),          // Jun: 29 d → 2 900
+  ]
+
+  it('predicts the last day of next month, not a fixed day-of-month', () => {
+    const c = expectedCharge(part(), [period()], eom)!
+    expect(c.charge_basis).toBe('days')
+    expect(c.next_date).toBe('2026-07-31')                  // month-end, NOT ~the 30th the day-mode would pick
+    expect(c.days).toBe(31)                                 // full July accrual (30 Jun → 31 Jul)
+    expect(c.interest).toBe(3100)                           // 1 000 000 × 3.65 % × 31/365 — not the 30-day 3 000
+  })
+
+  it('rolls month-end to month-end (clamping short months)', () => {
+    const s = pendingChargeSeries(part(), [period()], eom)
+    expect(s[0].next_date).toBe('2026-07-31')
+    expect(s[1].next_date).toBe('2026-08-31')
+    expect(s[2].next_date).toBe('2026-09-30')               // clamps to Sep's 30 days
+  })
+
+  it('from a rolled early-month last row, the next charge is THIS month-end', () => {
+    // Ledger ends on 1 Jun (May's charge, rolled) with June not yet logged —
+    // the next uncovered charge is June's, due 30 Jun (a ~one-month interval),
+    // never a 60-day jump to July.
+    const throughMay = eom.slice(0, 5)                      // …up to 2026-06-01
+    const c = expectedCharge(part(), [period()], throughMay)!
+    expect(c.next_date).toBe('2026-06-30')
+    expect(c.days).toBe(29)                                 // 1 Jun → 30 Jun, one month — never 60 days
+  })
+
+  it('a fixed mid-month biller (the 27th) is NOT treated as month-end', () => {
+    expect(expectedCharge(part(), [period()], CLEAN)!.next_date).toBe('2026-07-27')
+  })
+
+  it('a start-of-month biller (the 1st) is NOT treated as month-end', () => {
+    const firsts = [
+      interestRow('2026-03-02', 3100, { id: 'f0' }),        // 1st, rolled Sun→Mon
+      interestRow('2026-04-01', 3000, { id: 'f1' }),
+      interestRow('2026-05-01', 3100, { id: 'f2' }),
+      interestRow('2026-06-01', 3100, { id: 'f3' }),
+    ]
+    const c = expectedCharge(part(), [period()], firsts)!
+    expect(c.next_date).toBe('2026-07-01')                  // stays on the 1st, not pushed to 31 Jul
+  })
+})
+
 describe('pendingCharge (rolls past covered months)', () => {
   const loggedJuly: Payment = {
     id: 'pred1', created_at: '', loan_part_id: 'p1', date: '2026-07-27', kind: 'interest',
