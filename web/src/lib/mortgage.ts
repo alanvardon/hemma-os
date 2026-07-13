@@ -721,9 +721,36 @@ export function derivedRate(part: LoanPart, payments: Payment[], opts?: { traili
   return den > 0 ? r2(num / den * 100) : null
 }
 
+// Which year the bank divides by when accruing the LISTED rate: the Swedish
+// convention is saldo × ränta × dagar/365, but Danske accrues over a 360-day
+// bankår (faktisk/360), which runs every charge 365/360 ≈ +1,4 % over the /365
+// arithmetic — at 1,2 Mkr × 3,93 % that's 4 061 kr vs 4 005 for a 31-day month.
+// Fitted as the observed daily rate factor Σ|charge| / Σ(balance × days) over
+// the trailing posting intervals, compared against listed/360 vs listed/365.
+// The accrual window shifts ±1–2 days around each posting (value dates), so
+// per-interval fits can't tell 1,4 % apart — over the whole window the noise
+// cancels. Thin or unusable history defaults to 365.
+function interestYearBasis(part: LoanPart, real: Payment[], intRows: Payment[], listed: number): 360 | 365 {
+  const t = intRows.slice(-7)                     // ≤ 6 trailing intervals ≈ half a year,
+  let num = 0, den = 0, used = 0                  // short enough to sit inside one rate period
+  for (let i = 1; i < t.length; i++) {
+    const d = daysBetween(String(t[i - 1].date), String(t[i].date))
+    if (!d || d <= 0) continue
+    const bal = partBalanceAsOf(part, real, String(t[i - 1].date))
+    if (bal <= 0) continue
+    num += Math.abs(Number(t[i].amount))
+    den += bal * d
+    used++
+  }
+  if (used < 3 || den <= 0) return 365
+  const daily = num / den
+  return Math.abs(daily - listed / 100 / 360) < Math.abs(daily - listed / 100 / 365) ? 360 : 365
+}
+
 // ── Expected next charge (plan 23) ─────────────────────────────────────────
 // Forecast + reconcile for the near-identical monthly Ränta/Amortering entry:
-// arithmetic (balance × rate × days/365) on stored data, never rate forecasting.
+// arithmetic (balance × rate × days/year-basis) on stored data, never rate
+// forecasting.
 
 export interface ExpectedCharge {
   loan_part_id: string
@@ -743,6 +770,10 @@ export interface ExpectedCharge {
                               // ledger has kind-'payment' betalning rows; null for manual ledgers
   charge_basis: 'days' | 'monthly'  // 'monthly' = flat 30/360 billing: ränta predicted from the
                                     // last charge (balance-scaled), never from day-count arithmetic
+  year_basis: 360 | 365       // the year the bank divides by when accruing the LISTED rate —
+                              // 365 (Swedish convention) or a 360-day bankår (Danske). Only
+                              // fitted for a locked bunden part; the derived rate absorbs the
+                              // convention by construction, so everything else stays 365.
   confidence: 'exact' | 'assumed' | 'unknown'
   calibration_gap: number | null  // listed rate − derived rate (pp); diagnostic only
 }
@@ -887,6 +918,11 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   const rate_source: ExpectedCharge['rate_source'] =
     lockedBunden ? 'listed' : derived != null ? 'derived' : listed != null ? 'listed' : null
   const rate_type = effectiveRatePeriod(part, periods, next_date)?.rate_type ?? null
+  // The listed rate needs the bank's own day-count year; the derived rate
+  // already encodes it (reverse-engineered on the /365 fiction), so only the
+  // locked-bunden path fits a basis.
+  const year_basis: ExpectedCharge['year_basis'] =
+    lockedBunden ? interestYearBasis(part, real, intRows, listed) : 365
 
   const confidence: ExpectedCharge['confidence'] =
     bs.bound && !bs.expired ? 'exact' : rate_source === 'derived' ? 'assumed' : 'unknown'
@@ -941,7 +977,7 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
     // Sats shows the bank's nominal monthly-basis rate, not a 365-day fiction.
     if (balance + amortization > 0) rateUsed = r2(lastCharge * (12 / period_months) * 100 / (balance + amortization))
   } else {
-    interest = rate != null && days > 0 && balance > 0 ? r2(balance * rate / 100 * days / 365) : 0
+    interest = rate != null && days > 0 && balance > 0 ? r2(balance * rate / 100 * days / year_basis) : 0
   }
 
   return {
@@ -951,7 +987,7 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
     // A part with betalning history predicts the bank's total row; a ledger
     // without one renders the legacy separate amortering line instead.
     betalning: paired.length ? r2(interest + amortization) : null,
-    charge_basis: basis,
+    charge_basis: basis, year_basis,
     confidence, calibration_gap: derived != null && listed != null && rateUsed != null ? r2(listed - rateUsed) : null,
   }
 }
@@ -1008,7 +1044,7 @@ function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedChar
   const balance = Math.max(0, r2(out.balance - out.amortization))
   const interest = out.charge_basis === 'monthly'
     ? (out.balance > 0 ? r2(out.interest * balance / out.balance) : out.interest)
-    : out.rate != null && days > 0 && balance > 0 ? r2(balance * out.rate / 100 * days / 365) : 0
+    : out.rate != null && days > 0 && balance > 0 ? r2(balance * out.rate / 100 * days / out.year_basis) : 0
   const bs = bindingStatus(part, periods, next_date)
   return {
     ...out, next_date, days, balance, interest,

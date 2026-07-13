@@ -457,6 +457,82 @@ describe('end-of-month billing (Danske: last day of month, weekend-rolled)', () 
   })
 })
 
+describe('360-day bankår (Danske faktisk/360)', () => {
+  // Danske accrues the bunden rate over a 360-day year: at 1 200 000 × 3,93 %
+  // one day of ränta is exactly 1 200 000 × 0.0393 / 360 = 131,00 kr, and every
+  // charge in the household ledger is a whole number of days × 131 (4 192 = 32,
+  // 3 930 = 30, 3 799 = 29, 4 061 = 31). Predicting listed/365 undershot every
+  // part by 360/365 ≈ −1,4 % (4 005 kr vs the bank's 4 061). The accrual window
+  // shifts ±1–2 days around each posting (value dates), so the basis is fitted
+  // over ALL trailing intervals — per-interval fits can't tell 1,4 % apart.
+  const B = 1_200_000
+  const bunden = () => period({ rate: 3.93, rate_type: 'bunden', end_date: '2027-12-31' })
+  // The household shape: month-end postings, weekend-rolled, value-date noise.
+  const danske = [
+    interestRow('2026-02-02', 4192, { id: 'g0', balance_after: B }),  // 32 d × 131 (jan, rolled Sat→Mon)
+    interestRow('2026-03-02', 3930, { id: 'g1', balance_after: B }),  // 30 d × 131 (feb, rolled)
+    interestRow('2026-03-31', 3799, { id: 'g2', balance_after: B }),  // 29 d × 131
+    interestRow('2026-04-30', 3799, { id: 'g3', balance_after: B }),  // 29 d × 131
+    interestRow('2026-06-01', 4061, { id: 'g4', balance_after: B }),  // 31 d × 131 (maj, rolled Sun→Mon)
+    interestRow('2026-06-30', 3799, { id: 'g5', balance_after: B }),  // 29 d × 131
+  ]
+
+  it('golden household case: bunden 3,93 % on 360 basis lands the bank amount to the öre', () => {
+    const c = expectedCharge(part(), [bunden()], danske)!
+    expect(c.charge_basis).toBe('days')
+    expect(c.next_date).toBe('2026-07-31')          // end-of-month biller
+    expect(c.days).toBe(31)
+    expect(c.rate).toBe(3.93)
+    expect(c.rate_source).toBe('listed')
+    // 1 200 000 × 3.93 % / 360 = 131,00 kr/day × 31 = 4 061 — the bank's exact
+    // juli figure, NOT the /365 arithmetic's 4 005.37.
+    expect(c.interest).toBe(4061)
+  })
+
+  it('the rolled series keeps the 360 basis', () => {
+    const s = pendingChargeSeries(part(), [bunden()], danske)
+    expect(s[1].next_date).toBe('2026-08-31')
+    expect(s[1].interest).toBe(4061)                // 31 d again
+    expect(s[2].next_date).toBe('2026-09-30')
+    expect(s[2].interest).toBe(3930)                // 30 d × 131
+  })
+
+  it('fits the basis with per-interval balances on an amortising part', () => {
+    // Balance steps 8 000 kr/month; each charge = balance-at-interval-start
+    // × 3.93 % × days/360. The fit must weight by balance, not assume it flat.
+    const amortising = [
+      interestRow('2026-03-31', 3400, { id: 'h0', balance_after: 1_016_000 }),  // seed (charge unused)
+      interestRow('2026-04-30', 3327.4, { id: 'h1', balance_after: 1_008_000 }),  // 1 016 000 × .0393 × 30/360
+      interestRow('2026-05-31', 3411.24, { id: 'h2', balance_after: 1_000_000 }), // 1 008 000 × .0393 × 31/360
+      interestRow('2026-06-30', 3275, { id: 'h3', balance_after: 992_000 }),      // 1 000 000 × .0393 × 30/360
+    ]
+    const c = expectedCharge(part(), [bunden()], amortising)!
+    expect(c.next_date).toBe('2026-07-31')
+    // 992 000 × 3.93 % × 31/360 = 3 357.09 (the /365 arithmetic gives 3 311.11)
+    expect(c.interest).toBe(3357.09)
+  })
+
+  it('a 365-basis bunden bank keeps the Swedish convention', () => {
+    // CLEAN charges are exactly listed/365 (100 kr × days at 3.65 %) — the fit
+    // must pick 365 and reproduce the classic arithmetic.
+    const c = expectedCharge(part(), [period({ rate_type: 'bunden', end_date: '2027-12-31' })], CLEAN)!
+    expect(c.rate_source).toBe('listed')
+    expect(c.interest).toBe(3000)                   // 1 000 000 × 3.65 % × 30/365
+  })
+
+  it('thin history defaults to 365', () => {
+    // One interval is far too little to tell 1,4 % apart from value-date noise.
+    const thin = [
+      interestRow('2026-05-31', 4061, { id: 't0', balance_after: B }),
+      interestRow('2026-06-30', 3930, { id: 't1', balance_after: B }),
+    ]
+    const c = expectedCharge(part(), [bunden()], thin)!
+    expect(c.days).toBe(30)                         // 30 jun → 30 jul (day mode, 2 dates isn't month-end evidence)
+    // 1 200 000 × 3.93 % × 30/365 = 3 876.16 — the safe default
+    expect(c.interest).toBe(3876.16)
+  })
+})
+
 describe('pendingCharge (rolls past covered months)', () => {
   const loggedJuly: Payment = {
     id: 'pred1', created_at: '', loan_part_id: 'p1', date: '2026-07-27', kind: 'interest',
