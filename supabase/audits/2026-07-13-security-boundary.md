@@ -3,22 +3,22 @@
 This report records sanitized, read-only evidence. It does **not** conclude that
 the live project is secure: migration parity, supplied SQL Editor catalog
 evidence, and the hosted Auth-hook inspection verify the areas stated below and
-also establish concrete function-grant and response-header failures. No
-household rows, user records, project identifiers, URLs, keys, tokens, or emails
-were read or recorded.
+also establish concrete response-header failures. No household rows, user
+records, project identifiers, URLs, keys, tokens, or emails were read or
+recorded.
 
 ## Executive result
 
 | Area | Result | Evidence |
 |---|---|---|
 | Repository migration replay | PASS | All 19 migrations, including the approved grant remediation, replayed successfully in a reset local Supabase database. |
-| Live migration parity | PENDING migration push | The audit first confirmed 18/18 parity; the approved 19th repository migration has not been pushed to production. |
+| Live migration parity | PASS (owner-verified) | The owner confirmed all 19 repository versions are applied through the grant remediation migration. |
 | Local table RLS and policy catalogs | PASS | 15/15 public tables have RLS; policy-shape checks passed. |
 | Local SECURITY DEFINER owner/search path | PASS | 12/12 functions are owned by `postgres` and pin `search_path=""`. |
 | Local function execute grants | PASS after remediation | The approved migration removes the four grant defects; the hard catalog gate passes 14/14. |
-| Live table RLS and policies | PASS | 15/15 unique public tables have RLS and all 18 policy rows match the expected role/command/scope shapes. |
+| Live table RLS and policies | PASS post-push | The owner re-ran the live audit after migration: 15/15 public tables retain RLS and all 18 policy rows retain the expected shapes. |
 | Live function owners/search paths | PASS | 12/12 SECURITY DEFINER functions are owned by `postgres` and pin an empty search path. |
-| Live function execute grants | FAIL pending migration push | Captured live grants contain the four defects; this report does not claim the approved migration has been deployed. |
+| Live function execute grants | PASS after remediation | Focused post-push rows match the intended four-function grant matrix exactly. |
 | Live Before User Created hook target | PASS (owner-verified) | On 2026-07-13 the owner created and dashboard-verified a Before User Created registration targeting `public.hook_before_user_created`. No production signup test was run. |
 | Private schema usage | PASS (local/live) | `anon` has no usage; `authenticated` has the policy-required usage. |
 | Private schema client table grants | PASS (local/live) | Both catalog results establish a client table-grant count of zero. |
@@ -102,19 +102,19 @@ catalogs. “Observed execution” summarizes the matching local/live role grant
 | `public.accept_invite()` | authenticated | authenticated | PASS local/live |
 | `public.claim_household()` | authenticated | authenticated | PASS local/live |
 | `public.delete_mortgage_loan_part(text)` | authenticated | authenticated | PASS local/live |
-| `public.email_may_sign_in(text)` | none | local: none; live: `PUBLIC`, anon, authenticated | **PASS local / FAIL live pending push** |
+| `public.email_may_sign_in(text)` | none | none | PASS local/live post-push |
 | `public.hook_before_user_created(jsonb)` | Auth administrator only | Auth administrator only | PASS local/live |
-| `public.household_roster()` | authenticated | local: authenticated; live: `PUBLIC`, anon, authenticated | **PASS local / FAIL live pending push** |
+| `public.household_roster()` | authenticated | authenticated | PASS local/live post-push |
 | `public.leave_household()` | authenticated | authenticated | PASS local/live |
-| `public.settle_items(text,jsonb,text,text,numeric,text,text,timestamptz)` | authenticated | local: authenticated; live: `PUBLIC`, anon, authenticated | **PASS local / FAIL live pending push** |
-| `public.unsettle_payment(text)` | authenticated | local: authenticated; live: `PUBLIC`, anon, authenticated | **PASS local / FAIL live pending push** |
+| `public.settle_items(text,jsonb,text,text,numeric,text,text,timestamptz)` | authenticated | authenticated | PASS local/live post-push |
+| `public.unsettle_payment(text)` | authenticated | authenticated | PASS local/live post-push |
 
-The captured live `email_may_sign_in` failure contradicted the earlier code-level
-conclusion: revoking `anon` and `authenticated` did not remove PostgreSQL's
-default `PUBLIC` execute privilege, and membership in `PUBLIC` makes the
-function callable again. The other three public RPCs perform their own
-authentication/household checks, so this audit did not demonstrate a
-cross-household bypass, but their grants are broader than intended.
+The captured pre-push `email_may_sign_in` failure contradicted the earlier
+code-level conclusion: revoking `anon` and `authenticated` did not remove
+PostgreSQL's default `PUBLIC` execute privilege. The other three public RPCs
+performed their own authentication/household checks, so the audit did not
+demonstrate a cross-household bypass, but their grants were broader than
+intended.
 
 The owner approved the smallest corrective migration. It is included as
 `20260713110000_restrict_public_function_execute.sql` with these exact
@@ -140,8 +140,15 @@ grant execute on function public.unsettle_payment(text) to authenticated;
 
 The private helpers are unchanged. Their schema/function ACL interaction
 supports RLS policy evaluation and needs separate analysis before any change.
-The migration replayed locally and the pgTAP catalog gate passed 14/14. It has
-not been pushed to production.
+The migration replayed locally and the pgTAP catalog gate passed 14/14. The
+owner subsequently confirmed it is applied in production with 19/19 migration
+parity. Focused post-push rows from
+`supabase/verify-live-function-grants.sql` now confirm `email_may_sign_in` is
+executable by none of the three client roles, while `household_roster`,
+`settle_items`, and `unsettle_payment` are executable by `authenticated` only.
+The full 12-function inventory still reports owner `postgres` and an empty
+search path throughout; the hook and private-helper controls are unchanged and
+pass.
 
 ## Hosted Auth hook
 
@@ -200,9 +207,7 @@ baseline commit `209c767`. This is point-in-time evidence only.
 
 ## Remaining verification work
 
-1. Apply and re-verify `20260713110000_restrict_public_function_execute.sql` in
-   production; this report does not claim it has been pushed.
-2. Run hostile two-user CRUD/move and invite-gate tests with fictional users in
+1. Run hostile two-user CRUD/move and invite-gate tests with fictional users in
    an approved non-production project. Never run those writes against
    production.
-3. Treat the response-header gaps as a separate hosting/security decision.
+2. Treat the response-header gaps as a separate hosting/security decision.

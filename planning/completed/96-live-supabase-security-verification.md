@@ -84,16 +84,25 @@ The sanitized report is
 - Local migration replay, catalog assertions, build/deployed-asset scans,
   response-header inspection, and dependency audit are complete.
 - The approved `20260713110000_restrict_public_function_execute.sql` migration
-  fixes the confirmed function-grant defects locally; the hard catalog gate now
-  passes 14/14. It has not been pushed to production.
+  fixes the confirmed function-grant defects; the hard local catalog gate passes
+  14/14, and the owner confirmed the post-push live grant matrix.
 - Baseline live migration parity was verified at 18/18 before adding the
   approved 19th migration. Supplied SQL Editor evidence also
   verifies 15/15 table RLS flags, all 18 policy shapes, all 12 function
   owner/search-path rows, matching function-grant defects, and private-schema
   usage plus a zero private client-table grant count.
+- The owner applied the approved grant migration and confirmed 19/19 live
+  migration parity. A post-push audit also reconfirmed 15/15 RLS flags and all
+  18 policy shapes. Focused post-push verification confirms all four changed
+  function grants match the intended matrix; all 12 SECURITY DEFINER functions
+  remain owned by `postgres` with empty search paths.
 - The owner remediated the initially blank hosted Authentication > Hooks setting
   on 2026-07-13 and dashboard-verified a Before User Created registration
   targeting `public.hook_before_user_created`. Function metadata/ACL is
   independently live-catalog verified; no production signup test was run.
+- All live database catalog categories in scope now pass. Hostile two-user
+  writes remain untested because no approved non-production project was
+  available, and the documented response-header gaps remain a separate hosting
+  decision.
 - No production data was read or changed. The owner changed only the hosted
   hook registration described above; the agent made no production change.
