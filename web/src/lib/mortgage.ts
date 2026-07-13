@@ -741,6 +741,8 @@ export interface ExpectedCharge {
   gross: number               // interest + amortization
   betalning: number | null    // the bank's per-part TOTAL debit (ränta + amortering) when the
                               // ledger has kind-'payment' betalning rows; null for manual ledgers
+  charge_basis: 'days' | 'monthly'  // 'monthly' = flat 30/360 billing: ränta predicted from the
+                                    // last charge (balance-scaled), never from day-count arithmetic
   confidence: 'exact' | 'assumed' | 'unknown'
   calibration_gap: number | null  // listed rate − derived rate (pp); diagnostic only
 }
@@ -794,8 +796,9 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   // rate its own output; excluding it keeps the forecast fixed until a real
   // import supersedes the predicted row.
   const real = payments.filter(p => p?.source !== 'predicted')
-  const ints = real.filter(p => p?.loan_part_id === part.id && p.kind === 'interest' && p.date && Math.abs(Number(p.amount)) > 0)
-    .map(p => String(p.date)).sort()
+  const intRows = real.filter(p => p?.loan_part_id === part.id && p.kind === 'interest' && p.date && Math.abs(Number(p.amount)) > 0)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+  const ints = intRows.map(p => String(p.date))
   // Nothing to compute from: neither an interest row nor a rate period.
   if (!ints.length && !effectiveRatePeriod(part, periods)) return null
 
@@ -820,7 +823,6 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   const confidence: ExpectedCharge['confidence'] =
     bs.bound && !bs.expired ? 'exact' : rate_source === 'derived' ? 'assumed' : 'unknown'
 
-  const interest = rate != null && days > 0 && balance > 0 ? r2(balance * rate / 100 * days / 365) : 0
   // Amortering, in priority order:
   // 1. Explicit real amortering rows — manual ledgers. Median of the trailing
   //    3 (one-off insatser excluded — they don't repeat).
@@ -852,15 +854,59 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   const amortization = amorts.length ? r2(amorts[amorts.length >> 1])
     : paired.length ? r2(paired[paired.length >> 1])
     : r2(monthlyAmortizationRate([part], real) * period_months)
+
+  // Flat-monthly billing (Danske-style 30/360): the ränta is balance × rate/12
+  // every month — it does NOT scale with the interval's day count, so two
+  // trailing intervals with different day counts carry (near-)identical
+  // charges. Predict from the LAST CHARGE, scaled only by the balance step
+  // from amorteringen. This is immune both to the ±3 % day-count wobble and
+  // to charge-day noise in the ledger (mixed billing days once stretched a
+  // 30-day month into a 56-day interval and inflated the ränta by 86 %).
+  // Charges that DO track the day count keep the classic days/365 model.
+  const basis = chargeBasis(intRows)
+  const lastCharge = intRows.length ? Math.abs(Number(intRows[intRows.length - 1].amount)) : 0
+  let interest: number
+  let rateUsed = rate
+  if (basis === 'monthly' && lastCharge > 0) {
+    // The last charge accrued on the balance BEFORE this month's amortering.
+    interest = balance > 0 ? r2(lastCharge * balance / (balance + amortization)) : r2(lastCharge)
+    // Sats shows the bank's nominal monthly-basis rate, not a 365-day fiction.
+    if (balance + amortization > 0) rateUsed = r2(lastCharge * (12 / period_months) * 100 / (balance + amortization))
+  } else {
+    interest = rate != null && days > 0 && balance > 0 ? r2(balance * rate / 100 * days / 365) : 0
+  }
+
   return {
     loan_part_id: part.id, next_date, days, period_months, charge_day: chargeDay, balance,
     original_balance: partOriginal(part, real),
-    rate, rate_source, rate_type, interest, amortization, gross: r2(interest + amortization),
+    rate: rateUsed, rate_source, rate_type, interest, amortization, gross: r2(interest + amortization),
     // A part with betalning history predicts the bank's total row; a ledger
     // without one renders the legacy separate amortering line instead.
     betalning: paired.length ? r2(interest + amortization) : null,
-    confidence, calibration_gap: derived != null && listed != null ? r2(listed - derived) : null,
+    charge_basis: basis,
+    confidence, calibration_gap: derived != null && listed != null && rateUsed != null ? r2(listed - rateUsed) : null,
   }
+}
+
+// Which quantity the bank holds constant across an interval: 'days' (charge ∝
+// day count, the classic actual/365 model) or 'monthly' (flat charge per
+// month, 30/360). Decided on the NEWEST pair of trailing intervals with
+// differing day counts: if the charges differ far less than the day counts do,
+// the bank bills flat months. A rate change breaks the flatness for one
+// import, falling back to the days model until the next charge confirms.
+function chargeBasis(intRows: Payment[]): ExpectedCharge['charge_basis'] {
+  const t = intRows.slice(-4)
+  const iv: Array<{ d: number; c: number }> = []
+  for (let i = 1; i < t.length; i++) {
+    const d = daysBetween(String(t[i - 1].date), String(t[i].date))
+    const c = Math.abs(Number(t[i].amount))
+    if (d != null && d > 0 && c > 0) iv.push({ d, c })
+  }
+  for (let j = iv.length - 1; j > 0; j--)
+    for (let i = j - 1; i >= 0; i--)
+      if (iv[i].d !== iv[j].d)
+        return Math.abs(iv[j].c / iv[i].c - 1) < Math.abs(iv[j].d / iv[i].d - 1) / 2 ? 'monthly' : 'days'
+  return 'days'
 }
 
 // The next charge NOT yet in the ledger: expectedCharge rolled forward past
@@ -886,12 +932,15 @@ export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: P
 }
 
 // One roll step: advance next_date by the cadence, step the balance down by
-// the predicted amortering, reprice the new interval's actual day count.
+// the predicted amortering, and reprice — the actual day count of the new
+// interval on the days basis, the balance ratio on the flat-monthly basis.
 function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedCharge): ExpectedCharge {
   const next_date = addMonthsAtDay(out.next_date, out.period_months, out.charge_day)
   const days = daysBetween(out.next_date, next_date) ?? 0
   const balance = Math.max(0, r2(out.balance - out.amortization))
-  const interest = out.rate != null && days > 0 && balance > 0 ? r2(balance * out.rate / 100 * days / 365) : 0
+  const interest = out.charge_basis === 'monthly'
+    ? (out.balance > 0 ? r2(out.interest * balance / out.balance) : out.interest)
+    : out.rate != null && days > 0 && balance > 0 ? r2(balance * out.rate / 100 * days / 365) : 0
   const bs = bindingStatus(part, periods, next_date)
   return {
     ...out, next_date, days, balance, interest,
