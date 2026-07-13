@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import {
   expectedCharge, expectedCharges, forecastInterest, reconcileCharge,
   matchPredictedRows, hasChargeInMonth, pendingCharge, pendingChargeSeries, partBalance,
+  stalePredictedRows,
 } from './mortgage'
 import type { LoanPart, Payment, RatePeriod } from './mortgage'
 
@@ -641,5 +642,55 @@ describe('hasChargeInMonth (double-log guard)', () => {
     expect(hasChargeInMonth(CLEAN, 'p1', '2026-06-15', 'amortization')).toBe(false)
     const amort: Payment = { ...predicted, id: 'a1', kind: 'amortization' }
     expect(hasChargeInMonth([amort], 'p1', '2026-07-15', 'amortization')).toBe(true)
+  })
+})
+
+describe('stalePredictedRows (logged forecasts vs the current model)', () => {
+  // Rows logged with "Logga förväntad rad" persist in the ledger with the
+  // amounts the model produced AT THAT TIME. When the model improves (the
+  // 30/360 fix), those rows go stale — nothing rewrites them automatically
+  // (real imports supersede them), so the UI offers a one-click refresh.
+  const B = 1_350_000
+  const flat: Payment[] = [
+    { id: 'i1', created_at: '', loan_part_id: 'p1', date: '2026-03-01', kind: 'interest', description: 'Ränta', amount: 4061, balance_after: B, paid_by: 'joint', source: 'import:bank.csv' },
+    { id: 'i2', created_at: '', loan_part_id: 'p1', date: '2026-04-01', kind: 'interest', description: 'Ränta', amount: 4061, balance_after: B, paid_by: 'joint', source: 'import:bank.csv' },
+    { id: 'i3', created_at: '', loan_part_id: 'p1', date: '2026-05-01', kind: 'interest', description: 'Ränta', amount: 4061, balance_after: B, paid_by: 'joint', source: 'import:bank.csv' },
+    { id: 'i4', created_at: '', loan_part_id: 'p1', date: '2026-06-01', kind: 'interest', description: 'Ränta', amount: 4061, balance_after: B, paid_by: 'joint', source: 'import:bank.csv' },
+    { id: 'b3', created_at: '', loan_part_id: 'p1', date: '2026-05-01', kind: 'payment', description: 'Betalning', amount: 4061, balance_after: B, paid_by: 'joint', source: 'import:bank.csv' },
+    { id: 'b4', created_at: '', loan_part_id: 'p1', date: '2026-06-01', kind: 'payment', description: 'Betalning', amount: 4061, balance_after: B, paid_by: 'joint', source: 'import:bank.csv' },
+  ]
+  function predRow(over: Partial<Payment>): Payment {
+    return {
+      id: 'pr', created_at: '', loan_part_id: 'p1', date: '2026-07-01', kind: 'interest',
+      description: 'Förväntad avi', amount: 0, balance_after: null, paid_by: 'joint', source: 'predicted', ...over,
+    }
+  }
+
+  it('flags old-model rows and returns the corrected amounts (the ×1.86 prod rows)', () => {
+    const stale = [
+      predRow({ id: 'sr', kind: 'interest', amount: 7565 }),
+      predRow({ id: 'sb', kind: 'payment', amount: 7565 }),
+    ]
+    const out = stalePredictedRows([part()], [], [...flat, ...stale])
+    expect(out.map(s => [s.payment.id, s.amount, s.balance_after])).toEqual([
+      ['sr', 4061, B],   // interest refreshed to the flat-monthly prediction
+      ['sb', 4061, B],   // betalning likewise; interest-only part → saldo unchanged
+    ])
+  })
+
+  it('leaves rows inside the reconcile tolerance alone, and never touches real rows', () => {
+    const fine = predRow({ id: 'ok', amount: 4062 })                       // drift 1 kr — fine
+    const realRow = { ...predRow({ id: 'real', amount: 9999 }), source: 'import:bank.csv' }
+    expect(stalePredictedRows([part()], [], [...flat, fine, realRow])).toEqual([])
+  })
+
+  it('compares rows in LATER months against the rolled forecast', () => {
+    const julyOk = [
+      predRow({ id: 'jr', amount: 4061 }),
+      predRow({ id: 'jb', kind: 'payment', amount: 4061 }),
+    ]
+    const augustStale = predRow({ id: 'ar', date: '2026-08-01', amount: 8000 })
+    const out = stalePredictedRows([part()], [], [...flat, ...julyOk, augustStale])
+    expect(out.map(s => [s.payment.id, s.amount])).toEqual([['ar', 4061]])  // flat part: same charge rolled
   })
 })
