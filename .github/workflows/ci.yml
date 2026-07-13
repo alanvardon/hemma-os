@@ -31,6 +31,9 @@ jobs:
       - name: Build (tsc -b + vite build)
         run: npm --prefix web run build
 
+      - name: Scan emitted assets for privileged secrets
+        run: npm --prefix web run verify:build-security
+
   # E2E golden path (plan 79): Playwright against the production bundle with
   # the Supabase network boundary mocked via page.route — no live Supabase.
   # `needs: quality` so the slow browser install never runs for a build that's
@@ -59,3 +62,23 @@ jobs:
       - name: E2E (Playwright, mocked network)
         run: npx playwright test
         working-directory: web
+
+  database-security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.109.1
+
+      - name: Start local Supabase
+        run: supabase start
+
+      - name: Rebuild from migrations
+        run: supabase db reset --local
+
+      - name: Verify database security boundary
+        run: |
+          supabase test db --local supabase/tests/database/security_boundary_test.sql
+          supabase test db --local supabase/tests/database/household_isolation_test.sql

@@ -1,0 +1,207 @@
+begin;
+
+create extension if not exists pgtap with schema extensions;
+
+select plan(14);
+
+select is(
+  (
+    select count(*)
+    from pg_catalog.pg_class c
+    join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind in ('r', 'p')
+  ),
+  15::bigint,
+  'the audited public-table inventory is complete'
+);
+
+select ok(
+  not exists (
+    select 1
+    from pg_catalog.pg_class c
+    join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind in ('r', 'p')
+      and not c.relrowsecurity
+  ),
+  'every public table has row-level security enabled'
+);
+
+select ok(
+  not exists (
+    select 1
+    from pg_catalog.pg_class c
+    join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+    join pg_catalog.pg_attribute a
+      on a.attrelid = c.oid
+     and a.attname = 'household_id'
+     and a.attnum > 0
+     and not a.attisdropped
+    where n.nspname = 'public'
+      and c.relkind in ('r', 'p')
+      and c.relname not in (
+        'household_invites',
+        'household_members',
+        'notification_state'
+      )
+      and not exists (
+        select 1
+        from pg_catalog.pg_policies p
+        where p.schemaname = 'public'
+          and p.tablename = c.relname
+          and p.permissive = 'PERMISSIVE'
+          and p.cmd = 'ALL'
+          and 'authenticated' = any (p.roles)
+          and p.qual ilike '%current_household%'
+          and p.with_check ilike '%current_household%'
+      )
+  ),
+  'every mutable household table has an authenticated ALL policy with USING and WITH CHECK isolation'
+);
+
+select ok(
+  exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'households'
+      and cmd = 'SELECT' and qual ilike '%current_household%'
+  )
+  and exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'household_members'
+      and cmd = 'SELECT' and qual ilike '%current_household%'
+  ),
+  'households and household_members expose household-scoped reads only'
+);
+
+select ok(
+  exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'notification_state'
+      and cmd = 'SELECT' and qual ilike '%current_household%'
+  )
+  and not exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'notification_state'
+      and cmd in ('ALL', 'INSERT', 'UPDATE', 'DELETE')
+      and 'authenticated' = any (roles)
+  ),
+  'notification_state is household-readable and client read-only'
+);
+
+select ok(
+  exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'household_invites'
+      and cmd = 'INSERT' and with_check ilike '%current_household%'
+  )
+  and exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'household_invites'
+      and cmd = 'DELETE' and qual ilike '%current_household%'
+  )
+  and exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'household_invites'
+      and cmd = 'SELECT' and qual ilike '%current_household%'
+  )
+  and exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'household_invites'
+      and cmd = 'SELECT' and qual ilike '%auth.jwt%email%'
+  ),
+  'household_invites has scoped manage and recipient-read policies'
+);
+
+select ok(
+  not exists (
+    select 1
+    from pg_catalog.pg_proc p
+    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+    where n.nspname in ('public', 'private')
+      and p.prosecdef
+      and not coalesce(p.proconfig, '{}'::text[]) @> array['search_path=""']
+  ),
+  'every application SECURITY DEFINER function pins an empty search_path'
+);
+
+select ok(
+  not exists (
+    select 1
+    from pg_catalog.pg_proc p
+    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+    join pg_catalog.pg_roles owner on owner.oid = p.proowner
+    where n.nspname in ('public', 'private')
+      and p.prosecdef
+      and owner.rolname <> 'postgres'
+  ),
+  'every application SECURITY DEFINER function is owned by postgres'
+);
+
+select ok(
+  not has_function_privilege('public', 'public.hook_before_user_created(jsonb)', 'execute')
+  and not has_function_privilege('anon', 'public.hook_before_user_created(jsonb)', 'execute')
+  and not has_function_privilege('authenticated', 'public.hook_before_user_created(jsonb)', 'execute')
+  and has_function_privilege('supabase_auth_admin', 'public.hook_before_user_created(jsonb)', 'execute'),
+  'the signup hook is executable only by the Auth administrator'
+);
+
+select ok(
+  not has_function_privilege('public', 'public.email_may_sign_in(text)', 'execute')
+  and not has_function_privilege('anon', 'public.email_may_sign_in(text)', 'execute')
+  and not has_function_privilege('authenticated', 'public.email_may_sign_in(text)', 'execute'),
+  'the retired email_may_sign_in function is not client-executable'
+);
+
+select ok(
+  not has_function_privilege('public', 'public.household_roster()', 'execute')
+  and not has_function_privilege('anon', 'public.household_roster()', 'execute')
+  and has_function_privilege('authenticated', 'public.household_roster()', 'execute')
+  and not has_function_privilege(
+    'public',
+    'public.settle_items(text,jsonb,text,text,numeric,text,text,timestamp with time zone)',
+    'execute'
+  )
+  and not has_function_privilege(
+    'anon',
+    'public.settle_items(text,jsonb,text,text,numeric,text,text,timestamp with time zone)',
+    'execute'
+  )
+  and has_function_privilege(
+    'authenticated',
+    'public.settle_items(text,jsonb,text,text,numeric,text,text,timestamp with time zone)',
+    'execute'
+  )
+  and not has_function_privilege('public', 'public.unsettle_payment(text)', 'execute')
+  and not has_function_privilege('anon', 'public.unsettle_payment(text)', 'execute')
+  and has_function_privilege('authenticated', 'public.unsettle_payment(text)', 'execute'),
+  'authenticated RPCs are not executable by PUBLIC or anon'
+);
+
+select ok(
+  not exists (
+    select 1
+    from information_schema.table_privileges
+    where table_schema = 'private'
+      and grantee in ('PUBLIC', 'anon', 'authenticated')
+  ),
+  'private schema contains no client table grants'
+);
+
+select ok(
+  not has_function_privilege('public', 'private.household_has_persisted_data(uuid)', 'execute')
+  and not has_function_privilege('anon', 'private.household_has_persisted_data(uuid)', 'execute')
+  and not has_function_privilege('authenticated', 'private.household_has_persisted_data(uuid)', 'execute'),
+  'the private persisted-data predicate is not client-executable'
+);
+
+select ok(
+  not has_schema_privilege('anon', 'private', 'usage')
+  and has_schema_privilege('authenticated', 'private', 'usage')
+  and has_function_privilege('authenticated', 'private.current_household()', 'execute')
+  and has_function_privilege('authenticated', 'private.invite_cap_ok(uuid)', 'execute'),
+  'private helper access matches policy evaluation requirements'
+);
+
+select * from finish();
+
+rollback;
