@@ -59,6 +59,9 @@ jobs:
           VITE_BUILD_SHA: ${{ github.sha }}
         run: npm --prefix web run build
 
+      - name: Reject privileged secrets in emitted assets
+        run: npm --prefix web run verify:build-security
+
       - name: Assemble the Hemma·OS site
         run: |
           mkdir -p _site
