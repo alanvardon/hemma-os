@@ -774,6 +774,40 @@ function chargeDayMode(sortedDates: string[]): number {
   return best
 }
 
+// The last day of a date's own month (1-indexed month, matching addMonthsAtDay).
+function lastDayOfMonth(y: number, m: number): number {
+  return new Date(y, m, 0).getDate()
+}
+
+// Does the bank bill on the LAST day of the month (Danske) rather than a fixed
+// day-of-month? Month-end charges surface in the ledger as dates clustered at
+// month boundaries: the 28th–31st, OR the 1st–3rd of the next month when
+// month-end fell on a weekend and rolled to the next banking day. A fixed
+// mid-month day (the 15th, the 27th) never clusters there; a bank that bills on
+// the 1st sits only at the START edge — so we also require at least two genuine
+// late-month dates to tell month-end apart from a 1st-of-month biller.
+function isMonthEndBilling(sortedDates: string[]): boolean {
+  if (sortedDates.length < 3) return false
+  let late = 0, boundary = 0
+  for (const d of sortedDates) {
+    const y = +d.slice(0, 4), m = +d.slice(5, 7), day = +d.slice(8, 10)
+    if (day >= lastDayOfMonth(y, m) - 2) { late++; boundary++ } // 28th–31st
+    else if (day <= 3) boundary++                               // rolled month-end
+  }
+  return boundary / sortedDates.length >= 0.7 && late >= 2
+}
+
+// The month-end a charge BELONGS to. A late-month date is its own month's end;
+// an early-month date (≤ 3, a weekend-rolled charge) belongs to the PREVIOUS
+// month's end — so the next charge is one month on from there, never a
+// double-counted 60-day jump.
+function logicalMonthEnd(dateStr: string): string {
+  let y = +dateStr.slice(0, 4), m = +dateStr.slice(5, 7)
+  const day = +dateStr.slice(8, 10)
+  if (day <= 3) { m -= 1; if (m < 1) { m = 12; y -= 1 } }
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(lastDayOfMonth(y, m)).padStart(2, '0')
+}
+
 // Median gap between interest rows, snapped to whole months: monthly (≤ 45
 // days) or kvartalsvis. Cold start (< 2 rows) assumes monthly.
 function chargePeriodMonths(sortedDates: string[]): number {
@@ -804,21 +838,34 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
 
   const lastDate = ints.length ? ints[ints.length - 1] : todayISO()
   const period_months = chargePeriodMonths(ints)
-  let chargeDay = ints.length ? chargeDayMode(ints) : +lastDate.slice(8, 10)
-  let next_date = addMonthsAtDay(lastDate, period_months, chargeDay)
-  let days = daysBetween(lastDate, next_date) ?? 0
-  // A moved billing day (e.g. the bank shifting the charge from the 27th to the
-  // 1st) leaves the all-history day-mode stale: it still points at the old day,
-  // roughly a full month PAST the true next charge, so a monthly cadence
-  // balloons to ~56 days. On a days/365 bank that inflates the ränta by exactly
-  // that ratio (the 7 565-vs-4 061 kr prod bug). A genuine monthly interval is
-  // 28–31 days; > 45 means the mode disagrees with where the bank now bills, so
-  // anchor to the most recent bill's own day — one month out is 28–31 days, so
-  // this always resolves in a single step.
-  if (period_months === 1 && days > 45) {
-    chargeDay = +lastDate.slice(8, 10)
+  let chargeDay: number
+  let next_date: string
+  let days: number
+  if (isMonthEndBilling(ints)) {
+    // Bill lands on each month's last day (charge_day 31 makes addMonthsAtDay
+    // clamp to the real length: Jul→31, Sep→30, Feb→28/29). Anchor on the last
+    // charge's LOGICAL month-end so a weekend-rolled date (e.g. 1 Jun for May's
+    // charge) advances one true month, not two.
+    chargeDay = 31
+    next_date = addMonthsAtDay(logicalMonthEnd(lastDate), period_months, chargeDay)
+    days = daysBetween(lastDate, next_date) ?? 0
+  } else {
+    chargeDay = ints.length ? chargeDayMode(ints) : +lastDate.slice(8, 10)
     next_date = addMonthsAtDay(lastDate, period_months, chargeDay)
     days = daysBetween(lastDate, next_date) ?? 0
+    // A moved fixed billing day (e.g. the bank shifting the charge from the 27th
+    // to the 1st) leaves the all-history day-mode stale: it still points at the
+    // old day, roughly a full month PAST the true next charge, so a monthly
+    // cadence balloons to ~56 days. On a days/365 bank that inflates the ränta
+    // by exactly that ratio (the 7 565-vs-4 061 kr prod bug). A genuine monthly
+    // interval is 28–31 days; > 45 means the mode disagrees with where the bank
+    // now bills, so anchor to the most recent bill's own day — one month out is
+    // 28–31 days, so this always resolves in a single step.
+    if (period_months === 1 && days > 45) {
+      chargeDay = +lastDate.slice(8, 10)
+      next_date = addMonthsAtDay(lastDate, period_months, chargeDay)
+      days = daysBetween(lastDate, next_date) ?? 0
+    }
   }
   const balance = partBalanceAsOf(part, real, lastDate)
 
