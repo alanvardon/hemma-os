@@ -261,6 +261,93 @@ describe('expectedCharge', () => {
   })
 })
 
+describe('flat-monthly billing (30/360 banks)', () => {
+  // Danske-style: ränta = balance × rate/12 every month — the charge does NOT
+  // scale with the interval's day count (4 061 kr in a 30-day month AND a
+  // 31-day month). The days/365 model would wobble ±3 % month to month and,
+  // worse, amplify any charge-day noise in the ledger (a 56-day interval →
+  // +86 %). Detection: trailing intervals whose charges stay flat while day
+  // counts differ → predict from the LAST CHARGE, scaled only by the balance
+  // step from amorteringen.
+  const B = 1_350_000
+  function flatRows(): Payment[] {
+    return [
+      interestRow('2026-03-01', 4061, { id: 'i1', balance_after: B }),
+      interestRow('2026-04-01', 4061, { id: 'i2', balance_after: B }),   // 31-day interval
+      interestRow('2026-05-01', 4061, { id: 'i3', balance_after: B }),   // 30-day interval
+      interestRow('2026-06-01', 4061, { id: 'i4', balance_after: B }),   // 31-day interval
+      interestRow('2026-05-01', 4061, { id: 'b1', kind: 'payment', description: 'Betalning', balance_after: B }),
+      interestRow('2026-06-01', 4061, { id: 'b2', kind: 'payment', description: 'Betalning', balance_after: B }),
+    ]
+  }
+
+  it('an interest-only part predicts EXACTLY the last charge — no day-count wobble', () => {
+    const c = expectedCharge(part(), [], flatRows())!
+    expect(c.charge_basis).toBe('monthly')
+    expect(c.next_date).toBe('2026-07-01')
+    expect(c.interest).toBe(4061)                   // NOT 4 061 × 30/31
+    expect(c.betalning).toBe(4061)
+    expect(c.amortization).toBe(0)
+    // Sats shows the bank's nominal monthly-basis rate: 4 061 × 12 / 1 350 000.
+    expect(c.rate).toBe(3.61)
+  })
+
+  it('rak amortering: the charge steps down with the balance, golden to the öre', () => {
+    // Nominal 3,6 % → 0,3 %/month on the balance after the previous month's
+    // 8 000 kr amortering: 3 600 → 3 576 → 3 552 → 3 528 → predicts 3 504.
+    const pays: Payment[] = []
+    let bal = 1_200_000
+    const months = ['2026-03-01', '2026-04-01', '2026-05-01', '2026-06-01']
+    const charges = [3600, 3576, 3552, 3528]
+    months.forEach((d, i) => {
+      bal -= 8000
+      pays.push(interestRow(d, charges[i], { id: 'i' + i, balance_after: bal }))
+      pays.push(interestRow(d, charges[i] + 8000, { id: 'b' + i, kind: 'payment', description: 'Betalning', balance_after: bal }))
+    })
+    const c = expectedCharge(part(), [], pays)!
+    expect(c.charge_basis).toBe('monthly')
+    expect(c.balance).toBe(1_168_000)
+    expect(c.amortization).toBe(8000)
+    expect(c.interest).toBe(3504)                   // 3 528 × 1 168 000 / 1 176 000 = 1 168 000 × 0,3 %
+    expect(c.betalning).toBe(11_504)
+    expect(c.rate).toBe(3.6)                        // 3 528 × 12 / 1 176 000
+
+    // Rolling holds the pattern: each month −8 000 kr saldo, ränta × B'/B.
+    const s = pendingChargeSeries(part(), [], pays)
+    expect(s[1].balance).toBe(1_160_000)
+    expect(s[1].interest).toBe(3480)                // 3 504 × 1 160 / 1 168
+    expect(s[1].betalning).toBe(11_480)
+  })
+
+  it('REGRESSION: charge-day noise cannot scale the amount (the 56-day prod bug)', () => {
+    // Legacy ledger rows dated on the 27th outvote the bank's current
+    // charge-day (the 1st), so next_date lands on 2026-07-27 — a 56-day
+    // interval. Under the days model that inflated the ränta by ×56/30
+    // (predicted ~7 565 kr vs the bank's 4 061 kr). On the monthly basis the
+    // date noise cannot touch the amount.
+    const noisy = [
+      interestRow('2026-02-27', 4061, { id: 'o1', balance_after: B }),
+      interestRow('2026-03-27', 4061, { id: 'o2', balance_after: B }),
+      interestRow('2026-04-27', 4061, { id: 'o3', balance_after: B }),
+      interestRow('2026-05-01', 4061, { id: 'n1', balance_after: B }),
+      interestRow('2026-06-01', 4061, { id: 'n2', balance_after: B }),
+    ]
+    const c = expectedCharge(part(), [], noisy)!
+    expect(c.next_date).toBe('2026-07-27')          // the date noise itself remains…
+    expect(c.days).toBe(56)
+    expect(c.charge_basis).toBe('monthly')
+    expect(c.interest).toBe(4061)                   // …but the amount is immune
+  })
+
+  it('a bank whose charges track the day count keeps the days/365 model', () => {
+    // CLEAN charges are exactly 100 kr × days — proportional to the interval —
+    // so the flat-monthly detection must NOT fire.
+    const c = expectedCharge(part(), [period()], CLEAN)!
+    expect(c.charge_basis).toBe('days')
+    expect(c.interest).toBe(3000)
+  })
+})
+
 describe('pendingCharge (rolls past covered months)', () => {
   const loggedJuly: Payment = {
     id: 'pred1', created_at: '', loan_part_id: 'p1', date: '2026-07-27', kind: 'interest',
