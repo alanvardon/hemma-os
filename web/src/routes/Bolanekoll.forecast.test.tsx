@@ -14,6 +14,14 @@ import { defaultSettings } from '../lib/mortgage'
 import type { LoanPart, Payment, RatePeriod } from '../lib/mortgage'
 
 vi.mock('../lib/mortgage-store')
+// The Riksbank strip fetches via the local Supabase Edge Function — with the
+// local stack running, live data reaches the test and renders a visx chart
+// jsdom can't host (no ResizeObserver). Reject the fetch so the strip stays
+// quietly absent and the test is deterministic with or without local services.
+vi.mock('../lib/riksbank', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../lib/riksbank')>(),
+  fetchPolicyRate: vi.fn().mockRejectedValue(new Error('no network in tests')),
+}))
 // NumberFlow's getSnapshotBeforeUpdate needs browser layout APIs jsdom lacks —
 // with a seeded ledger the dashboard renders Money/Percent everywhere, so swap
 // them for plain spans (these tests assert flows, not number animation).
@@ -138,7 +146,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const rows = document.querySelectorAll('.prognos-row')
     expect(rows).toHaveLength(2)
     expect(rows[0].querySelector('.kind-interest')?.textContent).toBe('Ränta')
-    expect(rows[1].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
+    expect(rows[1].querySelector('.kind-amortization')?.textContent).toBe('Betalning')
     expect(rows[1].querySelector('button')).not.toBeNull()
     // The amortering line shows the amorteringsgrad where ränta lines show
     // the rate — a share of the loan's ORIGINAL size (amorteringskravets bas),
@@ -181,7 +189,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     await waitFor(() => {
       const rows = document.querySelectorAll('.prognos-row')
       expect(rows).toHaveLength(1)
-      expect(rows[0].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
+      expect(rows[0].querySelector('.kind-amortization')?.textContent).toBe('Betalning')
     })
     expect(document.querySelector('.prognos-row .col-date')?.textContent).toBe('juli 2026')
   })

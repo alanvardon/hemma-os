@@ -22,6 +22,14 @@ vi.mock('../lib/mortgage-store')
 vi.mock('@number-flow/react', () => ({
   default: ({ value }: { value: number }) => <span>{value}</span>,
 }))
+// The Riksbank strip fetches via the local Supabase Edge Function — with the
+// local stack running, live data reaches the test and renders a visx chart
+// jsdom can't host (no ResizeObserver). Reject the fetch so the strip stays
+// quietly absent and the test is deterministic with or without local services.
+vi.mock('../lib/riksbank', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../lib/riksbank')>(),
+  fetchPolicyRate: vi.fn().mockRejectedValue(new Error('no network in tests')),
+}))
 
 // Bolanekoll reads useViewTransitionState (useToolPageActive), which needs a
 // data router — mount it as the sole route of an in-memory one.

@@ -152,8 +152,12 @@ export function classifyKind(text: string | null | undefined): PaymentKind {
   const s = String(text ?? '').toLowerCase()
   if (/ränta|ranta|interest/.test(s)) return 'interest'
   if (/amorter|amort|principal|avbetal/.test(s)) return 'amortization'
-  if (/betalning|payment|inbet|överför|overfor|insättning|insattning/.test(s)) return 'payment'
-  if (/\blån\b|\blan\b|utbetalning|disburs|loan|uttag|nyutl/.test(s)) return 'loan'
+  // Account movements must match BEFORE the bare betalning check below —
+  // "inbetalning"/"utbetalning" contain "betalning".
+  if (/inbet|utbetal|payment|överför|overfor|insättning|insattning/.test(s)) return 'payment'
+  // The bank labels the avi's fixed amortering line "Betalning".
+  if (/betalning/.test(s)) return 'amortization'
+  if (/\blån\b|\blan\b|disburs|loan|uttag|nyutl/.test(s)) return 'loan'
   if (/avgift|fee|aviavgift/.test(s)) return 'fee'
   return 'other'
 }
@@ -871,7 +875,10 @@ function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedChar
 // The pending charge plus the avier after it: months ahead projected with the
 // rate held flat and the balance stepping down by the amortering each period.
 // [0] is pendingCharge (loggable); the rest are a read-only preview. Stops
-// early when the loan is paid off — a 0 kr avi is noise, not information.
+// early when the loan is paid off — a 0 kr avi is noise, not information —
+// and at the villkorsändringsdag: past a lapsed binding with no successor
+// period the rate is simply unknown, and projecting the old rate a full year
+// ahead is misleading. [0] always stays, whatever its confidence.
 export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payments: Payment[], months = 12): ExpectedCharge[] {
   const first = pendingCharge(part, periods, payments)
   if (!first) return []
@@ -880,6 +887,8 @@ export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payme
   for (let i = 1; i < n; i++) {
     const next = rollChargeOnce(part, periods, out[out.length - 1])
     if (next.balance <= 0) break
+    const bs = bindingStatus(part, periods, next.next_date)
+    if (bs.bound && bs.expired) break
     out.push(next)
   }
   return out

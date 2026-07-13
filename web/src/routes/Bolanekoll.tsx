@@ -1307,7 +1307,7 @@ export default function Bolanekoll() {
                   <span className="metric-val">~{fmtMoney(shownPending.reduce((s, e) => s + e.amount, 0))}</span>
                   <span className="metric-sub">
                     ränta {fmtMoney(shownPending.filter(e => e.kind === 'interest').reduce((s, e) => s + e.amount, 0))}
-                    {' · amort '}{fmtMoney(shownPending.filter(e => e.kind === 'amortization').reduce((s, e) => s + e.amount, 0))}
+                    {' · betalning '}{fmtMoney(shownPending.filter(e => e.kind === 'amortization').reduce((s, e) => s + e.amount, 0))}
                   </span>
                 </div>
                 {shownPending.length > 1 && (
@@ -1341,7 +1341,7 @@ export default function Bolanekoll() {
                             <td className="col-date">{fmtChargeMonth(r.next_date)}</td>
                             <td className="col-part">{partNameById(r.loan_part_id)}</td>
                             <td className="col-kind">
-                              <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
+                              <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Betalning'}</span>
                             </td>
                             <td className="num col-rate">{pct != null ? fmtPct(pct) : '—'}</td>
                             <td className="num col-amount">~{fmtMoney(e.amount)}</td>
@@ -1381,7 +1381,7 @@ export default function Bolanekoll() {
                           <td className="col-date">{fmtChargeMonth(r.next_date)}</td>
                           <td className="col-part">{partNameById(r.loan_part_id)}</td>
                           <td className="col-kind">
-                            <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Amortering'}</span>
+                            <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Betalning'}</span>
                           </td>
                           <td className="num col-rate">{pct != null ? fmtPct(pct) : '—'}</td>
                           <td className="num col-amount">~{fmtMoney(e.amount)}</td>
