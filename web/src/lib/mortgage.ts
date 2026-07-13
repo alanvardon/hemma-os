@@ -804,9 +804,22 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
 
   const lastDate = ints.length ? ints[ints.length - 1] : todayISO()
   const period_months = chargePeriodMonths(ints)
-  const chargeDay = ints.length ? chargeDayMode(ints) : +lastDate.slice(8, 10)
-  const next_date = addMonthsAtDay(lastDate, period_months, chargeDay)
-  const days = daysBetween(lastDate, next_date) ?? 0
+  let chargeDay = ints.length ? chargeDayMode(ints) : +lastDate.slice(8, 10)
+  let next_date = addMonthsAtDay(lastDate, period_months, chargeDay)
+  let days = daysBetween(lastDate, next_date) ?? 0
+  // A moved billing day (e.g. the bank shifting the charge from the 27th to the
+  // 1st) leaves the all-history day-mode stale: it still points at the old day,
+  // roughly a full month PAST the true next charge, so a monthly cadence
+  // balloons to ~56 days. On a days/365 bank that inflates the ränta by exactly
+  // that ratio (the 7 565-vs-4 061 kr prod bug). A genuine monthly interval is
+  // 28–31 days; > 45 means the mode disagrees with where the bank now bills, so
+  // anchor to the most recent bill's own day — one month out is 28–31 days, so
+  // this always resolves in a single step.
+  if (period_months === 1 && days > 45) {
+    chargeDay = +lastDate.slice(8, 10)
+    next_date = addMonthsAtDay(lastDate, period_months, chargeDay)
+    days = daysBetween(lastDate, next_date) ?? 0
+  }
   const balance = partBalanceAsOf(part, real, lastDate)
 
   // Predict with the trailing derived rate (encodes what the bank actually

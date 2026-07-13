@@ -320,12 +320,13 @@ describe('flat-monthly billing (30/360 banks)', () => {
     expect(s[1].betalning).toBe(11_480)
   })
 
-  it('REGRESSION: charge-day noise cannot scale the amount (the 56-day prod bug)', () => {
+  it('REGRESSION: a moved charge-day cannot scale the amount (the 56-day prod bug)', () => {
     // Legacy ledger rows dated on the 27th outvote the bank's current
-    // charge-day (the 1st), so next_date lands on 2026-07-27 — a 56-day
-    // interval. Under the days model that inflated the ränta by ×56/30
-    // (predicted ~7 565 kr vs the bank's 4 061 kr). On the monthly basis the
-    // date noise cannot touch the amount.
+    // charge-day (the 1st). The forecast anchors to the current day, so
+    // next_date is the 1st (a clean 30-day interval) rather than a 56-day
+    // phantom. Belt AND braces: even if the date noise did leak through, the
+    // monthly basis keeps the amount fixed — earlier this inflated the ränta
+    // by ×56/30 (predicted ~7 565 kr vs the bank's 4 061 kr).
     const noisy = [
       interestRow('2026-02-27', 4061, { id: 'o1', balance_after: B }),
       interestRow('2026-03-27', 4061, { id: 'o2', balance_after: B }),
@@ -334,10 +335,10 @@ describe('flat-monthly billing (30/360 banks)', () => {
       interestRow('2026-06-01', 4061, { id: 'n2', balance_after: B }),
     ]
     const c = expectedCharge(part(), [], noisy)!
-    expect(c.next_date).toBe('2026-07-27')          // the date noise itself remains…
-    expect(c.days).toBe(56)
+    expect(c.next_date).toBe('2026-07-01')          // anchored to where the bank now bills
+    expect(c.days).toBe(30)                         // one month — the phantom 56-day interval is gone
     expect(c.charge_basis).toBe('monthly')
-    expect(c.interest).toBe(4061)                   // …but the amount is immune
+    expect(c.interest).toBe(4061)                   // the amount is immune either way
   })
 
   it('a bank whose charges track the day count keeps the days/365 model', () => {
@@ -346,6 +347,34 @@ describe('flat-monthly billing (30/360 banks)', () => {
     const c = expectedCharge(part(), [period()], CLEAN)!
     expect(c.charge_basis).toBe('days')
     expect(c.interest).toBe(3000)
+  })
+})
+
+describe('billing-day change (days-basis bank)', () => {
+  // The bank bills actual/365 — every charge is 100 kr × interval days, so
+  // derivedRate reads 3.65 % and charge_basis is 'days' (NOT the flat-monthly
+  // case above). It then MOVED its charge day from the 27th to the 1st. The
+  // all-history day-mode still picks 27 — it outvotes the two recent 1st-of-
+  // month rows — so a naive next_date is 2026-07-27, i.e. 56 days after the
+  // last bill on Jun 1. On the days model that inflates the ränta by ×56/30
+  // (the real prod bug: ~7 565 kr predicted vs the bank's ~4 061). Unlike the
+  // flat-monthly REGRESSION test, the monthly basis does NOT rescue a days-
+  // basis bank here, so the interval itself must be corrected: the forecast
+  // anchors to where the bank now bills.
+  const moved = [
+    interestRow('2026-02-27', 3100, { id: 'm0' }),          // seed
+    interestRow('2026-03-27', 2800, { id: 'm1' }),          // 28 d → 2 800
+    interestRow('2026-04-27', 3100, { id: 'm2' }),          // 31 d → 3 100
+    interestRow('2026-05-01', 400, { id: 'm3' }),           // 4 d → 400: the day moves to the 1st
+    interestRow('2026-06-01', 3100, { id: 'm4' }),          // 31 d → 3 100
+  ]
+
+  it('anchors to the current billing day, not the stale all-history mode', () => {
+    const c = expectedCharge(part(), [period()], moved)!
+    expect(c.charge_basis).toBe('days')                     // charges track day count
+    expect(c.next_date).toBe('2026-07-01')                  // the 1st, where it now bills — NOT 07-27
+    expect(c.days).toBe(30)                                 // one month, NOT a 56-day phantom interval
+    expect(c.interest).toBe(3000)                           // 1 000 000 × 3.65 % × 30/365, NOT × 56/365 = 5 600
   })
 })
 
