@@ -51,6 +51,10 @@ import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fm
 // villkorsändring — before that, the date lives in the Lånedelar ledger.
 const REPRICE_NOTICE_DAYS = 31
 
+// The kinds an expected-charge line item can log as: the ränta plus its
+// companion — the bank's betalning (total debit) or a legacy amortering row.
+type PendingKind = 'interest' | 'payment' | 'amortization'
+
 /** "17 jun", or "1 okt 2025" when the date isn't in the current year — a bare
  * day+month for a past year reads as upcoming. Strips the trailing period
  * sv-SE puts on most abbreviated months ("1 okt.") so callers can add their
@@ -312,29 +316,31 @@ export default function Bolanekoll() {
       .filter(s => s.length > 0 && s[0].interest > 0),
     [parts, periods, payments])
   const pendingCharges = useMemo(() => pendingSeries.map(s => s[0]), [pendingSeries])
-  // Flattened to ONE entry per upcoming transaction — ränta and amortering
-  // are separate line items, individually loggable and individually guarded.
-  const pendingEntries = useMemo(() => pendingCharges.flatMap(r => {
-    const out: Array<{ charge: ExpectedCharge; kind: 'interest' | 'amortization'; amount: number }> = []
-    if (r.interest > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date, 'interest'))
-      out.push({ charge: r, kind: 'interest', amount: r.interest })
-    if (r.amortization > 0 && !hasChargeInMonth(payments, r.loan_part_id, r.next_date, 'amortization'))
-      out.push({ charge: r, kind: 'amortization', amount: r.amortization })
+  // Flattened to ONE entry per upcoming transaction, mirroring the bank's avi:
+  // per part a Ränta row and — when the ledger has betalning history — the
+  // bank's Betalning row (the TOTAL debit, ränta + amortering; equal to the
+  // ränta on an interest-only part). Ledgers without betalning rows keep the
+  // legacy separate amortering line. Each line is individually loggable and
+  // individually guarded.
+  const chargeEntries = (r: ExpectedCharge): Array<{ charge: ExpectedCharge; kind: PendingKind; amount: number }> => {
+    const out: Array<{ charge: ExpectedCharge; kind: PendingKind; amount: number }> = []
+    if (r.interest > 0) out.push({ charge: r, kind: 'interest', amount: r.interest })
+    if (r.betalning != null) {
+      if (r.betalning > 0) out.push({ charge: r, kind: 'payment', amount: r.betalning })
+    } else if (r.amortization > 0) out.push({ charge: r, kind: 'amortization', amount: r.amortization })
     return out
-  }), [pendingCharges, payments])
+  }
+  const pendingEntries = useMemo(() => pendingCharges.flatMap(r =>
+    chargeEntries(r).filter(e => !hasChargeInMonth(payments, r.loan_part_id, r.next_date, e.kind))),
+  [pendingCharges, payments])  // eslint-disable-line react-hooks/exhaustive-deps -- chargeEntries is pure
   // The months AFTER the loggable one — a read-only preview of the coming
   // year's avier (rate held flat, balance stepping down each period).
   const futureEntries = useMemo(() => pendingSeries.flatMap(s => s.slice(1))
-    .flatMap(r => {
-      const out: Array<{ charge: ExpectedCharge; kind: 'interest' | 'amortization'; amount: number }> = []
-      if (r.interest > 0) out.push({ charge: r, kind: 'interest', amount: r.interest })
-      if (r.amortization > 0) out.push({ charge: r, kind: 'amortization', amount: r.amortization })
-      return out
-    })
+    .flatMap(chargeEntries)
     .sort((a, b) => a.charge.next_date.localeCompare(b.charge.next_date)
       || a.charge.loan_part_id.localeCompare(b.charge.loan_part_id)
       || (a.kind === b.kind ? 0 : a.kind === 'interest' ? -1 : 1)),
-  [pendingSeries])
+  [pendingSeries])  // eslint-disable-line react-hooks/exhaustive-deps -- chargeEntries is pure
   const [showFuture, setShowFuture] = useState(false)
   // Loan-part filter for the expected-charge block — only the parts that
   // actually have an upcoming charge appear as options (a part with nothing
@@ -353,6 +359,12 @@ export default function Bolanekoll() {
   const shownFuture = useMemo(
     () => effPrognosFilter === 'all' ? futureEntries : futureEntries.filter(e => e.charge.loan_part_id === effPrognosFilter),
     [futureEntries, effPrognosFilter])
+  // The headline figure comes from the underlying charges, not the loggable
+  // entries — betalning already CONTAINS the ränta, so summing the visible
+  // rows would double-count it (and partial logging would wobble the total).
+  const shownCharges = useMemo(
+    () => effPrognosFilter === 'all' ? pendingCharges : pendingCharges.filter(r => r.loan_part_id === effPrognosFilter),
+    [pendingCharges, effPrognosFilter])
 
   const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
@@ -413,6 +425,11 @@ export default function Bolanekoll() {
       if (pm) recon = { drift: pm.recon.drift, ok: pm.recon.ok, predicted: true }
       else if (c.kind === 'interest' && c.amount > 0 && exp && exp.interest > 0 && monthKey(c.date) === monthKey(exp.next_date)) {
         const r = reconcileCharge(exp, c.amount)
+        recon = { drift: r.drift, ok: r.ok, predicted: false }
+      } else if (c.kind === 'payment' && c.amount > 0 && exp?.betalning != null && exp.betalning > 0 && monthKey(c.date) === monthKey(exp.next_date)) {
+        // The bank's betalning row (total debit) checks against the predicted
+        // betalning the same way the ränta row checks against the interest.
+        const r = reconcileCharge(exp.betalning, c.amount)
         recon = { drift: r.drift, ok: r.ok, predicted: false }
       }
       return { ...c, recon, duplicate: !!dups[i], classification: (dups[i] || !c.hasAmount ? 'skip' : 'include') as 'include' | 'skip' }
@@ -608,11 +625,11 @@ export default function Bolanekoll() {
   }
 
   // Confirm-to-log (plan 23, decision 5): one click logs ONE expected
-  // transaction (a ränta or an amortering line) as a source:'predicted' row —
-  // the "stop typing" deliverable. The next real import replaces it (or
-  // prompts on drift). Rows only ever enter the ledger on this explicit
-  // click, never on visit.
-  async function handleLogPredicted(entries: Array<{ charge: ExpectedCharge; kind: 'interest' | 'amortization'; amount: number }>) {
+  // transaction (a ränta, the bank's betalning, or a legacy amortering line)
+  // as a source:'predicted' row — the "stop typing" deliverable. The next
+  // real import replaces it (or prompts on drift). Rows only ever enter the
+  // ledger on this explicit click, never on visit.
+  async function handleLogPredicted(entries: Array<{ charge: ExpectedCharge; kind: PendingKind; amount: number }>) {
     const toLog = entries.filter(e => e.amount > 0 && !hasChargeInMonth(payments, e.charge.loan_part_id, e.charge.next_date, e.kind))
     if (!toLog.length) return
     try {
@@ -1302,12 +1319,16 @@ export default function Bolanekoll() {
                 )}
               </div>
               <div className="prognos-head">
+                {/* Total = what actually leaves the account: the betalningar
+                    (each already contains its ränta) plus any legacy separate
+                    amortering — i.e. Σ gross per part, never entry amounts,
+                    which would double-count the ränta inside betalningen. */}
                 <div className="metric-chip is-accent">
                   <span className="metric-label">Nästa avisering</span>
-                  <span className="metric-val">~{fmtMoney(shownPending.reduce((s, e) => s + e.amount, 0))}</span>
+                  <span className="metric-val">~{fmtMoney(shownCharges.reduce((s, r) => s + r.gross, 0))}</span>
                   <span className="metric-sub">
-                    ränta {fmtMoney(shownPending.filter(e => e.kind === 'interest').reduce((s, e) => s + e.amount, 0))}
-                    {' · betalning '}{fmtMoney(shownPending.filter(e => e.kind === 'amortization').reduce((s, e) => s + e.amount, 0))}
+                    varav ränta {fmtMoney(shownCharges.reduce((s, r) => s + r.interest, 0))}
+                    {' · amortering '}{fmtMoney(shownCharges.reduce((s, r) => s + r.amortization, 0))}
                   </span>
                 </div>
                 {shownPending.length > 1 && (
@@ -1317,10 +1338,11 @@ export default function Bolanekoll() {
                 )}
               </div>
               {/* Same table shell as Betalningar below: every upcoming
-                  transaction is its own row — a ränta row and an amortering
-                  row stand alone, each with its own log button and double-log
-                  guard. The coming-months preview appends read-only rows to
-                  the SAME tbody when expanded. */}
+                  transaction is its own row — the ränta and its companion
+                  (the bank's betalning, or a legacy amortering) stand alone,
+                  each with its own log button and double-log guard. The
+                  coming-months preview appends read-only rows to the SAME
+                  tbody when expanded. */}
               <div className="table-wrap">
                 <table className="data-table table-cards prognos-table">
                   <thead><tr><th className="col-date">Månad</th><th>Lånedel</th><th>Typ</th><th className="num">Sats</th><th className="num">Belopp</th><th>Status</th><th className="col-act"></th></tr></thead>
@@ -1341,7 +1363,7 @@ export default function Bolanekoll() {
                             <td className="col-date">{fmtChargeMonth(r.next_date)}</td>
                             <td className="col-part">{partNameById(r.loan_part_id)}</td>
                             <td className="col-kind">
-                              <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Betalning'}</span>
+                              <span className={'kind-tag kind-' + e.kind}>{kindLabel(e.kind)}</span>
                             </td>
                             <td className="num col-rate">{pct != null ? fmtPct(pct) : '—'}</td>
                             <td className="num col-amount">~{fmtMoney(e.amount)}</td>
@@ -1381,7 +1403,7 @@ export default function Bolanekoll() {
                           <td className="col-date">{fmtChargeMonth(r.next_date)}</td>
                           <td className="col-part">{partNameById(r.loan_part_id)}</td>
                           <td className="col-kind">
-                            <span className={'kind-tag kind-' + e.kind}>{isInterest ? 'Ränta' : 'Betalning'}</span>
+                            <span className={'kind-tag kind-' + e.kind}>{kindLabel(e.kind)}</span>
                           </td>
                           <td className="num col-rate">{pct != null ? fmtPct(pct) : '—'}</td>
                           <td className="num col-amount">~{fmtMoney(e.amount)}</td>

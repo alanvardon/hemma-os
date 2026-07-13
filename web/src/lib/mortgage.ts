@@ -148,16 +148,18 @@ export function autoMapColumns(headers: string[]): ColMapping {
   }
 }
 
+// The bank's per-part "Betalning" line is the TOTAL debited for the part —
+// ränta included — so it stays kind 'payment' (an account movement, never
+// principal). The part's amortering is derived downstream as the paired
+// difference betalning − ränta within the month; classifying betalning as
+// amortization would invent principal on interest-only parts whose betalning
+// merely equals the ränta.
 export function classifyKind(text: string | null | undefined): PaymentKind {
   const s = String(text ?? '').toLowerCase()
   if (/ränta|ranta|interest/.test(s)) return 'interest'
   if (/amorter|amort|principal|avbetal/.test(s)) return 'amortization'
-  // Account movements must match BEFORE the bare betalning check below —
-  // "inbetalning"/"utbetalning" contain "betalning".
-  if (/inbet|utbetal|payment|överför|overfor|insättning|insattning/.test(s)) return 'payment'
-  // The bank labels the avi's fixed amortering line "Betalning".
-  if (/betalning/.test(s)) return 'amortization'
-  if (/\blån\b|\blan\b|disburs|loan|uttag|nyutl/.test(s)) return 'loan'
+  if (/betalning|payment|inbet|överför|overfor|insättning|insattning/.test(s)) return 'payment'
+  if (/\blån\b|\blan\b|utbetalning|disburs|loan|uttag|nyutl/.test(s)) return 'loan'
   if (/avgift|fee|aviavgift/.test(s)) return 'fee'
   return 'other'
 }
@@ -737,6 +739,8 @@ export interface ExpectedCharge {
   interest: number            // balance × rate/100 × days/365
   amortization: number        // observed monthly amortization × period (0 for interest-only)
   gross: number               // interest + amortization
+  betalning: number | null    // the bank's per-part TOTAL debit (ränta + amortering) when the
+                              // ledger has kind-'payment' betalning rows; null for manual ledgers
   confidence: 'exact' | 'assumed' | 'unknown'
   calibration_gap: number | null  // listed rate − derived rate (pp); diagnostic only
 }
@@ -817,22 +821,44 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
     bs.bound && !bs.expired ? 'exact' : rate_source === 'derived' ? 'assumed' : 'unknown'
 
   const interest = rate != null && days > 0 && balance > 0 ? r2(balance * rate / 100 * days / 365) : 0
-  // The bank charges a FIXED amortering per avi, so predict the full amount
-  // from the recent real amortering rows (median of the trailing 3; one-off
-  // insatser excluded — they don't repeat). The balance-timeline drop is only
-  // the fallback for ledgers without explicit amortering rows: it dilutes the
-  // charge across months outside the amortering history and underestimates.
+  // Amortering, in priority order:
+  // 1. Explicit real amortering rows — manual ledgers. Median of the trailing
+  //    3 (one-off insatser excluded — they don't repeat).
+  // 2. The bank's statement shape: per part a Ränta row and a "Betalning" row
+  //    that is the TOTAL debited (ränta included). Amortering is the paired
+  //    difference betalning − ränta within the month — 0 on an interest-only
+  //    part, whose betalning simply equals the ränta. Median of the trailing
+  //    3 paired months so a one-off transfer can't skew it.
+  // 3. The balance-timeline drop — last resort; it dilutes the charge across
+  //    months outside the history and underestimates.
   const amorts = real.filter(p => p?.loan_part_id === part.id && p.kind === 'amortization'
     && !p.is_insats && Math.abs(Number(p.amount)) > 0 && p.date)
     .sort((a, b) => a.date.localeCompare(b.date)).slice(-3)
     .map(p => Math.abs(Number(p.amount))).sort((a, b) => a - b)
-  const amortization = amorts.length
-    ? r2(amorts[amorts.length >> 1])
+  const byMonth = new Map<string, { interest: number; betalning: number; hasBetalning: boolean }>()
+  for (const p of real) {
+    if (p?.loan_part_id !== part.id || !p.date) continue
+    const mk = monthKey(p.date)
+    if (!mk) continue
+    const m = byMonth.get(mk) || { interest: 0, betalning: 0, hasBetalning: false }
+    if (p.kind === 'interest') m.interest += Math.abs(Number(p.amount) || 0)
+    else if (p.kind === 'payment') { m.betalning += Math.abs(Number(p.amount) || 0); m.hasBetalning = true }
+    byMonth.set(mk, m)
+  }
+  const paired = [...byMonth.entries()]
+    .filter(([, m]) => m.hasBetalning && m.interest > 0)
+    .sort((a, b) => a[0].localeCompare(b[0])).slice(-3)
+    .map(([, m]) => Math.max(0, m.betalning - m.interest)).sort((a, b) => a - b)
+  const amortization = amorts.length ? r2(amorts[amorts.length >> 1])
+    : paired.length ? r2(paired[paired.length >> 1])
     : r2(monthlyAmortizationRate([part], real) * period_months)
   return {
     loan_part_id: part.id, next_date, days, period_months, charge_day: chargeDay, balance,
     original_balance: partOriginal(part, real),
     rate, rate_source, rate_type, interest, amortization, gross: r2(interest + amortization),
+    // A part with betalning history predicts the bank's total row; a ledger
+    // without one renders the legacy separate amortering line instead.
+    betalning: paired.length ? r2(interest + amortization) : null,
     confidence, calibration_gap: derived != null && listed != null ? r2(listed - derived) : null,
   }
 }
@@ -845,12 +871,15 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
 export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[]): ExpectedCharge | null {
   const c = expectedCharge(part, periods, payments)
   if (!c) return null
-  // A month only rolls once EVERY expected transaction is covered — ränta and,
-  // when the loan amortizes, the amortering. Logging just one of the two keeps
-  // the month visible so the other stays loggable.
+  // A month only rolls once EVERY expected transaction is covered — the ränta
+  // and its companion row: the bank's betalning (kind payment) when the part
+  // has one, else the legacy amortering line. Logging just one of the two
+  // keeps the month visible so the other stays loggable.
   const covered = (x: ExpectedCharge) =>
     hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'interest') &&
-    (x.amortization <= 0 || hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'amortization'))
+    (x.betalning != null
+      ? (x.betalning <= 0 || hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'payment'))
+      : (x.amortization <= 0 || hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'amortization')))
   let out = c
   for (let i = 0; i < 24 && covered(out); i++) out = rollChargeOnce(part, periods, out)
   return out
@@ -867,6 +896,7 @@ function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedChar
   return {
     ...out, next_date, days, balance, interest,
     gross: r2(interest + out.amortization),
+    betalning: out.betalning != null ? r2(interest + out.amortization) : null,
     // A binding can lapse mid-roll: exact only while it still holds.
     confidence: bs.bound && !bs.expired ? 'exact' : out.rate_source === 'derived' ? 'assumed' : 'unknown',
   }
@@ -929,19 +959,20 @@ export function reconcileCharge(expected: ExpectedCharge | number, actualInteres
   return { expected: exp, actual, drift, ok: Math.abs(drift) <= Math.max(50, exp * 0.01) + 1e-9 }
 }
 
-// Pairs each incoming ränta/amortering draft with an existing
+// Pairs each incoming ränta/betalning/amortering draft with an existing
 // source:'predicted' row of the SAME kind on the same loan_part_id + month.
 // Deliberately NOT flagDuplicates: its fingerprint includes the exact date,
 // and the import triage feeds it blank candidate dates, so that path can
 // never collide with a dated predicted row.
+const SUPERSEDABLE: ReadonlySet<PaymentKind> = new Set(['interest', 'amortization', 'payment'])
 export function matchPredictedRows(payments: Payment[], drafts: Array<Partial<Payment>>):
   Array<{ draftIndex: number; predicted: Payment; recon: ReturnType<typeof reconcileCharge> }> {
   const preds = (payments || []).filter(p =>
-    p?.source === 'predicted' && (p.kind === 'interest' || p.kind === 'amortization') && p.loan_part_id && monthKey(p.date))
+    p?.source === 'predicted' && SUPERSEDABLE.has(p.kind) && p.loan_part_id && monthKey(p.date))
   const used = new Set<string>()
   const out: Array<{ draftIndex: number; predicted: Payment; recon: ReturnType<typeof reconcileCharge> }> = []
   ;(drafts || []).forEach((d, i) => {
-    if (!d || (d.kind !== 'interest' && d.kind !== 'amortization') || !d.loan_part_id || !monthKey(d.date)) return
+    if (!d || !d.kind || !SUPERSEDABLE.has(d.kind) || !d.loan_part_id || !monthKey(d.date)) return
     const hit = preds.find(p => !used.has(p.id) && p.kind === d.kind && p.loan_part_id === d.loan_part_id && monthKey(p.date) === monthKey(d.date))
     if (!hit) return
     used.add(hit.id)

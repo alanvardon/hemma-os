@@ -33,8 +33,8 @@ export default function PaymentDialog({ open, id, payments, parts, settings, onS
           <FormField label="Type">
             <select className="select" value={form.kind} onChange={e => set('kind', e.target.value)}>
               <option value="interest">Ränta · Interest</option>
-              <option value="amortization">Betalning · Principal</option>
-              <option value="payment">Inbetalning · Payment</option>
+              <option value="amortization">Amortering · Principal</option>
+              <option value="payment">Betalning · Payment</option>
               <option value="loan">Lån · Disbursement</option>
               <option value="fee">Avgift · Fee</option>
               <option value="other">Övrigt · Other</option>

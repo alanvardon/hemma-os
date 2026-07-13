@@ -146,7 +146,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const rows = document.querySelectorAll('.prognos-row')
     expect(rows).toHaveLength(2)
     expect(rows[0].querySelector('.kind-interest')?.textContent).toBe('Ränta')
-    expect(rows[1].querySelector('.kind-amortization')?.textContent).toBe('Betalning')
+    expect(rows[1].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
     expect(rows[1].querySelector('button')).not.toBeNull()
     // The amortering line shows the amorteringsgrad where ränta lines show
     // the rate — a share of the loan's ORIGINAL size (amorteringskravets bas),
@@ -189,9 +189,51 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     await waitFor(() => {
       const rows = document.querySelectorAll('.prognos-row')
       expect(rows).toHaveLength(1)
-      expect(rows[0].querySelector('.kind-amortization')?.textContent).toBe('Betalning')
+      expect(rows[0].querySelector('.kind-amortization')?.textContent).toBe('Amortering')
     })
     expect(document.querySelector('.prognos-row .col-date')?.textContent).toBe('juli 2026')
+  })
+
+  it('bank shape: renders a Ränta and a Betalning (total) row per part and logs the pair', async () => {
+    // The bank reports per part a Ränta row and a Betalning row that is the
+    // TOTAL debited (ränta included): betalning − ränta = 3 000 amortering,
+    // saldo stepping down accordingly. Nästa avisering mirrors that shape —
+    // the Betalning line carries the full debit, not the bare amortering.
+    const betalningRow = (date: string, amount: number, balance: number): Payment => ({
+      id: 'b' + date, created_at: '', loan_part_id: 'p1', date, kind: 'payment',
+      description: 'Betalning', amount, balance_after: balance, paid_by: 'joint', source: 'import:bank.csv',
+    })
+    const paired = [
+      interestRow('2026-03-27', 3100, { balance_after: 1_000_000 }),
+      interestRow('2026-04-27', 3100, { balance_after: 997_000 }),
+      interestRow('2026-05-27', 3000, { balance_after: 994_000 }),
+      interestRow('2026-06-27', 3100, { balance_after: 991_000 }),
+      betalningRow('2026-04-27', 6100, 997_000),
+      betalningRow('2026-05-27', 6000, 994_000),
+      betalningRow('2026-06-27', 6100, 991_000),
+    ]
+    seedStore(paired, { ...PART, start_date: '2026-03-01', start_balance: 1_000_000 })
+    vi.mocked(Store.addPayments).mockImplementation(async (records) =>
+      records.map((r, i) => ({ ...r, id: 'new' + i, created_at: '' } as Payment)))
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await screen.findAllByRole('button', { name: 'Logga förväntad rad' })
+    const rows = document.querySelectorAll('.prognos-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].querySelector('.kind-interest')?.textContent).toBe('Ränta')
+    expect(rows[1].querySelector('.kind-payment')?.textContent).toBe('Betalning')
+    // Betalning = predicted ränta + amortering; amorteringsgraden still reads
+    // off the principal share: 3 000 × 12 / 1 000 000 = 3,60 %.
+    expect(rows[1].querySelector('.col-rate')?.textContent).toBe('3,60 %')
+
+    await user.click(screen.getByRole('button', { name: 'Logga alla förväntade rader' }))
+
+    expect(Store.addPayments).toHaveBeenCalledTimes(1)
+    expect(Store.addPayments).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: 'interest', date: '2026-07-27', amount: 2981.15, source: 'predicted', balance_after: 988_000 }),
+      expect.objectContaining({ kind: 'payment', date: '2026-07-27', amount: 5981.15, source: 'predicted', balance_after: 988_000 }),
+    ])
   })
 
   it('shows the month AFTER one already covered, without logging anything', async () => {

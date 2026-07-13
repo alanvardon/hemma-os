@@ -188,21 +188,63 @@ describe('expectedCharge', () => {
     expect(c.gross).toBe(c.interest + 3000)
   })
 
-  it('a betalning row stored as kind payment does NOT feed the amortering prediction', () => {
-    // The pre-fix failure mode: the bank's "Betalning" (amortering) rows were
-    // imported as kind 'payment', so the forecast saw no amortering history
-    // and silently fell back to the diluted balance-drop estimate (here: 0,
-    // since the interest rows hold the saldo flat at 1 000 000).
+  it('derives the amortering as betalning − ränta from the month-paired rows', () => {
+    // The bank reports per part a Ränta row and a "Betalning" row that is the
+    // TOTAL debited (ränta included). Amortering = the paired difference:
+    //   maj: 6 000 − 3 000 = 3 000 · jun: 6 100 − 3 100 = 3 000.
+    // The prediction is the median of the trailing paired months, and the
+    // betalning field carries the predicted total (ränta + amortering).
     const pays = [
       ...CLEAN,
-      interestRow('2026-05-27', 4000, { id: 'b1', kind: 'payment', description: 'Betalning' }),
-      interestRow('2026-06-27', 4000, { id: 'b2', kind: 'payment', description: 'Betalning' }),
+      interestRow('2026-05-27', 6000, { id: 'b1', kind: 'payment', description: 'Betalning' }),
+      interestRow('2026-06-27', 6100, { id: 'b2', kind: 'payment', description: 'Betalning' }),
+    ]
+    const c = expectedCharge(part(), [period()], pays)!
+    expect(c.amortization).toBe(3000)
+    expect(c.interest).toBe(3000)                   // 1 000 000 × 3.65/100 × 30/365
+    expect(c.betalning).toBe(6000)                  // ränta + amortering — the bank's total
+    expect(c.gross).toBe(6000)
+  })
+
+  it('an interest-only part whose betalning equals the ränta predicts amortering 0 — betalning = ränta', () => {
+    // Betalning 3 100 = Ränta 3 100 → the part stays flat; the avi still has
+    // both rows, so the prediction must too (betalning non-null, no principal).
+    const pays = [
+      ...CLEAN,
+      interestRow('2026-05-27', 3000, { id: 'b1', kind: 'payment', description: 'Betalning' }),
+      interestRow('2026-06-27', 3100, { id: 'b2', kind: 'payment', description: 'Betalning' }),
     ]
     const c = expectedCharge(part(), [period()], pays)!
     expect(c.amortization).toBe(0)
-    // The same rows reclassified to kind amortization drive the prediction.
-    const repaired = pays.map(p => p.kind === 'payment' ? { ...p, kind: 'amortization' as const } : p)
-    expect(expectedCharge(part(), [period()], repaired)!.amortization).toBe(4000)
+    expect(c.betalning).toBe(c.interest)
+  })
+
+  it('a ledger without betalning rows stays in the legacy shape: betalning is null', () => {
+    // Manual ledgers (or other banks) have no per-part total row — the UI
+    // then falls back to the separate amortering line item.
+    expect(expectedCharge(part(), [period()], CLEAN)!.betalning).toBeNull()
+    const withAmort = [
+      ...CLEAN,
+      interestRow('2026-05-27', 3000, { id: 'a1', kind: 'amortization' }),
+      interestRow('2026-06-27', 3000, { id: 'a2', kind: 'amortization' }),
+    ]
+    const c = expectedCharge(part(), [period()], withAmort)!
+    expect(c.amortization).toBe(3000)
+    expect(c.betalning).toBeNull()
+  })
+
+  it('one-off transfers cannot skew the paired median', () => {
+    // A lone big payment row in June (e.g. an extra inbetalning) makes that
+    // month's diff jump; the median of the trailing paired months holds.
+    const pays = [
+      ...CLEAN,
+      interestRow('2026-04-27', 6100, { id: 'b0', kind: 'payment', description: 'Betalning' }),
+      interestRow('2026-05-27', 6000, { id: 'b1', kind: 'payment', description: 'Betalning' }),
+      interestRow('2026-06-27', 6100, { id: 'b2', kind: 'payment', description: 'Betalning' }),
+      interestRow('2026-06-15', 50_000, { id: 'x1', kind: 'payment', description: 'Överföring' }),
+    ]
+    // Diffs: apr 3 000 · maj 3 000 · jun 53 000 → median 3 000.
+    expect(expectedCharge(part(), [period()], pays)!.amortization).toBe(3000)
   })
 
   it('ignores logged predictions when calibrating (round-trip invariance)', () => {
@@ -281,6 +323,28 @@ describe('pendingCharge (rolls past covered months)', () => {
     expect(c.balance).toBe(988_000)                 // 991 000 − 3 000 predicted amortering
     expect(c.amortization).toBe(3000)
   })
+
+  it('bank shape: the month holds until BOTH the ränta and the betalning row are logged', () => {
+    // Paired history (betalning = ränta + 3 000). Logging just the July ränta
+    // leaves the betalning slot open — the month must not roll; adding the
+    // kind-payment betalning row rolls it and steps the balance down by the
+    // amortering (NOT by the whole betalning).
+    const paired = [
+      ...CLEAN,
+      interestRow('2026-05-27', 6000, { id: 'b1', kind: 'payment', description: 'Betalning' }),
+      interestRow('2026-06-27', 6100, { id: 'b2', kind: 'payment', description: 'Betalning' }),
+    ]
+    const halfLogged = [...paired, loggedJuly]
+    const held = pendingCharge(part(), [period()], halfLogged)!
+    expect(held.next_date).toBe('2026-07-27')
+
+    const fullyLogged = [...halfLogged,
+      { ...loggedJuly, id: 'predB', kind: 'payment' as const, amount: 6000, balance_after: 997_000 }]
+    const rolled = pendingCharge(part(), [period()], fullyLogged)!
+    expect(rolled.next_date).toBe('2026-08-27')
+    expect(rolled.balance).toBe(997_000)            // 1 000 000 − 3 000 amortering
+    expect(rolled.betalning).toBeCloseTo(rolled.interest + 3000, 2)
+  })
 })
 
 describe('pendingChargeSeries (coming-months preview)', () => {
@@ -352,20 +416,23 @@ describe('expectedCharges / forecastInterest', () => {
     expect(res.total_gross).toBe(9000)
   })
 
-  it('every amortizing part predicts its OWN betalning — never pooled onto one part', () => {
-    // Two parts, each with its own fixed betalning history (4 000 / 1 000 kr).
-    // The Nästa avisering block must show one amortering line per part with
-    // that part's amount — not a single pooled transaction.
+  it('the household shape: one amortizing part, the rest betalning == ränta', () => {
+    // All amortering sits on p1 (betalning 3 000 kr over the ränta); p2 pays
+    // exactly its ränta and stays flat. Each part predicts its OWN pair —
+    // Nästa avisering mirrors the bank: Ränta + Betalning per part.
     const p2 = part({ id: 'p2', label: 'Del 2' })
     const p2ints = CLEAN.map(p => ({ ...p, id: p.id + '-2', loan_part_id: 'p2', balance_after: 2_000_000, amount: p.amount * 2 }))
-    const amorts = [
-      interestRow('2026-05-27', 4000, { id: 'am1', kind: 'amortization' }),
-      interestRow('2026-06-27', 4000, { id: 'am2', kind: 'amortization' }),
-      interestRow('2026-05-27', 1000, { id: 'am3', kind: 'amortization', loan_part_id: 'p2' }),
-      interestRow('2026-06-27', 1000, { id: 'am4', kind: 'amortization', loan_part_id: 'p2' }),
+    const betalningar = [
+      interestRow('2026-05-27', 6000, { id: 'b1', kind: 'payment', description: 'Betalning' }),
+      interestRow('2026-06-27', 6100, { id: 'b2', kind: 'payment', description: 'Betalning' }),
+      interestRow('2026-05-27', 6000, { id: 'b3', kind: 'payment', description: 'Betalning', loan_part_id: 'p2', balance_after: 2_000_000 }),
+      interestRow('2026-06-27', 6200, { id: 'b4', kind: 'payment', description: 'Betalning', loan_part_id: 'p2', balance_after: 2_000_000 }),
     ]
-    const res = expectedCharges([part(), p2], [period(), period({ id: 'r2', loan_part_id: 'p2' })], [...CLEAN, ...p2ints, ...amorts])
-    expect(res.rows.map(r => [r.loan_part_id, r.amortization])).toEqual([['p1', 4000], ['p2', 1000]])
+    const res = expectedCharges([part(), p2], [period(), period({ id: 'r2', loan_part_id: 'p2' })], [...CLEAN, ...p2ints, ...betalningar])
+    expect(res.rows.map(r => [r.loan_part_id, r.amortization, r.betalning])).toEqual([
+      ['p1', 3000, 6000],   // ränta 3 000 + amortering 3 000 (diffs: maj 6 000−3 000, jun 6 100−3 100)
+      ['p2', 0, 6000],      // betalning == ränta (2 000 000 × 3.65 % × 30/365) — stays flat
+    ])
   })
 
   it('12-month flat forecast = 12 × one monthly charge, through ränteavdrag', () => {
@@ -439,6 +506,18 @@ describe('matchPredictedRows', () => {
     expect(m).toHaveLength(2)
     expect(m.find(x => x.draftIndex === 0)!.predicted.id).toBe('pred2')  // amort ↔ amort
     expect(m.find(x => x.draftIndex === 1)!.predicted.id).toBe('pred1')  // ränta ↔ ränta
+  })
+
+  it('pairs an incoming betalning draft with the predicted kind-payment row', () => {
+    // The bank's Betalning row (total debit) supersedes the logged prediction
+    // just like the ränta row does.
+    const predictedBetalning: Payment = { ...predicted, id: 'pred3', kind: 'payment', amount: 6000 }
+    const m = matchPredictedRows([predicted, predictedBetalning], [
+      { loan_part_id: 'p1', date: '2026-07-27', kind: 'payment', amount: 6010 },
+    ])
+    expect(m).toHaveLength(1)
+    expect(m[0].predicted.id).toBe('pred3')
+    expect(m[0].recon.ok).toBe(true)                 // drift 10 kr, inside max(50, 1 %)
   })
 
   it('ignores non-predicted existing rows and consumes each predicted row once', () => {
