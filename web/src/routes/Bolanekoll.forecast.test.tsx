@@ -236,6 +236,63 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     ])
   })
 
+  it('offers a one-click refresh when logged förväntade rows drift from the current forecast', async () => {
+    // Flat-monthly bank (4 061 kr every month) + two July förväntad rows
+    // logged with the OLD days-model (the ×1.86 bug: 7 565 kr). The banner
+    // rewrites them to the current forecast on an explicit click.
+    const B = 1_350_000
+    const flatRow = (date: string, kind: Payment['kind'], amount: number, over: Partial<Payment> = {}): Payment => ({
+      id: kind[0] + date, created_at: '', loan_part_id: 'p1', date, kind,
+      description: kind === 'interest' ? 'Ränta' : 'Betalning', amount, balance_after: B,
+      paid_by: 'joint', source: 'import:bank.csv', ...over,
+    })
+    const ledger = [
+      flatRow('2026-03-01', 'interest', 4061), flatRow('2026-04-01', 'interest', 4061),
+      flatRow('2026-05-01', 'interest', 4061), flatRow('2026-06-01', 'interest', 4061),
+      flatRow('2026-05-01', 'payment', 4061), flatRow('2026-06-01', 'payment', 4061),
+      flatRow('2026-07-01', 'interest', 7565, { id: 'stale-i', source: 'predicted', description: 'Förväntad avi' }),
+      flatRow('2026-07-01', 'payment', 7565, { id: 'stale-b', source: 'predicted', description: 'Förväntad avi' }),
+    ]
+    seedStore(ledger)
+    vi.mocked(Store.updatePayment).mockImplementation(async (id, patch) =>
+      ({ ...ledger.find(p => p.id === id)!, ...patch } as Payment))
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    expect(await screen.findByText(/beräknades med en äldre prognosmodell/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Uppdatera förväntade rader' }))
+
+    expect(Store.updatePayment).toHaveBeenCalledTimes(2)
+    expect(Store.updatePayment).toHaveBeenCalledWith('stale-i', { amount: 4061, balance_after: B })
+    expect(Store.updatePayment).toHaveBeenCalledWith('stale-b', { amount: 4061, balance_after: B })
+    expect(await screen.findByText(/förväntade rader uppdaterade till aktuell prognos/)).toBeInTheDocument()
+  })
+
+  it('a failed refresh surfaces the error toast and keeps the banner', async () => {
+    const B = 1_350_000
+    const stale: Payment = {
+      id: 'stale-i', created_at: '', loan_part_id: 'p1', date: '2026-07-01', kind: 'interest',
+      description: 'Förväntad avi', amount: 7565, balance_after: B, paid_by: 'joint', source: 'predicted',
+    }
+    const ledger = [
+      ...['2026-03-01', '2026-04-01', '2026-05-01', '2026-06-01'].map((d, i): Payment => ({
+        id: 'i' + i, created_at: '', loan_part_id: 'p1', date: d, kind: 'interest',
+        description: 'Ränta', amount: 4061, balance_after: B, paid_by: 'joint', source: 'import:bank.csv',
+      })),
+      stale,
+    ]
+    seedStore(ledger)
+    vi.mocked(Store.updatePayment).mockRejectedValueOnce({ message: 'Failed to fetch' })
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Uppdatera förväntade rader' }))
+
+    expect(await screen.findByText('Ingen anslutning. Ändringen sparades inte i molnet.')).toBeInTheDocument()
+    // The rows were not rewritten, so the banner must still be offering the fix.
+    expect(screen.getByRole('button', { name: 'Uppdatera förväntade rader' })).toBeInTheDocument()
+  })
+
   it('shows the month AFTER one already covered, without logging anything', async () => {
     seedStore([...HISTORY, PREDICTED])
     renderBolanekoll()

@@ -973,6 +973,40 @@ export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payme
   return out
 }
 
+// Logged förväntad rows carry the amounts the model produced AT LOGGING TIME;
+// when the model improves they go stale, and by design nothing rewrites them
+// on visit (real imports supersede them). This surfaces the drift so the UI
+// can offer an explicit one-click refresh: each stale row is returned with the
+// CURRENT forecast's amount and post-charge saldo for its part + month + kind.
+// Rows inside the reconcile tolerance, real rows, and past months are left
+// alone; months after the base forecast are compared against the rolled charge.
+export function stalePredictedRows(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]):
+  Array<{ payment: Payment; amount: number; balance_after: number }> {
+  const out: Array<{ payment: Payment; amount: number; balance_after: number }> = []
+  const preds = (payments || []).filter(p => p?.source === 'predicted' && p.loan_part_id && monthKey(p.date))
+  if (!preds.length) return out
+  for (const part of (parts || []).filter(p => p && !p.archived)) {
+    const mine = preds.filter(p => p.loan_part_id === part.id)
+    if (!mine.length) continue
+    const lastMk = mine.map(p => monthKey(p.date) as string).sort()[mine.length - 1]
+    let c = expectedCharge(part, periods, payments)
+    for (let i = 0; c && i < 24; i++, c = rollChargeOnce(part, periods, c)) {
+      const mk = monthKey(c.next_date)
+      if (!mk || mk > lastMk) break
+      for (const p of mine) {
+        if (monthKey(p.date) !== mk) continue
+        const expected = p.kind === 'interest' ? c.interest
+          : p.kind === 'payment' ? (c.betalning ?? c.gross)
+          : p.kind === 'amortization' ? c.amortization : null
+        if (expected == null || expected <= 0) continue
+        if (reconcileCharge(expected, Number(p.amount) || 0).ok) continue
+        out.push({ payment: p, amount: expected, balance_after: r2(Math.max(0, c.balance - c.amortization)) })
+      }
+    }
+  }
+  return out
+}
+
 export function expectedCharges(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]):
   { rows: ExpectedCharge[]; total_interest: number; total_gross: number } {
   const rows = (parts || []).filter(p => p && !p.archived)

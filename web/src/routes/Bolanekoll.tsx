@@ -23,7 +23,7 @@ import {
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit, insatsPayments,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
-  expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey,
+  expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   contributionSplit, settlement, todayISO,
 } from '../lib/mortgage'
@@ -366,6 +366,11 @@ export default function Bolanekoll() {
     () => effPrognosFilter === 'all' ? pendingCharges : pendingCharges.filter(r => r.loan_part_id === effPrognosFilter),
     [pendingCharges, effPrognosFilter])
 
+  // Förväntade rows logged with an OLDER model keep their logged amounts —
+  // nothing rewrites ledger rows on visit. Surface the drift with an explicit
+  // one-click refresh instead (each entry carries the corrected values).
+  const staleRows = useMemo(() => stalePredictedRows(parts, periods, payments), [parts, periods, payments])
+
   const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
     return Math.abs(r.drift) >= Math.max(r.start_balance * 0.01, 5000)
@@ -644,6 +649,20 @@ export default function Bolanekoll() {
       showToast(toLog.length === 1
         ? 'Förväntad rad loggad — nästa import ersätter den med bankens rad.'
         : toLog.length + ' förväntade rader loggade — nästa import ersätter dem.')
+    } catch (err) { saveErr(err) }
+  }
+
+  // Rewrite each stale förväntad row to the current forecast's amount and
+  // post-charge saldo. Explicit click only — same principle as logging.
+  async function handleRefreshPredicted() {
+    if (!staleRows.length) return
+    try {
+      for (const s of staleRows)
+        await Store.updatePayment(s.payment.id, { amount: s.amount, balance_after: s.balance_after })
+      await refresh(); flashSaved()
+      showToast(staleRows.length === 1
+        ? '1 förväntad rad uppdaterad till aktuell prognos.'
+        : staleRows.length + ' förväntade rader uppdaterade till aktuell prognos.')
     } catch (err) { saveErr(err) }
   }
 
@@ -1306,6 +1325,20 @@ export default function Bolanekoll() {
               header and its controls sit further down, directly above the
               ledger they act on. Only parts NOT yet covered by a row for that
               month show — logging (or importing) makes a part drop out. */}
+          {/* Förväntade rows in the ledger that no longer match the current
+              forecast (logged with an older model). Refresh is an explicit
+              click — the app never rewrites ledger rows on visit. */}
+          {staleRows.length > 0 && (
+            <div className="reconcile-banner">
+              {staleRows.length === 1
+                ? '1 förväntad rad i liggaren beräknades med en äldre prognosmodell och stämmer inte längre med aktuell prognos.'
+                : staleRows.length + ' förväntade rader i liggaren beräknades med en äldre prognosmodell och stämmer inte längre med aktuell prognos.'}
+              {' '}
+              <button type="button" className="btn btn-ghost" onClick={handleRefreshPredicted}>
+                Uppdatera förväntade rader
+              </button>
+            </div>
+          )}
           {pendingEntries.length > 0 && (
             <div className="prognos-block">
               <div className="card-head">
