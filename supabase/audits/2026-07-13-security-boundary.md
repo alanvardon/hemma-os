@@ -22,7 +22,7 @@ recorded.
 | Live Before User Created hook target | PASS (owner-verified) | On 2026-07-13 the owner created and dashboard-verified a Before User Created registration targeting `public.hook_before_user_created`. No production signup test was run. |
 | Private schema usage | PASS (local/live) | `anon` has no usage; `authenticated` has the policy-required usage. |
 | Private schema client table grants | PASS (local/live) | Both catalog results establish a client table-grant count of zero. |
-| Hostile two-user requests | NOT RUN | Production writes are forbidden; no separately approved non-production remote project was available. |
+| Hostile two-user isolation | PASS (local) | A transactional pgTAP regression passed 133/133 across all 15 public tables using two fictional users and households. No hostile write was sent to production; deployed parity relies on 19/19 migrations plus the live catalog evidence. |
 | Clean local build secret/source-map scan | PASS | Five emitted text assets; no privileged pattern, service-role JWT, or source map. |
 | Deployed text-asset scan | PASS | HTML plus two same-origin JS/CSS assets; one publishable key, no service-role/JWT/private-key pattern. |
 | Deployed security response headers | FAIL | All five reviewed response headers were absent. A meta CSP is present but cannot replace all headers. |
@@ -36,6 +36,7 @@ containing deployment identifiers was discarded before reporting.
 ```sh
 supabase db reset --local
 supabase test db --local supabase/tests/database/security_boundary_test.sql
+supabase test db --local supabase/tests/database/household_isolation_test.sql
 supabase migration list --linked
 npm ci
 npm run lint
@@ -66,6 +67,19 @@ The catalog assertions are executable pgTAP queries in
 `pg_roles`, privilege functions, and `information_schema.table_privileges`.
 They fail CI rather than merely printing a verdict.
 
+The behavioral assertions are in
+`supabase/tests/database/household_isolation_test.sql`. Inside one rolled-back
+transaction, two fictional Auth users each belong to a fictional household.
+The test then switches to the `authenticated` role with user A's fictional JWT
+claims. For every ordinary household store, it proves the own-row success path,
+foreign `SELECT` invisibility, RLS-denied foreign `INSERT`, a successful own
+`UPDATE`, RLS-denied movement into the foreign household, zero-row foreign
+`UPDATE`/`DELETE`, and a successful own `DELETE`. Relationship/read-only tables
+are checked through their intended direct-read and RPC/service-owned surfaces;
+invites also prove the intentional recipient-read exception. Exact `42501` RLS
+errors plus successful controls distinguish isolation from malformed fixtures.
+The gate passed 133/133 after a clean migration replay.
+
 ## Public-table RLS and policy inventory (local replay + live catalog)
 
 | Table | RLS | Expected client policy | Result |
@@ -87,7 +101,11 @@ They fail CI rather than merely printing a verdict.
 | `tool_state` | on | authenticated `ALL`, household `USING` + `WITH CHECK` | PASS local/live |
 
 The 18 supplied live policy rows match the same command, role, `USING`, and
-`WITH CHECK` shape expectations as the local replay.
+`WITH CHECK` shape expectations as the local replay. Behavioral isolation is
+PASS locally for all 15 tables. It was deliberately not re-executed against
+production: production parity is supported by the confirmed 19/19 migration
+versions and the post-push live policy catalog, not by hostile production
+writes.
 
 ## SECURITY DEFINER inventory (local replay + live catalog)
 
@@ -207,7 +225,7 @@ baseline commit `209c767`. This is point-in-time evidence only.
 
 ## Remaining verification work
 
-1. Run hostile two-user CRUD/move and invite-gate tests with fictional users in
-   an approved non-production project. Never run those writes against
-   production.
-2. Treat the response-header gaps as a separate hosting/security decision.
+1. Treat the response-header gaps as a separate hosting/security decision.
+2. If a separately approved remote non-production project becomes available,
+   the local two-user regression may be repeated there for an additional
+   environment-parity check. Never run hostile writes against production.

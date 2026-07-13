@@ -82,7 +82,8 @@ The sanitized report is
 `supabase/audits/2026-07-13-security-boundary.md`.
 
 - Local migration replay, catalog assertions, build/deployed-asset scans,
-  response-header inspection, and dependency audit are complete.
+  response-header inspection, dependency audit, and a transactional two-user
+  household-isolation regression are complete.
 - The approved `20260713110000_restrict_public_function_execute.sql` migration
   fixes the confirmed function-grant defects; the hard local catalog gate passes
   14/14, and the owner confirmed the post-push live grant matrix.
@@ -100,9 +101,12 @@ The sanitized report is
   on 2026-07-13 and dashboard-verified a Before User Created registration
   targeting `public.hook_before_user_created`. Function metadata/ACL is
   independently live-catalog verified; no production signup test was run.
-- All live database catalog categories in scope now pass. Hostile two-user
-  writes remain untested because no approved non-production project was
-  available, and the documented response-header gaps remain a separate hosting
+- The local-only hostile two-user regression passes 133/133 across every public
+  table using fictional users and households. It covers cross-household reads,
+  inserts, updates, moves, deletes, success controls, read-only/RPC surfaces,
+  and the intended invite-recipient exception. No hostile write was sent to
+  production; deployed parity relies on 19/19 migrations and live catalog
+  evidence. The documented response-header gaps remain a separate hosting
   decision.
 - No production data was read or changed. The owner changed only the hosted
   hook registration described above; the agent made no production change.

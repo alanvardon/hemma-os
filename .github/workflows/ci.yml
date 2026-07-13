@@ -78,5 +78,7 @@ jobs:
       - name: Rebuild from migrations
         run: supabase db reset --local
 
-      - name: Verify RLS and function security catalogs
-        run: supabase test db --local supabase/tests/database/security_boundary_test.sql
+      - name: Verify database security boundary
+        run: |
+          supabase test db --local supabase/tests/database/security_boundary_test.sql
+          supabase test db --local supabase/tests/database/household_isolation_test.sql
