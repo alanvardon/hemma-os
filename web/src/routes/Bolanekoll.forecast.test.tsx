@@ -66,6 +66,7 @@ function renderBolanekoll() {
 function seedStore(payments: Payment[], part: LoanPart = PART) {
   vi.mocked(Store.cachedSnapshot).mockReturnValue({
     version: 1,
+    banks: [], mortgages: [],
     loan_parts: [part], payments, valuations: [], rate_periods: [PERIOD], contributions: [],
     settings: defaultSettings(),
   })
@@ -75,6 +76,8 @@ function seedStore(payments: Payment[], part: LoanPart = PART) {
   vi.mocked(Store.listRatePeriods).mockResolvedValue([PERIOD])
   vi.mocked(Store.listContributions).mockResolvedValue([])
   vi.mocked(Store.getSettings).mockResolvedValue(defaultSettings())
+  vi.mocked(Store.listBanks).mockResolvedValue([])
+  vi.mocked(Store.listMortgages).mockResolvedValue([])
 }
 
 // Route a CSV through the hidden dropzone input. jsdom's File may lack .text(),
@@ -313,7 +316,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const period2: RatePeriod = { ...PERIOD, id: 'r2', loan_part_id: 'p2', rate: 4 }
     const p2Rows = HISTORY.map(r => ({ ...r, id: r.id + '-p2', loan_part_id: 'p2' }))
     vi.mocked(Store.cachedSnapshot).mockReturnValue({
-      version: 1, loan_parts: [PART, part2], payments: [...HISTORY, ...p2Rows],
+      version: 1, banks: [], mortgages: [], loan_parts: [PART, part2], payments: [...HISTORY, ...p2Rows],
       valuations: [], rate_periods: [PERIOD, period2], contributions: [], settings: defaultSettings(),
     })
     vi.mocked(Store.listLoanParts).mockResolvedValue([PART, part2])
@@ -322,6 +325,8 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     vi.mocked(Store.listRatePeriods).mockResolvedValue([PERIOD, period2])
     vi.mocked(Store.listContributions).mockResolvedValue([])
     vi.mocked(Store.getSettings).mockResolvedValue(defaultSettings())
+    vi.mocked(Store.listBanks).mockResolvedValue([])
+    vi.mocked(Store.listMortgages).mockResolvedValue([])
     const user = userEvent.setup()
     renderBolanekoll()
 

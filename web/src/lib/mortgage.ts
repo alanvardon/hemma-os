@@ -21,6 +21,29 @@ export interface LoanPart {
   planned_amortization?: number | null
   planned_amortization_start?: string | null
   planned_amortization_end?: string | null
+  // Plan 103 — links the part to its Mortgage (→ Bank). Null on legacy rows.
+  mortgage_id?: string | null
+  // Plan 103 — the explicit origination anchor, split out of the overloaded
+  // start_balance / start_date. original_balance is the part's amount when the
+  // agreement was signed; original_date its origination date (per-part override
+  // of the mortgage's start_date, for staggered draws). Null falls back to the
+  // legacy start_balance / derivation.
+  original_balance?: number | null
+  original_date?: string | null
+}
+
+// Plan 103 — the household's bank (billing-convention profile lands in plan
+// 104). A household may use several over time; a Mortgage links to exactly one.
+export interface Bank {
+  id: string; created_at: string; household_id?: string; label: string
+}
+
+// Plan 103 — one bolån agreement, linked to exactly one Bank, holding many
+// Lånedelar. "Change bank" creates a new Mortgage (a refinance is a new
+// agreement); the old one is retained as history.
+export interface Mortgage {
+  id: string; created_at: string; household_id?: string
+  bank_id: string | null; label: string; start_date: string | null; archived: boolean
 }
 
 export type PaymentKind = 'interest' | 'amortization' | 'payment' | 'loan' | 'fee' | 'other'
@@ -187,6 +210,10 @@ function normPlannedAmortization(v: unknown): number | null {
 }
 
 export function makeLoanPart(p: Partial<LoanPart>): Omit<LoanPart, 'id' | 'created_at'> {
+  // original_balance is the origination anchor: clamp to ≥ 0, and ignore a
+  // NaN/negative value (falls back to start_balance / derivation downstream).
+  const ob = Number(p.original_balance)
+  const original_balance = (p.original_balance == null || !isFinite(ob) || ob < 0) ? null : r2(ob)
   return {
     label: p.label || '', loan_number: p.loan_number || '',
     start_balance: r2(Number(p.start_balance) || 0),
@@ -194,6 +221,9 @@ export function makeLoanPart(p: Partial<LoanPart>): Omit<LoanPart, 'id' | 'creat
     planned_amortization: normPlannedAmortization(p.planned_amortization),
     planned_amortization_start: (p.planned_amortization_start == null || p.planned_amortization_start === '') ? null : String(p.planned_amortization_start),
     planned_amortization_end: (p.planned_amortization_end == null || p.planned_amortization_end === '') ? null : String(p.planned_amortization_end),
+    mortgage_id: p.mortgage_id || null,
+    original_balance,
+    original_date: p.original_date || null,
   }
 }
 
@@ -278,6 +308,10 @@ export function partBalance(part: LoanPart, payments: Payment[]): number {
 }
 
 function partOriginal(part: LoanPart, payments: Payment[]): number {
+  // Origination anchor — the part's amount when the agreement was signed (plan
+  // 103). Prefer the explicit original_balance; fall back to the legacy
+  // start_balance, then to the loan-row / earliest-Saldo derivation.
+  if (Number(part?.original_balance) > 0) return r2(Number(part.original_balance))
   if (Number(part?.start_balance) > 0) return r2(Number(part.start_balance))
   const mine = payments.filter(p => p?.loan_part_id === part?.id)
   const loans = mine.filter(p => p.kind === 'loan')
@@ -1311,22 +1345,77 @@ export function paymentsToCsv(payments: Payment[], parts: LoanPart[]): string {
 
 // ── Reconciliation ─────────────────────────────────────────────────────────
 
+// Rebuilt on the clean origination anchor (plan 103). The check must NOT fire
+// just because a loan is older than its imported ledger window: when the
+// origination PREDATES the ledger's earliest Saldo, the gap is expected
+// pre-import amortisation and no banner is warranted (the 192 000 false-alarm
+// case). It fires only on genuine partial-import evidence:
+//   - the origination sits within/after the ledger window (origination date not
+//     before the earliest Saldo), and the anchor still can't be reconciled to
+//     that opening Saldo by the amortisation actually logged between them.
+// `start_balance` in the returned shape is the origination anchor (original_balance
+// first, then legacy start_balance) so the existing UI copy keeps working.
 export function reconcileBalance(parts: LoanPart[], payments: Payment[]) {
-  function edge(rows: Payment[], newest: boolean): number | null {
+  function edgeDate(rows: Payment[], newest: boolean): string | null {
     if (!rows.length) return null
-    const e = rows.reduce((acc: string | null, x) => acc == null ? String(x.date) : (newest ? (x.date > acc ? x.date : acc) : (x.date < acc ? x.date : acc)), null) as string
-    return rows.filter(x => x.date === e).reduce((mn: number | null, x) => { const b = Number(x.balance_after) || 0; return mn == null || b < mn ? b : mn }, null)
+    return rows.reduce((acc: string | null, x) => acc == null ? String(x.date) : (newest ? (x.date > acc ? x.date : acc) : (x.date < acc ? x.date : acc)), null)
+  }
+  function saldoAt(rows: Payment[], date: string): number | null {
+    const same = rows.filter(x => String(x.date) === date)
+    if (!same.length) return null
+    return same.reduce((mn: number | null, x) => { const b = Number(x.balance_after) || 0; return mn == null || b < mn ? b : mn }, null)
   }
   return parts.filter(p => p && !p.archived).map(p => {
+    // Origination anchor + its date (per-part original_* first, legacy fallback).
+    const anchorRaw = Number(p.original_balance) > 0 ? Number(p.original_balance)
+      : Number(p.start_balance) > 0 ? Number(p.start_balance) : null
+    const anchor = anchorRaw != null ? r2(anchorRaw) : null
+    const origDate = String(p.original_date || p.start_date || '')
+
     const mine = payments.filter(x => x?.loan_part_id === p.id)
     const wb = mine.filter(x => x.balance_after != null && x.date)
-    const scoped = (p.start_date ? wb.filter(x => x.date >= p.start_date) : wb) || wb
-    const hasStart = Number(p.start_balance) > 0
-    const current = wb.length ? (edge(wb, true) != null ? r2(edge(wb, true)!) : null) : null
-    const startSaldo = (scoped.length ? scoped : wb).length ? (edge(scoped.length ? scoped : wb, false) != null ? r2(edge(scoped.length ? scoped : wb, false)!) : null) : null
-    const drift = hasStart && startSaldo != null ? r2(Number(p.start_balance) - startSaldo) : null
-    return { loan_part_id: p.id, label: p.label, current, start_balance: hasStart ? r2(Number(p.start_balance)) : null, start_saldo: startSaldo, drift }
+    const newestDate = edgeDate(wb, true)
+    const earliestDate = edgeDate(wb, false)
+    const current = newestDate != null ? (saldoAt(wb, newestDate) != null ? r2(saldoAt(wb, newestDate)!) : null) : null
+    const startSaldo = earliestDate != null ? (saldoAt(wb, earliestDate) != null ? r2(saldoAt(wb, earliestDate)!) : null) : null
+
+    let drift: number | null = null
+    if (anchor != null && startSaldo != null && earliestDate != null) {
+      // Amortisation the ledger actually logged between origination and the
+      // opening Saldo — the only reduction we can account for.
+      const amortRows = mine.filter(x => x.kind === 'amortization' && x.date
+        && (!origDate || x.date >= origDate) && x.date <= earliestDate)
+      const loggedAmort = amortRows.reduce((s, x) => s + (Number(x.amount) || 0), 0)
+      if (origDate && origDate < earliestDate && amortRows.length === 0) {
+        // Origination strictly before the ledger opens and nothing logged in
+        // between → the gap is expected pre-import amortisation we can't see, so
+        // never a banner (the 192 000 false-alarm case, silenced by construction).
+        drift = null
+      } else {
+        // Either the origination sits within/after the window (the two should
+        // coincide), or there IS logged amortisation to reconcile forward: the
+        // opening Saldo should equal the anchor less that logged amortisation.
+        // Any residual is genuine partial-import / stale-figure evidence.
+        drift = r2(anchor - loggedAmort - startSaldo)
+      }
+    }
+    return { loan_part_id: p.id, label: p.label, current, start_balance: anchor, start_saldo: startSaldo, drift }
   })
+}
+
+// ── Bank / Mortgage resolvers (plan 103) ─────────────────────────────────────
+// Pure lookups so the forecast and plan 104's profile lookup can reach a part's
+// bank without threading ids through every call. Legacy rows lacking
+// mortgage_id / bank resolve to null (an "unknown bank") without crashing.
+export function mortgageForPart(part: LoanPart | null | undefined, mortgages: Mortgage[]): Mortgage | null {
+  const id = part?.mortgage_id
+  if (!id) return null
+  return (mortgages || []).find(m => m?.id === id) ?? null
+}
+export function bankForPart(part: LoanPart | null | undefined, mortgages: Mortgage[], banks: Bank[]): Bank | null {
+  const m = mortgageForPart(part, mortgages)
+  if (!m?.bank_id) return null
+  return (banks || []).find(b => b?.id === m.bank_id) ?? null
 }
 
 // ── Contributions ──────────────────────────────────────────────────────────

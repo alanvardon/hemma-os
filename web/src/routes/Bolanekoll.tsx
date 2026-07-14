@@ -27,7 +27,7 @@ import {
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   contributionSplit, settlement, todayISO,
 } from '../lib/mortgage'
-import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, PaidBy, ExpectedCharge } from '../lib/mortgage'
+import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, PaidBy, ExpectedCharge, Bank, Mortgage } from '../lib/mortgage'
 import {
   fetchPolicyRate, nextDecision, lastDecision, decisionOutcome,
   detectChange, currentPoint, readAcknowledged, acknowledge, readSessionHidden, hideForSession,
@@ -95,6 +95,8 @@ export default function Bolanekoll() {
   // Cold cache → empty arrays (a genuine first-time user), and the `loaded` flag
   // below holds back the empty-hero until we actually know it's empty.
   const [seed] = useState(Store.cachedSnapshot)
+  const [banks, setBanks] = useState<Bank[]>(seed.banks)
+  const [mortgages, setMortgages] = useState<Mortgage[]>(seed.mortgages)
   const [parts, setParts] = useState<LoanPart[]>(seed.loan_parts)
   const [payments, setPayments] = useState<Payment[]>(seed.payments)
   const [valuations, setValuations] = useState<Valuation[]>(seed.valuations)
@@ -171,11 +173,13 @@ export default function Bolanekoll() {
   currencyState.current = settings.currency || 'SEK'
 
   const refresh = useCallback(async () => {
-    const [ps, pays, vals, pers, contribs, sett] = await Promise.all([
+    const [ps, pays, vals, pers, contribs, sett, bnks, morts] = await Promise.all([
       Store.listLoanParts(), Store.listPayments(), Store.listValuations(),
       Store.listRatePeriods(), Store.listContributions(), Store.getSettings(),
+      Store.listBanks(), Store.listMortgages(),
     ])
     setParts(ps); setPayments(pays); setValuations(vals); setPeriods(pers); setContributions(contribs); setSettings(sett)
+    setBanks(bnks); setMortgages(morts)
     setLoaded(true)
   }, [])
 
@@ -217,6 +221,12 @@ export default function Bolanekoll() {
   // bare date can't: how much of the loan moves, and off which rate.
   const nextReprice = useMemo(() => loanGroups.find(g => !g.is_catchall && g.days_left != null) ?? null, [loanGroups])
   const archivedParts = useMemo(() => parts.filter(p => p.archived), [parts])
+
+  // Plan 103 — the active mortgage the UI surfaces (the model supports many; we
+  // show one). First non-archived, else the first. Legacy data with no mortgage
+  // → null, and the Lånedelar list renders flat, exactly as before.
+  const activeMortgage = useMemo<Mortgage | null>(() => mortgages.find(m => m && !m.archived) ?? mortgages[0] ?? null, [mortgages])
+  const activeBank = useMemo<Bank | null>(() => activeMortgage?.bank_id ? (banks.find(b => b.id === activeMortgage.bank_id) ?? null) : null, [activeMortgage, banks])
 
   const nextBesked = useMemo(() => nextDecision(today), [today])
   const nextBeskedDays = useMemo(() => nextBesked ? daysUntil(nextBesked, today) : null, [nextBesked, today])
@@ -521,7 +531,10 @@ export default function Bolanekoll() {
   // ── Handlers ─────────────────────────────────────────────────────────────
   async function handleSavePart(data: Omit<LoanPart, 'id' | 'created_at'>) {
     try {
-      if (partDlg.id) await Store.updateLoanPart(partDlg.id, data); else await Store.addLoanPart(data)
+      // Plan 103 — a new part associates with the active mortgage (edits keep
+      // their existing link). Legacy data with no mortgage leaves it null.
+      if (partDlg.id) await Store.updateLoanPart(partDlg.id, data)
+      else await Store.addLoanPart({ ...data, mortgage_id: activeMortgage?.id ?? null })
       await refresh(); flashSaved(); setPartDlg({ open: false, id: null }); showToast(partDlg.id ? 'Loan part updated.' : 'Loan part added.')
     } catch (err) { saveErr(err) }
   }
@@ -1188,6 +1201,15 @@ export default function Bolanekoll() {
           </div>
           {!parts.length ? <p className="empty">No loan parts yet. Add your lånedelar — one per loan account — to begin.</p> : (
             <div className="table-wrap">
+              {/* Plan 103 — the parts sit under the active mortgage (bank → lån).
+                  Only shown once the household has one; legacy data stays flat. */}
+              {activeMortgage && (
+                <div className="ld-mortgage-head">
+                  <span className="ld-bank">{activeBank?.label || 'Okänd bank'}</span>
+                  <span className="ld-mortgage-sep">·</span>
+                  <span className="ld-mortgage-name">{activeMortgage.label || 'Bolån'}</span>
+                </div>
+              )}
               <table className="data-table table-cards lanedelar-table">
                 <thead><tr><th>Lånedel <span className="th-en">· part</span></th><th className="num">Balance</th><th className="num">Share</th><th className="col-act"></th></tr></thead>
                 <tbody>
