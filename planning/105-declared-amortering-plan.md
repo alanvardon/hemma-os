@@ -1,8 +1,11 @@
-# Plan 103 — Declared amortering plan (override the derived amortering)
+# Plan 105 — Declared amortering plan (override the derived amortering)
 
-**Status:** proposed · **Priority:** Medium · **Effort:** S–M · **Owner:** Claude ·
-**Source:** owner question after the #305 forecast fix, 2026-07-14 ·
-**Touches:** `web/src/lib/mortgage.ts`, `web/src/lib/mortgage.test.ts`,
+**Status:** proposed · **Priority:** Medium · **Depends on:** none — independent;
+composes with [plan 103](103-mortgage-domain-model.md) (parts stay per-part under
+a mortgage) and is unrelated to [plan 104](104-declared-calc-overrides.md)
+(interest side) · **Effort:** S–M · **Owner:** Claude Sonnet 5 · **Source:** owner
+question after the #305 forecast fix, 2026-07-14 · **Touches:**
+`web/src/lib/mortgage.ts`, `web/src/lib/mortgage.test.ts`,
 `web/src/lib/mortgage-forecast.test.ts`, `web/src/lib/mortgage-store.ts`,
 `web/src/routes/bolanekoll/PartDialog.tsx`, `web/src/routes/Bolanekoll.tsx`,
 optionally a Supabase migration (see Decisions locked · storage)
