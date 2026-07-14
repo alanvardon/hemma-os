@@ -164,7 +164,7 @@ When the owner asks to start or implement a plan (or several):
 - **The orchestrating agent keeps the clarify gate.** Do not hand a subagent a
   stage that still needs an undecided call on financial meaning, persisted-data
   semantics, schema, or security. Resolve it with the owner first (concrete
-  interpretation + example), then dispatch. A stage marked `[Opus · escalate]`
+  interpretation + example), then dispatch. A stage marked `[escalate]`
   must never be guessed by a cold subagent. Verification, financial-correctness
   gates, and the final report stay the orchestrator's responsibility.
 
