@@ -5,7 +5,8 @@ import { describe, it, expect } from 'vitest'
 import {
   expectedCharge, expectedCharges, forecastInterest, reconcileCharge,
   matchPredictedRows, hasChargeInMonth, pendingCharge, pendingChargeSeries, partBalance,
-  stalePredictedRows,
+  stalePredictedRows, makeLoanPart, effectiveDeclaredAmortization, declaredMonthlyAmortization,
+  projectMilestones,
 } from './mortgage'
 import type { LoanPart, Payment, RatePeriod } from './mortgage'
 
@@ -941,5 +942,153 @@ describe('stalePredictedRows (logged forecasts vs the current model)', () => {
     const augustStale = predRow({ id: 'ar', date: '2026-08-01', amount: 8000 })
     const out = stalePredictedRows([part()], [], [...flat, ...julyOk, augustStale])
     expect(out.map(s => [s.payment.id, s.amount])).toEqual([['ar', 4061]])  // flat part: same charge rolled
+  })
+})
+
+// Plan 105 — the owner can DECLARE a fixed rak amortering (kr/mån) on a part;
+// the forecast trusts it over the value derived from ledger history, so a new
+// or changed arrangement is correct immediately instead of lagging ~3 months.
+describe('plan 105 — declared amortering', () => {
+  // A betalning (bank total-debit) row for a given month.
+  function betalning(date: string, amount: number, id: string): Payment {
+    return interestRow(date, amount, { id, kind: 'payment', description: 'Betalning' })
+  }
+
+  it('declared amount wins over a stale paired diff — amortization, betalning and the rolled step', () => {
+    // Trailing paired diffs say 6 000 (betalning − ränta), but the owner declared
+    // 8 000. Declared wins: amortering 8 000, betalning = ränta + 8 000, and the
+    // rolled balance steps by 8 000.
+    const pays = [
+      ...CLEAN,
+      betalning('2026-05-27', 9000, 'b1'),   // 9 000 − 3 000 = 6 000
+      betalning('2026-06-27', 9100, 'b2'),   // 9 100 − 3 100 = 6 000
+    ]
+    const p = part({ planned_amortization: 8000 })
+    const c = expectedCharge(p, [period()], pays)!
+    expect(c.interest).toBe(3000)                    // unchanged: 1 000 000 × 3.65/100 × 30/365
+    expect(c.amortization).toBe(8000)                // declared beats the paired 6 000
+    expect(c.amortization_source).toBe('declared')
+    expect(c.betalning).toBe(11000)                  // ränta 3 000 + declared 8 000
+    expect(c.gross).toBe(11000)
+    // The rolled avi (August) steps the balance down by the declared 8 000.
+    const series = pendingChargeSeries(p, [period()], pays, 3)
+    expect(series[0].amortization).toBe(8000)
+    expect(series[1].balance).toBe(992000)           // 1 000 000 − 8 000
+    expect(series[1].amortization).toBe(8000)
+  })
+
+  it('declared 0 pins the part interest-only, overriding a noisy paired diff', () => {
+    // One noisy paired month would otherwise invent 50 kr of amortering; the
+    // owner declares 0 → interest-only, betalning = ränta.
+    const pays = [
+      ...CLEAN,
+      betalning('2026-06-27', 3150, 'b1'),   // 3 150 − 3 100 = 50 (noise)
+    ]
+    const c = expectedCharge(part({ planned_amortization: 0 }), [period()], pays)!
+    expect(c.amortization).toBe(0)
+    expect(c.amortization_source).toBe('declared')
+    expect(c.betalning).toBe(c.interest)             // 3 000 — bank total-debit shape kept
+  })
+
+  it('real amortization rows still outrank the declaration (ground-truth precedence)', () => {
+    const pays = [
+      ...CLEAN,
+      interestRow('2026-05-27', 3000, { id: 'a1', kind: 'amortization' }),
+      interestRow('2026-06-27', 3000, { id: 'a2', kind: 'amortization' }),
+    ]
+    const c = expectedCharge(part({ planned_amortization: 8000 }), [period()], pays)!
+    expect(c.amortization).toBe(3000)                // real row median wins over declared 8 000
+    expect(c.amortization_source).toBe('real')
+  })
+
+  it('effective-dating: a future start does not alter the current charge but applies from its date (8 000 → 5 000)', () => {
+    // Detection reads 8 000 from the paired history; the owner declares a step
+    // DOWN to 5 000 starting 2026-09-01. Months before the start keep 8 000; the
+    // declared 5 000 applies only from September on.
+    const pays = [
+      ...CLEAN,
+      betalning('2026-05-27', 11000, 'b1'),  // 11 000 − 3 000 = 8 000
+      betalning('2026-06-27', 11100, 'b2'),  // 11 100 − 3 100 = 8 000
+    ]
+    const p = part({ planned_amortization: 5000, planned_amortization_start: '2026-09-01' })
+    const series = pendingChargeSeries(p, [period()], pays, 4)
+    // [0] Jul 27, [1] Aug 27 — both before the start → detected 8 000.
+    expect(series[0].next_date).toBe('2026-07-27')
+    expect(series[0].amortization).toBe(8000)
+    expect(series[0].amortization_source).toBe('paired')
+    expect(series[1].amortization).toBe(8000)
+    // [2] Sep 27 — on/after the start → declared 5 000.
+    expect(series[2].next_date).toBe('2026-09-27')
+    expect(series[2].amortization).toBe(5000)
+    expect(series[2].amortization_source).toBe('declared')
+  })
+
+  it('detection is unchanged when nothing is declared (regression guard)', () => {
+    // planned_amortization undefined AND explicit null both reproduce the paired
+    // golden (betalning − ränta = 3 000), byte-for-byte with the pre-105 path.
+    const pays = [
+      ...CLEAN,
+      betalning('2026-05-27', 6000, 'b1'),
+      betalning('2026-06-27', 6100, 'b2'),
+    ]
+    const base = expectedCharge(part(), [period()], pays)!
+    expect(base.amortization).toBe(3000)
+    expect(base.amortization_source).toBe('paired')
+    expect(base.betalning).toBe(6000)
+    const withNull = expectedCharge(part({ planned_amortization: null }), [period()], pays)!
+    expect(withNull.amortization).toBe(3000)
+    expect(withNull.betalning).toBe(6000)
+  })
+
+  it('balance step-down / payoff: declared amortering drives the series and projectBalance, stopping at 0', () => {
+    // A 25 000 kr part with a flat ledger (timeline drop 0) and a declared
+    // 10 000 kr/mån: the per-part series steps 25 000 → 15 000 → 5 000 and stops
+    // (never negative), and the aggregate projection pays off in 3 months.
+    const pays = [
+      interestRow('2026-04-27', 76, { balance_after: 25000 }),
+      interestRow('2026-05-27', 76, { id: 'i2', balance_after: 25000 }),
+      interestRow('2026-06-27', 76, { id: 'i3', balance_after: 25000 }),
+    ]
+    const declared = part({ planned_amortization: 10000 })
+    const series = pendingChargeSeries(declared, [period()], pays, 12)
+    expect(series.map(s => s.balance)).toEqual([25000, 15000, 5000])   // stops before going negative
+    expect(series.every(s => s.balance >= 0)).toBe(true)
+    // Aggregate projection: declared drives payoff; the undeclared part is flat.
+    expect(projectMilestones([declared], pays, [], {}).payoff_months).toBe(3)
+    expect(projectMilestones([part()], pays, [], {}).payoff_months).toBeNull()
+  })
+
+  it('effectiveDeclaredAmortization: clamps/ignores malformed and honours effective dates', () => {
+    expect(effectiveDeclaredAmortization(part())).toBeNull()                              // undeclared
+    expect(effectiveDeclaredAmortization(part({ planned_amortization: 0 }))).toBe(0)       // 0 is valid
+    expect(effectiveDeclaredAmortization(part({ planned_amortization: -5 }))).toBeNull()   // negative ignored
+    expect(effectiveDeclaredAmortization(part({ planned_amortization: NaN }))).toBeNull()  // NaN ignored
+    const dated = part({ planned_amortization: 8000, planned_amortization_start: '2026-09-01', planned_amortization_end: '2026-12-31' })
+    expect(effectiveDeclaredAmortization(dated, '2026-08-31')).toBeNull()   // before start
+    expect(effectiveDeclaredAmortization(dated, '2026-09-01')).toBe(8000)   // on start (inclusive)
+    expect(effectiveDeclaredAmortization(dated, '2026-12-31')).toBe(8000)   // on end (inclusive)
+    expect(effectiveDeclaredAmortization(dated, '2027-01-01')).toBeNull()   // after end
+  })
+
+  it('declaredMonthlyAmortization: sums declared parts, null when none, archived excluded', () => {
+    expect(declaredMonthlyAmortization([part()])).toBeNull()
+    expect(declaredMonthlyAmortization([
+      part({ planned_amortization: 8000 }),
+      part({ id: 'p2', planned_amortization: 0 }),
+    ])).toBe(8000)
+    expect(declaredMonthlyAmortization([part({ archived: true, planned_amortization: 8000 })])).toBeNull()
+  })
+
+  it('makeLoanPart normalises the declared fields defensively', () => {
+    expect(makeLoanPart({}).planned_amortization).toBeNull()
+    expect(makeLoanPart({ planned_amortization: 0 }).planned_amortization).toBe(0)
+    expect(makeLoanPart({ planned_amortization: 8000 }).planned_amortization).toBe(8000)
+    expect(makeLoanPart({ planned_amortization: -100 }).planned_amortization).toBeNull()
+    expect(makeLoanPart({ planned_amortization: NaN }).planned_amortization).toBeNull()
+    expect(makeLoanPart({ planned_amortization: '' as unknown as number }).planned_amortization).toBeNull()
+    expect(makeLoanPart({ planned_amortization: '8000' as unknown as number }).planned_amortization).toBe(8000)
+    expect(makeLoanPart({ planned_amortization_start: '' }).planned_amortization_start).toBeNull()
+    expect(makeLoanPart({ planned_amortization_start: '2026-09-01' }).planned_amortization_start).toBe('2026-09-01')
+    expect(makeLoanPart({ planned_amortization_end: '2026-12-31' }).planned_amortization_end).toBe('2026-12-31')
   })
 })

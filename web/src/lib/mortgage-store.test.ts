@@ -119,6 +119,48 @@ describe('write path', () => {
     expect(sync.syncCoordinator.isDirty('mortgage_loan_parts')).toBe(false)
   })
 
+  // Plan 105 — the declared amortering columns must round-trip through the
+  // COLS.parts allowlist (a field missing there is silently dropped and never
+  // persists). Save success + failure per the AGENTS.md writes-and-failures rule.
+  it('addLoanPart: persists a declared amortering to the row and round-trips via list', async () => {
+    const saved = await store.addLoanPart({
+      label: 'Bolån', loan_number: '1', start_balance: 500000, start_date: '2024-01-01', archived: false,
+      planned_amortization: 8000, planned_amortization_start: '2026-09-01', planned_amortization_end: null,
+    })
+    const row = mock().tables.mortgage_loan_parts[0]
+    expect(row.planned_amortization).toBe(8000)              // reached the DB column, not dropped by COLS.parts
+    expect(row.planned_amortization_start).toBe('2026-09-01')
+    const listed = await store.listLoanParts()
+    expect(listed[0].planned_amortization).toBe(8000)        // read back out of the cloud
+    expect((cache().loan_parts as LoanPart[])[0].planned_amortization).toBe(8000)
+    expect(saved.planned_amortization).toBe(8000)
+  })
+
+  it('updateLoanPart: patches the declared amortering on the row and cache', async () => {
+    mock().tables.mortgage_loan_parts = [{ id: 'p1', created_at: 't', label: 'Bolån', loan_number: '1', start_balance: 500000, start_date: '2024-01-01', archived: false, revision: 1 }]
+    // Load through the sync layer first so the optimistic-concurrency revision
+    // for p1 is registered — an update against an unknown revision conflicts.
+    await store.listLoanParts()
+    const updated = await store.updateLoanPart('p1', { planned_amortization: 5000, planned_amortization_start: '2026-09-01' })
+    expect(updated?.planned_amortization).toBe(5000)
+    expect(mock().tables.mortgage_loan_parts[0].planned_amortization).toBe(5000)
+    expect((cache().loan_parts as LoanPart[])[0].planned_amortization).toBe(5000)
+  })
+
+  it('addLoanPart: a cloud error keeps the declared amortering dirty for replay', async () => {
+    mock().control.failing.add('mortgage_loan_parts')
+    await expect(store.addLoanPart({
+      label: 'Bolån', loan_number: '1', start_balance: 500000, start_date: '2024-01-01', archived: false, planned_amortization: 8000,
+    })).rejects.toBeTruthy()
+    // Durable sync keeps the optimistic row cached + dirty for replay rather than
+    // dropping it; the declared amortering must survive to reach the DB on replay.
+    expect((cache().loan_parts as LoanPart[])[0].planned_amortization).toBe(8000)
+    mock().control.failing.delete('mortgage_loan_parts')
+    await sync.syncCoordinator.replay()
+    expect(mock().tables.mortgage_loan_parts[0].planned_amortization).toBe(8000)
+    expect(sync.syncCoordinator.isDirty('mortgage_loan_parts')).toBe(false)
+  })
+
   it('addPayment: success patches the cache', async () => {
     const saved = await store.addPayment({ loan_part_id: 'p1', date: '2024-02-01', kind: 'amortization', description: '', amount: 1000, balance_after: null, paid_by: 'joint', source: '' })
     expect(mock().tables.mortgage_payments).toHaveLength(1)
