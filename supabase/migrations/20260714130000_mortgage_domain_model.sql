@@ -80,6 +80,21 @@ where not exists (
   select 1 from public.mortgages m where m.household_id = b.household_id
 );
 
+-- The two backfills below UPDATE existing mortgage_loan_parts rows, which fires
+-- private.reject_tombstoned_row (the reject_deleted_mortgage_loan_parts trigger
+-- from 20260714100000). That guard's superuser bypass only matches a bare
+-- session_user='postgres' connection; the role `supabase db push` runs under on
+-- a hosted project does NOT match it, so the guard raises "household write
+-- denied" on any row it touches (a `supabase db reset` on empty local tables
+-- never hits it — zero rows are updated). This is a legitimate one-time admin
+-- backfill: it only sets the new nullable columns on rows that already exist,
+-- never changing an id or reusing a tombstoned one, so the tombstone/immutability
+-- checks are safe to skip. Disable that one trigger for the two statements and
+-- re-enable it immediately (the whole migration is one transaction, so a failure
+-- rolls the disable back too). The migration role owns the table — it just added
+-- columns to it above — so it may toggle the trigger.
+alter table public.mortgage_loan_parts disable trigger reject_deleted_mortgage_loan_parts;
+
 -- Backfill every part still lacking a mortgage to its household's mortgage.
 -- min(id) is deterministic and, since this migration is the first to create
 -- mortgages, resolves to the single seeded row per household.
@@ -96,6 +111,8 @@ update public.mortgage_loan_parts
 set original_balance = start_balance,
     original_date    = start_date
 where original_balance is null;
+
+alter table public.mortgage_loan_parts enable trigger reject_deleted_mortgage_loan_parts;
 
 -- ── Wire the new tables into the plan-98 optimistic-concurrency sync system ──
 -- Every mutable household table mutates ONLY through the receipt-backed
