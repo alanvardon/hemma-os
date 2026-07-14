@@ -1401,10 +1401,12 @@ export default function Bolanekoll() {
                             <td className="num col-rate">{pct != null ? fmtPct(pct) : '—'}</td>
                             <td className="num col-amount">~{fmtMoney(e.amount)}</td>
                             <td className="col-status">
-                              {isInterest && (
+                              {isInterest ? (
                                 <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
                                   {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
                                 </span>
+                              ) : r.amortization_source === 'declared' && (
+                                <span className="conf-badge is-exact" title="Planerad amortering — deklarerad, inte framräknad ur historiken">deklarerad</span>
                               )}
                             </td>
                             <td className="col-act">
@@ -1440,7 +1442,11 @@ export default function Bolanekoll() {
                           </td>
                           <td className="num col-rate">{pct != null ? fmtPct(pct) : '—'}</td>
                           <td className="num col-amount">~{fmtMoney(e.amount)}</td>
-                          <td className="col-status" />
+                          <td className="col-status">
+                            {!isInterest && r.amortization_source === 'declared' && (
+                              <span className="conf-badge is-exact" title="Planerad amortering — deklarerad, inte framräknad ur historiken">deklarerad</span>
+                            )}
+                          </td>
                           <td className="col-act" />
                         </tr>
                       )

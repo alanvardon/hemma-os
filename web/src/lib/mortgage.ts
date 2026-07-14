@@ -12,6 +12,15 @@ function r2(n: number): number { return Math.round((Number(n) || 0) * 100) / 100
 export interface LoanPart {
   id: string; created_at: string; label: string; loan_number: string
   start_balance: number; start_date: string; archived: boolean
+  // Plan 105 — an owner-DECLARED rak amortering (kr/mån) on this part, which
+  // overrides the value derived from ledger history in the forecast. null =
+  // "not declared → detect". A declared 0 explicitly pins the part interest-only.
+  // Optionally effective-dated: applies only from *_start (inclusive) and, when
+  // set, until *_end (inclusive). Dates are text (lexicographic ISO), matching
+  // the rest of the schema. Real imported `amortization` rows still outrank it.
+  planned_amortization?: number | null
+  planned_amortization_start?: string | null
+  planned_amortization_end?: string | null
 }
 
 export type PaymentKind = 'interest' | 'amortization' | 'payment' | 'loan' | 'fee' | 'other'
@@ -168,11 +177,23 @@ export function normPaidBy(v: unknown): PaidBy {
   return v === 'a' ? 'a' : v === 'b' ? 'b' : 'joint'
 }
 
+// A declared amortering is a non-negative krona amount or null. Empty string,
+// null/undefined, NaN and negative values all normalise to null ("not declared
+// → detect"); 0 is a valid declaration (interest-only) and is preserved.
+function normPlannedAmortization(v: unknown): number | null {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return isFinite(n) && n >= 0 ? r2(n) : null
+}
+
 export function makeLoanPart(p: Partial<LoanPart>): Omit<LoanPart, 'id' | 'created_at'> {
   return {
     label: p.label || '', loan_number: p.loan_number || '',
     start_balance: r2(Number(p.start_balance) || 0),
     start_date: p.start_date || '', archived: !!p.archived,
+    planned_amortization: normPlannedAmortization(p.planned_amortization),
+    planned_amortization_start: (p.planned_amortization_start == null || p.planned_amortization_start === '') ? null : String(p.planned_amortization_start),
+    planned_amortization_end: (p.planned_amortization_end == null || p.planned_amortization_end === '') ? null : String(p.planned_amortization_end),
   }
 }
 
@@ -506,12 +527,44 @@ export function monthlyAmortizationRate(parts: LoanPart[], payments: Payment[]):
   return drop > 0 ? r2(drop / (tl.length - 1)) : 0
 }
 
+// Plan 105 — the owner-declared rak amortering (kr/mån) effective on `part` at
+// `asOf`, or null when nothing is declared (→ fall back to detection). Defends
+// against unnormalised cloud rows: a non-finite or negative stored value is
+// treated as "not declared". A declared 0 is authoritative and returned as 0.
+// The optional start/end bound the plan: before start, or after end, it does
+// not apply (null), so a future-dated change never rewrites the current charge.
+export function effectiveDeclaredAmortization(part: LoanPart | null | undefined, asOf?: string): number | null {
+  const raw = part?.planned_amortization
+  if (raw == null || (raw as unknown) === '') return null
+  const v = Number(raw)
+  if (!isFinite(v) || v < 0) return null
+  if (asOf != null) {
+    const s = part?.planned_amortization_start
+    const e = part?.planned_amortization_end
+    if (s && asOf < s) return null
+    if (e && asOf > e) return null
+  }
+  return r2(v)
+}
+
+// Plan 105 — the summed declared amortering across the active parts, or null
+// when NO part declares one (so the aggregate projection falls back to the
+// existing timeline detection and undeclared behaviour is byte-for-byte
+// unchanged). Parts without a declaration contribute nothing; the household's
+// interest-only flats declare 0 and correctly add nothing.
+export function declaredMonthlyAmortization(parts: LoanPart[], asOf?: string): number | null {
+  const active = (parts || []).filter(p => p && !p.archived)
+  const declared = active.map(p => effectiveDeclaredAmortization(p, asOf))
+  if (!declared.some(v => v != null)) return null
+  return r2(declared.reduce((s: number, v) => s + (v ?? 0), 0))
+}
+
 function projectBalance(
   parts: LoanPart[], payments: Payment[],
   opts?: { startBalance?: number; monthlyAmortization?: number; extraMonthly?: number; maxMonths?: number }
 ) {
   const balance = opts?.startBalance ?? totalBalance(parts, payments)
-  const base = opts?.monthlyAmortization ?? monthlyAmortizationRate(parts, payments)
+  const base = opts?.monthlyAmortization ?? declaredMonthlyAmortization(parts, todayISO()) ?? monthlyAmortizationRate(parts, payments)
   const per = r2((Number(base) || 0) + (Number(opts?.extraMonthly) || 0))
   const horizon = opts?.maxMonths || 1200
   if (per <= 0) return { flat: true, per_month: per, months: null as number | null, start_balance: r2(balance), schedule: [] as Array<{ month_index: number; balance: number }> }
@@ -772,6 +825,11 @@ export interface ExpectedCharge {
   rate_type: 'rörlig' | 'bunden' | null
   interest: number            // balance × rate/100 × days/365
   amortization: number        // observed monthly amortization × period (0 for interest-only)
+  amortization_source: 'real' | 'declared' | 'paired' | 'timeline' | null
+                              // which source the amortering came from: a real
+                              // ledger row, the owner's declared plan (plan 105),
+                              // the paired betalning − ränta diff, or the balance
+                              // timeline. Lets the UI label declared vs detected.
   gross: number               // interest + amortization
   betalning: number | null    // the bank's per-part TOTAL debit (ränta + amortering) when the
                               // ledger has kind-'payment' betalning rows; null for manual ledgers
@@ -936,13 +994,18 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
 
   // Amortering, in priority order:
   // 1. Explicit real amortering rows — manual ledgers. Median of the trailing
-  //    3 (one-off insatser excluded — they don't repeat).
-  // 2. The bank's statement shape: per part a Ränta row and a "Betalning" row
+  //    3 (one-off insatser excluded — they don't repeat). Real recorded history
+  //    stays ground truth and outranks even a declared plan.
+  // 2. The owner-DECLARED plan (plan 105): a fixed rak amortering the owner
+  //    stated for this part, effective at next_date. When present (INCLUDING 0)
+  //    it is authoritative and the paired/timeline branches below are skipped —
+  //    so the forecast is correct immediately, not ~3 months late.
+  // 3. The bank's statement shape: per part a Ränta row and a "Betalning" row
   //    that is the TOTAL debited (ränta included). Amortering is the paired
   //    difference betalning − ränta within the month — 0 on an interest-only
   //    part, whose betalning simply equals the ränta. Median of the trailing
   //    3 paired months so a one-off transfer can't skew it.
-  // 3. The balance-timeline drop — last resort; it dilutes the charge across
+  // 4. The balance-timeline drop — last resort; it dilutes the charge across
   //    months outside the history and underestimates.
   const amorts = real.filter(p => p?.loan_part_id === part.id && p.kind === 'amortization'
     && !p.is_insats && Math.abs(Number(p.amount)) > 0 && p.date)
@@ -958,13 +1021,23 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
     else if (p.kind === 'payment') { m.betalning += Math.abs(Number(p.amount) || 0); m.hasBetalning = true }
     byMonth.set(mk, m)
   }
+  const hasBetalning = [...byMonth.values()].some(m => m.hasBetalning)
   const paired = [...byMonth.entries()]
     .filter(([, m]) => m.hasBetalning && m.interest > 0)
     .sort((a, b) => a[0].localeCompare(b[0])).slice(-3)
     .map(([, m]) => Math.max(0, m.betalning - m.interest)).sort((a, b) => a - b)
+  // The declared plan, resolved at next_date and expressed per charge (× the
+  // cadence, so a kvartalsvis part gets three months of the monthly figure).
+  const declaredMonthly = effectiveDeclaredAmortization(part, next_date)
   const amortization = amorts.length ? r2(amorts[amorts.length >> 1])
+    : declaredMonthly != null ? r2(declaredMonthly * period_months)
     : paired.length ? r2(paired[paired.length >> 1])
     : r2(monthlyAmortizationRate([part], real) * period_months)
+  const amortization_source: ExpectedCharge['amortization_source'] =
+    amorts.length ? 'real'
+    : declaredMonthly != null ? 'declared'
+    : paired.length ? 'paired'
+    : 'timeline'
 
   // Flat-monthly billing (Danske-style 30/360): the ränta is balance × rate/12
   // every month — it does NOT scale with the interval's day count, so two
@@ -990,10 +1063,13 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   return {
     loan_part_id: part.id, next_date, days, period_months, charge_day: chargeDay, balance,
     original_balance: partOriginal(part, real),
-    rate: rateUsed, rate_source, rate_type, interest, amortization, gross: r2(interest + amortization),
+    rate: rateUsed, rate_source, rate_type, interest, amortization, amortization_source,
+    gross: r2(interest + amortization),
     // A part with betalning history predicts the bank's total row; a ledger
-    // without one renders the legacy separate amortering line instead.
-    betalning: paired.length ? r2(interest + amortization) : null,
+    // without one renders the legacy separate amortering line instead. A declared
+    // amortering on a part with betalning history keeps the bank's total-debit
+    // shape (betalning = interest + declared), even when no paired month exists yet.
+    betalning: (paired.length || (declaredMonthly != null && hasBetalning)) ? r2(interest + amortization) : null,
     charge_basis: basis, year_basis,
     confidence, calibration_gap: derived != null && listed != null && rateUsed != null ? r2(listed - rateUsed) : null,
   }
@@ -1048,15 +1124,22 @@ export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: P
 function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedCharge): ExpectedCharge {
   const next_date = addMonthsAtDay(out.next_date, out.period_months, out.charge_day)
   const days = daysBetween(out.next_date, next_date) ?? 0
-  const balance = Math.max(0, r2(out.balance - out.amortization))
+  // Plan 105: a declared plan can change the amortering across a roll boundary
+  // (a future start date, or a dated step-down). Re-resolve it at the new
+  // next_date — same pattern as the binding check below; when present it drives
+  // the amortering and the balance step-down, else the prior amount holds flat.
+  const declaredMonthly = effectiveDeclaredAmortization(part, next_date)
+  const amortization = declaredMonthly != null ? r2(declaredMonthly * out.period_months) : out.amortization
+  const amortization_source = declaredMonthly != null ? 'declared' : out.amortization_source
+  const balance = Math.max(0, r2(out.balance - amortization))
   const interest = out.charge_basis === 'monthly'
     ? (out.balance > 0 ? r2(out.interest * balance / out.balance) : out.interest)
     : out.rate != null && days > 0 && balance > 0 ? r2(balance * out.rate / 100 * days / out.year_basis) : 0
   const bs = bindingStatus(part, periods, next_date)
   return {
-    ...out, next_date, days, balance, interest,
-    gross: r2(interest + out.amortization),
-    betalning: out.betalning != null ? r2(interest + out.amortization) : null,
+    ...out, next_date, days, balance, interest, amortization, amortization_source,
+    gross: r2(interest + amortization),
+    betalning: out.betalning != null ? r2(interest + amortization) : null,
     // A binding can lapse mid-roll: exact only while it still holds.
     confidence: bs.bound && !bs.expired ? 'exact' : out.rate_source === 'derived' ? 'assumed' : 'unknown',
   }

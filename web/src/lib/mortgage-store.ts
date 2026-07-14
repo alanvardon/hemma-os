@@ -51,7 +51,7 @@ const RESOURCES = T
 // `household_id` (column default) + `updated_at` (trigger) are never sent. Field
 // names already match column names 1:1 (both snake_case), so a plain pick works.
 const COLS = {
-  parts: ['label', 'loan_number', 'start_balance', 'start_date', 'archived'],
+  parts: ['label', 'loan_number', 'start_balance', 'start_date', 'archived', 'planned_amortization', 'planned_amortization_start', 'planned_amortization_end'],
   periods: ['loan_part_id', 'start_date', 'end_date', 'rate', 'rate_type'],
   payments: ['loan_part_id', 'date', 'kind', 'description', 'amount', 'balance_after', 'paid_by', 'source', 'is_insats', 'paid_split'],
   valuations: ['date', 'value', 'note', 'is_purchase'],
