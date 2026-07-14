@@ -49,6 +49,7 @@ beforeEach(() => {
   vi.stubGlobal('confirm', vi.fn(() => true))
   vi.mocked(Store.cachedSnapshot).mockReturnValue({
     version: 1,
+    banks: [], mortgages: [],
     loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [],
     settings: defaultSettings(),
   })
@@ -58,6 +59,8 @@ beforeEach(() => {
   vi.mocked(Store.listRatePeriods).mockResolvedValue([])
   vi.mocked(Store.listContributions).mockResolvedValue([])
   vi.mocked(Store.getSettings).mockResolvedValue(defaultSettings())
+  vi.mocked(Store.listBanks).mockResolvedValue([])
+  vi.mocked(Store.listMortgages).mockResolvedValue([])
 })
 
 describe('Bolanekoll — save failures surface to the user (regression for audit H2 / PR #237)', () => {
@@ -120,7 +123,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
       start_balance: 500000, start_date: '2026-01-01', archived: false,
     }
     vi.mocked(Store.cachedSnapshot).mockReturnValue({
-      version: 4, loan_parts: [part], payments: [], valuations: [],
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [], valuations: [],
       rate_periods: [], contributions: [], settings: defaultSettings(),
     })
     vi.mocked(Store.listLoanParts).mockResolvedValue([part])

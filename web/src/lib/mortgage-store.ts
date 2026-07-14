@@ -14,7 +14,7 @@
    - CACHE_KEY   — the write-through offline cache mirroring the whole envelope. */
 
 import { defaultSettings, makeRatePeriod } from './mortgage'
-import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping } from './mortgage'
+import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage } from './mortgage'
 import { supabase } from './supabase'
 import { makeImportOnce, materializeImport, stamp } from './store-helpers'
 import type { MutationInput } from './sync-coordinator'
@@ -38,6 +38,8 @@ const SETTINGS_RESOURCE = `tool_state:${SETTINGS_TOOL}`
 const CASCADE_RESOURCE = 'mortgage-loan-part-cascade'
 
 const T = {
+  banks: 'mortgage_banks',
+  mortgages: 'mortgages',
   parts: 'mortgage_loan_parts',
   periods: 'mortgage_rate_periods',
   payments: 'mortgage_payments',
@@ -51,7 +53,9 @@ const RESOURCES = T
 // `household_id` (column default) + `updated_at` (trigger) are never sent. Field
 // names already match column names 1:1 (both snake_case), so a plain pick works.
 const COLS = {
-  parts: ['label', 'loan_number', 'start_balance', 'start_date', 'archived', 'planned_amortization', 'planned_amortization_start', 'planned_amortization_end'],
+  banks: ['label'],
+  mortgages: ['bank_id', 'label', 'start_date', 'archived'],
+  parts: ['label', 'loan_number', 'start_balance', 'start_date', 'archived', 'mortgage_id', 'original_balance', 'original_date', 'planned_amortization', 'planned_amortization_start', 'planned_amortization_end'],
   periods: ['loan_part_id', 'start_date', 'end_date', 'rate', 'rate_type'],
   payments: ['loan_part_id', 'date', 'kind', 'description', 'amount', 'balance_after', 'paid_by', 'source', 'is_insats', 'paid_split'],
   valuations: ['date', 'value', 'note', 'is_purchase'],
@@ -60,6 +64,8 @@ const COLS = {
 
 interface StoreEnvelope {
   version: number
+  banks: Bank[]
+  mortgages: Mortgage[]
   loan_parts: LoanPart[]
   payments: Payment[]
   valuations: Valuation[]
@@ -156,12 +162,14 @@ function _row(obj: { id?: string; created_at?: string }, cols: readonly string[]
 
 // ── localStorage cache (offline fallback) ────────────────────────────────────
 function _emptyEnvelope(): StoreEnvelope {
-  return { version: VERSION, loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [], settings: defaultSettings() }
+  return { version: VERSION, banks: [], mortgages: [], loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [], settings: defaultSettings() }
 }
 
 function _envelope(raw: Record<string, unknown>, migrate: boolean): StoreEnvelope {
   const out: StoreEnvelope = {
     version: VERSION,
+    banks: Array.isArray(raw.banks) ? (raw.banks as Bank[]) : [],
+    mortgages: Array.isArray(raw.mortgages) ? (raw.mortgages as Mortgage[]) : [],
     loan_parts: Array.isArray(raw.loan_parts) ? (raw.loan_parts as LoanPart[]) : [],
     payments: Array.isArray(raw.payments) ? (raw.payments as Payment[]) : [],
     valuations: Array.isArray(raw.valuations) ? (raw.valuations as Valuation[]) : [],
@@ -205,6 +213,8 @@ export function cachedSnapshot(): StoreEnvelope {
   const e = _readCacheFrom(scope)
   return {
     version: e.version,
+    banks: withoutTombstones(e.banks, cachedTombstoneIds(scope, RESOURCES.banks)),
+    mortgages: withoutTombstones(e.mortgages, cachedTombstoneIds(scope, RESOURCES.mortgages)),
     loan_parts: withoutTombstones(e.loan_parts, cachedTombstoneIds(scope, RESOURCES.parts)),
     payments: byDateDesc(withoutTombstones(e.payments, cachedTombstoneIds(scope, RESOURCES.payments))),
     valuations: byDateDesc(withoutTombstones(e.valuations, cachedTombstoneIds(scope, RESOURCES.valuations))),
@@ -429,6 +439,86 @@ export async function removeLoanPart(id: string): Promise<number> {
       n = e.loan_parts.length
     }),
   })
+  return n
+}
+
+// ── Banks (plan 103) ─────────────────────────────────────────────────────────
+// Bank + mortgage rows sync through the same optimistic-concurrency outbox as
+// the other mortgage tables (auto-registered from T at load, see registerTableSync
+// loop above), so their CRUD mirrors the parts/valuations pattern exactly: reads
+// fall back to the tombstone-filtered cache when the scope is inactive/dirty or
+// the cloud errors; writes queue through queueTableUpsert/Delete with an optimistic
+// cache patch.
+export async function listBanks(): Promise<Bank[]> {
+  const scope = syncCoordinator.captureScope()
+  await _importLocalOnce()
+  const fallback = () => withoutTombstones(_readCacheFrom(scope).banks, cachedTombstoneIds(scope, RESOURCES.banks))
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.banks)) return fallback()
+  const [result, tombstones] = await Promise.all([
+    supabase.from(T.banks).select('*').order('created_at', { ascending: true }), loadTombstoneIds(scope, RESOURCES.banks),
+  ])
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.banks)) return fallback()
+  if (result.error || !result.data) return fallback()
+  rememberRowRevisions(RESOURCES.banks, result.data as Record<string, unknown>[])
+  const rows = withoutTombstones(result.data as Bank[], tombstones)
+  const cache = _readCacheFrom(scope); cache.banks = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
+  return rows.slice()
+}
+
+export async function addBank(record: Omit<Bank, 'id' | 'created_at'>): Promise<Bank> {
+  const saved = stamp(record, 'bank') as Bank
+  await queueTableUpsert(RESOURCES.banks, [_row(saved, COLS.banks)], [saved.id], () => _patchCache(e => { e.banks.push(saved) }))
+  return saved
+}
+
+export async function updateBank(id: string, patch: Partial<Bank>): Promise<Bank | null> {
+  const current = _readCache().banks.find((bank) => bank.id === id)
+  if (!current) return null
+  const saved = { ...current, ...patch }
+  await queueTableUpsert(RESOURCES.banks, [_row(saved, COLS.banks)], [id], () => _patchCache(e => { e.banks = e.banks.map(b => b?.id === id ? saved : b) }))
+  return saved
+}
+
+export async function removeBank(id: string): Promise<number> {
+  let n = 0
+  await queueTableDelete(RESOURCES.banks, [id], () => _patchCache(e => { e.banks = e.banks.filter(b => b?.id !== id); n = e.banks.length }))
+  return n
+}
+
+// ── Mortgages (plan 103) ─────────────────────────────────────────────────────
+export async function listMortgages(): Promise<Mortgage[]> {
+  const scope = syncCoordinator.captureScope()
+  await _importLocalOnce()
+  const fallback = () => withoutTombstones(_readCacheFrom(scope).mortgages, cachedTombstoneIds(scope, RESOURCES.mortgages))
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.mortgages)) return fallback()
+  const [result, tombstones] = await Promise.all([
+    supabase.from(T.mortgages).select('*').order('created_at', { ascending: true }), loadTombstoneIds(scope, RESOURCES.mortgages),
+  ])
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.mortgages)) return fallback()
+  if (result.error || !result.data) return fallback()
+  rememberRowRevisions(RESOURCES.mortgages, result.data as Record<string, unknown>[])
+  const rows = withoutTombstones(result.data as Mortgage[], tombstones)
+  const cache = _readCacheFrom(scope); cache.mortgages = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
+  return rows.slice()
+}
+
+export async function addMortgage(record: Omit<Mortgage, 'id' | 'created_at'>): Promise<Mortgage> {
+  const saved = stamp(record, 'mort') as Mortgage
+  await queueTableUpsert(RESOURCES.mortgages, [_row(saved, COLS.mortgages)], [saved.id], () => _patchCache(e => { e.mortgages.push(saved) }))
+  return saved
+}
+
+export async function updateMortgage(id: string, patch: Partial<Mortgage>): Promise<Mortgage | null> {
+  const current = _readCache().mortgages.find((mortgage) => mortgage.id === id)
+  if (!current) return null
+  const saved = { ...current, ...patch }
+  await queueTableUpsert(RESOURCES.mortgages, [_row(saved, COLS.mortgages)], [id], () => _patchCache(e => { e.mortgages = e.mortgages.map(m => m?.id === id ? saved : m) }))
+  return saved
+}
+
+export async function removeMortgage(id: string): Promise<number> {
+  let n = 0
+  await queueTableDelete(RESOURCES.mortgages, [id], () => _patchCache(e => { e.mortgages = e.mortgages.filter(m => m?.id !== id); n = e.mortgages.length }))
   return n
 }
 
@@ -689,4 +779,4 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
 }
 
 // ── Re-export types for callers that only import from the store ──────────────
-export type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping }
+export type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage }

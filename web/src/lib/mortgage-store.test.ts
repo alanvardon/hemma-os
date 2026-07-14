@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createSupabaseMock } from './testSupabaseMock'
-import type { LoanPart, Payment } from './mortgage'
+import type { LoanPart, Payment, Bank, Mortgage } from './mortgage'
 
 // vi.mock factories run eagerly at the hoisted call site, before any of this
 // file's own top-level statements — so the factory can't assign into a plain
@@ -322,6 +322,81 @@ describe('store-specific: migrateToPeriods (v<4 forward migration)', () => {
     const periods = await store.listRatePeriods()
     expect(periods).toHaveLength(1)
     expect(periods[0]).toMatchObject({ loan_part_id: 'p1', rate: 2.5, rate_type: 'rörlig', start_date: '2020-06-01' })
+  })
+})
+
+describe('banks & mortgages CRUD (plan 103)', () => {
+  beforeEach(() => { mem.set(IMPORT_FLAG, '1') })
+
+  it('addBank: success patches the cache and cloud', async () => {
+    const saved = await store.addBank({ label: 'Danske' })
+    expect(saved.id).toBeTruthy()
+    expect(mock().tables.mortgage_banks).toHaveLength(1)
+    expect((cache().banks as Bank[])[0].label).toBe('Danske')
+  })
+
+  it('addBank: cloud error keeps the row dirty for replay', async () => {
+    mock().control.failing.add('mortgage_banks')
+    await expect(store.addBank({ label: 'Danske' })).rejects.toBeTruthy()
+    // Durable sync keeps the optimistic row cached + dirty rather than dropping it.
+    expect((cache().banks as Bank[])[0].label).toBe('Danske')
+    mock().control.failing.delete('mortgage_banks')
+    await sync.syncCoordinator.replay()
+    expect(mock().tables.mortgage_banks).toHaveLength(1)
+    expect(sync.syncCoordinator.isDirty('mortgage_banks')).toBe(false)
+  })
+
+  it('addMortgage: success links the bank and patches both layers', async () => {
+    const bank = await store.addBank({ label: 'Danske' })
+    const saved = await store.addMortgage({ bank_id: bank.id, label: 'Bolån', start_date: null, archived: false })
+    expect(mock().tables.mortgages).toHaveLength(1)
+    expect(mock().tables.mortgages[0].bank_id).toBe(bank.id)
+    expect((cache().mortgages as Mortgage[])[0].id).toBe(saved.id)
+  })
+
+  it('addMortgage: cloud error throws', async () => {
+    mock().control.failing.add('mortgages')
+    await expect(store.addMortgage({ bank_id: 'b1', label: 'Bolån', start_date: null, archived: false })).rejects.toBeTruthy()
+  })
+
+  it('listBanks/listMortgages: cloud ok writes through, cloud error falls back to cache', async () => {
+    mock().tables.mortgage_banks = [{ id: 'b1', created_at: 't', label: 'Danske' }]
+    mock().tables.mortgages = [{ id: 'm1', created_at: 't', bank_id: 'b1', label: 'Bolån', start_date: null, archived: false }]
+    expect(await store.listBanks()).toHaveLength(1)
+    expect(await store.listMortgages()).toHaveLength(1)
+    expect((cache().banks as unknown[])).toHaveLength(1)
+
+    mock().control.failing.add('mortgage_banks')
+    // Cache still holds the written-through row → fallback returns it.
+    expect(await store.listBanks()).toHaveLength(1)
+  })
+
+  it('updateLoanPart: patches mortgage_id + original anchor on the part', async () => {
+    mock().tables.mortgage_loan_parts = [{ id: 'p1', created_at: 't', label: 'Bolån', loan_number: '', start_balance: 1000000, start_date: '2020-01-01', archived: false, revision: 1 }]
+    // Register p1's revision through the sync layer before the optimistic update.
+    await store.listLoanParts()
+    await store.updateLoanPart('p1', { mortgage_id: 'm1', original_balance: 1200000, original_date: '2020-01-01' })
+    const row = mock().tables.mortgage_loan_parts[0]
+    expect(row.mortgage_id).toBe('m1')
+    expect(row.original_balance).toBe(1200000)
+    expect(row.original_date).toBe('2020-01-01')
+  })
+
+  it('addLoanPart: sends the new nullable columns through _row without inventing defaults', async () => {
+    const saved = await store.addLoanPart({ label: 'Bolån', loan_number: '', start_balance: 500000, start_date: '2024-01-01', archived: false, mortgage_id: 'm1', original_balance: 500000, original_date: '2024-01-01' })
+    const row = mock().tables.mortgage_loan_parts.find(r => r.id === saved.id)!
+    expect(row.mortgage_id).toBe('m1')
+    expect(row.original_balance).toBe(500000)
+  })
+
+  it('removeMortgage/removeBank: success prunes the cache', async () => {
+    const bank = await store.addBank({ label: 'Danske' })
+    const m = await store.addMortgage({ bank_id: bank.id, label: 'Bolån', start_date: null, archived: false })
+    await store.removeMortgage(m.id)
+    await store.removeBank(bank.id)
+    expect(mock().tables.mortgages).toHaveLength(0)
+    expect(mock().tables.mortgage_banks).toHaveLength(0)
+    expect((cache().mortgages as unknown[])).toHaveLength(0)
   })
 })
 

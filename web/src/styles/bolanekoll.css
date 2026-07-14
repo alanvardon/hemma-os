@@ -451,6 +451,15 @@
   .contrib-legend li::before { content: '·'; position: absolute; left: 0.15rem; color: var(--ink-faint); }
   .contrib-legend b { color: var(--ink-mid); font-weight: 600; }
 
+  /* ── Lånedelar: grouped under the active mortgage (bank → lån) ──────── */
+  .ld-mortgage-head {
+    display: flex; align-items: baseline; gap: 0.4rem;
+    margin-bottom: 0.6rem; font-size: 13px;
+  }
+  .ld-mortgage-head .ld-bank { font-weight: 600; color: var(--ink); }
+  .ld-mortgage-head .ld-mortgage-sep { color: var(--ink-faint); }
+  .ld-mortgage-head .ld-mortgage-name { color: var(--ink-soft); }
+
   /* ── Lånedelar: grouped by villkorsändringsdag + rate ───────────────── */
   .lanedelar-table .th-en { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--ink-faint); }
 
