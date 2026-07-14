@@ -453,12 +453,27 @@
 
   /* ── Lånedelar: grouped under the active mortgage (bank → lån) ──────── */
   .ld-mortgage-head {
-    display: flex; align-items: baseline; gap: 0.4rem;
+    display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap;
     margin-bottom: 0.6rem; font-size: 13px;
   }
   .ld-mortgage-head .ld-bank { font-weight: 600; color: var(--ink); }
   .ld-mortgage-head .ld-mortgage-sep { color: var(--ink-faint); }
   .ld-mortgage-head .ld-mortgage-name { color: var(--ink-soft); }
+
+  /* Plan 104 — minimal Bankvillkor affordance: day-count-year lock. */
+  .ld-bankvillkor {
+    display: inline-flex; align-items: baseline; gap: 0.35rem; flex-wrap: wrap;
+    margin-left: auto; font-size: 12px;
+  }
+  .ld-bankvillkor .ld-bankvillkor-label { color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.03em; font-size: 11px; }
+  .ld-bankvillkor .ld-bankvillkor-state { color: var(--ink-soft); }
+  .ld-bankvillkor .ld-bankvillkor-state.is-locked { color: var(--copper, var(--ink)); font-weight: 600; }
+  .ld-bankvillkor .btn-xs {
+    padding: 0.1rem 0.4rem; font-size: 11px; line-height: 1.5; border-radius: 6px;
+  }
+  .ld-bankvillkor .btn-xs[aria-pressed="true"] {
+    background: var(--copper, var(--accent, #b87333)); color: #fff; border-color: transparent;
+  }
 
   /* ── Lånedelar: grouped by villkorsändringsdag + rate ───────────────── */
   .lanedelar-table .th-en { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--ink-faint); }

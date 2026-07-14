@@ -315,16 +315,19 @@ export default function Bolanekoll() {
   // Expected next charge (plan 23): arithmetic from stored data — balance ×
   // rate × days/365 — calibrated against the real charge history. Read-only
   // here; writes happen only via the explicit log button / import supersede.
-  const prognos = useMemo(() => expectedCharges(parts, periods, payments), [parts, periods, payments])
+  // Plan 104 — thread the bank entities into the forecast so a declared
+  // year-basis lock on a part's bank overrides ledger detection.
+  const forecastOpts = useMemo(() => ({ banks, mortgages }), [banks, mortgages])
+  const prognos = useMemo(() => expectedCharges(parts, periods, payments, forecastOpts), [parts, periods, payments, forecastOpts])
   const forecast = useMemo(() => forecastInterest(parts, periods, payments), [parts, periods, payments])
   // The next UNCOVERED charge per part: once a month is fully logged (or
   // imported), the Nästa avisering block rolls forward to the following month
   // rather than going quiet — there is always a next avisering to look at.
   const pendingSeries = useMemo(
     () => parts.filter(p => !p.archived)
-      .map(p => pendingChargeSeries(p, periods, payments))
+      .map(p => pendingChargeSeries(p, periods, payments, 12, forecastOpts))
       .filter(s => s.length > 0 && s[0].interest > 0),
-    [parts, periods, payments])
+    [parts, periods, payments, forecastOpts])
   const pendingCharges = useMemo(() => pendingSeries.map(s => s[0]), [pendingSeries])
   // Flattened to ONE entry per upcoming transaction, mirroring the bank's avi:
   // per part a Ränta row and — when the ledger has betalning history — the
@@ -541,6 +544,20 @@ export default function Bolanekoll() {
   async function handleDeletePart(id: string) {
     try { await Store.removeLoanPart(id); await refresh(); flashSaved(); setPartDlg({ open: false, id: null }); showToast('Loan part deleted.') }
     catch (err) { saveErr(err) }
+  }
+  // Plan 104 — lock (or clear) the active bank's day-count year. A declared lock
+  // (source 'declared') makes that basis authoritative for the bunden forecast;
+  // clearing it (basis null, source null) hands the decision back to detection.
+  async function handleSetBankYearBasis(basis: 360 | 365 | null) {
+    if (!activeBank) return
+    try {
+      await Store.updateBank(activeBank.id, {
+        year_basis: basis,
+        year_basis_source: basis == null ? null : 'declared',
+      })
+      await refresh(); flashSaved()
+      showToast(basis == null ? 'Bankår återställt till auto.' : `Bankår låst till faktisk/${basis}.`)
+    } catch (err) { saveErr(err) }
   }
   async function handleSavePeriod(partId: string, data: Omit<RatePeriod, 'id' | 'created_at'>, existingId?: string) {
     try {
@@ -1208,6 +1225,30 @@ export default function Bolanekoll() {
                   <span className="ld-bank">{activeBank?.label || 'Okänd bank'}</span>
                   <span className="ld-mortgage-sep">·</span>
                   <span className="ld-mortgage-name">{activeMortgage.label || 'Bolån'}</span>
+                  {/* Plan 104 — minimal Bankvillkor affordance: lock the bank's
+                      day-count year for the bunden forecast, or leave it on auto. */}
+                  {activeBank && (() => {
+                    const locked = activeBank.year_basis_source === 'declared'
+                      && (activeBank.year_basis === 360 || activeBank.year_basis === 365)
+                    return (
+                      <span className="ld-bankvillkor">
+                        <span className="ld-bankvillkor-label">Bankår</span>
+                        <span className={'ld-bankvillkor-state' + (locked ? ' is-locked' : '')}>
+                          {locked ? `Låst faktisk/${activeBank.year_basis}` : 'Auto (upptäck)'}
+                        </span>
+                        <button type="button" className="btn btn-ghost btn-xs"
+                          aria-pressed={locked && activeBank.year_basis === 360}
+                          onClick={() => handleSetBankYearBasis(360)}>Lås faktisk/360</button>
+                        <button type="button" className="btn btn-ghost btn-xs"
+                          aria-pressed={locked && activeBank.year_basis === 365}
+                          onClick={() => handleSetBankYearBasis(365)}>Lås 365</button>
+                        {locked && (
+                          <button type="button" className="btn btn-ghost btn-xs"
+                            onClick={() => handleSetBankYearBasis(null)}>Auto</button>
+                        )}
+                      </span>
+                    )
+                  })()}
                 </div>
               )}
               <table className="data-table table-cards lanedelar-table">

@@ -36,6 +36,31 @@ export interface LoanPart {
 // 104). A household may use several over time; a Mortgage links to exactly one.
 export interface Bank {
   id: string; created_at: string; household_id?: string; label: string
+  // Plan 104 — per-bank day-count-year profile. `year_basis` is the year the
+  // bank divides by when accruing the listed rate (360 = faktisk/360, 365 =
+  // the Swedish default); null = detect from the ledger. `year_basis_source`
+  // is the provenance: only 'declared' (an owner-confirmed lock) short-circuits
+  // the forecast learner — 'detected'/'suggested'/null fall back to detection.
+  year_basis?: number | null
+  year_basis_source?: string | null
+}
+
+// Plan 104 — the closed sets a bank profile clamps to. Kept beside the type so
+// the normaliser and any future provenance UI share one source of truth.
+export const YEAR_BASES = [360, 365] as const
+export const YEAR_BASIS_SOURCES = ['detected', 'suggested', 'declared'] as const
+
+// Normalise a Bank record: default the profile columns to null, clamp
+// `year_basis` to exactly 360 | 365 (anything else → null → detection), and
+// `year_basis_source` to the allowed provenance set (else null). A malformed
+// profile therefore reads as "no lock" and the forecast falls back to
+// detection, never to a garbage basis.
+export function makeBank(b: Partial<Bank>): Omit<Bank, 'id' | 'created_at'> {
+  const yb = Number(b.year_basis)
+  const year_basis = yb === 360 ? 360 : yb === 365 ? 365 : null
+  const src = b.year_basis_source
+  const year_basis_source = typeof src === 'string' && (YEAR_BASIS_SOURCES as readonly string[]).includes(src) ? src : null
+  return { label: b.label || '', year_basis, year_basis_source }
 }
 
 // Plan 103 — one bolån agreement, linked to exactly one Bank, holding many
@@ -953,7 +978,24 @@ function chargePeriodMonths(sortedDates: string[]): number {
   return median <= 45 ? 1 : 3
 }
 
-export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[]): ExpectedCharge | null {
+// Plan 104 — optional entity context threaded into the forecast so it can read
+// the part's bank profile (part → mortgage → bank). Backward-compatible: when
+// omitted, profileYearBasis returns null and the forecast is byte-for-byte
+// identical to before (detection only).
+export interface ForecastOpts { banks?: Bank[]; mortgages?: Mortgage[] }
+
+// The declared day-count year for a part's bank, or null when there is no
+// declared lock. ONLY a `year_basis_source === 'declared'` value short-circuits
+// the learner; 'detected'/'suggested'/null do NOT override in Phase 1 (they are
+// still surfaced as provenance, but detection stays authoritative until the
+// owner confirms). A missing bank / mortgage link also yields null → detection.
+export function profileYearBasis(part: LoanPart | null | undefined, mortgages: Mortgage[], banks: Bank[]): 360 | 365 | null {
+  const bank = bankForPart(part, mortgages, banks)
+  if (!bank || bank.year_basis_source !== 'declared') return null
+  return bank.year_basis === 360 ? 360 : bank.year_basis === 365 ? 365 : null
+}
+
+export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[], opts?: ForecastOpts): ExpectedCharge | null {
   if (!part) return null
   // Calibrate on REAL rows only — the bank stays ground truth. Including a
   // logged prediction would advance next_date past it and feed the derived
@@ -1020,8 +1062,13 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   // The listed rate needs the bank's own day-count year; the derived rate
   // already encodes it (reverse-engineered on the /365 fiction), so only the
   // locked-bunden path fits a basis.
+  // A declared bank profile is authoritative for the locked-bunden path (plan
+  // 104): use it when present, else fall back to ledger detection. Never pin a
+  // basis on the derived-rate path — it self-calibrates on the /365 fiction.
   const year_basis: ExpectedCharge['year_basis'] =
-    lockedBunden ? interestYearBasis(part, real, intRows, listed) : 365
+    lockedBunden
+      ? (profileYearBasis(part, opts?.mortgages ?? [], opts?.banks ?? []) ?? interestYearBasis(part, real, intRows, listed))
+      : 365
 
   const confidence: ExpectedCharge['confidence'] =
     bs.bound && !bs.expired ? 'exact' : rate_source === 'derived' ? 'assumed' : 'unknown'
@@ -1135,8 +1182,8 @@ function chargeBasis(intRows: Payment[]): ExpectedCharge['charge_basis'] {
 // month makes the block advance to the following one instead of going quiet.
 // Each roll holds the rate flat, steps the balance down by the predicted
 // amortering, and reprices the actual day count of the new interval.
-export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[]): ExpectedCharge | null {
-  const c = expectedCharge(part, periods, payments)
+export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[], opts?: ForecastOpts): ExpectedCharge | null {
+  const c = expectedCharge(part, periods, payments, opts)
   if (!c) return null
   // A month only rolls once EVERY expected transaction is covered — the ränta
   // and its companion row: the bank's betalning (kind payment) when the part
@@ -1186,8 +1233,8 @@ function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedChar
 // and at the villkorsändringsdag: past a lapsed binding with no successor
 // period the rate is simply unknown, and projecting the old rate a full year
 // ahead is misleading. [0] always stays, whatever its confidence.
-export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payments: Payment[], months = 12): ExpectedCharge[] {
-  const first = pendingCharge(part, periods, payments)
+export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payments: Payment[], months = 12, opts?: ForecastOpts): ExpectedCharge[] {
+  const first = pendingCharge(part, periods, payments, opts)
   if (!first) return []
   const out = [first]
   const n = Math.max(1, Math.round(months / first.period_months))
@@ -1208,7 +1255,7 @@ export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payme
 // CURRENT forecast's amount and post-charge saldo for its part + month + kind.
 // Rows inside the reconcile tolerance, real rows, and past months are left
 // alone; months after the base forecast are compared against the rolled charge.
-export function stalePredictedRows(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]):
+export function stalePredictedRows(parts: LoanPart[], periods: RatePeriod[], payments: Payment[], opts?: ForecastOpts):
   Array<{ payment: Payment; amount: number; balance_after: number }> {
   const out: Array<{ payment: Payment; amount: number; balance_after: number }> = []
   const preds = (payments || []).filter(p => p?.source === 'predicted' && p.loan_part_id && monthKey(p.date))
@@ -1217,7 +1264,7 @@ export function stalePredictedRows(parts: LoanPart[], periods: RatePeriod[], pay
     const mine = preds.filter(p => p.loan_part_id === part.id)
     if (!mine.length) continue
     const lastMk = mine.map(p => monthKey(p.date) as string).sort()[mine.length - 1]
-    let c = expectedCharge(part, periods, payments)
+    let c = expectedCharge(part, periods, payments, opts)
     for (let i = 0; c && i < 24; i++, c = rollChargeOnce(part, periods, c)) {
       const mk = monthKey(c.next_date)
       if (!mk || mk > lastMk) break
@@ -1235,10 +1282,10 @@ export function stalePredictedRows(parts: LoanPart[], periods: RatePeriod[], pay
   return out
 }
 
-export function expectedCharges(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]):
+export function expectedCharges(parts: LoanPart[], periods: RatePeriod[], payments: Payment[], opts?: ForecastOpts):
   { rows: ExpectedCharge[]; total_interest: number; total_gross: number } {
   const rows = (parts || []).filter(p => p && !p.archived)
-    .map(p => expectedCharge(p, periods, payments))
+    .map(p => expectedCharge(p, periods, payments, opts))
     .filter((r): r is ExpectedCharge => r != null)
   return {
     rows,
