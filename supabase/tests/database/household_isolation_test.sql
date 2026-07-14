@@ -83,9 +83,9 @@ select set_config(
   true
 );
 
--- The 11 ordinary household stores share one behavioral matrix. Extra column
--- fragments support salary_submissions and tool_state without weakening their
--- valid inserts. Each table emits nine separately named TAP assertions.
+-- The 11 revisioned stores remain household-readable, but every direct client
+-- mutation is revoked so stale clients cannot bypass optimistic concurrency.
+-- Each table emits nine separately named TAP assertions.
 create function pg_temp.test_mutable_store(
   p_table text,
   p_key_column text,
@@ -102,12 +102,8 @@ declare
   affected bigint;
   own_household constant text := '20000000-0000-0000-0000-000000000001';
   foreign_household constant text := '20000000-0000-0000-0000-000000000002';
-  rls_message text := format(
-    'new row violates row-level security policy for table "%s"',
-    p_table
-  );
+  permission_message text := format('permission denied for table %s', p_table);
 begin
-  if p_table <> 'tool_state' then rls_message := 'household write denied'; end if;
   execute format(
     'select count(*) from public.%I where %I = %L',
     p_table, p_key_column, p_own_key
@@ -120,15 +116,15 @@ begin
   ) into affected;
   return next extensions.is(affected, 0::bigint, format('%s: foreign fixture is invisible', p_table));
 
-  execute format(
-    'with changed as (
-       insert into public.%I (%I, household_id%s)
-       values (%L, %L%s) returning 1
-     ) select count(*) from changed',
-    p_table, p_key_column, p_extra_columns,
-    p_insert_key, own_household, p_extra_values
-  ) into affected;
-  return next extensions.is(affected, 1::bigint, format('%s: own insert succeeds', p_table));
+  return next extensions.throws_ok(
+    format(
+      'insert into public.%I (%I, household_id%s) values (%L, %L%s)',
+      p_table, p_key_column, p_extra_columns,
+      p_insert_key, own_household, p_extra_values
+    ),
+    '42501', permission_message,
+    format('%s: direct own insert is denied; use a revision RPC', p_table)
+  );
 
   return next extensions.throws_ok(
     format(
@@ -136,62 +132,43 @@ begin
       p_table, p_key_column, p_extra_columns,
       p_foreign_insert_key, foreign_household, p_extra_values
     ),
-    '42501',
-    rls_message,
-    format('%s: foreign insert is denied by RLS', p_table)
+    '42501', permission_message,
+    format('%s: direct foreign insert is denied', p_table)
   );
 
-  execute format(
-    'with changed as (
-       update public.%I set household_id = household_id
-       where %I = %L returning 1
-     ) select count(*) from changed',
-    p_table, p_key_column, p_own_key
-  ) into affected;
-  return next extensions.is(affected, 1::bigint, format('%s: own update succeeds', p_table));
+  return next extensions.throws_ok(
+    format('update public.%I set household_id = household_id where %I = %L',
+      p_table, p_key_column, p_own_key),
+    '42501', permission_message,
+    format('%s: direct own update is denied; use a revision RPC', p_table)
+  );
 
   return next extensions.throws_ok(
     format(
       'update public.%I set household_id = %L where %I = %L',
       p_table, foreign_household, p_key_column, p_own_key
     ),
-    '42501',
-    rls_message,
+    '42501', permission_message,
     format('%s: moving an own row to the foreign household is denied', p_table)
   );
 
-  execute format(
-    'with changed as (
-       update public.%I set household_id = %L
-       where %I = %L returning 1
-     ) select count(*) from changed',
-    p_table, own_household, p_key_column, p_foreign_key
-  ) into affected;
-  return next extensions.is(affected, 0::bigint, format('%s: foreign update affects no rows', p_table));
+  return next extensions.throws_ok(
+    format('update public.%I set household_id = %L where %I = %L',
+      p_table, own_household, p_key_column, p_foreign_key),
+    '42501', permission_message,
+    format('%s: direct foreign update is denied', p_table)
+  );
 
-  if p_table = 'tool_state' then
-    execute format(
-      'with changed as (delete from public.%I where %I = %L returning 1) select count(*) from changed',
-      p_table, p_key_column, p_foreign_key
-    ) into affected;
-    return next extensions.is(affected, 0::bigint, format('%s: foreign delete affects no rows', p_table));
-    execute format(
-      'with changed as (delete from public.%I where %I = %L returning 1) select count(*) from changed',
-      p_table, p_key_column, p_insert_key
-    ) into affected;
-    return next extensions.is(affected, 1::bigint, format('%s: own delete succeeds', p_table));
-  else
-    return next extensions.throws_ok(
-      format('delete from public.%I where %I = %L', p_table, p_key_column, p_foreign_key),
-      '42501', format('permission denied for table %s', p_table),
-      format('%s: foreign direct delete is revoked', p_table)
-    );
-    return next extensions.throws_ok(
-      format('delete from public.%I where %I = %L', p_table, p_key_column, p_insert_key),
-      '42501', format('permission denied for table %s', p_table),
-      format('%s: own direct delete must use the durable RPC', p_table)
-    );
-  end if;
+  return next extensions.throws_ok(
+    format('delete from public.%I where %I = %L', p_table, p_key_column, p_foreign_key),
+    '42501', permission_message,
+    format('%s: foreign direct delete is revoked', p_table)
+  );
+  return next extensions.throws_ok(
+    format('delete from public.%I where %I = %L', p_table, p_key_column, p_own_key),
+    '42501', permission_message,
+    format('%s: own direct delete must use the revision RPC', p_table)
+  );
 end;
 $$;
 

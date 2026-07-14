@@ -19,6 +19,7 @@ import { supabase } from './supabase'
 import { syncCoordinator } from './sync'
 import { makeImportOnce } from './store-helpers'
 import { legacyImportAssignedToActive } from './legacy-data'
+import { receiptRpc, rejectLegacyToolOperation, rememberToolRevision, revisionKey, syncRpcResult } from './sync-rpc'
 
 export interface ToolStateStoreConfig<T> {
   /** `tool_state.tool` discriminator, e.g. 'konsultkalkyl'. */
@@ -80,6 +81,7 @@ export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolState
         operation: 'upsert',
         payload: { tool, data: legacy, seed: true },
         entityIds: [tool],
+        expectedRevisions: { [revisionKey('tool_state', tool)]: syncCoordinator.getRevision(revisionKey('tool_state', tool)) },
         applyLocal: () => scope.write(cacheKey, JSON.stringify(legacy)),
       })
       return true
@@ -89,13 +91,16 @@ export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolState
   syncCoordinator.register(resource, async (operation) => {
     const payload = operation.payload as { tool?: unknown; data?: unknown; seed?: unknown }
     if (!payload || payload.tool !== tool || !('data' in payload)) throw { status: 400, message: 'Malformed tool-state operation' }
-    const { error } = payload.seed === true
-      ? await supabase.from(table).insert({ tool, data: payload.data })
-      : await supabase.from(table).upsert(
-        { tool, data: payload.data }, { onConflict: 'household_id,tool' },
-      )
-    if (payload.seed === true && (error as { code?: string } | null)?.code === '23505') return
+    await rejectLegacyToolOperation(operation, tool)
+    const { data, error } = await receiptRpc('sync_apply_tool_state', {
+      p_operation_id: operation.id,
+      p_tool: tool,
+      p_data: payload.data,
+      p_expected_revision: operation.expectedRevisions?.[revisionKey('tool_state', tool)] ?? null,
+      p_seed: payload.seed === true,
+    })
     if (error) throw error
+    return syncRpcResult(data)
   }, (operation) => {
     const payload = operation.payload as { tool?: unknown; data?: unknown; seed?: unknown }
     return operation.operation === 'upsert' && payload?.tool === tool && Object.prototype.hasOwnProperty.call(payload, 'data')
@@ -111,10 +116,11 @@ export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolState
     await importLocalOnce()
     if (!scope.isActive()) return readCapturedCache(scope)
     if (syncCoordinator.isDirty(resource)) return readCapturedCache(scope)
-    const { data, error } = await supabase.from(table).select('data').eq('tool', tool).maybeSingle()
+    const { data, error } = await supabase.from(table).select('data,revision').eq('tool', tool).maybeSingle()
     if (!scope.isActive() || syncCoordinator.isDirty(resource)) return readCapturedCache(scope)
     if (error) return readCapturedCache(scope)
     if (!data) return null
+    rememberToolRevision(tool, data)
     const merged = merge(data.data)
     if (merged && scope.isActive()) scope.write(cacheKey, JSON.stringify(merged))
     return merged
@@ -128,6 +134,7 @@ export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolState
       operation: 'upsert',
       payload: { tool, data },
       entityIds: [tool],
+      expectedRevisions: { [revisionKey('tool_state', tool)]: syncCoordinator.getRevision(revisionKey('tool_state', tool)) },
       applyLocal: () => writeCache(data),
     })
   }

@@ -49,8 +49,10 @@ function fakeSession(): string {
 }
 
 interface Backend {
-  /** When true, INSERTs to mortgage_loan_parts die at the network layer. */
+  /** When true, revisioned mortgage writes die at the network layer. */
   failInserts: boolean
+  /** Simulate a second device changing an already loaded loan part. */
+  remoteUpdatePart(currentLabel: string, nextLabel: string): void
 }
 
 // Seed the auth session and mock the whole Supabase origin. Inserted loan
@@ -59,7 +61,16 @@ interface Backend {
 // cache). Everything else reads empty and accepts writes.
 async function mockBackend(page: Page): Promise<Backend> {
   const parts: Record<string, unknown>[] = []
-  const backend: Backend = { failInserts: false }
+  const receipts = new Map<string, unknown>()
+  const backend: Backend = {
+    failInserts: false,
+    remoteUpdatePart(currentLabel, nextLabel) {
+      const part = parts.find((row) => row.label === currentLabel)
+      if (!part) throw new Error(`Missing mocked loan part: ${currentLabel}`)
+      part.label = nextLabel
+      part.revision = Number(part.revision) + 1
+    },
+  }
 
   await page.addInitScript(
     ([key, session]) => window.localStorage.setItem(key, session),
@@ -75,13 +86,39 @@ async function mockBackend(page: Page): Promise<Backend> {
     // Defensive: the seeded session shouldn't trigger auth traffic, but if a
     // future supabase-js version phones home, don't let it hang the test.
     if (path.startsWith('/auth/')) return route.fulfill({ json: {} })
-    if (path === '/rest/v1/mortgage_loan_parts') {
-      if (req.method() === 'POST') {
-        if (backend.failInserts) return route.abort('failed')
-        const body = req.postDataJSON()
-        parts.push(...(Array.isArray(body) ? body : [body]))
-        return route.fulfill({ status: 201, body: '' })
+    if (path === '/rest/v1/rpc/sync_apply_rows' && req.method() === 'POST') {
+      if (backend.failInserts) return route.abort('failed')
+      const body = req.postDataJSON() as {
+        p_operation_id: string
+        p_resource: string
+        p_rows: Record<string, unknown>[]
+        p_expected_revisions: Record<string, number | null>
+        p_seed: boolean
       }
+      const prior = receipts.get(body.p_operation_id)
+      if (prior) return route.fulfill({ json: prior })
+      if (body.p_resource !== 'mortgage_loan_parts') return route.fulfill({ status: 400, json: {} })
+      const current = Object.fromEntries(body.p_rows.map((row) => {
+        const existing = parts.find((part) => part.id === row.id)
+        return [`mortgage_loan_parts:${String(row.id)}`, existing ? Number(existing.revision) : null]
+      }))
+      const conflict = Object.entries(current).some(([key, revision]) =>
+        !(body.p_seed && revision !== null) && body.p_expected_revisions[key] !== revision)
+      if (conflict) return route.fulfill({ json: { status: 'conflict', revisions: current } })
+      const revisions: Record<string, number> = {}
+      for (const row of body.p_rows) {
+        const index = parts.findIndex((part) => part.id === row.id)
+        const revision = index < 0 ? 1 : Number(parts[index].revision) + 1
+        const saved = { ...row, revision }
+        if (index < 0) parts.push(saved); else if (!body.p_seed) parts[index] = saved
+        revisions[`mortgage_loan_parts:${String(row.id)}`] = index >= 0 && body.p_seed
+          ? Number(parts[index].revision) : revision
+      }
+      const response = { status: 'applied', revisions }
+      receipts.set(body.p_operation_id, response)
+      return route.fulfill({ json: response })
+    }
+    if (path === '/rest/v1/mortgage_loan_parts') {
       if (req.method() === 'GET') return route.fulfill({ json: parts })
     }
     if (path.startsWith('/rest/')) {
@@ -168,6 +205,49 @@ test('a failed save survives reload and replays after connectivity returns', asy
   await expect(page.locator('.persistence-notice')).toContainText('Sparat')
   await page.reload()
   await expect(page.locator('.ld-name', { hasText: 'Spöklån' })).toBeVisible()
+
+  expect(errors).toEqual([])
+})
+
+test('a stale device can reload the cloud version or keep its own version', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  const backend = await mockBackend(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/bolanekoll')
+
+  const addDialog = await openAddLoanPartDialog(page)
+  await addDialog.getByLabel('Label').fill('Gemensam grund')
+  await addDialog.getByRole('button', { name: 'Save' }).click()
+  await expect(addDialog).not.toBeVisible()
+
+  // This tab loaded revision 1. Another device advances the row to revision 2.
+  backend.remoteUpdatePart('Gemensam grund', 'Molnversion')
+  const row = page.locator('tr.ld-member', { hasText: 'Gemensam grund' })
+  await row.getByRole('button', { name: 'Edit' }).click()
+  const editDialog = page.locator('dialog.bk-dialog[open]')
+  await editDialog.getByLabel('Label').fill('Min första version')
+  await editDialog.getByRole('button', { name: 'Save' }).click()
+
+  await expect(page.locator('.persistence-conflict')).toContainText('Det här ändrades på en annan enhet.')
+  await page.getByRole('button', { name: 'Ladda molnversionen' }).click()
+  await expect(page.locator('.ld-name', { hasText: 'Molnversion' })).toBeVisible()
+  await expect(page.locator('.ld-name', { hasText: 'Min första version' })).toHaveCount(0)
+
+  // Repeat from the now-current revision 2, choosing the local version. The
+  // coordinator retries it against revision 3 and the backend issues revision 4.
+  backend.remoteUpdatePart('Molnversion', 'Ny molnversion')
+  const currentRow = page.locator('tr.ld-member', { hasText: 'Molnversion' })
+  await currentRow.getByRole('button', { name: 'Edit' }).click()
+  const secondEditDialog = page.locator('dialog.bk-dialog[open]')
+  await secondEditDialog.getByLabel('Label').fill('Behåll min version')
+  await secondEditDialog.getByRole('button', { name: 'Save' }).click()
+
+  await expect(page.locator('.persistence-conflict')).toBeVisible()
+  await page.getByRole('button', { name: 'Behåll min version' }).click()
+  await expect(page.locator('.persistence-conflict')).not.toBeVisible()
+  await page.reload()
+  await expect(page.locator('.ld-name', { hasText: 'Behåll min version' })).toBeVisible()
+  await expect(page.locator('.ld-name', { hasText: 'Ny molnversion' })).toHaveCount(0)
 
   expect(errors).toEqual([])
 })

@@ -20,6 +20,7 @@ import { makeImportOnce, materializeImport } from './store-helpers'
 import { syncCoordinator } from './sync'
 import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
 import { legacyImportAssignedToActive } from './legacy-data'
+import { rememberRowRevisions, revisionKey } from './sync-rpc'
 
 // Legacy pre-Supabase history — import source + backup. (Exported name kept for
 // back-compat; it is no longer the cache.)
@@ -137,6 +138,7 @@ const _importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(I
       operation: 'upsert',
       payload: { rows: legacy.map(_row), seed: true },
       entityIds: legacy.map((row) => row.id!),
+      expectedRevisions: Object.fromEntries(legacy.map((row) => [revisionKey(RESOURCE, row.id!), null])),
       applyLocal: () => {
         const ids = new Set(legacy.map((row) => row.id))
         _writeCache(_sortedDesc([...legacy, ..._readCache().filter((row) => !ids.has(row.id))]))
@@ -164,6 +166,7 @@ export async function list(): Promise<SalarySubmission[]> {
   ])
   if (!scope.isActive() || syncCoordinator.isDirty(RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
+  rememberRowRevisions(RESOURCE, result.data as Record<string, unknown>[])
   const rows = withoutTombstones((result.data as SalarySubmission[]).map(_migrate), tombstones)
   if (scope.isActive()) scope.write(CACHE_KEY, JSON.stringify({ version: VERSION, submissions: rows }))
   return rows
@@ -236,7 +239,9 @@ export async function importJSON(text: string): Promise<number> {
   if (toAdd.length) {
     await syncCoordinator.mutate({
       resource: RESOURCE, operation: 'upsert', payload: { rows: toAdd.map(_row), seed: true },
-      entityIds: toAdd.map((row) => row.id!), applyLocal: () => {
+      entityIds: toAdd.map((row) => row.id!),
+      expectedRevisions: Object.fromEntries(toAdd.map((row) => [revisionKey(RESOURCE, row.id!), null])),
+      applyLocal: () => {
         _writeCache(_sortedDesc([...toAdd, ..._readCache()]))
       },
     })

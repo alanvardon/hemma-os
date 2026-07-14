@@ -14,6 +14,7 @@ import { genId } from './id'
 import { stamp } from './store-helpers'
 import { syncCoordinator } from './sync'
 import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
+import { rememberRowRevisions } from './sync-rpc'
 
 const CACHE_KEY = 'bostadskalkyl_house_items_cache_v1'
 const TABLE = 'house_items'
@@ -128,6 +129,7 @@ export async function listItems(): Promise<HouseItem[]> {
   ])
   if (!scope.isActive() || syncCoordinator.isDirty(RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
+  rememberRowRevisions(RESOURCE, result.data as Record<string, unknown>[])
   const rows = withoutTombstones((result.data as unknown[]).map(normalizeItem), tombstones)
   scope.write(CACHE_KEY, JSON.stringify({ version: VERSION, items: rows }))
   return sortedByDate(rows)

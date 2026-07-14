@@ -18,6 +18,8 @@ export interface SupabaseMockControl {
   errors: Record<string, { message: string; code?: string; status?: number }>
   /** Scripted return values for `.rpc(name, args)`, keyed by rpc name. */
   rpcHandlers: Record<string, (args: unknown) => unknown>
+  /** Commit once, but return a network error; the receipt serves the retry. */
+  lostResponseOnce: Set<string>
   /** The signed-in user returned by `auth.getUser()`; null when signed out. */
   user: { id?: string; email?: string } | null
 }
@@ -38,7 +40,10 @@ function matchRow(row: Row, filters: Filter[]): boolean {
 
 export function createSupabaseMock() {
   const tables: Record<string, Row[]> = {}
-  const control: SupabaseMockControl = { fail: false, failing: new Set(), errors: {}, rpcHandlers: {}, user: null }
+  const control: SupabaseMockControl = {
+    fail: false, failing: new Set(), errors: {}, rpcHandlers: {}, lostResponseOnce: new Set(), user: null,
+  }
+  const receipts = new Map<string, unknown>()
 
   function rowsOf(table: string): Row[] {
     if (!tables[table]) tables[table] = []
@@ -141,16 +146,160 @@ export function createSupabaseMock() {
   }
 
   function rpc(name: string, args?: unknown) {
-    const deleteArgs = name === 'delete_household_rows'
+    const deleteArgs = name === 'delete_household_rows' || name === 'sync_delete_rows'
       ? args as { p_resource?: string; p_ids?: string[] } | undefined
       : undefined
-    const failureKey = deleteArgs?.p_resource && shouldFail(deleteArgs.p_resource) ? deleteArgs.p_resource : name
+    const resourceArg = (name === 'sync_apply_rows' || name === 'sync_delete_rows')
+      ? (args as { p_resource?: string } | undefined)?.p_resource : deleteArgs?.p_resource
+    const failureKey = resourceArg && shouldFail(resourceArg) ? resourceArg : name
     if (shouldFail(failureKey)) return Promise.resolve({
       data: null,
       error: control.errors[failureKey] ?? { message: `mock: rpc ${name} failed` },
     })
     const handler = control.rpcHandlers[name]
     if (handler) return Promise.resolve({ data: handler(args), error: null })
+    const operationId = (args as { p_operation_id?: unknown } | undefined)?.p_operation_id
+    const receiptKey = typeof operationId === 'string' ? `${name}:${operationId}` : null
+    if (receiptKey && receipts.has(receiptKey)) return Promise.resolve({ data: receipts.get(receiptKey), error: null })
+
+    let data: unknown = null
+    if (name === 'sync_apply_rows') {
+      const input = args as {
+        p_resource: string; p_rows: Row[]; p_expected_revisions: Record<string, number | null>; p_seed?: boolean
+      }
+      const current: Record<string, number | null> = {}
+      let conflict = false
+      for (const incoming of input.p_rows) {
+        const id = String(incoming.id)
+        const key = `${input.p_resource}:${id}`
+        const existing = rowsOf(input.p_resource).find((row) => row.id === incoming.id)
+        const revision = existing ? Number(existing.revision ?? 1) : null
+        current[key] = revision
+        if (!(input.p_seed && revision !== null) && input.p_expected_revisions?.[key] !== revision) conflict = true
+      }
+      if (conflict) data = { status: 'conflict', revisions: current }
+      else {
+        const revisions: Record<string, number> = {}
+        for (const incoming of input.p_rows) {
+          const id = String(incoming.id)
+          const key = `${input.p_resource}:${id}`
+          const existing = rowsOf(input.p_resource).findIndex((row) => row.id === incoming.id)
+          if (input.p_seed && existing >= 0) revisions[key] = Number(rowsOf(input.p_resource)[existing].revision ?? 1)
+          else if (existing >= 0) {
+            const revision = Number(rowsOf(input.p_resource)[existing].revision ?? 1) + 1
+            rowsOf(input.p_resource)[existing] = { ...rowsOf(input.p_resource)[existing], ...incoming, revision }
+            revisions[key] = revision
+          } else {
+            rowsOf(input.p_resource).push({ ...incoming, revision: 1 })
+            revisions[key] = 1
+          }
+        }
+        data = { status: 'applied', revisions }
+      }
+    } else if (name === 'sync_apply_tool_state') {
+      const input = args as { p_tool: string; p_data: unknown; p_expected_revision: number | null; p_seed?: boolean }
+      const key = `tool_state:${input.p_tool}`
+      const index = rowsOf('tool_state').findIndex((row) => row.tool === input.p_tool)
+      const current = index >= 0 ? Number(rowsOf('tool_state')[index].revision ?? 1) : null
+      if (!(input.p_seed && current !== null) && input.p_expected_revision !== current) {
+        data = { status: 'conflict', revisions: { [key]: current } }
+      } else if (input.p_seed && current !== null) data = { status: 'applied', revisions: { [key]: current } }
+      else {
+        const revision = current === null ? 1 : current + 1
+        const row = { tool: input.p_tool, data: input.p_data, revision }
+        if (index >= 0) rowsOf('tool_state')[index] = row
+        else rowsOf('tool_state').push(row)
+        data = { status: 'applied', revisions: { [key]: revision } }
+      }
+    } else if (name === 'sync_delete_rows' && deleteArgs?.p_resource && Array.isArray(deleteArgs.p_ids)) {
+      const input = args as { p_resource: string; p_ids: string[]; p_expected_revisions: Record<string, number | null> }
+      const current: Record<string, number | null> = {}
+      let conflict = false
+      for (const id of input.p_ids) {
+        const key = `${input.p_resource}:${id}`
+        const existing = rowsOf(input.p_resource).find((row) => String(row.id) === id)
+        const revision = existing ? Number(existing.revision ?? 1) : null
+        current[key] = revision
+        if (input.p_expected_revisions?.[key] !== revision) conflict = true
+      }
+      if (conflict) data = { status: 'conflict', revisions: current }
+      else {
+        const ids = new Set(input.p_ids)
+        tables[input.p_resource] = rowsOf(input.p_resource).filter((row) => !ids.has(String(row.id)))
+        data = { status: 'applied', revisions: Object.fromEntries(input.p_ids.map((id) => [`${input.p_resource}:${id}`, null])) }
+      }
+    } else if (name === 'sync_settle_items') {
+      const input = args as { p_payment: Row; p_expected_revisions: Record<string, number | null> }
+      const payment = input.p_payment
+      const paymentId = String(payment.id)
+      const itemIds = Array.isArray(payment.item_ids) ? payment.item_ids.map(String) : []
+      const current: Record<string, number | null> = {
+        [`monthend_payments:${paymentId}`]: rowsOf('monthend_payments').some((row) => row.id === payment.id) ? 1 : null,
+      }
+      for (const id of itemIds) {
+        const row = rowsOf('monthend_items').find((candidate) => String(candidate.id) === id)
+        current[`monthend_items:${id}`] = row ? Number(row.revision ?? 1) : null
+      }
+      const conflict = Object.entries(current).some(([key, revision]) => input.p_expected_revisions?.[key] !== revision)
+      if (conflict) data = { status: 'conflict', revisions: current }
+      else {
+        rowsOf('monthend_payments').push({ ...payment, revision: 1 })
+        const revisions: Record<string, number> = { [`monthend_payments:${paymentId}`]: 1 }
+        for (const id of itemIds) {
+          const index = rowsOf('monthend_items').findIndex((row) => String(row.id) === id)
+          if (index < 0) continue
+          const revision = Number(rowsOf('monthend_items')[index].revision ?? 1) + 1
+          rowsOf('monthend_items')[index] = { ...rowsOf('monthend_items')[index], paid: true, payment_id: paymentId, revision }
+          revisions[`monthend_items:${id}`] = revision
+        }
+        data = { status: 'applied', revisions }
+      }
+    } else if (name === 'sync_unsettle_payment') {
+      const input = args as { p_id: string; p_expected_revisions: Record<string, number | null> }
+      const payment = rowsOf('monthend_payments').find((row) => String(row.id) === input.p_id)
+      const items = rowsOf('monthend_items').filter((row) => row.payment_id === input.p_id)
+      const current: Record<string, number | null> = {
+        [`monthend_payments:${input.p_id}`]: payment ? Number(payment.revision ?? 1) : null,
+      }
+      for (const row of items) current[`monthend_items:${String(row.id)}`] = Number(row.revision ?? 1)
+      const conflict = Object.keys(current).length !== Object.keys(input.p_expected_revisions ?? {}).length
+        || Object.entries(current).some(([key, revision]) => input.p_expected_revisions?.[key] !== revision)
+      if (conflict) data = { status: 'conflict', revisions: current }
+      else {
+        tables.monthend_payments = rowsOf('monthend_payments').filter((row) => String(row.id) !== input.p_id)
+        const revisions: Record<string, number | null> = { [`monthend_payments:${input.p_id}`]: null }
+        for (const row of items) {
+          const revision = Number(row.revision ?? 1) + 1
+          Object.assign(row, { paid: false, payment_id: null, revision })
+          revisions[`monthend_items:${String(row.id)}`] = revision
+        }
+        data = { status: 'applied', revisions }
+      }
+    } else if (name === 'sync_delete_mortgage_loan_part') {
+      const input = args as { p_loan_part_id: string; p_expected_revisions: Record<string, number | null> }
+      const part = rowsOf('mortgage_loan_parts').find((row) => String(row.id) === input.p_loan_part_id)
+      const payments = rowsOf('mortgage_payments').filter((row) => row.loan_part_id === input.p_loan_part_id)
+      const periods = rowsOf('mortgage_rate_periods').filter((row) => row.loan_part_id === input.p_loan_part_id)
+      const current: Record<string, number | null> = {
+        [`mortgage_loan_parts:${input.p_loan_part_id}`]: part ? Number(part.revision ?? 1) : null,
+      }
+      for (const row of payments) current[`mortgage_payments:${String(row.id)}`] = Number(row.revision ?? 1)
+      for (const row of periods) current[`mortgage_rate_periods:${String(row.id)}`] = Number(row.revision ?? 1)
+      const conflict = Object.keys(current).length !== Object.keys(input.p_expected_revisions ?? {}).length
+        || Object.entries(current).some(([key, revision]) => input.p_expected_revisions?.[key] !== revision)
+      if (conflict) data = { status: 'conflict', revisions: current }
+      else {
+        tables.mortgage_payments = rowsOf('mortgage_payments').filter((row) => row.loan_part_id !== input.p_loan_part_id)
+        tables.mortgage_rate_periods = rowsOf('mortgage_rate_periods').filter((row) => row.loan_part_id !== input.p_loan_part_id)
+        tables.mortgage_loan_parts = rowsOf('mortgage_loan_parts').filter((row) => String(row.id) !== input.p_loan_part_id)
+        data = { status: 'applied', revisions: Object.fromEntries(Object.keys(current).map((key) => [key, null])) }
+      }
+    }
+    if (receiptKey && (data as { status?: unknown } | null)?.status === 'applied') receipts.set(receiptKey, data)
+    if (receiptKey && (control.lostResponseOnce.delete(receiptKey) || control.lostResponseOnce.delete(name))) {
+      return Promise.resolve({ data: null, error: { message: 'Failed to fetch', status: 0 } })
+    }
+    if (data !== null) return Promise.resolve({ data, error: null })
     if (deleteArgs?.p_resource && Array.isArray(deleteArgs.p_ids)) {
       const ids = new Set(deleteArgs.p_ids)
       tables[deleteArgs.p_resource] = rowsOf(deleteArgs.p_resource).filter((row) => !ids.has(String(row.id)))
@@ -168,5 +317,5 @@ export function createSupabaseMock() {
       getUser: async () => ({ data: { user: control.user }, error: null }),
     },
   }
-  return { supabase, tables, control }
+  return { supabase, tables, control, receipts }
 }

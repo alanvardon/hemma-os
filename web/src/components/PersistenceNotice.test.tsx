@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import PersistenceNotice from './PersistenceNotice'
 import { reportPersistenceError } from '../lib/persistence-error'
@@ -58,5 +58,30 @@ describe('PersistenceNotice', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('shows an actionable conflict and keeps the local version against the current revision', async () => {
+    const identity = { userId: 'notice-conflict-user', householdId: 'notice-conflict-house' }
+    activateSyncIdentity(identity)
+    const unregister = syncCoordinator.register('notice-conflict', async (operation) => {
+      if (operation.expectedRevisions?.['tool_state:notice'] === 1) {
+        throw { status: 409, currentRevisions: { 'tool_state:notice': 2 } }
+      }
+      return { revisions: { 'tool_state:notice': 3 } }
+    })
+    await expect(syncCoordinator.mutate({
+      resource: 'notice-conflict', operation: 'upsert', payload: { mine: true }, entityIds: ['notice'],
+      expectedRevisions: { 'tool_state:notice': 1 },
+    })).rejects.toMatchObject({ category: 'conflict' })
+
+    render(<PersistenceNotice />)
+    expect(screen.getByRole('alert')).toHaveTextContent('Det här ändrades på en annan enhet.')
+    expect(screen.getByRole('button', { name: 'Ladda molnversionen' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Behåll min version' }))
+
+    await waitFor(() => expect(screen.queryByText('Det här ändrades på en annan enhet.')).not.toBeInTheDocument())
+    expect(syncCoordinator.getRevision('tool_state:notice')).toBe(3)
+    unregister()
+    syncCoordinator.removeNamespace(identity)
   })
 })

@@ -34,6 +34,9 @@ beforeEach(async () => {
   Object.keys(mock().tables).forEach((k) => delete mock().tables[k])
   mock().control.fail = false
   mock().control.failing.clear()
+  mock().control.lostResponseOnce.clear()
+  Object.keys(mock().control.errors).forEach((key) => delete mock().control.errors[key])
+  Object.keys(mock().control.rpcHandlers).forEach((key) => delete mock().control.rpcHandlers[key])
 })
 
 function cache(): Record<string, unknown> {
@@ -86,19 +89,24 @@ describe('write path', () => {
     expect(syncCoordinator.isDirty('monthend_items')).toBe(true)
   })
 
-  // settle() is now one atomic `settle_items` RPC (plan 48); removePayment() the
-  // `unsettle_payment` mirror. The mock has no SQL engine, so each test wires a
+  // settle() is one atomic `sync_settle_items` RPC; removePayment() uses the
+  // revision-aware `sync_unsettle_payment` mirror. The mock has no SQL engine, so each test wires a
   // handler that records the args and returns success — cache patching is what
   // these assert on (the DB transaction is exercised by the migration itself).
   it('settle: one RPC records the payment and flips settled items to paid', async () => {
     mock().tables.monthend_items = [{ id: 'i1', created_at: 't1', ...itemDraft() }]
     // Seed the cache so the post-success patch has the item to flip.
     mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [{ id: 'i1', paid: false, payment_id: null, personal_items: [] }], payments: [], settings: {} }))
+    await store.listItems()
     let seen: Record<string, unknown> | null = null
-    mock().control.rpcHandlers.settle_items = (raw) => { seen = raw as Record<string, unknown>; return null }
+    mock().control.rpcHandlers.sync_settle_items = (raw) => {
+      seen = raw as Record<string, unknown>
+      const input = raw as { p_payment: { id: string }; p_expected_revisions: Record<string, number | null> }
+      return { status: 'applied', revisions: Object.fromEntries(Object.keys(input.p_expected_revisions).map((key) => [key, key.startsWith('monthend_payments:') ? 1 : 2])) }
+    }
     const payment = await store.settle({ item_ids: ['i1'], from_person: 'b', to_person: 'a', amount: 100, period_label: '2024-01', note: '' })
     // Called with the stamped id + the settle payload mapped to p_* args.
-    expect(seen).toMatchObject({ p_id: payment.id, p_item_ids: ['i1'], p_from: 'b', p_to: 'a', p_amount: 100, p_period_label: '2024-01', p_note: '' })
+    expect(seen).toMatchObject({ p_payment: { id: payment.id, item_ids: ['i1'], from_person: 'b', to_person: 'a', amount: 100, period_label: '2024-01', note: '' } })
     // Cache patched after success: payment recorded, item flipped to paid.
     expect((cache().payments as { id: string }[])[0].id).toBe(payment.id)
     expect((cache().items as { paid: boolean; payment_id: string }[])[0]).toMatchObject({ paid: true, payment_id: payment.id })
@@ -106,7 +114,7 @@ describe('write path', () => {
 
   it('settle: RPC failure keeps the settlement locally dirty', async () => {
     mock().tables.monthend_items = [{ id: 'i1', created_at: 't1', ...itemDraft() }]
-    mock().control.failing.add('settle_items')
+    mock().control.failing.add('sync_settle_items')
     await expect(store.settle({ item_ids: ['i1'], from_person: 'b', to_person: 'a', amount: 100, period_label: '2024-01', note: '' })).rejects.toBeTruthy()
     expect((cache().payments as unknown[] | undefined) || []).toHaveLength(1)
     const { syncCoordinator } = await import('./sync')
@@ -114,11 +122,7 @@ describe('write path', () => {
   })
 
   it('settle: a lost response after commit is verified by stable payment id', async () => {
-    mock().tables.monthend_payments = [{
-      id: 'pay-lost', item_ids: [], from_person: 'a', to_person: 'b', amount: 10,
-      period_label: 'Juli', note: '', created_at: '2026-07-14T12:00:00.000Z',
-    }]
-    mock().control.failing.add('settle_items')
+    mock().control.lostResponseOnce.add('sync_settle_items')
     await expect(store.settle({
       id: 'pay-lost', item_ids: [], from_person: 'a', to_person: 'b', amount: 10,
       period_label: 'Juli', note: '', created_at: '2026-07-14T12:00:00.000Z',
@@ -132,7 +136,6 @@ describe('write path', () => {
       id: 'pay-collision', item_ids: [], from_person: 'a', to_person: 'b', amount: 999,
       period_label: 'Juli', note: '', created_at: '2026-07-14T12:00:00.000Z',
     }]
-    mock().control.failing.add('settle_items')
     await expect(store.settle({
       id: 'pay-collision', item_ids: [], from_person: 'a', to_person: 'b', amount: 10,
       period_label: 'Juli', note: '', created_at: '2026-07-14T12:00:00.000Z',
@@ -143,11 +146,16 @@ describe('write path', () => {
 
   it('removePayment: one RPC un-settles the items and deletes the payment', async () => {
     mock().tables.monthend_items = [{ id: 'i1', paid: true, payment_id: 'pay1', personal_items: [] }]
-    mock().tables.monthend_payments = [{ id: 'pay1' }]
+    mock().tables.monthend_payments = [{ id: 'pay1', item_ids: ['i1'] }]
     // Seed the cache so the post-success patch has rows to mutate + count.
-    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [{ id: 'i1', paid: true, payment_id: 'pay1', personal_items: [] }], payments: [{ id: 'pay1' }], settings: {} }))
+    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [{ id: 'i1', paid: true, payment_id: 'pay1', personal_items: [] }], payments: [{ id: 'pay1', item_ids: ['i1'] }], settings: {} }))
+    await Promise.all([store.listItems(), store.listPayments()])
     let seenId: string | null = null
-    mock().control.rpcHandlers.unsettle_payment = (raw) => { seenId = (raw as { p_id: string }).p_id; return null }
+    mock().control.rpcHandlers.sync_unsettle_payment = (raw) => {
+      const input = raw as { p_id: string; p_expected_revisions: Record<string, number | null> }
+      seenId = input.p_id
+      return { status: 'applied', revisions: Object.fromEntries(Object.keys(input.p_expected_revisions).map((key) => [key, key.startsWith('monthend_payments:') ? null : 2])) }
+    }
     const n = await store.removePayment('pay1')
     expect(seenId).toBe('pay1')
     expect(n).toBe(0) // no payments left in the cache
@@ -156,7 +164,7 @@ describe('write path', () => {
   })
 
   it('removePayment: RPC failure throws', async () => {
-    mock().control.failing.add('unsettle_payment')
+    mock().control.failing.add('sync_unsettle_payment')
     await expect(store.removePayment('pay1')).rejects.toBeTruthy()
   })
 

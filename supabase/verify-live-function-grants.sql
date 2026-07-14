@@ -7,8 +7,10 @@
 -- Expected matrix:
 --   email_may_sign_in(text): public=false, anon=false, authenticated=false
 --   household_roster(): public=false, anon=false, authenticated=true
---   settle_items(...): public=false, anon=false, authenticated=true
---   unsettle_payment(text): public=false, anon=false, authenticated=true
+--   legacy settle_items/unsettle_payment/delete_*: all client execute=false
+--   sync_apply_rows/sync_apply_tool_state/sync_delete_rows: authenticated=true only
+--   sync_settle_items/sync_unsettle_payment/sync_delete_mortgage_loan_part:
+--     authenticated=true only
 
 select
   n.nspname as schema_name,
@@ -24,6 +26,13 @@ where p.oid in (
   'public.household_roster()'::pg_catalog.regprocedure,
   'public.settle_items(text,jsonb,text,text,numeric,text,text,timestamp with time zone)'::pg_catalog.regprocedure,
   'public.unsettle_payment(text)'::pg_catalog.regprocedure,
-  'public.delete_household_rows(text,text[])'::pg_catalog.regprocedure
+  'public.delete_household_rows(text,text[])'::pg_catalog.regprocedure,
+  'public.delete_mortgage_loan_part(text)'::pg_catalog.regprocedure,
+  'public.sync_apply_rows(text,text,jsonb,jsonb,boolean)'::pg_catalog.regprocedure,
+  'public.sync_apply_tool_state(text,text,jsonb,bigint,boolean)'::pg_catalog.regprocedure,
+  'public.sync_delete_rows(text,text,text[],jsonb)'::pg_catalog.regprocedure,
+  'public.sync_settle_items(text,jsonb,jsonb)'::pg_catalog.regprocedure,
+  'public.sync_unsettle_payment(text,text,jsonb)'::pg_catalog.regprocedure,
+  'public.sync_delete_mortgage_loan_part(text,text,jsonb)'::pg_catalog.regprocedure
 )
-order by p.proname;
+order by p.proname, pg_catalog.pg_get_function_identity_arguments(p.oid);

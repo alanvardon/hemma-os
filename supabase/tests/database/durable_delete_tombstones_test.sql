@@ -22,8 +22,8 @@ insert into public.mortgage_payments (id, household_id, loan_part_id) values
   ('deleted-child-payment', '42000000-0000-0000-0000-000000000001', 'deleted-part');
 insert into public.mortgage_rate_periods (id, household_id, loan_part_id) values
   ('deleted-child-period', '42000000-0000-0000-0000-000000000001', 'deleted-part');
-insert into public.monthend_payments (id, household_id) values
-  ('deleted-settlement', '42000000-0000-0000-0000-000000000001');
+insert into public.monthend_payments (id, household_id, item_ids) values
+  ('deleted-settlement', '42000000-0000-0000-0000-000000000001', '["settled-item"]');
 insert into public.monthend_items (id, household_id, paid, payment_id) values
   ('settled-item', '42000000-0000-0000-0000-000000000001', true, 'deleted-settlement');
 insert into public.house_items (id, household_id, title) values
@@ -75,7 +75,10 @@ select set_config('request.jwt.claims',
   '{"sub":"41000000-0000-0000-0000-000000000001","role":"authenticated","email":"tombstone-a@example.invalid"}', true);
 
 select lives_ok(
-  $$select public.delete_household_rows('scenarios', array['deleted-scenario'])$$,
+  $$select public.sync_delete_rows(
+    'tombstone-delete-scenario', 'scenarios', array['deleted-scenario'],
+    '{"scenarios:deleted-scenario":1}'::jsonb
+  )$$,
   'an authenticated household can durably delete its scenario'
 );
 select is((select count(*) from public.scenarios where id = 'deleted-scenario'), 0::bigint,
@@ -83,30 +86,45 @@ select is((select count(*) from public.scenarios where id = 'deleted-scenario'),
 select ok((select (data #> '{resources,scenarios}') ? 'deleted-scenario'
   from public.tool_state where tool = 'sync-tombstones-v1'), 'the scenario tombstone is recorded');
 select lives_ok(
-  $$select public.delete_household_rows('scenarios', array['deleted-scenario'])$$,
+  $$select public.sync_delete_rows(
+    'tombstone-delete-scenario', 'scenarios', array['deleted-scenario'],
+    '{"scenarios:deleted-scenario":1}'::jsonb
+  )$$,
   'repeating an acknowledged delete is idempotent'
 );
-select throws_ok(
-  $$insert into public.scenarios(id) values ('deleted-scenario')$$,
-  '23505', 'deleted id cannot be reused', 'stale replay cannot recreate a deleted id'
+select is(
+  (public.sync_apply_rows(
+    'tombstone-recreate-scenario', 'scenarios', '[{"id":"deleted-scenario"}]',
+    '{"scenarios:deleted-scenario":null}', false
+  )->>'status'), 'conflict', 'stale replay cannot recreate a deleted id'
 );
-select lives_ok($$insert into public.scenarios(id) values ('fresh-scenario')$$,
-  'a fresh scenario id remains writable');
+select is(
+  (public.sync_apply_rows(
+    'tombstone-fresh-scenario', 'scenarios', '[{"id":"fresh-scenario"}]',
+    '{"scenarios:fresh-scenario":null}', false
+  )->>'status'), 'applied', 'a fresh scenario id remains writable');
 select throws_ok(
   $$delete from public.scenarios where id = 'fresh-scenario'$$,
   '42501', 'permission denied for table scenarios', 'direct client deletes cannot bypass tombstones'
 );
 select throws_ok($$update public.scenarios set id = 'renamed-scenario' where id = 'fresh-scenario'$$,
-  '22023', 'sync entity ids are immutable', 'client updates cannot bypass deletion by renaming an id');
+  '42501', 'permission denied for table scenarios', 'client updates cannot bypass deletion by renaming an id');
 select lives_ok(
-  $$select public.delete_household_rows('house_items', array['43000000-0000-0000-0000-000000000001'])$$,
+  $$select public.sync_delete_rows(
+    'tombstone-delete-house-item', 'house_items',
+    array['43000000-0000-0000-0000-000000000001'],
+    '{"house_items:43000000-0000-0000-0000-000000000001":1}'::jsonb
+  )$$,
   'the corrected house_items allowlist mapping deletes through the RPC'
 );
 select is((select count(*) from public.house_items where id = '43000000-0000-0000-0000-000000000001'), 0::bigint,
   'the house item is absent after its durable delete');
 
 select lives_ok(
-  $$select public.delete_household_rows('scenarios', array['foreign-scenario'])$$,
+  $$select public.sync_delete_rows(
+    'tombstone-opaque-foreign', 'scenarios', array['foreign-scenario'],
+    '{"scenarios:foreign-scenario":null}'::jsonb
+  )$$,
   'a foreign opaque id does not disclose whether a row exists'
 );
 reset role;
@@ -114,7 +132,10 @@ select is((select count(*) from public.scenarios where id = 'foreign-scenario'),
   'the other household row is unchanged');
 
 set local role authenticated;
-select lives_ok($$select public.delete_mortgage_loan_part('deleted-part')$$,
+select lives_ok($$select public.sync_delete_mortgage_loan_part(
+  'tombstone-cascade', 'deleted-part',
+  '{"mortgage_loan_parts:deleted-part":1,"mortgage_payments:deleted-child-payment":1,"mortgage_rate_periods:deleted-child-period":1}'::jsonb
+)$$,
   'mortgage cascade deletion succeeds');
 select is((select count(*) from public.mortgage_loan_parts where id = 'deleted-part'), 0::bigint,
   'the mortgage parent is removed');
@@ -124,16 +145,32 @@ select ok((select
     and (data #> '{resources,mortgage_rate_periods}') ? 'deleted-child-period'
   from public.tool_state where tool = 'sync-tombstones-v1'),
   'mortgage parent and child tombstones are recorded atomically');
-select lives_ok($$select public.delete_mortgage_loan_part('deleted-part')$$,
+select lives_ok($$select public.sync_delete_mortgage_loan_part(
+  'tombstone-cascade', 'deleted-part',
+  '{"mortgage_loan_parts:deleted-part":1,"mortgage_payments:deleted-child-payment":1,"mortgage_rate_periods:deleted-child-period":1}'::jsonb
+)$$,
   'mortgage cascade retry is idempotent');
-select throws_ok($$insert into public.mortgage_loan_parts(id) values ('deleted-part')$$,
-  '23505', 'deleted id cannot be reused', 'a deleted mortgage parent id cannot be recreated');
-select throws_ok($$insert into public.mortgage_payments(id,loan_part_id) values ('deleted-child-payment','deleted-part')$$,
-  '23503', 'deleted mortgage loan part cannot receive children', 'a payment cannot be recreated under a deleted parent');
-select throws_ok($$insert into public.mortgage_rate_periods(id,loan_part_id) values ('deleted-child-period','deleted-part')$$,
-  '23503', 'deleted mortgage loan part cannot receive children', 'a rate period cannot be recreated under a deleted parent');
+select is((public.sync_apply_rows(
+  'tombstone-recreate-parent', 'mortgage_loan_parts', '[{"id":"deleted-part"}]',
+  '{"mortgage_loan_parts:deleted-part":null}', false
+)->>'status'), 'conflict', 'a deleted mortgage parent id cannot be recreated');
+select throws_ok($$select public.sync_apply_rows(
+  'tombstone-recreate-payment', 'mortgage_payments',
+  '[{"id":"deleted-child-payment","loan_part_id":"deleted-part"}]',
+  '{"mortgage_payments:deleted-child-payment":null}', false
+)$$, '23503', 'deleted mortgage loan part cannot receive children',
+  'a payment cannot be recreated under a deleted parent');
+select throws_ok($$select public.sync_apply_rows(
+  'tombstone-recreate-period', 'mortgage_rate_periods',
+  '[{"id":"deleted-child-period","loan_part_id":"deleted-part"}]',
+  '{"mortgage_rate_periods:deleted-child-period":null}', false
+)$$, '23503', 'deleted mortgage loan part cannot receive children',
+  'a rate period cannot be recreated under a deleted parent');
 
-select throws_ok($$select public.delete_mortgage_loan_part('rollback-part')$$,
+select throws_ok($$select public.sync_delete_mortgage_loan_part(
+  'tombstone-rollback-cascade', 'rollback-part',
+  '{"mortgage_loan_parts:rollback-part":1,"mortgage_payments:rollback-child-payment":1,"mortgage_rate_periods:rollback-child-period":1}'::jsonb
+)$$,
   'P0001', 'forced child delete failure', 'a child failure aborts the mortgage cascade');
 reset role;
 select ok(
@@ -149,25 +186,34 @@ select ok(
   'a failed cascade rolls back parent, children, and tombstones');
 set local role authenticated;
 
-select lives_ok($$select public.unsettle_payment('deleted-settlement')$$,
+select lives_ok($$select public.sync_unsettle_payment(
+  'tombstone-unsettle', 'deleted-settlement',
+  '{"monthend_payments:deleted-settlement":1,"monthend_items:settled-item":1}'::jsonb
+)$$,
   'unsettling records a durable payment deletion');
 select ok((select not paid and payment_id is null from public.monthend_items where id = 'settled-item'),
   'unsettling restores the linked item');
-select throws_ok($$insert into public.monthend_payments(id) values ('deleted-settlement')$$,
-  '23505', 'deleted id cannot be reused', 'an unsettled payment id cannot be recreated');
+select is((public.sync_settle_items(
+  'tombstone-recreate-settlement',
+  '{"id":"deleted-settlement","item_ids":["settled-item"]}',
+  '{"monthend_payments:deleted-settlement":null,"monthend_items:settled-item":2}'
+)->>'status'), 'conflict', 'an unsettled payment id cannot be recreated');
 select throws_ok(
   $$insert into public.tool_state(household_id, tool, data) values
     ('42000000-0000-0000-0000-000000000001', 'sync-tombstones-v1', '{}')
     on conflict (household_id, tool) do update set data = excluded.data$$,
-  '42501', 'sync tombstones are server managed', 'clients cannot mutate the tombstone ledger'
+  '42501', 'permission denied for table tool_state', 'clients cannot mutate the tombstone ledger'
 );
 select throws_ok(
   $$update public.tool_state set tool = 'renamed-ledger' where tool = 'sync-tombstones-v1'$$,
-  '42501', 'sync tombstones are server managed', 'clients cannot rename the tombstone ledger'
+  '42501', 'permission denied for table tool_state', 'clients cannot rename the tombstone ledger'
 );
 select throws_ok(
-  $$select public.delete_household_rows('not-allowlisted', array['x'])$$,
-  '22023', 'unsupported sync resource', 'the generic delete RPC has a strict allowlist'
+  $$select public.sync_delete_rows(
+    'tombstone-invalid-resource', 'not-allowlisted', array['x'],
+    '{"not-allowlisted:x":null}'::jsonb
+  )$$,
+  '22023', 'unsupported generic delete resource', 'the generic delete RPC has a strict allowlist'
 );
 
 select * from finish();

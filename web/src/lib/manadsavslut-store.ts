@@ -21,6 +21,10 @@ import { makeImportOnce, materializeImport, stamp } from './store-helpers'
 import { syncCoordinator } from './sync'
 import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
 import { legacyImportAssignedToActive } from './legacy-data'
+import {
+  receiptRpc, rejectLegacyToolOperation, rememberRowRevisions, rememberToolRevision,
+  revisionKey, syncRpcResult,
+} from './sync-rpc'
 
 // Legacy pre-Supabase envelope — import source + backup (read-only after swap).
 export const STORAGE_KEY = 'bostadskalkyl_monthend_v1'
@@ -193,15 +197,18 @@ const _importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(I
   if (legacy.items.length) operations.push({
     resource: ITEMS_RESOURCE, operation: 'upsert' as const, payload: { rows: legacy.items.map(_itemRow), seed: true },
     entityIds: legacy.items.map((row) => row.id),
+    expectedRevisions: Object.fromEntries(legacy.items.map((row) => [revisionKey(ITEMS_RESOURCE, row.id), null])),
     applyLocal: () => _patchCache((e) => { const ids = new Set(legacy.items.map((row) => row.id)); e.items = [...legacy.items, ...e.items.filter((row) => !ids.has(row.id))] }),
   })
   if (legacy.payments.length) operations.push({
     resource: PAYMENTS_RESOURCE, operation: 'upsert' as const, payload: { rows: legacy.payments.map(_paymentRow), seed: true },
     entityIds: legacy.payments.map((row) => row.id),
+    expectedRevisions: Object.fromEntries(legacy.payments.map((row) => [revisionKey(PAYMENTS_RESOURCE, row.id), null])),
     applyLocal: () => _patchCache((e) => { const ids = new Set(legacy.payments.map((row) => row.id)); e.payments = [...legacy.payments, ...e.payments.filter((row) => !ids.has(row.id))] }),
   })
   if (legacy.settings) operations.push({
     resource: SETTINGS_RESOURCE, operation: 'upsert' as const, payload: { data: legacy.settings, seed: true }, entityIds: [SETTINGS_TOOL],
+    expectedRevisions: { [SETTINGS_RESOURCE]: null },
     applyLocal: () => _patchCache((e) => { e.settings = legacy.settings! }),
   })
   if (!scope.isActive()) return false
@@ -214,57 +221,75 @@ syncCoordinator.register(SETTINGS_RESOURCE, async (operation) => {
   const payload = operation.payload as { data?: unknown; seed?: unknown }
   const data = payload?.data
   if (!data || typeof data !== 'object') throw { status: 400, message: 'Malformed month-end settings' }
-  const { error } = payload.seed === true
-    ? await supabase.from(STATE).insert({ tool: SETTINGS_TOOL, data })
-    : await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data }, { onConflict: 'household_id,tool' })
-  if (payload.seed === true && (error as { code?: string } | null)?.code === '23505') return
+  await rejectLegacyToolOperation(operation, SETTINGS_TOOL)
+  const { data: result, error } = await receiptRpc('sync_apply_tool_state', {
+    p_operation_id: operation.id, p_tool: SETTINGS_TOOL, p_data: data,
+    p_expected_revision: operation.expectedRevisions?.[SETTINGS_RESOURCE] ?? null,
+    p_seed: payload.seed === true,
+  })
   if (error) throw error
+  return syncRpcResult(result)
 }, (operation) => operation.operation === 'upsert'
   && !!(operation.payload as { data?: unknown })?.data
   && typeof (operation.payload as { data?: unknown }).data === 'object'
   && ((operation.payload as { seed?: unknown }).seed === undefined || typeof (operation.payload as { seed?: unknown }).seed === 'boolean')
   && operation.entityIds.length === 1 && operation.entityIds[0] === SETTINGS_TOOL)
 syncCoordinator.register(SETTLEMENT_RESOURCE, async (operation) => {
-  const payload = operation.payload as { rpc?: unknown; args?: unknown }
-  if (payload.rpc !== 'settle_items' && payload.rpc !== 'unsettle_payment') {
-    throw { status: 400, message: 'Malformed settlement operation' }
+  const payload = operation.payload as { kind?: unknown; payment?: unknown; id?: unknown }
+  if (operation.expectedRevisions === undefined) {
+    const current: Record<string, number | null> = {}
+    if (payload.kind === 'settle' && payload.payment && typeof payload.payment === 'object') {
+      const payment = payload.payment as { id?: unknown; item_ids?: unknown }
+      if (typeof payment.id !== 'string' || !Array.isArray(payment.item_ids)) throw { status: 400, message: 'Malformed settlement operation' }
+      const ids = payment.item_ids.filter((id): id is string => typeof id === 'string')
+      current[revisionKey(PAYMENTS_RESOURCE, payment.id)] = null
+      const { data, error } = await supabase.from(ITEMS).select('id,revision').in('id', ids)
+      if (error) throw error
+      for (const id of ids) current[revisionKey(ITEMS_RESOURCE, id)] = null
+      for (const row of (data ?? []) as Array<{ id?: unknown; revision?: unknown }>) {
+        if (typeof row.id === 'string') current[revisionKey(ITEMS_RESOURCE, row.id)] = Number(row.revision) || null
+      }
+    } else if (payload.kind === 'unsettle' && typeof payload.id === 'string') {
+      const [payment, items] = await Promise.all([
+        supabase.from(PAYMENTS).select('id,revision').eq('id', payload.id).maybeSingle(),
+        supabase.from(ITEMS).select('id,revision').eq('payment_id', payload.id),
+      ])
+      if (payment.error || items.error) throw payment.error ?? items.error
+      current[revisionKey(PAYMENTS_RESOURCE, payload.id)] = Number((payment.data as { revision?: unknown } | null)?.revision) || null
+      for (const row of (items.data ?? []) as Array<{ id?: unknown; revision?: unknown }>) {
+        if (typeof row.id === 'string') current[revisionKey(ITEMS_RESOURCE, row.id)] = Number(row.revision) || null
+      }
+    } else throw { status: 400, message: 'Malformed settlement operation' }
+    throw { status: 409, message: 'legacy operation has no base revision', currentRevisions: current }
   }
-  const { error } = await supabase.rpc(payload.rpc, payload.args)
-  if (error && payload.rpc === 'settle_items') {
-    const args = payload.args as {
-      p_id?: unknown; p_item_ids?: unknown; p_from?: unknown; p_to?: unknown;
-      p_amount?: unknown; p_period_label?: unknown; p_note?: unknown; p_created_at?: unknown
-    }
-    const id = args?.p_id
-    if (typeof id === 'string') {
-      const { data, error: verifyError } = await supabase.from(PAYMENTS).select('*').eq('id', id).maybeSingle()
-      // A response can be lost after the transaction committed. The stable
-      // payment id plus exact payload make that replay observable as success;
-      // an unrelated row with the same id must remain a conflict.
-      const row = data as Record<string, unknown> | null
-      if (!verifyError && row
-        && JSON.stringify(row.item_ids ?? []) === JSON.stringify(args.p_item_ids ?? [])
-        && (row.from_person ?? null) === (args.p_from ?? null)
-        && (row.to_person ?? null) === (args.p_to ?? null)
-        && Number(row.amount ?? 0) === Number(args.p_amount ?? 0)
-        && String(row.period_label ?? '') === String(args.p_period_label ?? '')
-        && String(row.note ?? '') === String(args.p_note ?? '')
-        && new Date(String(row.created_at)).toISOString() === new Date(String(args.p_created_at)).toISOString()) return
-    }
+  if (payload.kind === 'settle' && payload.payment && typeof payload.payment === 'object') {
+    const { data, error } = await receiptRpc('sync_settle_items', {
+      p_operation_id: operation.id, p_payment: payload.payment,
+      p_expected_revisions: operation.expectedRevisions,
+    })
+    if (error) throw error
+    return syncRpcResult(data)
   }
-  if (error) throw error
+  if (payload.kind === 'unsettle' && typeof payload.id === 'string') {
+    const { data, error } = await receiptRpc('sync_unsettle_payment', {
+      p_operation_id: operation.id, p_id: payload.id,
+      p_expected_revisions: operation.expectedRevisions,
+    })
+    if (error) throw error
+    return syncRpcResult(data)
+  }
+  throw { status: 400, message: 'Malformed settlement operation' }
 }, (operation) => {
-  const payload = operation.payload as { rpc?: unknown; args?: unknown }
-  if (!payload?.args || typeof payload.args !== 'object') return false
-  if (operation.operation === 'delete' && payload.rpc === 'unsettle_payment') {
-    const id = (payload.args as { p_id?: unknown }).p_id
+  const payload = operation.payload as { kind?: unknown; payment?: unknown; id?: unknown }
+  if (operation.operation === 'delete' && payload.kind === 'unsettle') {
+    const id = payload.id
     return typeof id === 'string' && !!id && operation.entityIds.length === 1 && operation.entityIds[0] === id
   }
-  if (operation.operation === 'upsert' && payload.rpc === 'settle_items') {
-    const args = payload.args as { p_id?: unknown; p_item_ids?: unknown }
-    if (typeof args.p_id !== 'string' || !args.p_id || !Array.isArray(args.p_item_ids)
-      || !args.p_item_ids.every((id) => typeof id === 'string' && !!id)) return false
-    const expected = [args.p_id, ...args.p_item_ids]
+  if (operation.operation === 'upsert' && payload.kind === 'settle' && payload.payment && typeof payload.payment === 'object') {
+    const payment = payload.payment as { id?: unknown; item_ids?: unknown }
+    if (typeof payment.id !== 'string' || !payment.id || !Array.isArray(payment.item_ids)
+      || !payment.item_ids.every((id) => typeof id === 'string' && !!id)) return false
+    const expected = [payment.id, ...payment.item_ids]
     return expected.length === operation.entityIds.length && expected.every((id, index) => id === operation.entityIds[index])
   }
   return false
@@ -282,6 +307,7 @@ export async function listItems(): Promise<Item[]> {
   ])
   if (!scope.isActive() || syncCoordinator.isDirty(ITEMS_RESOURCE) || syncCoordinator.isDirty(SETTLEMENT_RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
+  rememberRowRevisions(ITEMS_RESOURCE, result.data as Record<string, unknown>[])
   const rows = withoutTombstones((result.data as Item[]).map(normalizeItem), tombstones)
   if (scope.isActive()) {
     const cache = _readCacheFrom(scope); cache.items = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
@@ -353,30 +379,29 @@ export async function listPayments(): Promise<Payment[]> {
   ])
   if (!scope.isActive() || syncCoordinator.isDirty(PAYMENTS_RESOURCE) || syncCoordinator.isDirty(SETTLEMENT_RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
+  rememberRowRevisions(PAYMENTS_RESOURCE, result.data as Record<string, unknown>[])
   const rows = withoutTombstones(result.data as Payment[], tombstones)
   const cache = _readCacheFrom(scope); cache.payments = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return rows
 }
 
 // Insert the payment AND flip its items to paid in ONE transaction, via the
-// `settle_items` security-definer RPC (plan 48). The two writes commit or roll
+// `sync_settle_items` security-definer RPC (plans 48/98). The writes commit or roll
 // back together, so a crash/network drop can no longer leave a settlement whose
 // items are half-flipped. Cache is patched only after the RPC succeeds (plan 47).
 export async function settle(draft: Omit<Payment, 'id' | 'created_at'>): Promise<Payment> {
   const payment = stamp(draft || {}, 'pay') as Payment
   const itemIds = payment.item_ids || []
-  const args = {
-    p_id: payment.id,
-    p_item_ids: itemIds,
-    p_from: payment.from_person ?? null,
-    p_to: payment.to_person ?? null,
-    p_amount: payment.amount ?? 0,
-    p_period_label: payment.period_label ?? '',
-    p_note: payment.note ?? '',
-    p_created_at: payment.created_at,
+  const expected = {
+    [revisionKey(PAYMENTS_RESOURCE, payment.id)]: null,
+    ...Object.fromEntries(itemIds.map((id) => {
+      const key = revisionKey(ITEMS_RESOURCE, id)
+      return [key, syncCoordinator.getRevision(key)]
+    })),
   }
   await syncCoordinator.mutate({
-    resource: SETTLEMENT_RESOURCE, operation: 'upsert', payload: { rpc: 'settle_items', args }, entityIds: [payment.id, ...itemIds],
+    resource: SETTLEMENT_RESOURCE, operation: 'upsert', payload: { kind: 'settle', payment: _paymentRow(payment) },
+    entityIds: [payment.id, ...itemIds], expectedRevisions: expected,
     applyLocal: () => _patchCache((e) => {
       e.payments = [payment, ...e.payments.filter((p) => p.id !== payment.id)]
       const ids = new Set(itemIds)
@@ -387,11 +412,15 @@ export async function settle(draft: Omit<Payment, 'id' | 'created_at'>): Promise
 }
 
 // Un-flip the items AND delete the payment in ONE transaction, via the
-// `unsettle_payment` RPC — the atomic mirror of settle (plan 48).
+// `sync_unsettle_payment` RPC — the revision-aware atomic mirror of settle.
 export async function removePayment(id: string): Promise<number> {
+  const cachedPayment = _readCache().payments.find((payment) => payment.id === id)
+  const itemIds = cachedPayment?.item_ids ?? []
+  const keys = [revisionKey(PAYMENTS_RESOURCE, id), ...itemIds.map((itemId) => revisionKey(ITEMS_RESOURCE, itemId))]
   let n = 0
   await syncCoordinator.mutate({
-    resource: SETTLEMENT_RESOURCE, operation: 'delete', payload: { rpc: 'unsettle_payment', args: { p_id: id } }, entityIds: [id],
+    resource: SETTLEMENT_RESOURCE, operation: 'delete', payload: { kind: 'unsettle', id }, entityIds: [id],
+    expectedRevisions: Object.fromEntries(keys.map((key) => [key, syncCoordinator.getRevision(key)])),
     applyLocal: () => _patchCache((e) => {
       e.payments = e.payments.filter((p) => p.id !== id); n = e.payments.length
       e.items = e.items.map((it) => (it.payment_id === id ? { ...it, paid: false, payment_id: null } : it))
@@ -405,9 +434,10 @@ export async function getSettings(): Promise<MonthEndSettings> {
   const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
   if (!scope.isActive() || syncCoordinator.isDirty(SETTINGS_RESOURCE)) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
-  const { data, error } = await supabase.from(STATE).select('data').eq('tool', SETTINGS_TOOL).maybeSingle()
+  const { data, error } = await supabase.from(STATE).select('data,revision').eq('tool', SETTINGS_TOOL).maybeSingle()
   if (!scope.isActive() || syncCoordinator.isDirty(SETTINGS_RESOURCE)) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
   if (error) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
+  rememberToolRevision(SETTINGS_TOOL, data)
   const settings = { ...defaultSettings(), ...((data?.data as Partial<MonthEndSettings>) || {}) }
   const cache = _readCacheFrom(scope); cache.settings = settings; scope.write(CACHE_KEY, JSON.stringify(cache))
   return settings
@@ -420,6 +450,7 @@ export async function saveSettings(patch: Partial<MonthEndSettings>): Promise<Mo
   const merged = { ...defaultSettings(), ...current, ...(patch || {}) }
   await syncCoordinator.mutate({
     resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: merged }, entityIds: [SETTINGS_TOOL],
+    expectedRevisions: { [SETTINGS_RESOURCE]: syncCoordinator.getRevision(SETTINGS_RESOURCE) },
     applyLocal: () => _patchCache((e) => { e.settings = merged }),
   })
   return merged
@@ -469,11 +500,11 @@ export async function importJSON(text: string): Promise<{ items: number; payment
   })
 
   const operations = []
-  if (newItems.length) operations.push({ resource: ITEMS_RESOURCE, operation: 'upsert' as const, payload: { rows: newItems.map(_itemRow), seed: true }, entityIds: newItems.map((row) => row.id), applyLocal: () => _patchCache((e) => { const ids = new Set(newItems.map((row) => row.id)); e.items = [...newItems, ...e.items.filter((row) => !ids.has(row.id))] }) })
-  if (newPays.length) operations.push({ resource: PAYMENTS_RESOURCE, operation: 'upsert' as const, payload: { rows: newPays.map(_paymentRow), seed: true }, entityIds: newPays.map((row) => row.id), applyLocal: () => _patchCache((e) => { const ids = new Set(newPays.map((row) => row.id)); e.payments = [...newPays, ...e.payments.filter((row) => !ids.has(row.id))] }) })
+  if (newItems.length) operations.push({ resource: ITEMS_RESOURCE, operation: 'upsert' as const, payload: { rows: newItems.map(_itemRow), seed: true }, entityIds: newItems.map((row) => row.id), expectedRevisions: Object.fromEntries(newItems.map((row) => [revisionKey(ITEMS_RESOURCE, row.id), null])), applyLocal: () => _patchCache((e) => { const ids = new Set(newItems.map((row) => row.id)); e.items = [...newItems, ...e.items.filter((row) => !ids.has(row.id))] }) })
+  if (newPays.length) operations.push({ resource: PAYMENTS_RESOURCE, operation: 'upsert' as const, payload: { rows: newPays.map(_paymentRow), seed: true }, entityIds: newPays.map((row) => row.id), expectedRevisions: Object.fromEntries(newPays.map((row) => [revisionKey(PAYMENTS_RESOURCE, row.id), null])), applyLocal: () => _patchCache((e) => { const ids = new Set(newPays.map((row) => row.id)); e.payments = [...newPays, ...e.payments.filter((row) => !ids.has(row.id))] }) })
   if (parsed.settings && typeof parsed.settings === 'object') {
     const merged = { ...defaultSettings(), ...existingSettings, ...(parsed.settings as Partial<MonthEndSettings>) }
-    operations.push({ resource: SETTINGS_RESOURCE, operation: 'upsert' as const, payload: { data: merged, seed: true }, entityIds: [SETTINGS_TOOL], applyLocal: () => _patchCache((e) => { e.settings = merged }) })
+    operations.push({ resource: SETTINGS_RESOURCE, operation: 'upsert' as const, payload: { data: merged, seed: true }, entityIds: [SETTINGS_TOOL], expectedRevisions: { [SETTINGS_RESOURCE]: syncCoordinator.getRevision(SETTINGS_RESOURCE) }, applyLocal: () => _patchCache((e) => { e.settings = merged }) })
   }
   if (!scope.isActive()) throw new Error('Sync identity changed during month-end import')
   await syncCoordinator.mutateBatch(operations)

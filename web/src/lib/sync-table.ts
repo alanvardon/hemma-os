@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { syncCoordinator } from './sync'
+import { expectedRevisions, receiptRpc, rejectLegacyRowOperation, syncRpcResult } from './sync-rpc'
 
 interface TablePayload {
   rows?: Record<string, unknown>[]
@@ -55,33 +56,33 @@ export function withoutTombstones<T extends { id?: string }>(rows: T[], ids: Set
 export function registerTableSync(resource: string, table: string): void {
   syncCoordinator.register(resource, async (operation) => {
     const payload = operation.payload as TablePayload
+    await rejectLegacyRowOperation(operation, resource)
     if (operation.operation === 'upsert') {
       if (!Array.isArray(payload?.rows)) throw { status: 400, message: 'Malformed row upsert' }
       if (!payload.rows.length) return
-      if (payload.seed === true) {
-        for (const row of payload.rows) {
-          const { error } = await supabase.from(table).upsert([row], { onConflict: 'id', ignoreDuplicates: true })
-          if ((error as { code?: string } | null)?.code === '23505') continue
-          if (error) throw error
-        }
-        return
-      }
-      const { error } = await supabase.from(table).upsert(payload.rows, {
-        onConflict: 'id',
+      const { data, error } = await receiptRpc('sync_apply_rows', {
+        p_operation_id: operation.id,
+        p_resource: resource,
+        p_rows: payload.rows,
+        p_expected_revisions: operation.expectedRevisions,
+        p_seed: payload.seed === true,
       })
       if (error) throw error
-      return
+      return syncRpcResult(data)
     }
     if (!Array.isArray(payload?.ids) || !payload.ids.every((id) => typeof id === 'string')) {
       throw { status: 400, message: 'Malformed row delete' }
     }
     if (!payload.ids.length) return
     if (table !== resource) throw { status: 500, message: 'Sync resource/table mismatch' }
-    const { error } = await supabase.rpc('delete_household_rows', {
+    const { data, error } = await receiptRpc('sync_delete_rows', {
+      p_operation_id: operation.id,
       p_resource: resource,
       p_ids: payload.ids,
+      p_expected_revisions: operation.expectedRevisions,
     })
     if (error) throw error
+    return syncRpcResult(data)
   }, (operation) => {
     const payload = operation.payload as TablePayload
     if (operation.operation === 'upsert') {
@@ -109,6 +110,7 @@ export async function queueTableUpsert(
     operation: 'upsert',
     payload: { rows },
     entityIds,
+    expectedRevisions: expectedRevisions(resource, entityIds),
     applyLocal,
   })
 }
@@ -125,6 +127,7 @@ export async function queueTableDelete(
     operation: 'delete',
     payload: { ids: clean },
     entityIds: clean,
+    expectedRevisions: expectedRevisions(resource, clean),
     applyLocal,
   })
 }
