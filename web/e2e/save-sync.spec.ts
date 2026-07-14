@@ -3,8 +3,8 @@
  * Locks in, as a repeatable suite, the verification that was done by hand for
  * PR #237 (audit H2): a mutation that succeeds must survive a real reload, and
  * a mutation whose network write FAILS must surface a toast, keep the dialog
- * (and the user's input) open, add no phantom row, and throw no unhandled
- * rejection.
+ * (and the user's input) open, survive reload from the dirty cache, and replay
+ * after connectivity returns without an unhandled rejection.
  *
  * No live Supabase anywhere: the prod bundle is built with the Supabase origin
  * pinned to localhost:54321 (see playwright.config.ts) and every request to it
@@ -135,7 +135,7 @@ test('a saved loan part survives a real reload (save → cloud → re-read)', as
   expect(errors).toEqual([])
 })
 
-test('a failed save shows a toast, keeps the dialog + input, adds no phantom row (regression: audit H2 / PR #237)', async ({ page }) => {
+test('a failed save survives reload and replays after connectivity returns', async ({ page }) => {
   const errors = trackPageErrors(page)
   const backend = await mockBackend(page)
   backend.failInserts = true
@@ -152,8 +152,22 @@ test('a failed save shows a toast, keeps the dialog + input, adds no phantom row
   // …the dialog must stay open with the typed data intact (nothing lost)…
   await expect(dialog).toBeVisible()
   await expect(dialog.getByLabel('Label')).toHaveValue('Spöklån')
-  // …no phantom row may appear as if the save succeeded…
+  // The current form stays authoritative until reload; it is not falsely
+  // presented as cloud-saved in the ledger yet.
   await expect(page.locator('.ld-name', { hasText: 'Spöklån' })).toHaveCount(0)
-  // …and the rejection must have been caught (pre-#237 it was unhandled).
+  await expect(page.locator('.persistence-notice')).toContainText('Väntar på anslutning')
+
+  // The queued row is durable and wins the older empty cloud read on reload.
+  await page.reload()
+  await expect(page.locator('.ld-name', { hasText: 'Spöklån' })).toBeVisible()
+  await expect(page.locator('.persistence-notice')).toContainText('Väntar på anslutning')
+
+  // `online` is a retry hint; only the now-successful request produces Sparat.
+  backend.failInserts = false
+  await page.evaluate(() => window.dispatchEvent(new Event('online')))
+  await expect(page.locator('.persistence-notice')).toContainText('Sparat')
+  await page.reload()
+  await expect(page.locator('.ld-name', { hasText: 'Spöklån' })).toBeVisible()
+
   expect(errors).toEqual([])
 })

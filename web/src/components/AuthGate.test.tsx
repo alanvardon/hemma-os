@@ -25,6 +25,7 @@ vi.mock('../lib/household', () => ({
 }))
 
 beforeEach(() => {
+  localStorage.clear()
   vi.mocked(claimHousehold).mockReset()
   vi.mocked(signOut).mockReset().mockResolvedValue()
   vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
@@ -75,5 +76,45 @@ describe('AuthGate household provisioning', () => {
       'Flera hushåll har bjudit in dig. Be ett hushåll ta bort sin inbjudan innan du fortsätter.',
     )).toBeInTheDocument()
     expect(screen.queryByText('Skyddad route')).not.toBeInTheDocument()
+  })
+
+  it('keeps older unowned data behind an explicit import or leave choice', async () => {
+    localStorage.setItem('bostadskalkyl_draft_v1', '{"newPrice":7000000}')
+    vi.mocked(claimHousehold).mockResolvedValue('household-1')
+    const user = userEvent.setup()
+    render(<AuthGate><div>Skyddad route</div></AuthGate>)
+
+    expect(await screen.findByRole('heading', { name: 'Äldre data på den här enheten' })).toBeInTheDocument()
+    expect(screen.queryByText('Skyddad route')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Lämna kvar på enheten' }))
+    expect(await screen.findByText('Skyddad route')).toBeInTheDocument()
+    expect(localStorage.getItem('hemma-sync-v1:legacy-quarantine')).not.toBeNull()
+  })
+
+  it('imports older data only after the user chooses the active household', async () => {
+    localStorage.setItem('bostadskalkyl_draft_v1', '{"newPrice":7000000}')
+    vi.mocked(claimHousehold).mockResolvedValue('household-1')
+    const user = userEvent.setup()
+    render(<AuthGate><div>Skyddad route</div></AuthGate>)
+
+    await user.click(await screen.findByRole('button', { name: 'Importera till detta hushåll' }))
+    expect(await screen.findByText('Skyddad route')).toBeInTheDocument()
+    expect([...Array(localStorage.length).keys()].map((index) => localStorage.key(index))).toContain(
+      'hemma-sync-v1:user-1:household-1:bostadskalkyl_draft_v1',
+    )
+  })
+
+  it('requires a second warned action before removing older data', async () => {
+    localStorage.setItem('bostadskalkyl_draft_v1', '{}')
+    vi.mocked(claimHousehold).mockResolvedValue('household-1')
+    const user = userEvent.setup()
+    render(<AuthGate><div>Skyddad route</div></AuthGate>)
+
+    await user.click(await screen.findByRole('button', { name: 'Ta bort äldre data' }))
+    expect(screen.getByText('Detta tar permanent bort den äldre lokala datan från enheten.')).toBeInTheDocument()
+    expect(localStorage.getItem('hemma-sync-v1:legacy-quarantine')).not.toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Bekräfta: ta bort äldre data' }))
+    expect(await screen.findByText('Skyddad route')).toBeInTheDocument()
+    expect(localStorage.getItem('hemma-sync-v1:legacy-quarantine')).toBeNull()
   })
 })

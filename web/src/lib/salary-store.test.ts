@@ -10,8 +10,10 @@ vi.mock('./supabase', () => {
 })
 const mock = () => holder.current
 
-const CACHE_KEY = 'bostadskalkyl_salary_cache_v1'
-const IMPORT_FLAG = 'bostadskalkyl_salary_supabase_imported'
+const PREFIX = 'hemma-sync-v1:test-user:test-house:'
+const scoped = (key: string) => PREFIX + key
+const CACHE_KEY = scoped('bostadskalkyl_salary_cache_v1')
+const IMPORT_FLAG = scoped('bostadskalkyl_salary_supabase_imported')
 const TABLE = 'salary_submissions'
 
 const mem = new Map<string, string>()
@@ -19,13 +21,17 @@ let store: typeof import('./salary-store')
 beforeEach(async () => {
   mem.clear()
   vi.stubGlobal('localStorage', {
+    get length() { return mem.size },
     getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
     setItem: (k: string, v: string) => { mem.set(k, v) },
     removeItem: (k: string) => { mem.delete(k) },
     clear: () => mem.clear(),
+    key: (index: number) => [...mem.keys()][index] ?? null,
   })
   vi.resetModules()
   store = await import('./salary-store')
+  const { activateSyncIdentity } = await import('./sync')
+  activateSyncIdentity({ userId: 'test-user', householdId: 'test-house' })
   Object.keys(mock().tables).forEach((k) => delete mock().tables[k])
   mock().control.fail = false
   mock().control.failing.clear()
@@ -72,10 +78,12 @@ describe('write path', () => {
     await expect(store.add(sub() as never)).rejects.toBeTruthy()
   })
 
-  it('add: cloud error leaves the cache untouched', async () => {
+  it('add: cloud error keeps the local row dirty for replay', async () => {
     mock().control.failing.add(TABLE)
     await expect(store.add(sub() as never)).rejects.toBeTruthy()
-    expect((cache().submissions || [])).toHaveLength(0)
+    expect((cache().submissions || [])).toHaveLength(1)
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.isDirty(TABLE)).toBe(true)
   })
 
   it('remove: success patches the cache', async () => {
@@ -89,18 +97,28 @@ describe('write path', () => {
     mock().control.failing.add(TABLE)
     await expect(store.remove('s1')).rejects.toBeTruthy()
   })
+
+  it('does not expose household A cache or outbox in household B', async () => {
+    mock().control.failing.add(TABLE)
+    await expect(store.add(sub() as never)).rejects.toBeTruthy()
+    const sync = await import('./sync')
+    sync.activateSyncIdentity({ userId: 'test-user', householdId: 'house-b' })
+    expect(sync.syncCoordinator.readScoped('bostadskalkyl_salary_cache_v1')).toBeNull()
+    expect(sync.syncCoordinator.getOutbox()).toEqual([])
+  })
 })
 
 describe('one-time legacy import', () => {
+  beforeEach(() => { mem.set(scoped('legacy-import-complete'), '1') })
   it('legacy present + no cloud row: seeded once and the flag is set', async () => {
-    mem.set(store.STORAGE_KEY, JSON.stringify([{ id: 'legacy-1', ...sub() }]))
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify([{ id: 'legacy-1', ...sub() }]))
     await store.list()
     expect(mock().tables[TABLE].some((r) => r.id === 'legacy-1')).toBe(true)
     expect(mem.get(IMPORT_FLAG)).toBe('1')
   })
 
   it('import error: flag stays unset so it retries next call', async () => {
-    mem.set(store.STORAGE_KEY, JSON.stringify([{ id: 'legacy-1', ...sub() }]))
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify([{ id: 'legacy-1', ...sub() }]))
     mock().control.failing.add(TABLE)
     await store.list()
     expect(mem.get(IMPORT_FLAG)).toBeUndefined()
@@ -108,7 +126,7 @@ describe('one-time legacy import', () => {
 
   it('flag already set: legacy data is not re-imported', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mem.set(store.STORAGE_KEY, JSON.stringify([{ id: 'legacy-1', ...sub() }]))
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify([{ id: 'legacy-1', ...sub() }]))
     await store.list()
     expect(mock().tables[TABLE]).toHaveLength(0)
   })

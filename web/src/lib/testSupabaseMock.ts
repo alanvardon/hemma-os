@@ -14,6 +14,8 @@ export interface SupabaseMockControl {
   fail: boolean
   /** Fail operations only on these table names / rpc names. */
   failing: Set<string>
+  /** Optional exact error returned for a failing table/rpc key. */
+  errors: Record<string, { message: string; code?: string; status?: number }>
   /** Scripted return values for `.rpc(name, args)`, keyed by rpc name. */
   rpcHandlers: Record<string, (args: unknown) => unknown>
   /** The signed-in user returned by `auth.getUser()`; null when signed out. */
@@ -36,7 +38,7 @@ function matchRow(row: Row, filters: Filter[]): boolean {
 
 export function createSupabaseMock() {
   const tables: Record<string, Row[]> = {}
-  const control: SupabaseMockControl = { fail: false, failing: new Set(), rpcHandlers: {}, user: null }
+  const control: SupabaseMockControl = { fail: false, failing: new Set(), errors: {}, rpcHandlers: {}, user: null }
 
   function rowsOf(table: string): Row[] {
     if (!tables[table]) tables[table] = []
@@ -51,6 +53,7 @@ export function createSupabaseMock() {
     let op: 'select' | 'insert' | 'upsert' | 'update' | 'delete' | null = null
     let payload: Row | Row[] | null = null
     let onConflict = 'id'
+    let ignoreDuplicates = false
     const filters: Filter[] = []
     let orderCol: string | null = null
     let orderAsc = true
@@ -58,7 +61,7 @@ export function createSupabaseMock() {
     let selectAfterWrite = false
 
     const exec = (): { data: unknown; error: { message: string } | null } => {
-      if (shouldFail(table)) return { data: null, error: { message: `mock: ${table} ${op} failed` } }
+      if (shouldFail(table)) return { data: null, error: control.errors[table] ?? { message: `mock: ${table} ${op} failed` } }
       const rows = rowsOf(table)
 
       if (op === 'insert') {
@@ -71,8 +74,8 @@ export function createSupabaseMock() {
         const conflictCols = onConflict.split(',').map((s) => s.trim()).filter((c) => c !== 'household_id')
         incoming.forEach((r) => {
           const idx = rows.findIndex((x) => conflictCols.every((c) => x[c] === r[c]))
-          if (idx >= 0) rows[idx] = { ...rows[idx], ...r }
-          else rows.push({ ...r })
+          if (idx >= 0 && !ignoreDuplicates) rows[idx] = { ...rows[idx], ...r }
+          else if (idx < 0) rows.push({ ...r })
         })
         return { data: null, error: null }
       }
@@ -113,8 +116,9 @@ export function createSupabaseMock() {
         return builder
       },
       insert(rows: Row | Row[]) { op = 'insert'; payload = rows; return builder },
-      upsert(rows: Row | Row[], opts?: { onConflict?: string }) {
+      upsert(rows: Row | Row[], opts?: { onConflict?: string; ignoreDuplicates?: boolean }) {
         op = 'upsert'; payload = rows; if (opts?.onConflict) onConflict = opts.onConflict
+        ignoreDuplicates = opts?.ignoreDuplicates === true
         return builder
       },
       update(patch: Row) { op = 'update'; payload = patch; return builder },
@@ -137,9 +141,21 @@ export function createSupabaseMock() {
   }
 
   function rpc(name: string, args?: unknown) {
-    if (shouldFail(name)) return Promise.resolve({ data: null, error: { message: `mock: rpc ${name} failed` } })
+    const deleteArgs = name === 'delete_household_rows'
+      ? args as { p_resource?: string; p_ids?: string[] } | undefined
+      : undefined
+    const failureKey = deleteArgs?.p_resource && shouldFail(deleteArgs.p_resource) ? deleteArgs.p_resource : name
+    if (shouldFail(failureKey)) return Promise.resolve({
+      data: null,
+      error: control.errors[failureKey] ?? { message: `mock: rpc ${name} failed` },
+    })
     const handler = control.rpcHandlers[name]
-    return Promise.resolve({ data: handler ? handler(args) : null, error: null })
+    if (handler) return Promise.resolve({ data: handler(args), error: null })
+    if (deleteArgs?.p_resource && Array.isArray(deleteArgs.p_ids)) {
+      const ids = new Set(deleteArgs.p_ids)
+      tables[deleteArgs.p_resource] = rowsOf(deleteArgs.p_resource).filter((row) => !ids.has(String(row.id)))
+    }
+    return Promise.resolve({ data: null, error: null })
   }
 
   const supabase = {

@@ -14,6 +14,7 @@ import { defaultSettings } from '../lib/mortgage'
 import type { LoanPart, Payment, RatePeriod } from '../lib/mortgage'
 
 vi.mock('../lib/mortgage-store')
+vi.mock('../lib/hushallsbudget-store', () => ({ loadBudget: vi.fn(async () => null) }))
 // The Riksbank strip fetches via the local Supabase Edge Function — with the
 // local stack running, live data reaches the test and renders a visx chart
 // jsdom can't host (no ResizeObserver). Reject the fetch so the strip stays

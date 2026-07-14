@@ -22,6 +22,17 @@ import {
   type PendingInviteStatus,
 } from '../lib/household'
 import { persistenceErrorMessage } from '../lib/persistence-error'
+import type { SyncIdentity } from '../lib/sync-coordinator'
+import {
+  prepareSyncForSignOut,
+  prepareSyncForHouseholdTransition,
+  completeSyncHouseholdTransition,
+  completeSyncSignOut,
+  restoreSyncAfterFailedHouseholdTransition,
+  restoreSyncAfterFailedSignOut,
+  syncCoordinator,
+} from '../lib/sync'
+import { hasLegacyQuarantine, removeLegacyQuarantine } from '../lib/legacy-data'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -65,6 +76,8 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
+  const [signOutChoice, setSignOutChoice] = useState<'closed' | 'choose' | 'confirm-remove'>('closed')
+  const [confirmLegacyRemove, setConfirmLegacyRemove] = useState(false)
 
   // Load the current user + household state each time the dialog opens.
   useEffect(() => {
@@ -88,10 +101,15 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
   async function onAccept() {
     setBusy(true)
     setActionError('')
+    let snapshot: SyncIdentity | null = null
     try {
+      snapshot = await prepareSyncForHouseholdTransition()
+      if (!snapshot) throw new Error('No active household')
       await acceptInvite()
+      completeSyncHouseholdTransition(snapshot)
       window.location.reload()
     } catch (error) {
+      if (snapshot) restoreSyncAfterFailedHouseholdTransition(snapshot)
       setBusy(false)
       setActionError(persistenceErrorMessage(error))
     }
@@ -103,10 +121,15 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
     if (!confirmLeave) { setConfirmLeave(true); setActionError(''); return }
     setBusy(true)
     setActionError('')
+    let snapshot: SyncIdentity | null = null
     try {
+      snapshot = await prepareSyncForHouseholdTransition()
+      if (!snapshot) throw new Error('No active household')
       await leaveHousehold()
+      completeSyncHouseholdTransition(snapshot)
       window.location.reload()
     } catch {
+      if (snapshot) restoreSyncAfterFailedHouseholdTransition(snapshot)
       setBusy(false)
       setConfirmLeave(false)
       setActionError('Kunde inte lämna hushållet — försök igen.')
@@ -149,9 +172,32 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
     }
   }
 
-  async function onSignOut() {
+  async function onSignOut(removeLocalData: boolean) {
     setActionError('')
-    try { await signOut() } catch (error) { setActionError(persistenceErrorMessage(error)) }
+    setBusy(true)
+    let snapshot: SyncIdentity | null = null
+    let serverSignedOut = false
+    try {
+      snapshot = await prepareSyncForSignOut(removeLocalData)
+      if (!snapshot) throw new Error('No active household')
+      await signOut()
+      serverSignedOut = true
+      completeSyncSignOut(snapshot, removeLocalData)
+      setSignOutChoice('closed')
+      onClose()
+    } catch (error) {
+      if (snapshot && !serverSignedOut) restoreSyncAfterFailedSignOut(snapshot)
+      setBusy(false)
+      setActionError(serverSignedOut
+        ? 'Du är utloggad, men lokal data kunde inte tas bort. Försök igen från inloggningssidan.'
+        : persistenceErrorMessage(error))
+    }
+  }
+
+  function onRemoveLegacy() {
+    if (!confirmLegacyRemove) { setConfirmLegacyRemove(true); return }
+    removeLegacyQuarantine()
+    setConfirmLegacyRemove(false)
   }
 
   return (
@@ -189,8 +235,38 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
           <p className="const-group-title">Inloggad</p>
           <div className="hh-account-row">
             <span className="hh-email">{email ?? '…'}</span>
-            <button type="button" className="btn btn-ghost hh-signout" onClick={() => void onSignOut()}>Logga ut</button>
+            <button type="button" className="btn btn-ghost hh-signout" onClick={() => setSignOutChoice('choose')}>Logga ut</button>
           </div>
+          {signOutChoice !== 'closed' && (
+            <div className="hh-signout-choice" role="group" aria-label="Välj hur lokal data ska hanteras">
+              <p className="modal-note">
+                {syncCoordinator.getOutbox().length > 0
+                  ? 'Det finns ändringar som väntar på att synkas. Behåll dem på enheten om du vill försöka igen senare.'
+                  : 'Välj om hushållets lokala data ska finnas kvar på den här enheten.'}
+              </p>
+              {signOutChoice === 'confirm-remove' ? (
+                <>
+                  <p className="auth-error">All lokal hushållsdata och väntande ändringar för ditt konto tas bort från enheten efter att utloggningen lyckats.</p>
+                  <button type="button" className="btn btn-danger" disabled={busy} onClick={() => void onSignOut(true)}>Bekräfta och logga ut</button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void onSignOut(false)}>Behåll på enheten och logga ut</button>
+                  <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setSignOutChoice('confirm-remove')}>Ta bort från enheten och logga ut</button>
+                </>
+              )}
+              <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setSignOutChoice('closed')}>Avbryt</button>
+              <p className="modal-note">Äldre data i karantän hanteras separat.</p>
+            </div>
+          )}
+          {hasLegacyQuarantine() && (
+            <div className="hh-legacy-data">
+              <button type="button" className="btn btn-ghost" onClick={onRemoveLegacy}>
+                {confirmLegacyRemove ? 'Bekräfta: ta bort äldre lokal data' : 'Ta bort äldre lokal data'}
+              </button>
+              {confirmLegacyRemove && <p className="auth-error">Detta går inte att ångra.</p>}
+            </div>
+          )}
         </section>
 
         <section className="hh-section">

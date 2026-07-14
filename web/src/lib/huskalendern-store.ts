@@ -1,6 +1,6 @@
 // huskalendern-store.ts — persistence for Huskalendern. Reads and writes
-// Supabase (cloud source-of-truth) — rows → `house_items` — with a localStorage
-// write-through CACHE for offline. Row-store pattern à la manadsavslut-store:
+// Supabase rows → `house_items`, with a scoped durable cache/outbox. Row-store
+// pattern à la manadsavslut-store:
 // per-row insert/update/delete, NEVER delete-then-insert (plan 43), save errors
 // surface via throw so the route can toast them (plan 44). No legacy pre-cloud
 // key exists (new tool), so there is no first-login import step.
@@ -10,12 +10,14 @@
 
 import type { HouseItem } from './huskalendern'
 import { supabase } from './supabase'
-import { toPersistenceError } from './persistence-error'
 import { genId } from './id'
 import { stamp } from './store-helpers'
+import { syncCoordinator } from './sync'
+import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
 
 const CACHE_KEY = 'bostadskalkyl_house_items_cache_v1'
 const TABLE = 'house_items'
+const RESOURCE = TABLE
 const VERSION = 1
 
 interface Envelope { version: number; items: HouseItem[] }
@@ -82,9 +84,13 @@ function _patch(patch: Partial<HouseItem>): Record<string, unknown> {
 
 // ── localStorage cache (offline fallback) ───────────────────────────────────
 function _readCache(): Envelope {
+  return _readCacheFrom(syncCoordinator.captureScope())
+}
+
+function _readCacheFrom(scope: ReturnType<typeof syncCoordinator.captureScope>): Envelope {
   const empty: Envelope = { version: VERSION, items: [] }
   try {
-    const raw = localStorage.getItem(CACHE_KEY)
+    const raw = scope.read(CACHE_KEY)
     if (!raw) return empty
     const d = JSON.parse(raw) as Record<string, unknown>
     if (!d || typeof d !== 'object') return empty
@@ -93,7 +99,7 @@ function _readCache(): Envelope {
 }
 
 function _writeCache(env: Envelope): void {
-  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ version: VERSION, items: env.items })) }
+  try { syncCoordinator.writeScoped(CACHE_KEY, JSON.stringify({ version: VERSION, items: env.items })) }
   catch { /* private mode / quota — cache is best-effort */ }
 }
 
@@ -105,39 +111,50 @@ function _patchCache(fn: (env: Envelope) => void): void {
 // so the hub can seed its Huskalendern stat on the first paint. Cold cache →
 // empty array.
 export function cachedSnapshot(): { items: HouseItem[] } {
-  return { items: sortedByDate(_readCache().items) }
+  const scope = syncCoordinator.captureScope()
+  return { items: sortedByDate(withoutTombstones(_readCacheFrom(scope).items, cachedTombstoneIds(scope, RESOURCE))) }
 }
+
+registerTableSync(RESOURCE, TABLE)
 
 // ── Items ──────────────────────────────────────────────────────────────────
 export async function listItems(): Promise<HouseItem[]> {
-  const { data, error } = await supabase.from(TABLE).select('*').order('date', { ascending: true })
-  if (error || !data) return sortedByDate(_readCache().items)
-  const rows = (data as unknown[]).map(normalizeItem)
-  _patchCache((e) => { e.items = rows })
+  const scope = syncCoordinator.captureScope()
+  const fallback = () => sortedByDate(withoutTombstones(_readCacheFrom(scope).items, cachedTombstoneIds(scope, RESOURCE)))
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCE)) return fallback()
+  const [result, tombstones] = await Promise.all([
+    supabase.from(TABLE).select('*').order('date', { ascending: true }),
+    loadTombstoneIds(scope, RESOURCE),
+  ])
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCE)) return fallback()
+  if (result.error || !result.data) return fallback()
+  const rows = withoutTombstones((result.data as unknown[]).map(normalizeItem), tombstones)
+  scope.write(CACHE_KEY, JSON.stringify({ version: VERSION, items: rows }))
   return sortedByDate(rows)
 }
 
 export async function addItem(record: Omit<HouseItem, 'id' | 'created_at'>): Promise<HouseItem> {
   const saved = normalizeItem(stamp(record, 'house'))
-  const { error } = await supabase.from(TABLE).insert(_row(saved))
-  if (error) throw toPersistenceError(error)
-  _patchCache((e) => { e.items = [saved, ...e.items.filter((i) => i.id !== saved.id)] })
+  await queueTableUpsert(RESOURCE, [_row(saved)], [saved.id], () => {
+    _patchCache((e) => { e.items = [saved, ...e.items.filter((i) => i.id !== saved.id)] })
+  })
   return saved
 }
 
 export async function updateItem(id: string, patch: Partial<HouseItem>): Promise<HouseItem | null> {
-  const { data, error } = await supabase.from(TABLE).update(_patch(patch)).eq('id', id).select().maybeSingle()
-  if (error) throw toPersistenceError(error)
-  if (!data) return null
-  const saved = normalizeItem(data)
-  _patchCache((e) => { e.items = e.items.map((i) => (i.id === id ? saved : i)) })
+  const current = _readCache().items.find((item) => item.id === id)
+  if (!current) return null
+  const saved = normalizeItem({ ...current, ..._patch(patch), id })
+  await queueTableUpsert(RESOURCE, [_row(saved)], [id], () => {
+    _patchCache((e) => { e.items = e.items.map((i) => (i.id === id ? saved : i)) })
+  })
   return saved
 }
 
 export async function removeItem(id: string): Promise<number> {
-  const { error } = await supabase.from(TABLE).delete().eq('id', id)
-  if (error) throw toPersistenceError(error)
   let n = 0
-  _patchCache((e) => { e.items = e.items.filter((i) => i.id !== id); n = e.items.length })
+  await queueTableDelete(RESOURCE, [id], () => {
+    _patchCache((e) => { e.items = e.items.filter((i) => i.id !== id); n = e.items.length })
+  })
   return n
 }

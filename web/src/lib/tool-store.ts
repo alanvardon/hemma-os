@@ -1,8 +1,8 @@
 /* tool-store.ts — factory for the single-blob `tool_state` persistence pattern
    shared by Konsultkalkyl, Löneväxling and Hushållsbudget. Each of those tools
    persists its whole state object as ONE row in the shared `tool_state` table
-   (keyed by (household_id, tool)), with a localStorage write-through cache for
-   offline and a one-time first-login import from the pre-Supabase blob.
+   (keyed by (household_id, tool)), with a household/user-scoped cache, durable
+   operation outbox, and explicit-assignment import from the pre-Supabase blob.
 
    Reads fall back to the cache on error. Writes retain an optimistic local
    cache but reject explicitly when the cloud does not accept the mutation.
@@ -16,8 +16,9 @@
    models differ enough that forcing them through here would obscure both. */
 
 import { supabase } from './supabase'
+import { syncCoordinator } from './sync'
 import { makeImportOnce } from './store-helpers'
-import { toPersistenceError } from './persistence-error'
+import { legacyImportAssignedToActive } from './legacy-data'
 
 export interface ToolStateStoreConfig<T> {
   /** `tool_state.tool` discriminator, e.g. 'konsultkalkyl'. */
@@ -48,55 +49,87 @@ export interface ToolStateStore<T> {
 export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolStateStore<T> {
   const table = cfg.table ?? 'tool_state'
   const { tool, storageKey, cacheKey, importFlag, merge } = cfg
+  const resource = `tool_state:${tool}`
 
   function readCache(): T | null {
-    try { const raw = localStorage.getItem(cacheKey); return raw ? merge(JSON.parse(raw)) : null } catch { return null }
+    try { const raw = syncCoordinator.readScoped(cacheKey); return raw ? merge(JSON.parse(raw)) : null } catch { return null }
+  }
+  function readCapturedCache(scope: ReturnType<typeof syncCoordinator.captureScope>): T | null {
+    try { const raw = scope.read(cacheKey); return raw ? merge(JSON.parse(raw)) : null } catch { return null }
   }
   function writeCache(data: T): void {
-    try { localStorage.setItem(cacheKey, JSON.stringify(data)) } catch { /* private mode / quota — cache is best-effort */ }
+    syncCoordinator.writeScoped(cacheKey, JSON.stringify(data))
   }
   function readLegacy(): T | null {
-    try { const raw = localStorage.getItem(storageKey); return raw ? merge(JSON.parse(raw)) : null } catch { return null }
+    try { const raw = syncCoordinator.readScoped(storageKey); return raw ? merge(JSON.parse(raw)) : null } catch { return null }
   }
 
-  // First-login import (one-time, idempotent): seed the tool_state blob from the
-  // legacy localStorage blob, but ONLY if no cloud row exists yet (so a
-  // partner's saved state is never clobbered).
-  const importLocalOnce = makeImportOnce(importFlag, async () => {
-    const legacy = readLegacy()
+  const importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(importFlag), async () => {
+    const scope = syncCoordinator.captureScope()
+    if (!legacyImportAssignedToActive() || !scope.isActive()) return true
+    // The cache can contain the failed local edit this plan is recovering;
+    // the pre-cloud blob is only a fallback backup and may be older.
+    const legacy = readCapturedCache(scope) ?? (() => {
+      try { const raw = scope.read(storageKey); return raw ? merge(JSON.parse(raw)) : null } catch { return null }
+    })()
     if (!legacy) return true
-    const { data, error: selErr } = await supabase.from(table).select('tool').eq('tool', tool).maybeSingle()
-    if (selErr) return false
-    if (!data) {
-      const { error } = await supabase.from(table).upsert({ tool, data: legacy }, { onConflict: 'household_id,tool' })
-      if (error) return false
-    }
-    return true
+    if (!scope.isActive()) return false
+    try {
+      await syncCoordinator.mutate({
+        resource,
+        operation: 'upsert',
+        payload: { tool, data: legacy, seed: true },
+        entityIds: [tool],
+        applyLocal: () => scope.write(cacheKey, JSON.stringify(legacy)),
+      })
+      return true
+    } catch { return false }
+  })
+
+  syncCoordinator.register(resource, async (operation) => {
+    const payload = operation.payload as { tool?: unknown; data?: unknown; seed?: unknown }
+    if (!payload || payload.tool !== tool || !('data' in payload)) throw { status: 400, message: 'Malformed tool-state operation' }
+    const { error } = payload.seed === true
+      ? await supabase.from(table).insert({ tool, data: payload.data })
+      : await supabase.from(table).upsert(
+        { tool, data: payload.data }, { onConflict: 'household_id,tool' },
+      )
+    if (payload.seed === true && (error as { code?: string } | null)?.code === '23505') return
+    if (error) throw error
+  }, (operation) => {
+    const payload = operation.payload as { tool?: unknown; data?: unknown; seed?: unknown }
+    return operation.operation === 'upsert' && payload?.tool === tool && Object.prototype.hasOwnProperty.call(payload, 'data')
+      && (payload.seed === undefined || typeof payload.seed === 'boolean')
+      && operation.entityIds.length === 1 && operation.entityIds[0] === tool
   })
 
   // Read the persisted blob. Runs the one-time import first (so a seeded blob
   // appears in this very call), then reads cloud; on error serves the cache.
   // null = nothing stored yet (caller keeps its defaults).
   async function load(): Promise<T | null> {
+    const scope = syncCoordinator.captureScope()
     await importLocalOnce()
+    if (!scope.isActive()) return readCapturedCache(scope)
+    if (syncCoordinator.isDirty(resource)) return readCapturedCache(scope)
     const { data, error } = await supabase.from(table).select('data').eq('tool', tool).maybeSingle()
-    if (error) return readCache()
+    if (!scope.isActive() || syncCoordinator.isDirty(resource)) return readCapturedCache(scope)
+    if (error) return readCapturedCache(scope)
     if (!data) return null
     const merged = merge(data.data)
-    if (merged) writeCache(merged)
+    if (merged && scope.isActive()) scope.write(cacheKey, JSON.stringify(merged))
     return merged
   }
 
   // Persist the whole blob. The local cache remains optimistic, but a rejected
   // cloud write is explicit: cache-only is not the same as saved.
   async function save(data: T): Promise<void> {
-    writeCache(data)
-    try {
-      const { error } = await supabase.from(table).upsert({ tool, data }, { onConflict: 'household_id,tool' })
-      if (error) throw error
-    } catch (error) {
-      throw toPersistenceError(error)
-    }
+    await syncCoordinator.mutate({
+      resource,
+      operation: 'upsert',
+      payload: { tool, data },
+      entityIds: [tool],
+      applyLocal: () => writeCache(data),
+    })
   }
 
   return { load, save, readCache, writeCache, readLegacy, importLocalOnce }

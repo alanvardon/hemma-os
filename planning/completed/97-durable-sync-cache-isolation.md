@@ -1,6 +1,6 @@
 # Plan 97 — Durable offline outbox and household-scoped caches
 
-**Status:** proposed · **Priority:** High · **Effort:** L · **Depends on:** plan 93
+**Status:** completed · **Priority:** High · **Effort:** L · **Depends on:** plan 93
 · **Owner model:** GPT-5.6 Sol — the outbox, identity isolation, replay ordering,
 and recovery semantics require frontier-level reasoning
 

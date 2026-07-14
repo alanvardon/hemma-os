@@ -17,8 +17,21 @@ vi.mock('../lib/supabase', () => {
 
 import { useStore } from './useStore'
 import { DEFAULT_INPUTS, DEFAULT_CONSTANTS } from '../lib/calc'
+import { activateSyncIdentity } from '../lib/sync'
+
+const local = new Map<string, string>()
 
 beforeEach(() => {
+  local.clear()
+  vi.stubGlobal('localStorage', {
+    get length() { return local.size },
+    getItem: (key: string) => local.get(key) ?? null,
+    setItem: (key: string, value: string) => { local.set(key, value) },
+    removeItem: (key: string) => { local.delete(key) },
+    key: (index: number) => [...local.keys()][index] ?? null,
+    clear: () => local.clear(),
+  })
+  activateSyncIdentity({ userId: 'store-test-user', householdId: 'store-test-house' })
   useStore.setState({
     inputs: { ...DEFAULT_INPUTS },
     constants: DEFAULT_CONSTANTS,

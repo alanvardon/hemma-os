@@ -10,21 +10,27 @@ vi.mock('./supabase', () => {
 })
 const mock = () => holder.current
 
-const CACHE_KEY = 'bostadskalkyl_monthend_cache_v1'
-const IMPORT_FLAG = 'bostadskalkyl_monthend_supabase_imported'
+const PREFIX = 'hemma-sync-v1:test-user:test-house:'
+const scoped = (key: string) => PREFIX + key
+const CACHE_KEY = scoped('bostadskalkyl_monthend_cache_v1')
+const IMPORT_FLAG = scoped('bostadskalkyl_monthend_supabase_imported')
 
 const mem = new Map<string, string>()
 let store: typeof import('./manadsavslut-store')
 beforeEach(async () => {
   mem.clear()
   vi.stubGlobal('localStorage', {
+    get length() { return mem.size },
     getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
     setItem: (k: string, v: string) => { mem.set(k, v) },
     removeItem: (k: string) => { mem.delete(k) },
     clear: () => mem.clear(),
+    key: (index: number) => [...mem.keys()][index] ?? null,
   })
   vi.resetModules()
   store = await import('./manadsavslut-store')
+  const { activateSyncIdentity } = await import('./sync')
+  activateSyncIdentity({ userId: 'test-user', householdId: 'test-house' })
   Object.keys(mock().tables).forEach((k) => delete mock().tables[k])
   mock().control.fail = false
   mock().control.failing.clear()
@@ -72,10 +78,12 @@ describe('write path', () => {
     await expect(store.addItem(itemDraft() as never)).rejects.toBeTruthy()
   })
 
-  it('addItem: cloud error leaves the cache untouched', async () => {
+  it('addItem: cloud error keeps the local row dirty for replay', async () => {
     mock().control.failing.add('monthend_items')
     await expect(store.addItem(itemDraft() as never)).rejects.toBeTruthy()
-    expect((cache().items as unknown[] | undefined) || []).toHaveLength(0)
+    expect((cache().items as unknown[] | undefined) || []).toHaveLength(1)
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.isDirty('monthend_items')).toBe(true)
   })
 
   // settle() is now one atomic `settle_items` RPC (plan 48); removePayment() the
@@ -96,11 +104,41 @@ describe('write path', () => {
     expect((cache().items as { paid: boolean; payment_id: string }[])[0]).toMatchObject({ paid: true, payment_id: payment.id })
   })
 
-  it('settle: RPC failure throws and leaves the cache untouched', async () => {
+  it('settle: RPC failure keeps the settlement locally dirty', async () => {
     mock().tables.monthend_items = [{ id: 'i1', created_at: 't1', ...itemDraft() }]
     mock().control.failing.add('settle_items')
     await expect(store.settle({ item_ids: ['i1'], from_person: 'b', to_person: 'a', amount: 100, period_label: '2024-01', note: '' })).rejects.toBeTruthy()
-    expect((cache().payments as unknown[] | undefined) || []).toHaveLength(0)
+    expect((cache().payments as unknown[] | undefined) || []).toHaveLength(1)
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.isDirty('monthend-settlements')).toBe(true)
+  })
+
+  it('settle: a lost response after commit is verified by stable payment id', async () => {
+    mock().tables.monthend_payments = [{
+      id: 'pay-lost', item_ids: [], from_person: 'a', to_person: 'b', amount: 10,
+      period_label: 'Juli', note: '', created_at: '2026-07-14T12:00:00.000Z',
+    }]
+    mock().control.failing.add('settle_items')
+    await expect(store.settle({
+      id: 'pay-lost', item_ids: [], from_person: 'a', to_person: 'b', amount: 10,
+      period_label: 'Juli', note: '', created_at: '2026-07-14T12:00:00.000Z',
+    } as never)).resolves.toMatchObject({ id: 'pay-lost' })
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.isDirty('monthend-settlements')).toBe(false)
+  })
+
+  it('settle: an unrelated row with the same id does not acknowledge a lost response', async () => {
+    mock().tables.monthend_payments = [{
+      id: 'pay-collision', item_ids: [], from_person: 'a', to_person: 'b', amount: 999,
+      period_label: 'Juli', note: '', created_at: '2026-07-14T12:00:00.000Z',
+    }]
+    mock().control.failing.add('settle_items')
+    await expect(store.settle({
+      id: 'pay-collision', item_ids: [], from_person: 'a', to_person: 'b', amount: 10,
+      period_label: 'Juli', note: '', created_at: '2026-07-14T12:00:00.000Z',
+    } as never)).rejects.toBeTruthy()
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.isDirty('monthend-settlements')).toBe(true)
   })
 
   it('removePayment: one RPC un-settles the items and deletes the payment', async () => {
@@ -121,11 +159,21 @@ describe('write path', () => {
     mock().control.failing.add('unsettle_payment')
     await expect(store.removePayment('pay1')).rejects.toBeTruthy()
   })
+
+  it('does not expose household A envelope or outbox in household B', async () => {
+    mock().control.failing.add('monthend_items')
+    await expect(store.addItem(itemDraft() as never)).rejects.toBeTruthy()
+    const sync = await import('./sync')
+    sync.activateSyncIdentity({ userId: 'test-user', householdId: 'house-b' })
+    expect(store.cachedSnapshot().items).toEqual([])
+    expect(sync.syncCoordinator.getOutbox()).toEqual([])
+  })
 })
 
 describe('one-time legacy import', () => {
+  beforeEach(() => { mem.set(scoped('legacy-import-complete'), '1') })
   it('legacy items+payments+settings present: seeded once and the flag is set', async () => {
-    mem.set(store.STORAGE_KEY, JSON.stringify({
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify({
       version: 1,
       items: [{ id: 'item-1', description: 'Legacy', date_purchased: '2020-01-01', enter_amount: 50, split: true, amount: 50, fronted_by: 'a', owed_by: 'b', paid: false, pending: false, payment_id: null, note: '' }],
       payments: [{ id: 'pay-1', item_ids: [], amount: 0, period_label: '', note: '' }],
@@ -138,7 +186,7 @@ describe('one-time legacy import', () => {
   })
 
   it('import error: flag stays unset so it retries next call', async () => {
-    mem.set(store.STORAGE_KEY, JSON.stringify({
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify({
       version: 1,
       items: [{ id: 'item-1', description: 'Legacy', date_purchased: '2020-01-01', enter_amount: 50, split: true, amount: 50, fronted_by: 'a', owed_by: 'b', paid: false, pending: false, payment_id: null, note: '' }],
       payments: [], settings: null,
@@ -150,7 +198,7 @@ describe('one-time legacy import', () => {
 
   it('flag already set: legacy data is not re-imported', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mem.set(store.STORAGE_KEY, JSON.stringify({
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify({
       version: 1,
       items: [{ id: 'item-1', description: 'Legacy', date_purchased: '2020-01-01', enter_amount: 50, split: true, amount: 50, fronted_by: 'a', owed_by: 'b', paid: false, pending: false, payment_id: null, note: '' }],
       payments: [], settings: null,

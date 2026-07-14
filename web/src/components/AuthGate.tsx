@@ -7,6 +7,19 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import { claimHousehold, signOut } from '../lib/household'
+import {
+  activateSyncIdentity,
+  hasPendingDeviceRemoval,
+  quarantineSyncIdentity,
+  retryPendingDeviceRemoval,
+} from '../lib/sync'
+import {
+  importLegacyToActiveNamespace,
+  leaveLegacyQuarantined,
+  quarantineLegacyData,
+  removeLegacyQuarantine,
+  shouldOfferLegacyImport,
+} from '../lib/legacy-data'
 import { persistenceErrorMessage } from '../lib/persistence-error'
 import { useTheme } from '../App'
 import auroraMp4 from '../assets/auth/aurora.mp4'
@@ -26,6 +39,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   const [provisioning, setProvisioning] = useState<ProvisioningState>('loading')
   const [provisioningError, setProvisioningError] = useState('')
   const [retryCount, setRetryCount] = useState(0)
+  const [legacyPrompt, setLegacyPrompt] = useState(false)
   const claimedFor = useRef<string | null>(null)
 
   useEffect(() => {
@@ -46,9 +60,11 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!session) {
+      quarantineSyncIdentity()
       claimedFor.current = null
       setProvisioning('loading')
       setProvisioningError('')
+      setLegacyPrompt(false)
       return
     }
     const uid = session.user.id
@@ -60,14 +76,25 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     setProvisioning('loading')
     setProvisioningError('')
     claimHousehold()
-      .then(() => {
+      .then((householdId) => {
         if (!alive) return
+        // Both claims are required. A user id alone must never select a cache
+        // namespace or make queued household writes eligible for replay.
+        activateSyncIdentity({ userId: uid, householdId })
+        if (!quarantineLegacyData()) {
+          quarantineSyncIdentity()
+          throw new Error('legacy-quarantine-failed')
+        }
+        setLegacyPrompt(shouldOfferLegacyImport())
         claimedFor.current = uid
         setProvisioning('ready')
       })
       .catch((error) => {
         if (!alive) return
-        setProvisioningError(persistenceErrorMessage(error))
+        quarantineSyncIdentity()
+        setProvisioningError(error instanceof Error && error.message === 'legacy-quarantine-failed'
+          ? 'Äldre lokal data kunde inte säkras. Kontrollera enhetens lagring och försök igen.'
+          : persistenceErrorMessage(error))
         setProvisioning('error')
       })
     return () => { alive = false }
@@ -78,7 +105,9 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     return <div className="auth-splash" aria-hidden="true" />
   }
 
-  if (session === null) return <MagicLinkScreen />
+  if (session === null) return hasPendingDeviceRemoval()
+    ? <PendingDeviceRemovalScreen />
+    : <MagicLinkScreen />
 
   if (provisioning === 'error') {
     return (
@@ -92,7 +121,98 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   // Session present but the household claim hasn't resolved yet — brief splash.
   if (provisioning !== 'ready') return <div className="auth-splash" aria-hidden="true" />
 
+  if (legacyPrompt) return <LegacyDataScreen onDone={() => setLegacyPrompt(false)} />
+
   return <>{children}</>
+}
+
+function PendingDeviceRemovalScreen() {
+  const { theme } = useTheme()
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
+
+  function retry() {
+    setError('')
+    try {
+      retryPendingDeviceRemoval()
+      setDone(true)
+    } catch {
+      setError('Lokal data kunde inte tas bort. Kontrollera enhetens lagring och försök igen.')
+    }
+  }
+
+  if (done) return <MagicLinkScreen />
+  return (
+    <div className="auth-screen">
+      {theme === 'dark' && <AuroraBackdrop />}
+      <div className="auth-card">
+        <p className="auth-kicker">Hemma·OS</p>
+        <h1 className="auth-title">Slutför lokal datarensning</h1>
+        <p className="auth-lead">Du är utloggad, men hushållets lokala data kunde inte tas bort från enheten.</p>
+        <button type="button" className="btn btn-primary" onClick={retry}>Försök ta bort igen</button>
+        {error && <p className="auth-error" role="alert">{error}</p>}
+      </div>
+    </div>
+  )
+}
+
+function LegacyDataScreen({ onDone }: { onDone: () => void }) {
+  const { theme } = useTheme()
+  const [busy, setBusy] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleImport() {
+    setBusy(true)
+    setError('')
+    try {
+      await importLegacyToActiveNamespace()
+      onDone()
+    } catch {
+      setError('Importen avbröts. Ingen äldre data har tagits bort. Försök igen.')
+      setBusy(false)
+    }
+  }
+
+  function handleLeave() {
+    leaveLegacyQuarantined()
+    onDone()
+  }
+
+  function handleRemove() {
+    if (!confirmRemove) { setConfirmRemove(true); return }
+    removeLegacyQuarantine()
+    onDone()
+  }
+
+  return (
+    <div className="auth-screen">
+      {theme === 'dark' && <AuroraBackdrop />}
+      <div className="auth-card">
+        <p className="auth-kicker">Hemma·OS</p>
+        <h1 className="auth-title">Äldre data på den här enheten</h1>
+        <p className="auth-lead">
+          Datan saknar konto- och hushållskoppling. Importera den bara om den
+          tillhör hushållet du är inloggad i nu.
+        </p>
+        <div className="auth-recovery-actions">
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void handleImport()}>
+            {busy ? 'Importerar…' : 'Importera till detta hushåll'}
+          </button>
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={handleLeave}>
+            Lämna kvar på enheten
+          </button>
+        </div>
+        <button type="button" className="btn btn-ghost auth-reset" disabled={busy} onClick={handleRemove}>
+          {confirmRemove ? 'Bekräfta: ta bort äldre data' : 'Ta bort äldre data'}
+        </button>
+        {confirmRemove && (
+          <p className="auth-error">Detta tar permanent bort den äldre lokala datan från enheten.</p>
+        )}
+        {error && <p className="auth-error" role="alert">{error}</p>}
+      </div>
+    </div>
+  )
 }
 
 function ProvisioningErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {

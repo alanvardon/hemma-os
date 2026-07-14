@@ -16,9 +16,11 @@
 import { defaultSettings, makeRatePeriod } from './mortgage'
 import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping } from './mortgage'
 import { supabase } from './supabase'
-import { toPersistenceError } from './persistence-error'
-import { genId } from './id'
-import { makeImportOnce, stamp } from './store-helpers'
+import { makeImportOnce, materializeImport, stamp } from './store-helpers'
+import type { MutationInput } from './sync-coordinator'
+import { syncCoordinator } from './sync'
+import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
+import { legacyImportAssignedToActive } from './legacy-data'
 
 // Legacy pre-Supabase data — import source + backup. (Exported name kept for
 // back-compat; it is no longer the write target.)
@@ -28,6 +30,8 @@ const IMPORT_FLAG = 'bostadskalkyl_mortgage_supabase_imported'
 const VERSION = 4
 const STATE = 'tool_state'
 const SETTINGS_TOOL = 'bolanekoll-settings'
+const SETTINGS_RESOURCE = `tool_state:${SETTINGS_TOOL}`
+const CASCADE_RESOURCE = 'mortgage-loan-part-cascade'
 
 const T = {
   parts: 'mortgage_loan_parts',
@@ -36,6 +40,8 @@ const T = {
   valuations: 'mortgage_valuations',
   contributions: 'mortgage_contributions',
 } as const
+
+const RESOURCES = T
 
 // The writable data columns per table. `id` + `created_at` are added by `_row`;
 // `household_id` (column default) + `updated_at` (trigger) are never sent. Field
@@ -111,17 +117,6 @@ function migrateToPeriods(out: StoreEnvelope, raw: Record<string, unknown>): voi
   out.rate_periods = periods
 }
 
-// ── Row projection ───────────────────────────────────────────────────────────
-// Pick the given columns off any row/patch object. Accepts `object` (not
-// Record<string, unknown>) so the concrete interface types — which have no
-// implicit index signature — pass without a cast at every call site.
-function _pick(obj: object, cols: readonly string[]): Record<string, unknown> {
-  const rec = obj as Record<string, unknown>
-  const out: Record<string, unknown> = {}
-  for (const c of cols) if (rec[c] !== undefined) out[c] = rec[c]
-  return out
-}
-
 // Concrete fallbacks for every NOT-NULL column, so an insert NEVER depends on
 // the DB column default being present (a table created before the migration can
 // be NOT NULL without the default). Values match the migration defaults AND the
@@ -175,8 +170,12 @@ function _envelope(raw: Record<string, unknown>, migrate: boolean): StoreEnvelop
 }
 
 function _readCache(): StoreEnvelope {
+  return _readCacheFrom(syncCoordinator.captureScope())
+}
+
+function _readCacheFrom(scope: ReturnType<typeof syncCoordinator.captureScope>): StoreEnvelope {
   try {
-    const raw = localStorage.getItem(CACHE_KEY)
+    const raw = scope.read(CACHE_KEY)
     if (!raw) return _emptyEnvelope()
     const data = JSON.parse(raw)
     if (!data || typeof data !== 'object') return _emptyEnvelope()
@@ -185,7 +184,7 @@ function _readCache(): StoreEnvelope {
 }
 
 function _writeCache(env: StoreEnvelope): void {
-  try { localStorage.setItem(CACHE_KEY, JSON.stringify(env)) } catch { /* private mode / quota */ }
+  try { syncCoordinator.writeScoped(CACHE_KEY, JSON.stringify(env)) } catch { /* private mode / quota */ }
 }
 
 function _patchCache(fn: (e: StoreEnvelope) => void): void {
@@ -198,14 +197,15 @@ function _patchCache(fn: (e: StoreEnvelope) => void): void {
 // refresh reconciles. Cold cache (first-ever visit) → the empty envelope, so
 // callers still fall through to their genuine empty state.
 export function cachedSnapshot(): StoreEnvelope {
-  const e = _readCache()
+  const scope = syncCoordinator.captureScope()
+  const e = _readCacheFrom(scope)
   return {
     version: e.version,
-    loan_parts: e.loan_parts.slice(),
-    payments: byDateDesc(e.payments),
-    valuations: byDateDesc(e.valuations),
-    rate_periods: byStartDesc(e.rate_periods),
-    contributions: byDateDesc(e.contributions),
+    loan_parts: withoutTombstones(e.loan_parts, cachedTombstoneIds(scope, RESOURCES.parts)),
+    payments: byDateDesc(withoutTombstones(e.payments, cachedTombstoneIds(scope, RESOURCES.payments))),
+    valuations: byDateDesc(withoutTombstones(e.valuations, cachedTombstoneIds(scope, RESOURCES.valuations))),
+    rate_periods: byStartDesc(withoutTombstones(e.rate_periods, cachedTombstoneIds(scope, RESOURCES.periods))),
+    contributions: byDateDesc(withoutTombstones(e.contributions, cachedTombstoneIds(scope, RESOURCES.contributions))),
     settings: e.settings,
   }
 }
@@ -213,20 +213,23 @@ export function cachedSnapshot(): StoreEnvelope {
 // The pre-Supabase envelope from the legacy key — v<4-migrated in memory (no
 // write-back, STORAGE_KEY stays read-only) with id/created_at guaranteed on
 // every row, ready to upsert. null when there's no legacy data to import.
-function _readLegacy(): StoreEnvelope | null {
+function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): StoreEnvelope | null {
+  const raw = scope.read(STORAGE_KEY)
+  if (!raw) return null
+  let data: unknown
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const data = JSON.parse(raw)
+    data = JSON.parse(raw)
     if (!data || typeof data !== 'object') return null
-    const env = _envelope(data, true)
+  } catch { return null }
+  return materializeImport('mortgage-legacy', raw, () => {
+    const env = _envelope(data as Record<string, unknown>, true)
     env.loan_parts = env.loan_parts.map(r => stamp(r, 'part') as LoanPart)
     env.payments = env.payments.map(r => stamp(r, 'pay') as Payment)
     env.valuations = env.valuations.map(r => stamp(r, 'val') as Valuation)
     env.rate_periods = env.rate_periods.map(r => stamp(r, 'rate') as RatePeriod)
     env.contributions = env.contributions.map(r => stamp(r, 'contrib') as Contribution)
     return env
-  } catch { return null }
+  })
 }
 
 // ── First-login import (one-time, idempotent) ───────────────────────────────
@@ -234,28 +237,51 @@ function _readLegacy(): StoreEnvelope | null {
 // localStorage data into the five tables (keyed on id, so re-running adds
 // nothing) + seed the settings tool_state row only if none exists yet (so a
 // partner's saved settings aren't clobbered).
-const _importLocalOnce = makeImportOnce(IMPORT_FLAG, async () => {
-  const legacy = _readLegacy()
+const _importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(IMPORT_FLAG), async () => {
+  const scope = syncCoordinator.captureScope()
+  if (!legacyImportAssignedToActive() || !scope.isActive()) return true
+  const legacy = _readLegacy(scope)
   if (!legacy) return true
-  const jobs: Array<[string, Record<string, unknown>[]]> = [
-    [T.parts, legacy.loan_parts.map(r => _row(r, COLS.parts))],
-    [T.periods, legacy.rate_periods.map(r => _row(r, COLS.periods))],
-    [T.payments, legacy.payments.map(r => _row(r, COLS.payments))],
-    [T.valuations, legacy.valuations.map(r => _row(r, COLS.valuations))],
-    [T.contributions, legacy.contributions.map(r => _row(r, COLS.contributions))],
-  ]
-  for (const [table, rows] of jobs) {
-    if (!rows.length) continue
-    const { error } = await supabase.from(table).upsert(rows, { onConflict: 'id' })
-    if (error) return false // retry next call — don't mark done
+  const operations: MutationInput[] = []
+  const add = <T extends { id?: string }>(resource: string, rows: T[], projected: Record<string, unknown>[], applyLocal: () => void) => {
+    if (rows.length) operations.push({ resource, operation: 'upsert', payload: { rows: projected, seed: true }, entityIds: rows.map((row) => row.id!), applyLocal })
   }
-  const { data, error: selErr } = await supabase.from(STATE).select('tool').eq('tool', SETTINGS_TOOL).maybeSingle()
-  if (selErr) return false
-  if (!data) {
-    const { error } = await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data: legacy.settings }, { onConflict: 'household_id,tool' })
-    if (error) return false
-  }
-  return true
+  add(T.parts, legacy.loan_parts, legacy.loan_parts.map(r => _row(r, COLS.parts)), () => _patchCache(e => { const ids = new Set(legacy.loan_parts.map(r => r.id)); e.loan_parts = [...legacy.loan_parts, ...e.loan_parts.filter(r => !ids.has(r.id))] }))
+  add(T.periods, legacy.rate_periods, legacy.rate_periods.map(r => _row(r, COLS.periods)), () => _patchCache(e => { const ids = new Set(legacy.rate_periods.map(r => r.id)); e.rate_periods = [...legacy.rate_periods, ...e.rate_periods.filter(r => !ids.has(r.id))] }))
+  add(T.payments, legacy.payments, legacy.payments.map(r => _row(r, COLS.payments)), () => _patchCache(e => { const ids = new Set(legacy.payments.map(r => r.id)); e.payments = [...legacy.payments, ...e.payments.filter(r => !ids.has(r.id))] }))
+  add(T.valuations, legacy.valuations, legacy.valuations.map(r => _row(r, COLS.valuations)), () => _patchCache(e => { const ids = new Set(legacy.valuations.map(r => r.id)); e.valuations = [...legacy.valuations, ...e.valuations.filter(r => !ids.has(r.id))] }))
+  add(T.contributions, legacy.contributions, legacy.contributions.map(r => _row(r, COLS.contributions)), () => _patchCache(e => { const ids = new Set(legacy.contributions.map(r => r.id)); e.contributions = [...legacy.contributions, ...e.contributions.filter(r => !ids.has(r.id))] }))
+  operations.push({ resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: legacy.settings, seed: true }, entityIds: [SETTINGS_TOOL], applyLocal: () => _patchCache(e => { e.settings = legacy.settings }) })
+  if (!scope.isActive()) return false
+  try { await syncCoordinator.mutateBatch(operations); return true } catch { return false }
+})
+
+for (const table of Object.values(T)) registerTableSync(table, table)
+syncCoordinator.register(SETTINGS_RESOURCE, async (operation) => {
+  const payload = operation.payload as { data?: unknown; seed?: unknown }
+  const data = payload?.data
+  if (!data || typeof data !== 'object') throw { status: 400, message: 'Malformed mortgage settings' }
+  const { error } = payload.seed === true
+    ? await supabase.from(STATE).insert({ tool: SETTINGS_TOOL, data })
+    : await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data }, { onConflict: 'household_id,tool' })
+  if (payload.seed === true && (error as { code?: string } | null)?.code === '23505') return
+  if (error) throw error
+}, (operation) => {
+  const payload = operation.payload as { data?: unknown; seed?: unknown }
+  const data = payload?.data
+  return operation.operation === 'upsert' && !!data && typeof data === 'object'
+    && (payload.seed === undefined || typeof payload.seed === 'boolean')
+    && operation.entityIds.length === 1 && operation.entityIds[0] === SETTINGS_TOOL
+})
+syncCoordinator.register(CASCADE_RESOURCE, async (operation) => {
+  const id = (operation.payload as { id?: unknown })?.id
+  if (operation.operation !== 'delete' || typeof id !== 'string' || !id) throw { status: 400, message: 'Malformed loan-part delete' }
+  const { error } = await supabase.rpc('delete_mortgage_loan_part', { p_loan_part_id: id })
+  if (error) throw error
+}, (operation) => {
+  const id = (operation.payload as { id?: unknown })?.id
+  return operation.operation === 'delete' && typeof id === 'string' && !!id
+    && operation.entityIds.length === 1 && operation.entityIds[0] === id
 })
 
 // ── Loan parts ───────────────────────────────────────────────────────────────
@@ -269,238 +295,267 @@ export interface MortgageSyncSnapshot {
 // back to cache. Hushållsbudget must distinguish authoritative empty data
 // (remove synced rows) from an unavailable live source (preserve stale rows).
 export async function loadMortgageSyncSnapshot(): Promise<MortgageSyncSnapshot | null> {
+  const scope = syncCoordinator.captureScope()
+  const fallback = (): MortgageSyncSnapshot => {
+    const cache = _readCacheFrom(scope)
+    return {
+      parts: withoutTombstones(cache.loan_parts, cachedTombstoneIds(scope, RESOURCES.parts)),
+      periods: withoutTombstones(cache.rate_periods, cachedTombstoneIds(scope, RESOURCES.periods)),
+      payments: withoutTombstones(cache.payments, cachedTombstoneIds(scope, RESOURCES.payments)),
+    }
+  }
   await _importLocalOnce()
-  const [partsResult, periodsResult, paymentsResult] = await Promise.all([
+  if (!scope.isActive() || [RESOURCES.parts, RESOURCES.periods, RESOURCES.payments, CASCADE_RESOURCE].some((resource) => syncCoordinator.isDirty(resource))) {
+    return fallback()
+  }
+  const [partsResult, periodsResult, paymentsResult, partTombstones, periodTombstones, paymentTombstones] = await Promise.all([
     supabase.from(T.parts).select('*').order('created_at', { ascending: true }),
     supabase.from(T.periods).select('*'),
     supabase.from(T.payments).select('*'),
+    loadTombstoneIds(scope, RESOURCES.parts),
+    loadTombstoneIds(scope, RESOURCES.periods),
+    loadTombstoneIds(scope, RESOURCES.payments),
   ])
+  if (!scope.isActive() || [RESOURCES.parts, RESOURCES.periods, RESOURCES.payments, CASCADE_RESOURCE].some((resource) => syncCoordinator.isDirty(resource))) {
+    return fallback()
+  }
   if (partsResult.error || periodsResult.error || paymentsResult.error ||
       !partsResult.data || !periodsResult.data || !paymentsResult.data) return null
   const snapshot: MortgageSyncSnapshot = {
-    parts: partsResult.data as LoanPart[],
-    periods: periodsResult.data as RatePeriod[],
-    payments: paymentsResult.data as Payment[],
+    parts: withoutTombstones(partsResult.data as LoanPart[], partTombstones),
+    periods: withoutTombstones(periodsResult.data as RatePeriod[], periodTombstones),
+    payments: withoutTombstones(paymentsResult.data as Payment[], paymentTombstones),
   }
-  _patchCache((cache) => {
+  const cache = _readCacheFrom(scope)
+  {
     cache.loan_parts = snapshot.parts
     cache.rate_periods = snapshot.periods
     cache.payments = snapshot.payments
-  })
+  }
+  scope.write(CACHE_KEY, JSON.stringify(cache))
   return snapshot
 }
 
 export async function listLoanParts(): Promise<LoanPart[]> {
+  const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
-  const { data, error } = await supabase.from(T.parts).select('*').order('created_at', { ascending: true })
-  if (error || !data) return _readCache().loan_parts.slice()
-  const rows = data as LoanPart[]
-  _patchCache(e => { e.loan_parts = rows })
+  const fallback = () => withoutTombstones(_readCacheFrom(scope).loan_parts, cachedTombstoneIds(scope, RESOURCES.parts))
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.parts) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
+  const [result, tombstones] = await Promise.all([
+    supabase.from(T.parts).select('*').order('created_at', { ascending: true }), loadTombstoneIds(scope, RESOURCES.parts),
+  ])
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.parts) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
+  if (result.error || !result.data) return fallback()
+  const rows = withoutTombstones(result.data as LoanPart[], tombstones)
+  const cache = _readCacheFrom(scope); cache.loan_parts = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return rows.slice()
 }
 
 export async function addLoanPart(record: Omit<LoanPart, 'id' | 'created_at'>): Promise<LoanPart> {
   const saved = stamp(record, 'part') as LoanPart
-  const { error } = await supabase.from(T.parts).insert(_row(saved, COLS.parts))
-  if (error) throw toPersistenceError(error)
-  _patchCache(e => { e.loan_parts.push(saved) })
+  await queueTableUpsert(RESOURCES.parts, [_row(saved, COLS.parts)], [saved.id], () => _patchCache(e => { e.loan_parts.push(saved) }))
   return saved
 }
 
 export async function updateLoanPart(id: string, patch: Partial<LoanPart>): Promise<LoanPart | null> {
-  const { error } = await supabase.from(T.parts).update(_pick(patch, COLS.parts)).eq('id', id)
-  if (error) throw toPersistenceError(error)
-  let found: LoanPart | null = null
-  _patchCache(e => { e.loan_parts = e.loan_parts.map(p => { if (p?.id === id) { found = { ...p, ...patch }; return found } return p }) })
-  return found
+  const current = _readCache().loan_parts.find((part) => part.id === id)
+  if (!current) return null
+  const saved = { ...current, ...patch }
+  await queueTableUpsert(RESOURCES.parts, [_row(saved, COLS.parts)], [id], () => {
+    _patchCache(e => { e.loan_parts = e.loan_parts.map(p => p?.id === id ? saved : p) })
+  })
+  return saved
 }
 
 export async function removeLoanPart(id: string): Promise<number> {
   // Product decision (Plan 94): deleting a loan part permanently deletes its
   // linked payments and rate periods. The RPC performs that cascade in one
-  // database transaction; the cache must not move until the whole operation
-  // commits successfully.
-  const { error } = await supabase.rpc('delete_mortgage_loan_part', { p_loan_part_id: id })
-  if (error) throw toPersistenceError(error)
+  // database transaction. Once the delete is durably queued, the cache hides
+  // the parent and children while acknowledgement/retry remains explicit.
   let n = 0
-  _patchCache(e => {
-    e.loan_parts = e.loan_parts.filter(p => p?.id !== id)
-    e.payments = e.payments.filter(p => !(p?.loan_part_id === id))
-    e.rate_periods = e.rate_periods.filter(r => !(r?.loan_part_id === id))
-    n = e.loan_parts.length
+  await syncCoordinator.mutate({
+    resource: CASCADE_RESOURCE, operation: 'delete', payload: { id }, entityIds: [id],
+    applyLocal: () => _patchCache(e => {
+      e.loan_parts = e.loan_parts.filter(p => p?.id !== id)
+      e.payments = e.payments.filter(p => !(p?.loan_part_id === id))
+      e.rate_periods = e.rate_periods.filter(r => !(r?.loan_part_id === id))
+      n = e.loan_parts.length
+    }),
   })
   return n
 }
 
 // ── Payments ─────────────────────────────────────────────────────────────────
 export async function listPayments(): Promise<Payment[]> {
+  const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
-  const { data, error } = await supabase.from(T.payments).select('*')
-  if (error || !data) return byDateDesc(_readCache().payments)
-  const rows = data as Payment[]
-  _patchCache(e => { e.payments = rows })
+  const fallback = () => byDateDesc(withoutTombstones(_readCacheFrom(scope).payments, cachedTombstoneIds(scope, RESOURCES.payments)))
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.payments) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
+  const [result, tombstones] = await Promise.all([supabase.from(T.payments).select('*'), loadTombstoneIds(scope, RESOURCES.payments)])
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.payments) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
+  if (result.error || !result.data) return fallback()
+  const rows = withoutTombstones(result.data as Payment[], tombstones)
+  const cache = _readCacheFrom(scope); cache.payments = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return byDateDesc(rows)
 }
 
 export async function addPayment(record: Omit<Payment, 'id' | 'created_at'>): Promise<Payment> {
   const saved = stamp(record, 'pay') as Payment
-  const { error } = await supabase.from(T.payments).insert(_row(saved, COLS.payments))
-  if (error) throw toPersistenceError(error)
-  _patchCache(e => { e.payments.push(saved) })
+  await queueTableUpsert(RESOURCES.payments, [_row(saved, COLS.payments)], [saved.id], () => _patchCache(e => { e.payments.push(saved) }))
   return saved
 }
 
 export async function addPayments(records: Array<Omit<Payment, 'id' | 'created_at'>>): Promise<Payment[]> {
   const saved = records.map(r => stamp(r, 'pay') as Payment)
-  const { error } = await supabase.from(T.payments).insert(saved.map(r => _row(r, COLS.payments)))
-  if (error) throw toPersistenceError(error)
-  _patchCache(e => { e.payments = e.payments.concat(saved) })
+  await queueTableUpsert(RESOURCES.payments, saved.map(r => _row(r, COLS.payments)), saved.map((row) => row.id), () => _patchCache(e => { e.payments = e.payments.concat(saved) }))
   return saved
 }
 
 export async function updatePayment(id: string, patch: Partial<Payment>): Promise<Payment | null> {
-  const { error } = await supabase.from(T.payments).update(_pick(patch, COLS.payments)).eq('id', id)
-  if (error) throw toPersistenceError(error)
-  let found: Payment | null = null
-  _patchCache(e => { e.payments = e.payments.map(p => { if (p?.id === id) { found = { ...p, ...patch }; return found } return p }) })
-  return found
+  const current = _readCache().payments.find((payment) => payment.id === id)
+  if (!current) return null
+  const saved = { ...current, ...patch }
+  await queueTableUpsert(RESOURCES.payments, [_row(saved, COLS.payments)], [id], () => _patchCache(e => { e.payments = e.payments.map(p => p?.id === id ? saved : p) }))
+  return saved
 }
 
 export async function removePayment(id: string): Promise<number> {
-  const { error } = await supabase.from(T.payments).delete().eq('id', id)
-  if (error) throw toPersistenceError(error)
   let n = 0
-  _patchCache(e => { e.payments = e.payments.filter(p => p?.id !== id); n = e.payments.length })
+  await queueTableDelete(RESOURCES.payments, [id], () => _patchCache(e => { e.payments = e.payments.filter(p => p?.id !== id); n = e.payments.length }))
   return n
 }
 
 export async function removePayments(ids: string[]): Promise<number> {
-  const { error } = await supabase.from(T.payments).delete().in('id', ids)
-  if (error) throw toPersistenceError(error)
   const drop = new Set(ids)
   let removed = 0
-  _patchCache(e => { const before = e.payments.length; e.payments = e.payments.filter(p => !(p && drop.has(p.id))); removed = before - e.payments.length })
+  await queueTableDelete(RESOURCES.payments, ids, () => _patchCache(e => { const before = e.payments.length; e.payments = e.payments.filter(p => !(p && drop.has(p.id))); removed = before - e.payments.length }))
   return removed
 }
 
 // ── Valuations ───────────────────────────────────────────────────────────────
 export async function listValuations(): Promise<Valuation[]> {
+  const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
-  const { data, error } = await supabase.from(T.valuations).select('*')
-  if (error || !data) return byDateDesc(_readCache().valuations)
-  const rows = data as Valuation[]
-  _patchCache(e => { e.valuations = rows })
+  const fallback = () => byDateDesc(withoutTombstones(_readCacheFrom(scope).valuations, cachedTombstoneIds(scope, RESOURCES.valuations)))
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.valuations)) return fallback()
+  const [result, tombstones] = await Promise.all([supabase.from(T.valuations).select('*'), loadTombstoneIds(scope, RESOURCES.valuations)])
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.valuations)) return fallback()
+  if (result.error || !result.data) return fallback()
+  const rows = withoutTombstones(result.data as Valuation[], tombstones)
+  const cache = _readCacheFrom(scope); cache.valuations = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return byDateDesc(rows)
 }
 
 export async function addValuation(record: Omit<Valuation, 'id' | 'created_at'>): Promise<Valuation> {
   const saved = stamp(record, 'val') as Valuation
-  const { error } = await supabase.from(T.valuations).insert(_row(saved, COLS.valuations))
-  if (error) throw toPersistenceError(error)
-  _patchCache(e => { e.valuations.push(saved) })
+  await queueTableUpsert(RESOURCES.valuations, [_row(saved, COLS.valuations)], [saved.id], () => _patchCache(e => { e.valuations.push(saved) }))
   return saved
 }
 
 export async function updateValuation(id: string, patch: Partial<Valuation>): Promise<Valuation | null> {
-  const { error } = await supabase.from(T.valuations).update(_pick(patch, COLS.valuations)).eq('id', id)
-  if (error) throw toPersistenceError(error)
-  let found: Valuation | null = null
-  _patchCache(e => { e.valuations = e.valuations.map(v => { if (v?.id === id) { found = { ...v, ...patch }; return found } return v }) })
-  return found
+  const current = _readCache().valuations.find((valuation) => valuation.id === id)
+  if (!current) return null
+  const saved = { ...current, ...patch }
+  await queueTableUpsert(RESOURCES.valuations, [_row(saved, COLS.valuations)], [id], () => _patchCache(e => { e.valuations = e.valuations.map(v => v?.id === id ? saved : v) }))
+  return saved
 }
 
 export async function removeValuation(id: string): Promise<number> {
-  const { error } = await supabase.from(T.valuations).delete().eq('id', id)
-  if (error) throw toPersistenceError(error)
   let n = 0
-  _patchCache(e => { e.valuations = e.valuations.filter(v => v?.id !== id); n = e.valuations.length })
+  await queueTableDelete(RESOURCES.valuations, [id], () => _patchCache(e => { e.valuations = e.valuations.filter(v => v?.id !== id); n = e.valuations.length }))
   return n
 }
 
 // ── Rate periods ─────────────────────────────────────────────────────────────
 export async function listRatePeriods(): Promise<RatePeriod[]> {
+  const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
-  const { data, error } = await supabase.from(T.periods).select('*')
-  if (error || !data) return byStartDesc(_readCache().rate_periods)
-  const rows = data as RatePeriod[]
-  _patchCache(e => { e.rate_periods = rows })
+  const fallback = () => byStartDesc(withoutTombstones(_readCacheFrom(scope).rate_periods, cachedTombstoneIds(scope, RESOURCES.periods)))
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.periods) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
+  const [result, tombstones] = await Promise.all([supabase.from(T.periods).select('*'), loadTombstoneIds(scope, RESOURCES.periods)])
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.periods) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
+  if (result.error || !result.data) return fallback()
+  const rows = withoutTombstones(result.data as RatePeriod[], tombstones)
+  const cache = _readCacheFrom(scope); cache.rate_periods = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return byStartDesc(rows)
 }
 
 export async function addRatePeriod(record: Omit<RatePeriod, 'id' | 'created_at'>): Promise<RatePeriod> {
   const saved = stamp(record, 'rate') as RatePeriod
-  const { error } = await supabase.from(T.periods).insert(_row(saved, COLS.periods))
-  if (error) throw toPersistenceError(error)
-  _patchCache(e => { e.rate_periods.push(saved) })
+  await queueTableUpsert(RESOURCES.periods, [_row(saved, COLS.periods)], [saved.id], () => _patchCache(e => { e.rate_periods.push(saved) }))
   return saved
 }
 
 export async function updateRatePeriod(id: string, patch: Partial<RatePeriod>): Promise<RatePeriod | null> {
-  const { error } = await supabase.from(T.periods).update(_pick(patch, COLS.periods)).eq('id', id)
-  if (error) throw toPersistenceError(error)
-  let found: RatePeriod | null = null
-  _patchCache(e => { e.rate_periods = e.rate_periods.map(r => { if (r?.id === id) { found = { ...r, ...patch }; return found } return r }) })
-  return found
+  const current = _readCache().rate_periods.find((period) => period.id === id)
+  if (!current) return null
+  const saved = { ...current, ...patch }
+  await queueTableUpsert(RESOURCES.periods, [_row(saved, COLS.periods)], [id], () => _patchCache(e => { e.rate_periods = e.rate_periods.map(r => r?.id === id ? saved : r) }))
+  return saved
 }
 
 export async function removeRatePeriod(id: string): Promise<number> {
-  const { error } = await supabase.from(T.periods).delete().eq('id', id)
-  if (error) throw toPersistenceError(error)
   let n = 0
-  _patchCache(e => { e.rate_periods = e.rate_periods.filter(r => r?.id !== id); n = e.rate_periods.length })
+  await queueTableDelete(RESOURCES.periods, [id], () => _patchCache(e => { e.rate_periods = e.rate_periods.filter(r => r?.id !== id); n = e.rate_periods.length }))
   return n
 }
 
 // ── Contributions ────────────────────────────────────────────────────────────
 export async function listContributions(): Promise<Contribution[]> {
+  const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
-  const { data, error } = await supabase.from(T.contributions).select('*')
-  if (error || !data) return byDateDesc(_readCache().contributions)
-  const rows = data as Contribution[]
-  _patchCache(e => { e.contributions = rows })
+  const fallback = () => byDateDesc(withoutTombstones(_readCacheFrom(scope).contributions, cachedTombstoneIds(scope, RESOURCES.contributions)))
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.contributions)) return fallback()
+  const [result, tombstones] = await Promise.all([supabase.from(T.contributions).select('*'), loadTombstoneIds(scope, RESOURCES.contributions)])
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.contributions)) return fallback()
+  if (result.error || !result.data) return fallback()
+  const rows = withoutTombstones(result.data as Contribution[], tombstones)
+  const cache = _readCacheFrom(scope); cache.contributions = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return byDateDesc(rows)
 }
 
 export async function addContribution(record: Omit<Contribution, 'id' | 'created_at'>): Promise<Contribution> {
   const saved = stamp(record, 'contrib') as Contribution
-  const { error } = await supabase.from(T.contributions).insert(_row(saved, COLS.contributions))
-  if (error) throw toPersistenceError(error)
-  _patchCache(e => { e.contributions.push(saved) })
+  await queueTableUpsert(RESOURCES.contributions, [_row(saved, COLS.contributions)], [saved.id], () => _patchCache(e => { e.contributions.push(saved) }))
   return saved
 }
 
 export async function updateContribution(id: string, patch: Partial<Contribution>): Promise<Contribution | null> {
-  const { error } = await supabase.from(T.contributions).update(_pick(patch, COLS.contributions)).eq('id', id)
-  if (error) throw toPersistenceError(error)
-  let found: Contribution | null = null
-  _patchCache(e => { e.contributions = e.contributions.map(c => { if (c?.id === id) { found = { ...c, ...patch }; return found } return c }) })
-  return found
+  const current = _readCache().contributions.find((contribution) => contribution.id === id)
+  if (!current) return null
+  const saved = { ...current, ...patch }
+  await queueTableUpsert(RESOURCES.contributions, [_row(saved, COLS.contributions)], [id], () => _patchCache(e => { e.contributions = e.contributions.map(c => c?.id === id ? saved : c) }))
+  return saved
 }
 
 export async function removeContribution(id: string): Promise<number> {
-  const { error } = await supabase.from(T.contributions).delete().eq('id', id)
-  if (error) throw toPersistenceError(error)
   let n = 0
-  _patchCache(e => { e.contributions = e.contributions.filter(c => c?.id !== id); n = e.contributions.length })
+  await queueTableDelete(RESOURCES.contributions, [id], () => _patchCache(e => { e.contributions = e.contributions.filter(c => c?.id !== id); n = e.contributions.length }))
   return n
 }
 
 // ── Settings (tool_state blob) ───────────────────────────────────────────────
 export async function getSettings(): Promise<MortgageSettings> {
+  const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
+  if (!scope.isActive() || syncCoordinator.isDirty(SETTINGS_RESOURCE)) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
   const { data, error } = await supabase.from(STATE).select('data').eq('tool', SETTINGS_TOOL).maybeSingle()
-  if (error) return { ...defaultSettings(), ..._readCache().settings }
+  if (!scope.isActive() || syncCoordinator.isDirty(SETTINGS_RESOURCE)) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
+  if (error) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
   const settings = { ...defaultSettings(), ...((data?.data as Partial<MortgageSettings>) || {}) }
-  _patchCache(e => { e.settings = settings })
+  const cache = _readCacheFrom(scope); cache.settings = settings; scope.write(CACHE_KEY, JSON.stringify(cache))
   return settings
 }
 
 export async function saveSettings(patch: Partial<MortgageSettings>): Promise<MortgageSettings> {
+  const scope = syncCoordinator.captureScope()
   const current = await getSettings()
+  if (!scope.isActive()) throw new Error('Sync identity changed while saving settings')
   const merged = { ...defaultSettings(), ...current, ...patch }
-  const { error } = await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data: merged }, { onConflict: 'household_id,tool' })
-  if (error) throw toPersistenceError(error)
-  _patchCache(e => { e.settings = merged })
+  await syncCoordinator.mutate({
+    resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: merged }, entityIds: [SETTINGS_TOOL],
+    applyLocal: () => _patchCache(e => { e.settings = merged }),
+  })
   return merged
 }
 
@@ -515,20 +570,12 @@ export async function exportJSON(): Promise<string> {
 // Insert only the rows whose id isn't already present in the cloud (deduped
 // against `existing`), stamping id/created_at where missing. Returns the rows
 // actually added so the caller can patch the matching cache slice.
-async function _mergeInsert<T extends { id?: string; created_at?: string }>(table: string, existing: T[], incoming: unknown, prefix: string, cols: readonly string[]): Promise<T[]> {
+function _mergeRows<T extends { id?: string }>(existing: T[], incoming: T[]): T[] {
   const seen = new Set(existing.map(r => r?.id).filter(Boolean))
   const toAdd: T[] = []
-  for (const raw of Array.isArray(incoming) ? incoming : []) {
-    if (!raw || typeof raw !== 'object') continue
-    const row = { ...(raw as T) }
-    if (!row.id) row.id = genId(prefix) as T['id']
+  for (const row of incoming) {
     if (seen.has(row.id)) continue
-    if (!row.created_at) row.created_at = new Date().toISOString() as T['created_at']
     seen.add(row.id); toAdd.push(row)
-  }
-  if (toAdd.length) {
-    const { error } = await supabase.from(table).insert(toAdd.map(r => _row(r, cols)))
-    if (error) throw toPersistenceError(error)
   }
   return toAdd
 }
@@ -539,23 +586,38 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
   if (!parsed || typeof parsed !== 'object') throw new Error('No Bolånekoll data found.')
   if (!parsed.loan_parts && !parsed.payments && !parsed.valuations && !parsed.rate_periods && !parsed.contributions) throw new Error('No Bolånekoll data found.')
 
-  const [parts, pays, vals, rates, contribs] = await Promise.all([
-    listLoanParts(), listPayments(), listValuations(), listRatePeriods(), listContributions(),
+  const scope = syncCoordinator.captureScope()
+  const normalized = materializeImport('mortgage-backup', text, () => ({
+    loan_parts: (Array.isArray(parsed.loan_parts) ? parsed.loan_parts : []).filter((r): r is LoanPart => !!r && typeof r === 'object').map(r => stamp({ ...r }, 'part') as LoanPart),
+    payments: (Array.isArray(parsed.payments) ? parsed.payments : []).filter((r): r is Payment => !!r && typeof r === 'object').map(r => stamp({ ...r }, 'pay') as Payment),
+    valuations: (Array.isArray(parsed.valuations) ? parsed.valuations : []).filter((r): r is Valuation => !!r && typeof r === 'object').map(r => stamp({ ...r }, 'val') as Valuation),
+    rate_periods: (Array.isArray(parsed.rate_periods) ? parsed.rate_periods : []).filter((r): r is RatePeriod => !!r && typeof r === 'object').map(r => stamp({ ...r }, 'rate') as RatePeriod),
+    contributions: (Array.isArray(parsed.contributions) ? parsed.contributions : []).filter((r): r is Contribution => !!r && typeof r === 'object').map(r => stamp({ ...r }, 'contrib') as Contribution),
+  }))
+
+  const [parts, pays, vals, rates, contribs, existingSettings] = await Promise.all([
+    listLoanParts(), listPayments(), listValuations(), listRatePeriods(), listContributions(), getSettings(),
   ])
+  if (!scope.isActive()) throw new Error('Sync identity changed during mortgage import')
 
-  const newParts = await _mergeInsert<LoanPart>(T.parts, parts, parsed.loan_parts, 'part', COLS.parts)
-  _patchCache(e => { e.loan_parts = e.loan_parts.concat(newParts) })
-  const newPays = await _mergeInsert<Payment>(T.payments, pays, parsed.payments, 'pay', COLS.payments)
-  _patchCache(e => { e.payments = e.payments.concat(newPays) })
-  const newVals = await _mergeInsert<Valuation>(T.valuations, vals, parsed.valuations, 'val', COLS.valuations)
-  _patchCache(e => { e.valuations = e.valuations.concat(newVals) })
-  const newRates = await _mergeInsert<RatePeriod>(T.periods, rates, parsed.rate_periods, 'rate', COLS.periods)
-  _patchCache(e => { e.rate_periods = e.rate_periods.concat(newRates) })
-  const newContribs = await _mergeInsert<Contribution>(T.contributions, contribs, parsed.contributions, 'contrib', COLS.contributions)
-  _patchCache(e => { e.contributions = e.contributions.concat(newContribs) })
-
-  if (parsed.settings && typeof parsed.settings === 'object')
-    await saveSettings(parsed.settings as Partial<MortgageSettings>)
+  const newParts = _mergeRows(parts, normalized.loan_parts)
+  const newPays = _mergeRows(pays, normalized.payments)
+  const newVals = _mergeRows(vals, normalized.valuations)
+  const newRates = _mergeRows(rates, normalized.rate_periods)
+  const newContribs = _mergeRows(contribs, normalized.contributions)
+  const operations: MutationInput[] = []
+  const add = <T extends { id?: string }>(resource: string, rows: T[], projected: Record<string, unknown>[], applyLocal: () => void) => { if (rows.length) operations.push({ resource, operation: 'upsert', payload: { rows: projected, seed: true }, entityIds: rows.map(r => r.id!), applyLocal }) }
+  add(T.parts, newParts, newParts.map(r => _row(r, COLS.parts)), () => _patchCache(e => { e.loan_parts = [...newParts, ...e.loan_parts.filter(r => !new Set(newParts.map(x => x.id)).has(r.id))] }))
+  add(T.payments, newPays, newPays.map(r => _row(r, COLS.payments)), () => _patchCache(e => { e.payments = [...newPays, ...e.payments.filter(r => !new Set(newPays.map(x => x.id)).has(r.id))] }))
+  add(T.valuations, newVals, newVals.map(r => _row(r, COLS.valuations)), () => _patchCache(e => { e.valuations = [...newVals, ...e.valuations.filter(r => !new Set(newVals.map(x => x.id)).has(r.id))] }))
+  add(T.periods, newRates, newRates.map(r => _row(r, COLS.periods)), () => _patchCache(e => { e.rate_periods = [...newRates, ...e.rate_periods.filter(r => !new Set(newRates.map(x => x.id)).has(r.id))] }))
+  add(T.contributions, newContribs, newContribs.map(r => _row(r, COLS.contributions)), () => _patchCache(e => { e.contributions = [...newContribs, ...e.contributions.filter(r => !new Set(newContribs.map(x => x.id)).has(r.id))] }))
+  if (parsed.settings && typeof parsed.settings === 'object') {
+    const merged = { ...defaultSettings(), ...existingSettings, ...(parsed.settings as Partial<MortgageSettings>) }
+    operations.push({ resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: merged, seed: true }, entityIds: [SETTINGS_TOOL], applyLocal: () => _patchCache(e => { e.settings = merged }) })
+  }
+  if (!scope.isActive()) throw new Error('Sync identity changed during mortgage import')
+  await syncCoordinator.mutateBatch(operations)
 
   return {
     loan_parts: newParts.length, payments: newPays.length, valuations: newVals.length,

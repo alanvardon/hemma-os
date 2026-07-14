@@ -19,27 +19,35 @@ vi.mock('./supabase', () => {
 })
 const mock = () => holder.current
 
-const CACHE_KEY = 'bostadskalkyl_mortgage_cache_v1'
-const IMPORT_FLAG = 'bostadskalkyl_mortgage_supabase_imported'
+const PREFIX = 'hemma-sync-v1:test-user:test-house:'
+const scoped = (key: string) => PREFIX + key
+const CACHE_KEY = scoped('bostadskalkyl_mortgage_cache_v1')
+const IMPORT_FLAG = scoped('bostadskalkyl_mortgage_supabase_imported')
 
 const mem = new Map<string, string>()
 let store: typeof import('./mortgage-store')
+let sync: typeof import('./sync')
 beforeEach(async () => {
   mem.clear()
   vi.stubGlobal('localStorage', {
+    get length() { return mem.size },
     getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
     setItem: (k: string, v: string) => { mem.set(k, v) },
     removeItem: (k: string) => { mem.delete(k) },
     clear: () => mem.clear(),
+    key: (index: number) => [...mem.keys()][index] ?? null,
   })
   vi.resetModules()
   store = await import('./mortgage-store')
+  sync = await import('./sync')
+  sync.activateSyncIdentity({ userId: 'test-user', householdId: 'test-house' })
   // The mocked './supabase' module (unlike plain modules) is NOT
   // re-evaluated by vi.resetModules() — it's the same mock instance for the
   // whole file, so its data/control state must be cleared by hand.
   Object.keys(mock().tables).forEach((k) => delete mock().tables[k])
   mock().control.fail = false
   mock().control.failing.clear()
+  Object.keys(mock().control.errors).forEach((key) => delete mock().control.errors[key])
   Object.keys(mock().control.rpcHandlers).forEach((k) => delete mock().control.rpcHandlers[k])
 })
 
@@ -99,10 +107,15 @@ describe('write path', () => {
     await expect(store.addLoanPart({ label: 'Bolån', loan_number: '1', start_balance: 500000, start_date: '2024-01-01', archived: false })).rejects.toBeTruthy()
   })
 
-  it('addLoanPart: cloud error leaves the cache untouched', async () => {
+  it('addLoanPart: cloud error keeps the row dirty for reload and replay', async () => {
     mock().control.failing.add('mortgage_loan_parts')
     await expect(store.addLoanPart({ label: 'Bolån', loan_number: '1', start_balance: 500000, start_date: '2024-01-01', archived: false })).rejects.toBeTruthy()
-    expect((cache().loan_parts as unknown[] | undefined) || []).toHaveLength(0)
+    expect((cache().loan_parts as unknown[] | undefined) || []).toHaveLength(1)
+    expect(await store.listLoanParts()).toHaveLength(1)
+    mock().control.failing.delete('mortgage_loan_parts')
+    await sync.syncCoordinator.replay()
+    expect(mock().tables.mortgage_loan_parts).toHaveLength(1)
+    expect(sync.syncCoordinator.isDirty('mortgage_loan_parts')).toBe(false)
   })
 
   it('addPayment: success patches the cache', async () => {
@@ -152,7 +165,7 @@ describe('write path', () => {
     })
   })
 
-  it('removeLoanPart: RPC failure leaves the parent, linked history, and cache unchanged', async () => {
+  it('removeLoanPart: RPC failure keeps parent and children hidden behind a durable tombstone', async () => {
     const envelope = {
       version: 4,
       loan_parts: [{ id: 'p1' }], payments: [{ id: 'pay1', loan_part_id: 'p1' }],
@@ -164,20 +177,58 @@ describe('write path', () => {
     mock().tables.mortgage_payments = envelope.payments.map((row) => ({ ...row }))
     mock().tables.mortgage_rate_periods = envelope.rate_periods.map((row) => ({ ...row }))
     mock().control.failing.add('delete_mortgage_loan_part')
-    const before = mem.get(CACHE_KEY)
-
     await expect(store.removeLoanPart('p1')).rejects.toBeTruthy()
 
-    expect(mem.get(CACHE_KEY)).toBe(before)
+    expect(cache()).toMatchObject({ loan_parts: [], payments: [], rate_periods: [] })
+    expect(await store.listLoanParts()).toEqual([])
+    expect(await store.listPayments()).toEqual([])
+    expect(await store.listRatePeriods()).toEqual([])
     expect(mock().tables.mortgage_loan_parts).toEqual([{ id: 'p1' }])
     expect(mock().tables.mortgage_payments).toEqual([{ id: 'pay1', loan_part_id: 'p1' }])
     expect(mock().tables.mortgage_rate_periods).toEqual([{ id: 'rate1', loan_part_id: 'p1' }])
+    expect(sync.syncCoordinator.isDirty('mortgage-loan-part-cascade')).toBe(true)
+
+    mock().control.failing.delete('delete_mortgage_loan_part')
+    mock().control.rpcHandlers.delete_mortgage_loan_part = (args) => {
+      const id = (args as { p_loan_part_id: string }).p_loan_part_id
+      mock().tables.mortgage_payments = mock().tables.mortgage_payments.filter((row) => row.loan_part_id !== id)
+      mock().tables.mortgage_rate_periods = mock().tables.mortgage_rate_periods.filter((row) => row.loan_part_id !== id)
+      mock().tables.mortgage_loan_parts = mock().tables.mortgage_loan_parts.filter((row) => row.id !== id)
+      return null
+    }
+    await sync.syncCoordinator.replay()
+    expect(sync.syncCoordinator.isDirty('mortgage-loan-part-cascade')).toBe(false)
+    expect(mock().tables.mortgage_loan_parts).toEqual([])
+  })
+
+  it('keeps cascade-delete intent after an authorization failure', async () => {
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 4, loan_parts: [{ id: 'p1' }], payments: [], valuations: [],
+      rate_periods: [], contributions: [], settings: {},
+    }))
+    mock().control.failing.add('delete_mortgage_loan_part')
+    mock().control.errors.delete_mortgage_loan_part = { status: 403, message: 'JWT household membership denied' }
+
+    await expect(store.removeLoanPart('p1')).rejects.toMatchObject({ category: 'auth' })
+    expect(cache()).toMatchObject({ loan_parts: [] })
+    expect(sync.syncCoordinator.getOutbox()).toMatchObject([{
+      resource: 'mortgage-loan-part-cascade', operation: 'delete', state: 'pending', entityIds: ['p1'],
+    }])
+  })
+
+  it('does not expose household A mortgage cache or outbox in household B', async () => {
+    mock().control.failing.add('mortgage_loan_parts')
+    await expect(store.addLoanPart({ label: 'A', loan_number: '1', start_balance: 1, start_date: '2026-01-01', archived: false })).rejects.toBeTruthy()
+    sync.activateSyncIdentity({ userId: 'test-user', householdId: 'house-b' })
+    expect(store.cachedSnapshot().loan_parts).toEqual([])
+    expect(sync.syncCoordinator.getOutbox()).toEqual([])
   })
 })
 
 describe('one-time legacy import', () => {
+  beforeEach(() => { mem.set(scoped('legacy-import-complete'), '1') })
   it('legacy present + no cloud row: seeded once and the flag is set', async () => {
-    mem.set(store.STORAGE_KEY, JSON.stringify({
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify({
       version: 4,
       loan_parts: [{ id: 'legacy-1', label: 'Legacy', loan_number: '9', start_balance: 200000, start_date: '2020-01-01', archived: false }],
       payments: [], valuations: [], rate_periods: [], contributions: [], settings: {},
@@ -188,7 +239,7 @@ describe('one-time legacy import', () => {
   })
 
   it('import error: flag stays unset so it retries next call', async () => {
-    mem.set(store.STORAGE_KEY, JSON.stringify({
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify({
       version: 4,
       loan_parts: [{ id: 'legacy-1', label: 'Legacy', loan_number: '9', start_balance: 200000, start_date: '2020-01-01', archived: false }],
       payments: [], valuations: [], rate_periods: [], contributions: [], settings: {},
@@ -200,7 +251,7 @@ describe('one-time legacy import', () => {
 
   it('flag already set: legacy data is not re-imported', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mem.set(store.STORAGE_KEY, JSON.stringify({
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify({
       version: 4,
       loan_parts: [{ id: 'legacy-1', label: 'Legacy', loan_number: '9', start_balance: 200000, start_date: '2020-01-01', archived: false }],
       payments: [], valuations: [], rate_periods: [], contributions: [], settings: {},
@@ -211,8 +262,9 @@ describe('one-time legacy import', () => {
 })
 
 describe('store-specific: migrateToPeriods (v<4 forward migration)', () => {
+  beforeEach(() => { mem.set(scoped('legacy-import-complete'), '1') })
   it('folds a legacy per-part interest_rate into a rate_period on import', async () => {
-    mem.set(store.STORAGE_KEY, JSON.stringify({
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify({
       version: 1,
       loan_parts: [{ id: 'p1', label: 'Bolån', loan_number: '1', start_balance: 500000, start_date: '2020-06-01', archived: false, interest_rate: 2.5, rate_type: 'rörlig' }],
       payments: [], valuations: [], rate_periods: [], contributions: [], settings: {},
