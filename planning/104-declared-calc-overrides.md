@@ -1,8 +1,8 @@
 # Plan 104 — Bank profiles (per-bank, learned, declared conventions)
 
 **Status:** proposed · **Priority:** High · **Depends on:**
-[plan 105](105-mortgage-domain-model.md) (Bank/Mortgage entities) · **Effort:** M
-(Phase 1 S–M, Phase 2 M) · **Owner:** Claude · **Source:** owner design
+[plan 103](103-mortgage-domain-model.md) (Bank/Mortgage entities) · **Effort:** M
+(Phase 1 S–M, Phase 2 M) · **Owner:** Claude Opus 4.8 · **Source:** owner design
 discussion after the #305 forecast fix + the move to a rolling 3-month bunden
 from Aug 2026, 2026-07-14 · **Approvals:** owner approved the relational route on
 2026-07-14 · **Touches:** `supabase/migrations/` (new, additive — profile
@@ -13,12 +13,12 @@ columns on `mortgage_banks`), RLS, `web/src/lib/mortgage.ts`,
 
 ## Goal
 
-Give each **Bank** entity (introduced by [plan 105](105-mortgage-domain-model.md))
+Give each **Bank** entity (introduced by [plan 103](103-mortgage-domain-model.md))
 a **profile** of that bank's stable billing conventions (day-count year, billing
 cadence). The forecast reads the profile of a part's bank (via
 `bankForPart`, `part → mortgage → bank`) instead of re-deriving those conventions
 from noisy ledger history. Profiles are **per bank, retained across bank switches
-(a bank change is a new mortgage on a retained bank — plan 105), and learned by
+(a bank change is a new mortgage on a retained bank — plan 103), and learned by
 pooling evidence across all of that bank's rate windows.** Detection stays the
 bootstrap; a locked profile value is authoritative.
 
@@ -33,7 +33,7 @@ those parameters in `if (bank === …)` branching that is harder to test and rea
 The math stays **generic and bank-agnostic**, reading convention values from the
 active profile. **No bank-specific branching in the calculation layer** — an
 explicit non-goal. Same principle as the contractual `listed` rate (#303) and
-amortering ([plan 103](103-declared-amortering-plan.md)): declared facts win
+amortering ([plan 105](105-declared-amortering-plan.md)): declared facts win
 over detection.
 
 A profile does **not** remove the need to *decode* a new bank from its first
@@ -43,7 +43,7 @@ so moving bank (and moving back) is data, not code.
 ## Storage — profile columns on the Bank entity
 
 The `mortgage_banks` and `mortgages` tables and `mortgage_loan_parts.mortgage_id`
-are created by [plan 105](105-mortgage-domain-model.md); `tool_state` was
+are created by [plan 103](103-mortgage-domain-model.md); `tool_state` was
 rejected because a profile is a **retained entity with identity**, not a
 singleton config value (see 105). This plan adds only the **profile columns** to
 `mortgage_banks`, in its own additive migration:
@@ -53,7 +53,7 @@ singleton config value (see 105). This plan adds only the **profile columns** to
   small JSON). **Additive, idempotent; never edit 105's migration or an applied
   migration — new migration only.** Defensive against rows lacking the columns
   (null → detect).
-- **Change-and-return** works by construction (plan 105): a bank change is a new
+- **Change-and-return** works by construction (plan 103): a bank change is a new
   mortgage on the new bank; returning re-uses the retained bank row with its
   conventions intact.
 
@@ -95,7 +95,7 @@ Phase 1 is "immediate certainty and an owner-confirmed authoritative value,"
 
 ## Decisions locked
 
-- **Profile is per bank, relational, retained** (on the plan 105 Bank entity).
+- **Profile is per bank, relational, retained** (on the plan 103 Bank entity).
   Conventions are **bank-level; rates stay per Lånedel** — this plan never
   touches per-part `RatePeriod`s (rate, rörlig/bunden). The data model allows
   several banks; the UI surfaces the active mortgage's bank (no multi-bank
@@ -124,7 +124,7 @@ Phase 1 is "immediate certainty and an owner-confirmed authoritative value,"
 ## Design
 
 1. **Profile columns & store.** Add `year_basis`/`billing`/provenance to the
-   plan 105 `Bank` type + `mortgage_banks`; normalisers default them to null.
+   plan 103 `Bank` type + `mortgage_banks`; normalisers default them to null.
    Extend `mortgage-store.ts` to read/write them on the bank CRUD 105 introduces
    (supabase-js returns `{data,error}` — check `error`, as the store does).
 2. **Math reads the profile.** Where `year_basis` is computed
@@ -147,7 +147,7 @@ Phase 1 is "immediate certainty and an owner-confirmed authoritative value,"
    flow, provenance badges, drift banner — above its nested Lånedelar. Concise
    Swedish copy.
 
-## Phased delivery (each its own branch + PR off `main`, after plan 105)
+## Phased delivery (each its own branch + PR off `main`, after plan 103)
 
 - **Phase 1 — profile columns + the lock.** Additive migration adding
   `year_basis`/provenance to `mortgage_banks`, store read/write, math reads it,
@@ -177,7 +177,7 @@ rate change:
 - **Derived path unaffected** — rörlig/expired part ignores the pin, stays 365.
 - **Change-and-return** — a part under a retained bank (via 105's mortgage link)
   reads that bank's locked conventions (no re-learn needed). (Entity plumbing for
-  this is covered by plan 105's tests; here we assert the *profile lookup*.)
+  this is covered by plan 103's tests; here we assert the *profile lookup*.)
 - **Profile store + migration** — save/load/merge of the profile columns with a
   mocked Supabase client (success **and** failure paths, per the AGENTS.md
   writes-and-failures rule); the additive column migration is idempotent; a bank
@@ -190,7 +190,7 @@ Lock `year_basis = 360` on the Danske bank whenever convenient (no hard
 deadline) for immediate certainty; the learner also keeps it robust through the
 rolling transition. Each quarterly reset then needs only a new bunden
 `RatePeriod` on the affected Lånedel (rate + next villkorsändringsdag). If you
-ever move bank, plan 105 makes that a new mortgage on the new bank; moving back
+ever move bank, plan 103 makes that a new mortgage on the new bank; moving back
 re-uses the retained bank and its profile.
 
 ## Out of scope
@@ -200,11 +200,11 @@ re-uses the retained bank and its profile.
 - Auto-fetching the quarterly rate (parked rate-watcher plan) — owner enters each
   new 3-month rate.
 - The Lånedelar rename (separate cosmetic PR).
-- Amortering — [plan 103](103-declared-amortering-plan.md).
+- Amortering — [plan 105](105-declared-amortering-plan.md).
 
 ## Verify gates
 
 `npm run lint`, `npm run test`, `npm run build` from `web/`, plus the local
 migration/RLS checks. Store-layer test with a mocked Supabase client for the
 profile-column read/write (success + failure), per the AGENTS.md
-writes-and-failures rule. (Bank/mortgage entity CRUD is tested in plan 105.)
+writes-and-failures rule. (Bank/mortgage entity CRUD is tested in plan 103.)

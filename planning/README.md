@@ -266,23 +266,44 @@ Raised after the #305 forecast fix and the owner's move to a rolling 3-month
 bunden from Aug 2026. The through-line: **a declared fact wins over ledger
 detection, which stays the default and fallback** (same principle as the
 contractual `listed` rate, #303). The discussion surfaced a domain-model gap,
-so the batch grew a foundational plan (105) that 104 builds on.
+so the batch grew a foundational plan (103) that 104 builds on. **Files are
+numbered in execution order.**
 
-**Build order: 105 → 104 → 103** (103 is largely independent and can slot in any
-time). Each its own branch + PR off `main`; approved schema/RLS changes in
-105/104 seed + backfill and never edit an applied migration.
+**Build order: 103 → 104 → 105.** 103 is the foundation (104 depends on it); 105
+(amortering) is independent and can slot in any time. Each its own branch + PR
+off `main`; the approved schema/RLS changes in 103/104 seed + backfill and never
+edit an applied migration.
 
-| File | Priority | Scope | Summary | Owner | Effort |
-|------|----------|-------|---------|-------|--------|
-| [105-mortgage-domain-model.md](105-mortgage-domain-model.md) | High (foundational) | mortgage schema | **Bank → Mortgage → Lånedel.** Restructure the flat model into the real bolån hierarchy: new `mortgage_banks` + `mortgages` tables, `mortgage_loan_parts.mortgage_id`. Conventions live on the Bank, rates stay per Lånedel (per-part rörlig/bunden preserved). Model many mortgages / build UI for one; **change bank = new mortgage** on a retained bank. Owner-approved relational route + entity model 2026-07-14. Foundation for 104. | Claude | L |
-| [103-declared-amortering-plan.md](103-declared-amortering-plan.md) | Medium | mortgage forecast | Declare a fixed rak amortering (kr/mån) on a named part; wins over the derived paired-diff/timeline estimate but not over real rows. Fixes the ~3-month lag when the arrangement is new or changes. | Claude | S–M |
-| [104-declared-calc-overrides.md](104-declared-calc-overrides.md) | High (depends on 105) | mortgage forecast | **Bank profiles** (data records on 105's Bank entity, not per-bank code): billing conventions (chiefly day-count year, faktisk/360) the generic math reads instead of guessing. **The rolling 3-month bunden breaks the trailing-window `interestYearBasis` every quarter** — its 6-charge window straddles two rates and reverts to 365, returning the #305 undershoot; a **declared** value is immune, and a **new window-scoped, bank-pooled learner** (score within each rate window, pool across the bank's windows — learns from 2–3 rolling windows) fixes the detection path too. Provenance: detected → suggested → declared; suggest, never silently lock; drift banner if a lock stops matching. Adds only the profile columns to `mortgage_banks` (105 owns the tables). Phased: Phase 1 = profile columns + year-basis lock; Phase 2 = the learner + full bank-header UI. | Claude | M |
+| File | Priority | Depends on | Scope | Summary | Owner | Effort |
+|------|----------|-----------|-------|---------|-------|--------|
+| [103-mortgage-domain-model.md](103-mortgage-domain-model.md) | High (foundational) | — | mortgage schema | **Bank → Mortgage → Lånedel.** Restructure the flat model into the real bolån hierarchy: new `mortgage_banks` + `mortgages` tables, `mortgage_loan_parts.mortgage_id`. Conventions live on the Bank, rates stay per Lånedel (per-part rörlig/bunden preserved). Model many mortgages / build UI for one; **change bank = new mortgage** on a retained bank. Also **retires the overloaded per-part `start_balance` / "As of date"**: adds an explicit `original_balance` origination anchor and rebuilds `reconcileBalance` so a loan older than its imported ledger no longer trips the false *"start balance off by 192 000 kr"* banner. Owner-approved relational route + entity model 2026-07-14. Foundation for 104. | Claude Opus 4.8 | L |
+| [104-declared-calc-overrides.md](104-declared-calc-overrides.md) | High | **103** | mortgage forecast | **Bank profiles** (data records on 103's Bank entity, not per-bank code): billing conventions (chiefly day-count year, faktisk/360) the generic math reads instead of guessing. **The rolling 3-month bunden breaks the trailing-window `interestYearBasis` every quarter** — its 6-charge window straddles two rates and reverts to 365, returning the #305 undershoot; a **declared** value is immune, and a **new window-scoped, bank-pooled learner** (score within each rate window, pool across the bank's windows — learns from 2–3 rolling windows) fixes the detection path too. Provenance: detected → suggested → declared; suggest, never silently lock; drift banner if a lock stops matching. Adds only the profile columns to `mortgage_banks` (103 owns the tables). Phased: Phase 1 = profile columns + year-basis lock; Phase 2 = the learner + full bank-header UI. | Claude Opus 4.8 | M |
+| [105-declared-amortering-plan.md](105-declared-amortering-plan.md) | Medium | — (independent) | mortgage forecast | Declare a fixed rak amortering (kr/mån) on a named part; wins over the derived paired-diff/timeline estimate but not over real rows. Fixes the ~3-month lag when the arrangement is new or changes. | Claude Sonnet 5 | S–M |
 
 **104 is the correctness item** — without it, the rolling-3-month move
 re-introduces the exact 1,4 % (~4 005 vs 4 061 kr) the #300–#305 arc fixed, once
 per quarter. The window-scoped learner keeps faktisk/360 derivable through the
 villkorsändring (the earlier "lock before end of July" urgency was an artifact of
 the old trailing-6 detector — corrected); a manual lock makes it correct the
-moment it is set. Builds on 105's Bank entity; adds an approved additive column
-migration + store/profile tests. 103 is a smaller convenience for changing the
-amortering arrangement.
+moment it is set. Builds on 103's Bank entity; adds an approved additive column
+migration + store/profile tests. 105 is a smaller, independent convenience for
+changing the amortering arrangement.
+
+---
+
+# Huskalendern → Apple Calendar — 2026-07-14 (standalone)
+
+Owner asked whether the calendar tool can sync to Apple Calendar. Chosen shape:
+a **one-way, read-only ICS subscription feed** (`webcal://`) served by a public
+Edge Function, keyed by a per-household bearer token — not CalDAV two-way (Apple
+is never the editing surface, and two-way needs a conflict model AGENTS.md
+forbids promising without one). Independent of the 103–105 batch.
+
+| File | Priority | Depends on | Scope | Summary | Owner | Effort |
+|------|----------|-----------|-------|---------|-------|--------|
+| [106-huskalendern-ics-feed.md](106-huskalendern-ics-feed.md) | Medium | — (independent) | new Edge Function + table + Huskalendern UI | Publish Huskalendern's upcoming milestones (contract expiries + `≈` interval projections) as a subscribable `.ics`/`webcal` feed. New `calendar_feeds` token table + get/rotate RPCs; public `house-calendar` function (`verify_jwt=false`, token in URL is the auth) reusing the Deno-portable timeline core; a "Prenumerera i kalender" dialog on the Huskalendern page. **Requires owner sign-off** — public endpoint serving household data + schema/RLS change. | Claude Opus 4.8 | M |
+
+**Owner-approval gate:** unlike the browser-auth'd tools, this exposes household
+data at an unauthenticated bearer-token URL. The plan is written so the token
+model and the `cost`/`notes` field-exposure decision (§5) can be settled before
+any code is written; do not build until approved.

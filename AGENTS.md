@@ -145,6 +145,29 @@ header (Status, Owner, Source, Touches). When a plan's PR is opened, move its
 file into `planning/completed/`. When planning a batch, keep the
 `planning/README.md` index in sync.
 
+### Executing plans
+
+When the owner asks to start or implement a plan (or several):
+
+- **One plan at a time, in order.** If several plans are named, action them
+  sequentially in the given order (or the batch's build order when unspecified),
+  each on its own branch and PR, base `main`, landed before the next starts — no
+  stacked PRs. Finish and report a plan before beginning the next.
+- **Delegate every stage to a subagent — even within one plan.** A plan's
+  `## Execution` section lists its stages; run **each** stage in its own subagent
+  of the tagged model, not the whole plan in one pass, and not only when stages
+  span different tiers. Same-tier consecutive stages still get separate
+  subagents. Run the stage's own gate before moving to the next, and preserve the
+  stated stage order and dependencies. When a plan has no `## Execution` section
+  (a genuinely single-stage plan), one subagent of the `Owner model` tier is
+  enough.
+- **The orchestrating agent keeps the clarify gate.** Do not hand a subagent a
+  stage that still needs an undecided call on financial meaning, persisted-data
+  semantics, schema, or security. Resolve it with the owner first (concrete
+  interpretation + example), then dispatch. A stage marked `[escalate]`
+  must never be guessed by a cold subagent. Verification, financial-correctness
+  gates, and the final report stay the orchestrator's responsibility.
+
 ## Completion and Git
 
 A change is complete when the requested behaviour is implemented, relevant checks pass, important UI is verified, data and security implications are covered, and remaining risks or manual checks are reported.
