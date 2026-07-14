@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(14);
+select plan(15);
 
 select is(
   (
@@ -166,18 +166,48 @@ select ok(
     'public.settle_items(text,jsonb,text,text,numeric,text,text,timestamp with time zone)',
     'execute'
   )
-  and has_function_privilege(
+  and not has_function_privilege(
     'authenticated',
     'public.settle_items(text,jsonb,text,text,numeric,text,text,timestamp with time zone)',
     'execute'
   )
   and not has_function_privilege('public', 'public.unsettle_payment(text)', 'execute')
   and not has_function_privilege('anon', 'public.unsettle_payment(text)', 'execute')
-  and has_function_privilege('authenticated', 'public.unsettle_payment(text)', 'execute')
+  and not has_function_privilege('authenticated', 'public.unsettle_payment(text)', 'execute')
   and not has_function_privilege('public', 'public.delete_household_rows(text,text[])', 'execute')
   and not has_function_privilege('anon', 'public.delete_household_rows(text,text[])', 'execute')
-  and has_function_privilege('authenticated', 'public.delete_household_rows(text,text[])', 'execute'),
-  'authenticated RPCs are not executable by PUBLIC or anon'
+  and not has_function_privilege('authenticated', 'public.delete_household_rows(text,text[])', 'execute')
+  and not has_function_privilege('authenticated', 'public.delete_mortgage_loan_part(text)', 'execute')
+  and not exists (
+    select 1 from (values
+      ('public.sync_apply_rows(text,text,jsonb,jsonb,boolean)'),
+      ('public.sync_apply_tool_state(text,text,jsonb,bigint,boolean)'),
+      ('public.sync_delete_rows(text,text,text[],jsonb)'),
+      ('public.sync_settle_items(text,jsonb,jsonb)'),
+      ('public.sync_unsettle_payment(text,text,jsonb)'),
+      ('public.sync_delete_mortgage_loan_part(text,text,jsonb)')
+    ) functions(signature)
+    where has_function_privilege('public', signature, 'execute')
+       or has_function_privilege('anon', signature, 'execute')
+       or not has_function_privilege('authenticated', signature, 'execute')
+  ),
+  'only authenticated can execute the receipt-backed mutation RPCs; legacy mutation RPCs are retired'
+);
+
+select ok(
+  not exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public'
+      and table_name = any(array[
+        'tool_state', 'scenarios', 'salary_submissions', 'monthend_items',
+        'monthend_payments', 'mortgage_loan_parts', 'mortgage_rate_periods',
+        'mortgage_payments', 'mortgage_valuations', 'mortgage_contributions',
+        'house_items'
+      ]::text[])
+      and grantee in ('anon', 'authenticated')
+      and privilege_type in ('INSERT', 'UPDATE', 'DELETE')
+  ),
+  'client roles cannot bypass optimistic concurrency with direct table writes'
 );
 
 select ok(

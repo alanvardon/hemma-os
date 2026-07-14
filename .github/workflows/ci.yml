@@ -83,8 +83,14 @@ jobs:
           supabase test db --local supabase/tests/database/security_boundary_test.sql
           supabase test db --local supabase/tests/database/household_isolation_test.sql
           supabase test db --local supabase/tests/database/durable_delete_tombstones_test.sql
+          supabase test db --local supabase/tests/database/optimistic_concurrency_test.sql
 
       - name: Verify durable-delete concurrency
         run: |
           docker cp supabase/test-durable-delete-concurrency.sql supabase_db_hemma-os:/tmp/test-durable-delete-concurrency.sql
           docker exec supabase_db_hemma-os psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /tmp/test-durable-delete-concurrency.sql
+
+      - name: Verify optimistic-concurrency races
+        run: |
+          docker cp supabase/test-optimistic-concurrency.sql supabase_db_hemma-os:/tmp/test-optimistic-concurrency.sql
+          docker exec supabase_db_hemma-os psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /tmp/test-optimistic-concurrency.sql

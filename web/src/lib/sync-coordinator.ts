@@ -16,9 +16,16 @@ export interface SyncIdentity {
 
 export type SyncOperationKind = 'upsert' | 'delete'
 export type SyncOperationState = 'pending' | 'failed'
+export type ServerRevision = number | null
+export type RevisionMap = Record<string, ServerRevision>
+
+export interface ReplayResult {
+  /** Server revisions after the acknowledged transaction, keyed as table:id. */
+  revisions?: RevisionMap
+}
 
 export interface SyncOperation {
-  version: 1
+  version: 1 | 2
   id: string
   operation: SyncOperationKind
   resource: string
@@ -31,6 +38,10 @@ export interface SyncOperation {
   state: SyncOperationState
   attempts: number
   lastErrorCategory?: PersistenceErrorCategory
+  /** Missing on Plan 97 entries. Those are retained as visible conflicts. */
+  expectedRevisions?: RevisionMap
+  /** Current server revisions returned with an optimistic-lock conflict. */
+  conflictRevisions?: RevisionMap
 }
 
 export type SyncSaveState = 'idle' | 'saving' | 'saved' | 'waiting' | 'failed'
@@ -45,11 +56,12 @@ export interface MutationInput {
   operation: SyncOperationKind
   payload: unknown
   entityIds: string[]
+  expectedRevisions?: RevisionMap
   /** Runs only after the operation is durably queued, before foreground replay. */
   applyLocal?: (operation: SyncOperation) => void
 }
 
-type ReplayHandler = (operation: SyncOperation) => Promise<void>
+type ReplayHandler = (operation: SyncOperation) => Promise<ReplayResult | void>
 type ReplayValidator = (operation: SyncOperation) => boolean
 
 interface CoordinatorAdapters {
@@ -62,6 +74,7 @@ interface CoordinatorAdapters {
 const ROOT = 'hemma-sync-v1'
 const OUTBOX = 'outbox'
 const QUARANTINE = 'quarantine'
+const REVISIONS = 'revisions'
 
 function validIdentity(identity: SyncIdentity | null): identity is SyncIdentity {
   return !!identity?.userId && !!identity.householdId
@@ -70,7 +83,7 @@ function validIdentity(identity: SyncIdentity | null): identity is SyncIdentity 
 function validOperation(raw: unknown): raw is SyncOperation {
   if (!raw || typeof raw !== 'object') return false
   const op = raw as Partial<SyncOperation>
-  return op.version === 1
+  return (op.version === 1 || op.version === 2)
     && typeof op.id === 'string' && !!op.id
     && (op.operation === 'upsert' || op.operation === 'delete')
     && typeof op.resource === 'string' && !!op.resource
@@ -81,6 +94,20 @@ function validOperation(raw: unknown): raw is SyncOperation {
     && typeof op.createdAt === 'string' && !!op.createdAt
     && (op.state === 'pending' || op.state === 'failed')
     && typeof op.attempts === 'number' && Number.isSafeInteger(op.attempts) && op.attempts >= 0
+    && (op.expectedRevisions === undefined || validRevisionMap(op.expectedRevisions))
+    && (op.conflictRevisions === undefined || validRevisionMap(op.conflictRevisions))
+}
+
+function validRevisionMap(raw: unknown): raw is RevisionMap {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false
+  return Object.entries(raw).every(([key, revision]) => !!key
+    && (revision === null || (typeof revision === 'number' && Number.isSafeInteger(revision) && revision > 0)))
+}
+
+function conflictRevisionMap(error: unknown): RevisionMap | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const raw = (error as { currentRevisions?: unknown }).currentRevisions
+  return validRevisionMap(raw) ? raw : undefined
 }
 
 function permanent(category: PersistenceErrorCategory): boolean {
@@ -133,6 +160,7 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
 
   function outboxStorageKey(): string { return scopedStorageKey(OUTBOX) }
   function quarantineStorageKey(): string { return scopedStorageKey(QUARANTINE) }
+  function revisionsStorageKey(): string { return scopedStorageKey(REVISIONS) }
 
   function readScoped(base: string): string | null {
     if (!validIdentity(identity)) return null
@@ -240,6 +268,29 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
     return getOutbox().some((operation) => operation.resource === resource)
   }
 
+  function getRevisions(): RevisionMap {
+    if (!validIdentity(identity)) return {}
+    try {
+      const raw = storage.getItem(revisionsStorageKey())
+      const parsed = raw ? JSON.parse(raw) : {}
+      return validRevisionMap(parsed) ? parsed : {}
+    } catch { return {} }
+  }
+
+  function getRevision(key: string): ServerRevision {
+    return getRevisions()[key] ?? null
+  }
+
+  function recordRevisions(revisions: RevisionMap): void {
+    if (!validRevisionMap(revisions)) throw new Error('Invalid server revision map')
+    const merged = { ...getRevisions() }
+    for (const [key, revision] of Object.entries(revisions)) {
+      if (revision === null) delete merged[key]
+      else merged[key] = revision
+    }
+    storage.setItem(revisionsStorageKey(), JSON.stringify(merged))
+  }
+
   function nextRevision(entries: SyncOperation[]): number {
     return entries.reduce((max, entry) => Math.max(max, entry.localRevision), 0) + 1
   }
@@ -256,7 +307,7 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
     const handler = handlers.get(operation.resource)
     if (!handler) return false
     try {
-      await handler(operation)
+      const result = await handler(operation)
       // Membership/session changes can happen while a request is in flight.
       // Never touch the new namespace or continue replay under it. Leaving the
       // old operation queued is safe because every registered replay is
@@ -265,18 +316,37 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
         emit('waiting')
         return false
       }
-      const remaining = getOutbox().filter((entry) => entry.id !== operation.id)
+      const acknowledged = result?.revisions && validRevisionMap(result.revisions) ? result.revisions : {}
+      if (Object.keys(acknowledged).length) recordRevisions(acknowledged)
+      // Rewrite later operations before removing this one. If the response was
+      // lost, the durable server receipt returns the same revisions and this
+      // transformation is safely repeated after a restart.
+      const remaining = getOutbox()
+        .filter((entry) => entry.id !== operation.id)
+        .map((entry): SyncOperation => {
+          if (entry.localRevision <= operation.localRevision || !entry.expectedRevisions) return entry
+          let changed = false
+          const expectedRevisions = { ...entry.expectedRevisions }
+          for (const [key, revision] of Object.entries(acknowledged)) {
+            if (!Object.prototype.hasOwnProperty.call(expectedRevisions, key)) continue
+            expectedRevisions[key] = revision
+            changed = true
+          }
+          return changed ? { ...entry, expectedRevisions } : entry
+        })
       writeOutbox(remaining)
       emit(remaining.length ? 'waiting' : 'saved')
       return true
     } catch (error) {
       const persistenceError = toPersistenceError(error)
+      const currentRevisions = conflictRevisionMap(error)
       const entries = getOutbox().map((entry): SyncOperation => entry.id === operation.id
         ? {
             ...entry,
             attempts: entry.attempts + 1,
             state: permanent(persistenceError.category) ? 'failed' : 'pending',
             lastErrorCategory: persistenceError.category,
+            ...(currentRevisions ? { conflictRevisions: currentRevisions } : {}),
           }
         : entry)
       writeOutbox(entries)
@@ -292,7 +362,7 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
     const entries = getOutbox()
     let revision = nextRevision(entries)
     const operations = inputs.map((input): SyncOperation => ({
-      version: 1,
+      version: 2,
       id: createId(),
       operation: input.operation,
       resource: input.resource,
@@ -304,6 +374,7 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
       createdAt: now(),
       state: 'pending',
       attempts: 0,
+      expectedRevisions: input.expectedRevisions ? { ...input.expectedRevisions } : {},
     }))
     try {
       // Journal the complete logical batch before the first cloud request.
@@ -315,6 +386,12 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
     }
     await replay()
     const operationIds = new Set(operations.map((operation) => operation.id))
+    // An identity-activation replay can be completing while this mutation is
+    // appended. If that pass observed the old empty queue, start one fresh
+    // pass instead of reporting the newly journaled operation as unknown.
+    if (getOutbox().some((entry) => operationIds.has(entry.id) && entry.state === 'pending' && entry.attempts === 0)) {
+      await replay()
+    }
     const retained = getOutbox().find((entry) => operationIds.has(entry.id))
     if (retained) {
       const blocker = getOutbox()
@@ -359,6 +436,9 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
           const completed = await attempt(operation)
           if (!completed || !identityMatches(active)) return
           progressed = true
+          // Acknowledgement may have advanced revision preconditions on later
+          // entries. Re-read the durable queue before dispatching the next one.
+          break
         } catch (error) {
           const category = toPersistenceError(error).category
           if (!permanent(category)) return
@@ -408,6 +488,63 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
     return removed
   }
 
+  function conflictChain(operationId: string): Set<string> {
+    const ordered = getOutbox().slice().sort((a, b) => a.localRevision - b.localRevision || a.id.localeCompare(b.id))
+    const start = ordered.find((entry) => entry.id === operationId)
+    if (!start) return new Set()
+    const expectedKeys = Object.keys(start.expectedRevisions ?? {})
+    // A Plan 97 operation has no trusted expected revision. Once its handler
+    // reads the server state and surfaces the mandatory conflict, those
+    // returned keys safely identify its connected newer operations.
+    const keys = new Set(expectedKeys.length ? expectedKeys : Object.keys(start.conflictRevisions ?? {}))
+    const ids = new Set([start.id])
+    for (const entry of ordered) {
+      if (entry.localRevision <= start.localRevision) continue
+      const entryKeys = Object.keys(entry.expectedRevisions ?? {})
+      if (!entryKeys.some((key) => keys.has(key))) continue
+      ids.add(entry.id)
+      entryKeys.forEach((key) => keys.add(key))
+    }
+    return ids
+  }
+
+  function reloadConflict(operationId: string): number {
+    const ids = conflictChain(operationId)
+    if (!ids.size) return 0
+    writeOutbox(getOutbox().filter((entry) => !ids.has(entry.id)))
+    emit(pendingCount() ? 'waiting' : 'idle')
+    return ids.size
+  }
+
+  async function keepConflict(operationId: string): Promise<void> {
+    const entries = getOutbox()
+    const conflict = entries.find((entry) => entry.id === operationId)
+    if (!conflict || conflict.lastErrorCategory !== 'conflict' || !conflict.conflictRevisions) return
+    const chain = conflictChain(operationId)
+    const revisionlessLegacy = conflict.expectedRevisions === undefined
+    const expectedRevisions = { ...(conflict.expectedRevisions ?? {}) }
+    for (const [key, revision] of Object.entries(conflict.conflictRevisions)) {
+      if (revisionlessLegacy || Object.prototype.hasOwnProperty.call(expectedRevisions, key)) expectedRevisions[key] = revision
+    }
+    writeOutbox(entries.map((entry): SyncOperation => {
+      if (entry.id === operationId) {
+        return { ...entry, expectedRevisions, conflictRevisions: undefined, lastErrorCategory: undefined, state: 'pending' }
+      }
+      // Later local edits on the same entity were attempted only after the
+      // stale base failed, so reactivate them as one user choice. Each prior
+      // acknowledgement rewrites the next operation's expected revision.
+      if (chain.has(entry.id)) {
+        return { ...entry, conflictRevisions: undefined, lastErrorCategory: undefined, state: 'pending' }
+      }
+      return entry
+    }))
+    await replay()
+  }
+
+  function getConflicts(): SyncOperation[] {
+    return getOutbox().filter((entry) => entry.state === 'failed' && entry.lastErrorCategory === 'conflict')
+  }
+
   function removeNamespace(target: SyncIdentity): void {
     if (!validIdentity(target)) return
     const prefix = namespacePrefix(target)
@@ -448,7 +585,12 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
     resumeMutations,
     retryFailed,
     discardFailed,
+    reloadConflict,
+    keepConflict,
+    getConflicts,
     isDirty,
+    getRevision,
+    recordRevisions,
     getOutbox,
     readScoped,
     writeScoped,
@@ -457,6 +599,7 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
     captureScope,
     outboxStorageKey,
     quarantineStorageKey,
+    revisionsStorageKey,
     removeActiveNamespace,
     removeNamespace,
     removeUserNamespaces,

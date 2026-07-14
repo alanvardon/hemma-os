@@ -47,6 +47,7 @@ beforeEach(async () => {
   Object.keys(mock().tables).forEach((k) => delete mock().tables[k])
   mock().control.fail = false
   mock().control.failing.clear()
+  mock().control.lostResponseOnce.clear()
   Object.keys(mock().control.errors).forEach((key) => delete mock().control.errors[key])
   Object.keys(mock().control.rpcHandlers).forEach((k) => delete mock().control.rpcHandlers[k])
 })
@@ -142,19 +143,21 @@ describe('write path', () => {
     mock().tables.mortgage_loan_parts = envelope.loan_parts.map((row) => ({ ...row }))
     mock().tables.mortgage_payments = envelope.payments.map((row) => ({ ...row }))
     mock().tables.mortgage_rate_periods = envelope.rate_periods.map((row) => ({ ...row }))
+    await Promise.all([store.listLoanParts(), store.listPayments(), store.listRatePeriods()])
     const calls: unknown[] = []
-    mock().control.rpcHandlers.delete_mortgage_loan_part = (args) => {
+    mock().control.rpcHandlers.sync_delete_mortgage_loan_part = (args) => {
       calls.push(args)
-      const id = (args as { p_loan_part_id: string }).p_loan_part_id
+      const input = args as { p_loan_part_id: string; p_expected_revisions: Record<string, number | null> }
+      const id = input.p_loan_part_id
       mock().tables.mortgage_payments = mock().tables.mortgage_payments.filter((row) => row.loan_part_id !== id)
       mock().tables.mortgage_rate_periods = mock().tables.mortgage_rate_periods.filter((row) => row.loan_part_id !== id)
       mock().tables.mortgage_loan_parts = mock().tables.mortgage_loan_parts.filter((row) => row.id !== id)
-      return null
+      return { status: 'applied', revisions: Object.fromEntries(Object.keys(input.p_expected_revisions).map((key) => [key, null])) }
     }
 
     await expect(store.removeLoanPart('p1')).resolves.toBe(1)
 
-    expect(calls).toEqual([{ p_loan_part_id: 'p1' }])
+    expect(calls[0]).toMatchObject({ p_loan_part_id: 'p1' })
     expect(mock().tables.mortgage_loan_parts).toEqual([{ id: 'p2' }])
     expect(mock().tables.mortgage_payments).toEqual([{ id: 'pay2', loan_part_id: 'p2' }])
     expect(mock().tables.mortgage_rate_periods).toEqual([{ id: 'rate2', loan_part_id: 'p2' }])
@@ -176,7 +179,8 @@ describe('write path', () => {
     mock().tables.mortgage_loan_parts = envelope.loan_parts.map((row) => ({ ...row }))
     mock().tables.mortgage_payments = envelope.payments.map((row) => ({ ...row }))
     mock().tables.mortgage_rate_periods = envelope.rate_periods.map((row) => ({ ...row }))
-    mock().control.failing.add('delete_mortgage_loan_part')
+    await Promise.all([store.listLoanParts(), store.listPayments(), store.listRatePeriods()])
+    mock().control.failing.add('sync_delete_mortgage_loan_part')
     await expect(store.removeLoanPart('p1')).rejects.toBeTruthy()
 
     expect(cache()).toMatchObject({ loan_parts: [], payments: [], rate_periods: [] })
@@ -188,13 +192,14 @@ describe('write path', () => {
     expect(mock().tables.mortgage_rate_periods).toEqual([{ id: 'rate1', loan_part_id: 'p1' }])
     expect(sync.syncCoordinator.isDirty('mortgage-loan-part-cascade')).toBe(true)
 
-    mock().control.failing.delete('delete_mortgage_loan_part')
-    mock().control.rpcHandlers.delete_mortgage_loan_part = (args) => {
-      const id = (args as { p_loan_part_id: string }).p_loan_part_id
+    mock().control.failing.delete('sync_delete_mortgage_loan_part')
+    mock().control.rpcHandlers.sync_delete_mortgage_loan_part = (args) => {
+      const input = args as { p_loan_part_id: string; p_expected_revisions: Record<string, number | null> }
+      const id = input.p_loan_part_id
       mock().tables.mortgage_payments = mock().tables.mortgage_payments.filter((row) => row.loan_part_id !== id)
       mock().tables.mortgage_rate_periods = mock().tables.mortgage_rate_periods.filter((row) => row.loan_part_id !== id)
       mock().tables.mortgage_loan_parts = mock().tables.mortgage_loan_parts.filter((row) => row.id !== id)
-      return null
+      return { status: 'applied', revisions: Object.fromEntries(Object.keys(input.p_expected_revisions).map((key) => [key, null])) }
     }
     await sync.syncCoordinator.replay()
     expect(sync.syncCoordinator.isDirty('mortgage-loan-part-cascade')).toBe(false)
@@ -206,8 +211,10 @@ describe('write path', () => {
       version: 4, loan_parts: [{ id: 'p1' }], payments: [], valuations: [],
       rate_periods: [], contributions: [], settings: {},
     }))
-    mock().control.failing.add('delete_mortgage_loan_part')
-    mock().control.errors.delete_mortgage_loan_part = { status: 403, message: 'JWT household membership denied' }
+    mock().tables.mortgage_loan_parts = [{ id: 'p1' }]
+    await store.listLoanParts()
+    mock().control.failing.add('sync_delete_mortgage_loan_part')
+    mock().control.errors.sync_delete_mortgage_loan_part = { status: 403, message: 'JWT household membership denied' }
 
     await expect(store.removeLoanPart('p1')).rejects.toMatchObject({ category: 'auth' })
     expect(cache()).toMatchObject({ loan_parts: [] })

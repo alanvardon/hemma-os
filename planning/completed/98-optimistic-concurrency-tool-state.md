@@ -1,6 +1,6 @@
 # Plan 98 — Detect concurrent household edits
 
-**Status:** proposed · **Priority:** Medium · **Effort:** M–L · **Depends on:**
+**Status:** completed · **Priority:** Medium · **Effort:** M–L · **Depends on:**
 plans 93 and 97 · **Owner model:** GPT-5.6 Sol — owns conflict semantics, migration/RPC
 design, hostile-caller tests, and UI resolution behavior · **Requires approval:**
 schema/RPC changes

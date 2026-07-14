@@ -21,6 +21,10 @@ import type { MutationInput } from './sync-coordinator'
 import { syncCoordinator } from './sync'
 import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
 import { legacyImportAssignedToActive } from './legacy-data'
+import {
+  receiptRpc, rejectLegacyToolOperation, rememberRowRevisions,
+  rememberToolRevision, revisionKey, syncRpcResult,
+} from './sync-rpc'
 
 // Legacy pre-Supabase data — import source + backup. (Exported name kept for
 // back-compat; it is no longer the write target.)
@@ -244,14 +248,21 @@ const _importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(I
   if (!legacy) return true
   const operations: MutationInput[] = []
   const add = <T extends { id?: string }>(resource: string, rows: T[], projected: Record<string, unknown>[], applyLocal: () => void) => {
-    if (rows.length) operations.push({ resource, operation: 'upsert', payload: { rows: projected, seed: true }, entityIds: rows.map((row) => row.id!), applyLocal })
+    const ids = rows.map((row) => row.id!)
+    if (rows.length) operations.push({
+      resource, operation: 'upsert', payload: { rows: projected, seed: true }, entityIds: ids,
+      expectedRevisions: Object.fromEntries(ids.map((id) => [revisionKey(resource, id), null])), applyLocal,
+    })
   }
   add(T.parts, legacy.loan_parts, legacy.loan_parts.map(r => _row(r, COLS.parts)), () => _patchCache(e => { const ids = new Set(legacy.loan_parts.map(r => r.id)); e.loan_parts = [...legacy.loan_parts, ...e.loan_parts.filter(r => !ids.has(r.id))] }))
   add(T.periods, legacy.rate_periods, legacy.rate_periods.map(r => _row(r, COLS.periods)), () => _patchCache(e => { const ids = new Set(legacy.rate_periods.map(r => r.id)); e.rate_periods = [...legacy.rate_periods, ...e.rate_periods.filter(r => !ids.has(r.id))] }))
   add(T.payments, legacy.payments, legacy.payments.map(r => _row(r, COLS.payments)), () => _patchCache(e => { const ids = new Set(legacy.payments.map(r => r.id)); e.payments = [...legacy.payments, ...e.payments.filter(r => !ids.has(r.id))] }))
   add(T.valuations, legacy.valuations, legacy.valuations.map(r => _row(r, COLS.valuations)), () => _patchCache(e => { const ids = new Set(legacy.valuations.map(r => r.id)); e.valuations = [...legacy.valuations, ...e.valuations.filter(r => !ids.has(r.id))] }))
   add(T.contributions, legacy.contributions, legacy.contributions.map(r => _row(r, COLS.contributions)), () => _patchCache(e => { const ids = new Set(legacy.contributions.map(r => r.id)); e.contributions = [...legacy.contributions, ...e.contributions.filter(r => !ids.has(r.id))] }))
-  operations.push({ resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: legacy.settings, seed: true }, entityIds: [SETTINGS_TOOL], applyLocal: () => _patchCache(e => { e.settings = legacy.settings }) })
+  operations.push({
+    resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: legacy.settings, seed: true }, entityIds: [SETTINGS_TOOL],
+    expectedRevisions: { [SETTINGS_RESOURCE]: null }, applyLocal: () => _patchCache(e => { e.settings = legacy.settings }),
+  })
   if (!scope.isActive()) return false
   try { await syncCoordinator.mutateBatch(operations); return true } catch { return false }
 })
@@ -261,11 +272,16 @@ syncCoordinator.register(SETTINGS_RESOURCE, async (operation) => {
   const payload = operation.payload as { data?: unknown; seed?: unknown }
   const data = payload?.data
   if (!data || typeof data !== 'object') throw { status: 400, message: 'Malformed mortgage settings' }
-  const { error } = payload.seed === true
-    ? await supabase.from(STATE).insert({ tool: SETTINGS_TOOL, data })
-    : await supabase.from(STATE).upsert({ tool: SETTINGS_TOOL, data }, { onConflict: 'household_id,tool' })
-  if (payload.seed === true && (error as { code?: string } | null)?.code === '23505') return
+  await rejectLegacyToolOperation(operation, SETTINGS_TOOL)
+  const { data: result, error } = await receiptRpc('sync_apply_tool_state', {
+    p_operation_id: operation.id,
+    p_tool: SETTINGS_TOOL,
+    p_data: data,
+    p_expected_revision: operation.expectedRevisions?.[SETTINGS_RESOURCE] ?? null,
+    p_seed: payload.seed === true,
+  })
   if (error) throw error
+  return syncRpcResult(result)
 }, (operation) => {
   const payload = operation.payload as { data?: unknown; seed?: unknown }
   const data = payload?.data
@@ -276,8 +292,28 @@ syncCoordinator.register(SETTINGS_RESOURCE, async (operation) => {
 syncCoordinator.register(CASCADE_RESOURCE, async (operation) => {
   const id = (operation.payload as { id?: unknown })?.id
   if (operation.operation !== 'delete' || typeof id !== 'string' || !id) throw { status: 400, message: 'Malformed loan-part delete' }
-  const { error } = await supabase.rpc('delete_mortgage_loan_part', { p_loan_part_id: id })
+  if (operation.expectedRevisions === undefined) {
+    const [part, payments, periods] = await Promise.all([
+      supabase.from(T.parts).select('id,revision').eq('id', id).maybeSingle(),
+      supabase.from(T.payments).select('id,revision').eq('loan_part_id', id),
+      supabase.from(T.periods).select('id,revision').eq('loan_part_id', id),
+    ])
+    if (part.error || payments.error || periods.error) throw part.error ?? payments.error ?? periods.error
+    const current: Record<string, number | null> = { [revisionKey(T.parts, id)]: Number((part.data as { revision?: unknown } | null)?.revision) || null }
+    for (const [resource, rows] of [[T.payments, payments.data], [T.periods, periods.data]] as const) {
+      for (const row of (rows ?? []) as Array<{ id?: unknown; revision?: unknown }>) {
+        if (typeof row.id === 'string') current[revisionKey(resource, row.id)] = Number(row.revision) || null
+      }
+    }
+    throw { status: 409, message: 'legacy operation has no base revision', currentRevisions: current }
+  }
+  const { data, error } = await receiptRpc('sync_delete_mortgage_loan_part', {
+    p_operation_id: operation.id,
+    p_loan_part_id: id,
+    p_expected_revisions: operation.expectedRevisions,
+  })
   if (error) throw error
+  return syncRpcResult(data)
 }, (operation) => {
   const id = (operation.payload as { id?: unknown })?.id
   return operation.operation === 'delete' && typeof id === 'string' && !!id
@@ -321,6 +357,9 @@ export async function loadMortgageSyncSnapshot(): Promise<MortgageSyncSnapshot |
   }
   if (partsResult.error || periodsResult.error || paymentsResult.error ||
       !partsResult.data || !periodsResult.data || !paymentsResult.data) return null
+  rememberRowRevisions(RESOURCES.parts, partsResult.data as Record<string, unknown>[])
+  rememberRowRevisions(RESOURCES.periods, periodsResult.data as Record<string, unknown>[])
+  rememberRowRevisions(RESOURCES.payments, paymentsResult.data as Record<string, unknown>[])
   const snapshot: MortgageSyncSnapshot = {
     parts: withoutTombstones(partsResult.data as LoanPart[], partTombstones),
     periods: withoutTombstones(periodsResult.data as RatePeriod[], periodTombstones),
@@ -346,6 +385,7 @@ export async function listLoanParts(): Promise<LoanPart[]> {
   ])
   if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.parts) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
+  rememberRowRevisions(RESOURCES.parts, result.data as Record<string, unknown>[])
   const rows = withoutTombstones(result.data as LoanPart[], tombstones)
   const cache = _readCacheFrom(scope); cache.loan_parts = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return rows.slice()
@@ -372,9 +412,16 @@ export async function removeLoanPart(id: string): Promise<number> {
   // linked payments and rate periods. The RPC performs that cascade in one
   // database transaction. Once the delete is durably queued, the cache hides
   // the parent and children while acknowledgement/retry remains explicit.
+  const cache = _readCache()
+  const affected = [
+    revisionKey(RESOURCES.parts, id),
+    ...cache.payments.filter((row) => row.loan_part_id === id).map((row) => revisionKey(RESOURCES.payments, row.id)),
+    ...cache.rate_periods.filter((row) => row.loan_part_id === id).map((row) => revisionKey(RESOURCES.periods, row.id)),
+  ]
   let n = 0
   await syncCoordinator.mutate({
     resource: CASCADE_RESOURCE, operation: 'delete', payload: { id }, entityIds: [id],
+    expectedRevisions: Object.fromEntries(affected.map((key) => [key, syncCoordinator.getRevision(key)])),
     applyLocal: () => _patchCache(e => {
       e.loan_parts = e.loan_parts.filter(p => p?.id !== id)
       e.payments = e.payments.filter(p => !(p?.loan_part_id === id))
@@ -394,6 +441,7 @@ export async function listPayments(): Promise<Payment[]> {
   const [result, tombstones] = await Promise.all([supabase.from(T.payments).select('*'), loadTombstoneIds(scope, RESOURCES.payments)])
   if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.payments) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
+  rememberRowRevisions(RESOURCES.payments, result.data as Record<string, unknown>[])
   const rows = withoutTombstones(result.data as Payment[], tombstones)
   const cache = _readCacheFrom(scope); cache.payments = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return byDateDesc(rows)
@@ -441,6 +489,7 @@ export async function listValuations(): Promise<Valuation[]> {
   const [result, tombstones] = await Promise.all([supabase.from(T.valuations).select('*'), loadTombstoneIds(scope, RESOURCES.valuations)])
   if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.valuations)) return fallback()
   if (result.error || !result.data) return fallback()
+  rememberRowRevisions(RESOURCES.valuations, result.data as Record<string, unknown>[])
   const rows = withoutTombstones(result.data as Valuation[], tombstones)
   const cache = _readCacheFrom(scope); cache.valuations = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return byDateDesc(rows)
@@ -475,6 +524,7 @@ export async function listRatePeriods(): Promise<RatePeriod[]> {
   const [result, tombstones] = await Promise.all([supabase.from(T.periods).select('*'), loadTombstoneIds(scope, RESOURCES.periods)])
   if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.periods) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
+  rememberRowRevisions(RESOURCES.periods, result.data as Record<string, unknown>[])
   const rows = withoutTombstones(result.data as RatePeriod[], tombstones)
   const cache = _readCacheFrom(scope); cache.rate_periods = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return byStartDesc(rows)
@@ -509,6 +559,7 @@ export async function listContributions(): Promise<Contribution[]> {
   const [result, tombstones] = await Promise.all([supabase.from(T.contributions).select('*'), loadTombstoneIds(scope, RESOURCES.contributions)])
   if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.contributions)) return fallback()
   if (result.error || !result.data) return fallback()
+  rememberRowRevisions(RESOURCES.contributions, result.data as Record<string, unknown>[])
   const rows = withoutTombstones(result.data as Contribution[], tombstones)
   const cache = _readCacheFrom(scope); cache.contributions = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return byDateDesc(rows)
@@ -539,9 +590,10 @@ export async function getSettings(): Promise<MortgageSettings> {
   const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
   if (!scope.isActive() || syncCoordinator.isDirty(SETTINGS_RESOURCE)) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
-  const { data, error } = await supabase.from(STATE).select('data').eq('tool', SETTINGS_TOOL).maybeSingle()
+  const { data, error } = await supabase.from(STATE).select('data,revision').eq('tool', SETTINGS_TOOL).maybeSingle()
   if (!scope.isActive() || syncCoordinator.isDirty(SETTINGS_RESOURCE)) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
   if (error) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
+  rememberToolRevision(SETTINGS_TOOL, data)
   const settings = { ...defaultSettings(), ...((data?.data as Partial<MortgageSettings>) || {}) }
   const cache = _readCacheFrom(scope); cache.settings = settings; scope.write(CACHE_KEY, JSON.stringify(cache))
   return settings
@@ -554,6 +606,7 @@ export async function saveSettings(patch: Partial<MortgageSettings>): Promise<Mo
   const merged = { ...defaultSettings(), ...current, ...patch }
   await syncCoordinator.mutate({
     resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: merged }, entityIds: [SETTINGS_TOOL],
+    expectedRevisions: { [SETTINGS_RESOURCE]: syncCoordinator.getRevision(SETTINGS_RESOURCE) },
     applyLocal: () => _patchCache(e => { e.settings = merged }),
   })
   return merged
@@ -606,7 +659,13 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
   const newRates = _mergeRows(rates, normalized.rate_periods)
   const newContribs = _mergeRows(contribs, normalized.contributions)
   const operations: MutationInput[] = []
-  const add = <T extends { id?: string }>(resource: string, rows: T[], projected: Record<string, unknown>[], applyLocal: () => void) => { if (rows.length) operations.push({ resource, operation: 'upsert', payload: { rows: projected, seed: true }, entityIds: rows.map(r => r.id!), applyLocal }) }
+  const add = <T extends { id?: string }>(resource: string, rows: T[], projected: Record<string, unknown>[], applyLocal: () => void) => {
+    const ids = rows.map(r => r.id!)
+    if (rows.length) operations.push({
+      resource, operation: 'upsert', payload: { rows: projected, seed: true }, entityIds: ids,
+      expectedRevisions: Object.fromEntries(ids.map((id) => [revisionKey(resource, id), null])), applyLocal,
+    })
+  }
   add(T.parts, newParts, newParts.map(r => _row(r, COLS.parts)), () => _patchCache(e => { e.loan_parts = [...newParts, ...e.loan_parts.filter(r => !new Set(newParts.map(x => x.id)).has(r.id))] }))
   add(T.payments, newPays, newPays.map(r => _row(r, COLS.payments)), () => _patchCache(e => { e.payments = [...newPays, ...e.payments.filter(r => !new Set(newPays.map(x => x.id)).has(r.id))] }))
   add(T.valuations, newVals, newVals.map(r => _row(r, COLS.valuations)), () => _patchCache(e => { e.valuations = [...newVals, ...e.valuations.filter(r => !new Set(newVals.map(x => x.id)).has(r.id))] }))
@@ -614,7 +673,11 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
   add(T.contributions, newContribs, newContribs.map(r => _row(r, COLS.contributions)), () => _patchCache(e => { e.contributions = [...newContribs, ...e.contributions.filter(r => !new Set(newContribs.map(x => x.id)).has(r.id))] }))
   if (parsed.settings && typeof parsed.settings === 'object') {
     const merged = { ...defaultSettings(), ...existingSettings, ...(parsed.settings as Partial<MortgageSettings>) }
-    operations.push({ resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: merged, seed: true }, entityIds: [SETTINGS_TOOL], applyLocal: () => _patchCache(e => { e.settings = merged }) })
+    operations.push({
+      resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: merged, seed: true }, entityIds: [SETTINGS_TOOL],
+      expectedRevisions: { [SETTINGS_RESOURCE]: syncCoordinator.getRevision(SETTINGS_RESOURCE) },
+      applyLocal: () => _patchCache(e => { e.settings = merged }),
+    })
   }
   if (!scope.isActive()) throw new Error('Sync identity changed during mortgage import')
   await syncCoordinator.mutateBatch(operations)

@@ -94,6 +94,34 @@ private_table_grants as (
   from information_schema.table_privileges tp
   where tp.table_schema = 'private'
     and tp.grantee in ('PUBLIC', 'anon', 'authenticated')
+),
+revisioned_table_mutation_grants as (
+  select
+    'revisioned_table_client_mutation_grants'::text as section,
+    'public'::text as object_name,
+    pg_catalog.jsonb_build_object(
+      'grant_count', count(*),
+      'grants', coalesce(
+        pg_catalog.jsonb_agg(
+          pg_catalog.jsonb_build_object(
+            'table_name', tp.table_name,
+            'grantee', tp.grantee,
+            'privilege_type', tp.privilege_type
+          ) order by tp.table_name, tp.grantee, tp.privilege_type
+        ) filter (where tp.table_name is not null),
+        '[]'::jsonb
+      )
+    ) as details
+  from information_schema.table_privileges tp
+  where tp.table_schema = 'public'
+    and tp.table_name = any(array[
+      'tool_state', 'scenarios', 'salary_submissions', 'monthend_items',
+      'monthend_payments', 'mortgage_loan_parts', 'mortgage_rate_periods',
+      'mortgage_payments', 'mortgage_valuations', 'mortgage_contributions',
+      'house_items'
+    ]::text[])
+    and tp.grantee in ('PUBLIC', 'anon', 'authenticated')
+    and tp.privilege_type in ('INSERT', 'UPDATE', 'DELETE')
 )
 select section, object_name, details
 from (
@@ -106,5 +134,7 @@ from (
   select * from private_schema_usage
   union all
   select * from private_table_grants
+  union all
+  select * from revisioned_table_mutation_grants
 ) audit_rows
 order by section, object_name;

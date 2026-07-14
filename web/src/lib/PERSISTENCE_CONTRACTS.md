@@ -7,27 +7,40 @@ outbox. Switching identity immediately makes the prior namespace unavailable.
 Every mutation below is written to the durable local outbox before its local
 cache is changed or a foreground cloud request starts. A successful cloud
 response removes only that operation. Offline/auth failures stay pending;
-validation/conflict failures are retained for explicit retry or a warned discard-and-reload resolution.
+validation failures are retained for explicit retry or warned discard. Revision
+conflicts are retained with two explicit resolutions: reload the cloud entity
+chain, or keep the local chain against the server revision returned by the
+conflict.
 Reads for a dirty resource return its scoped cache so an older cloud response
 cannot overwrite local work. Deletes remove the cached row and retain a delete
 operation as the tombstone until cloud acknowledgement.
 
 | Store | Cloud | Scoped cache | Outbox and dirty-read contract |
 | --- | --- | --- | --- |
-| `tool-store` (`konsultkalkyl`, `lonevaxling`, `studentloan`, `hushallsbudget`) | One `tool_state` row per tool | One validated blob per tool | Idempotent whole-blob `upsert`; dirty blob wins cloud |
-| `storage` scenarios | `scenarios` rows | Whole scenario list | Row `upsert` plus explicit `delete` tombstones; dirty list wins cloud |
-| `storage` preferences | `tool_state:bostadskalkyl-prefs` | Constants/drift/savings blob | Idempotent whole-blob `upsert`; dirty blob wins cloud |
-| `salary-store` | `salary_submissions` | Versioned submissions envelope | Row `upsert` and `delete`; dirty log wins cloud |
-| `huskalendern-store` | `house_items` | Versioned items envelope | Full-row idempotent `upsert` and `delete`; dirty items win cloud |
-| `manadsavslut-store` | `monthend_items`, `monthend_payments`, settings `tool_state`, settlement RPCs | One versioned items/payments/settings envelope | Row/settings `upsert`, row `delete`, and entity-specific settle/unsettle replay. A lost response clears only when the persisted payment matches the queued payload |
-| `mortgage-store` | Five mortgage row tables, settings `tool_state`, cascade-delete RPC | One versioned mortgage envelope | Full-row `upsert`, row `delete`, settings `upsert`, and entity-specific loan-part cascade tombstone; linked cached rows stay hidden while pending |
+| `tool-store` (`konsultkalkyl`, `lonevaxling`, `studentloan`, `hushallsbudget`) | One revisioned `tool_state` row per tool | One validated blob per tool | Receipt-backed conditional blob write; dirty blob wins reads until acknowledgement or resolution |
+| `storage` scenarios | Revisioned `scenarios` rows | Whole scenario list | Conditional row write/delete plus durable tombstones; dirty list wins reads |
+| `storage` preferences | Three `tool_state` rows: global constants, drift items, savings items | Combined view cache | Each slice has its own revision and outbox resource, so sibling slices cannot overwrite each other |
+| `salary-store` | Revisioned `salary_submissions` | Versioned submissions envelope | Conditional row insert/delete; dirty log wins reads |
+| `huskalendern-store` | Revisioned `house_items` | Versioned items envelope | Conditional full-row write/delete; dirty items win reads |
+| `manadsavslut-store` | Revisioned items, payments, settings, and settlement RPCs | One versioned items/payments/settings envelope | Settlement/unsettlement checks every affected revision atomically. Durable operation receipts make a lost response retry return the original result |
+| `mortgage-store` | Five revisioned mortgage tables, revisioned settings, cascade RPC | One versioned mortgage envelope | Cascade deletion checks the parent and exact child set/revisions before recording tombstones and deleting atomically |
 
 Foreground replay is ordered by local revision and operation id. Entries carry
 operation id, operation kind (`upsert` or `delete`), resource, payload/ids,
-local revision/time, user id, and household id. Every replay revalidates both
+expected server revisions, local revision/time, user id, and household id.
+Server acknowledgements advance the preconditions on later queued edits to the
+same entity before the earlier operation leaves the outbox. This preserves
+offline edit chains. Server receipts make the same operation id idempotent even
+when the transaction commits but its response is lost. Every replay revalidates both
 identity fields. Malformed entries move to the namespace quarantine and cannot
 block later valid entries. The browser `online` event only requests a retry; it
 is never treated as proof of connectivity.
+
+Plan 97 outbox entries that predate expected revisions are never replayed as
+unconditional writes. They become visible conflicts and require the same reload
+or keep decision. The database accepts financial mutations only through the
+authenticated, household-derived revision RPCs; clients from before this
+protocol must be refreshed immediately when the migration is rolled out.
 
 ## Local-only state and shared devices
 

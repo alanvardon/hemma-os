@@ -88,6 +88,150 @@ describe('sync coordinator', () => {
     expect(second.isDirty('tool_state:test')).toBe(false)
   })
 
+  it('propagates an acknowledged revision through chained offline edits', async () => {
+    const coordinator = make()
+    coordinator.activate(A)
+    let offline = true
+    const expected: Array<number | null | undefined> = []
+    coordinator.register('scenarios', async (operation) => {
+      expected.push(operation.expectedRevisions?.['scenarios:s1'])
+      if (offline) throw new TypeError('Failed to fetch')
+      return { revisions: { 'scenarios:s1': expected.length === 2 ? 8 : 9 } }
+    })
+
+    await expect(coordinator.mutate({
+      resource: 'scenarios', operation: 'upsert', payload: { value: 1 }, entityIds: ['s1'],
+      expectedRevisions: { 'scenarios:s1': 7 },
+    })).rejects.toMatchObject({ category: 'offline' })
+
+    offline = false
+    await coordinator.mutate({
+      resource: 'scenarios', operation: 'upsert', payload: { value: 2 }, entityIds: ['s1'],
+      expectedRevisions: { 'scenarios:s1': 7 },
+    })
+
+    expect(expected).toEqual([7, 7, 8])
+    expect(coordinator.getRevision('scenarios:s1')).toBe(9)
+    expect(coordinator.getOutbox()).toEqual([])
+  })
+
+  it('retains a legacy revisionless operation as a visible conflict', async () => {
+    const coordinator = make()
+    coordinator.activate(A)
+    coordinator.register('scenarios', async (operation) => {
+      if (!operation.expectedRevisions) {
+        throw { status: 409, currentRevisions: { 'scenarios:s1': 4 } }
+      }
+    })
+    storage.setItem(coordinator.outboxStorageKey(), JSON.stringify([{
+      version: 1, id: 'legacy', operation: 'upsert', resource: 'scenarios', payload: { rows: [] },
+      entityIds: ['s1'], userId: A.userId, householdId: A.householdId, localRevision: 1,
+      createdAt: '2026-07-13T12:00:00.000Z', state: 'pending', attempts: 0,
+    }]))
+
+    await coordinator.replay()
+
+    expect(coordinator.getConflicts()).toMatchObject([{
+      id: 'legacy', state: 'failed', lastErrorCategory: 'conflict',
+      conflictRevisions: { 'scenarios:s1': 4 },
+    }])
+    await coordinator.keepConflict('legacy')
+    expect(coordinator.getOutbox()).toEqual([])
+  })
+
+  it('uses a legacy conflict revision to keep its connected newer edits', async () => {
+    const coordinator = make()
+    coordinator.activate(A)
+    const seen: Array<number | null | undefined> = []
+    coordinator.register('scenarios', async (operation) => {
+      const expected = operation.expectedRevisions?.['scenarios:s1']
+      seen.push(expected)
+      if (expected === undefined) throw { status: 409, currentRevisions: { 'scenarios:s1': 4 } }
+      if (expected === 3) throw { status: 409, currentRevisions: { 'scenarios:s1': 4 } }
+      return { revisions: { 'scenarios:s1': Number(expected) + 1 } }
+    })
+    storage.setItem(coordinator.outboxStorageKey(), JSON.stringify([
+      {
+        version: 1, id: 'legacy-chain', operation: 'upsert', resource: 'scenarios', payload: { step: 1 },
+        entityIds: ['s1'], userId: A.userId, householdId: A.householdId, localRevision: 1,
+        createdAt: '2026-07-13T12:00:00.000Z', state: 'pending', attempts: 0,
+      },
+      {
+        version: 2, id: 'newer-chain', operation: 'upsert', resource: 'scenarios', payload: { step: 2 },
+        entityIds: ['s1'], userId: A.userId, householdId: A.householdId, localRevision: 2,
+        createdAt: '2026-07-13T12:01:00.000Z', state: 'pending', attempts: 0,
+        expectedRevisions: { 'scenarios:s1': 3 },
+      },
+    ]))
+
+    await coordinator.replay()
+    await coordinator.keepConflict('legacy-chain')
+
+    expect(seen).toEqual([undefined, 3, 4, 5])
+    expect(coordinator.getRevision('scenarios:s1')).toBe(6)
+    expect(coordinator.getOutbox()).toEqual([])
+  })
+
+  it('can keep the local conflict against the current cloud revision', async () => {
+    const coordinator = make()
+    coordinator.activate(A)
+    const seen: Array<number | null | undefined> = []
+    coordinator.register('tool_state:test', async (operation) => {
+      const expected = operation.expectedRevisions?.['tool_state:test']
+      seen.push(expected)
+      if (expected === 2) throw { status: 409, currentRevisions: { 'tool_state:test': 3 } }
+      return { revisions: { 'tool_state:test': 4 } }
+    })
+
+    await expect(coordinator.mutate({
+      resource: 'tool_state:test', operation: 'upsert', payload: { value: 'mine' }, entityIds: ['test'],
+      expectedRevisions: { 'tool_state:test': 2 },
+    })).rejects.toMatchObject({ category: 'conflict' })
+    await coordinator.keepConflict(coordinator.getConflicts()[0].id)
+
+    expect(seen).toEqual([2, 3])
+    expect(coordinator.getRevision('tool_state:test')).toBe(4)
+    expect(coordinator.getOutbox()).toEqual([])
+  })
+
+  it('keeps and replays every later edit in the connected conflict chain', async () => {
+    const coordinator = make()
+    coordinator.activate(A)
+    const seen: Array<[number, number | null | undefined]> = []
+    coordinator.register('scenarios', async (operation) => {
+      const expected = operation.expectedRevisions?.['scenarios:s1']
+      seen.push([(operation.payload as { step: number }).step, expected])
+      if (expected === 1) throw { status: 409, currentRevisions: { 'scenarios:s1': 2 } }
+      return { revisions: { 'scenarios:s1': Number(expected) + 1 } }
+    })
+
+    await expect(coordinator.mutateBatch([
+      { resource: 'scenarios', operation: 'upsert', payload: { step: 1 }, entityIds: ['s1'], expectedRevisions: { 'scenarios:s1': 1 } },
+      { resource: 'scenarios', operation: 'upsert', payload: { step: 2 }, entityIds: ['s1'], expectedRevisions: { 'scenarios:s1': 1 } },
+    ])).rejects.toMatchObject({ category: 'conflict' })
+
+    await coordinator.keepConflict(coordinator.getConflicts()[0].id)
+
+    expect(seen).toEqual([[1, 1], [2, 1], [1, 2], [2, 3]])
+    expect(coordinator.getRevision('scenarios:s1')).toBe(4)
+    expect(coordinator.getOutbox()).toEqual([])
+  })
+
+  it('reload resolution removes only the connected entity chain', async () => {
+    const coordinator = make()
+    coordinator.activate(A)
+    coordinator.register('test', async () => { throw { status: 409, currentRevisions: { 'rows:a': 2 } } })
+    await expect(coordinator.mutateBatch([
+      { resource: 'test', operation: 'upsert', payload: {}, entityIds: ['a'], expectedRevisions: { 'rows:a': 1 } },
+      { resource: 'test', operation: 'upsert', payload: {}, entityIds: ['a'], expectedRevisions: { 'rows:a': 1 } },
+      { resource: 'test', operation: 'upsert', payload: {}, entityIds: ['b'], expectedRevisions: { 'rows:b': 1 } },
+    ])).rejects.toMatchObject({ category: 'conflict' })
+
+    const conflict = coordinator.getConflicts()[0]
+    expect(coordinator.reloadConflict(conflict.id)).toBe(2)
+    expect(coordinator.getOutbox()).toMatchObject([{ entityIds: ['b'] }])
+  })
+
   it('rejects new mutations while a namespace transition is paused', async () => {
     const coordinator = make()
     coordinator.activate(A)

@@ -7,6 +7,7 @@ const mem = new Map<string, string>()
 // writes so we can assert the casing mapping (savedAt ↔ saved_at) and the
 // upsert-only save model (plan 43 — saves never delete; deletions are explicit).
 const rows: Record<string, unknown>[] = []
+const toolRows = new Map<string, { data: unknown; revision: number }>()
 // Records how delete().in() was called, so a test can assert it passes an ARRAY
 // of ids (supabase-js quotes them) rather than an interpolated string filter.
 let lastDeleteRpc: { resource: string; ids: unknown } | null = null
@@ -31,24 +32,62 @@ vi.mock('./supabase', () => {
     return q
   }
   return { supabase: {
-    from: () => makeQuery(),
-    rpc: (_name: string, args: { p_resource: string; p_ids: string[] }) => {
-      lastDeleteRpc = { resource: args.p_resource, ids: args.p_ids }
+    from: (table: string) => table === 'tool_state' ? (() => {
+      let tool = ''
+      const q: Record<string, unknown> = {}
+      Object.assign(q, {
+        select: () => q,
+        eq: (_column: string, value: string) => { tool = value; return q },
+        maybeSingle: () => Promise.resolve({ data: toolRows.get(tool) ?? null, error: null }),
+      })
+      return q
+    })() : makeQuery(),
+    rpc: (name: string, args: Record<string, unknown>) => {
       if (mutationError) return Promise.resolve({ data: null, error: mutationError })
-      const drop = new Set(args.p_ids.map(String))
-      for (let i = rows.length - 1; i >= 0; i--) if (drop.has(String(rows[i].id))) rows.splice(i, 1)
+      if (name === 'sync_apply_rows') {
+        const incoming = args.p_rows as Record<string, unknown>[]
+        const revisions: Record<string, number> = {}
+        for (const row of incoming) {
+          const i = rows.findIndex((existing) => existing.id === row.id)
+          const revision = i >= 0 ? Number(rows[i].revision ?? 1) + 1 : 1
+          const saved = { ...row, revision }
+          if (i >= 0) rows[i] = saved; else rows.push(saved)
+          revisions[`scenarios:${String(row.id)}`] = revision
+        }
+        return Promise.resolve({ data: { status: 'applied', revisions }, error: null })
+      }
+      if (name === 'sync_delete_rows') {
+        const resource = String(args.p_resource)
+        const ids = args.p_ids as string[]
+        lastDeleteRpc = { resource, ids }
+        const drop = new Set(ids.map(String))
+        for (let i = rows.length - 1; i >= 0; i--) if (drop.has(String(rows[i].id))) rows.splice(i, 1)
+        return Promise.resolve({ data: {
+          status: 'applied', revisions: Object.fromEntries(ids.map((id) => [`${resource}:${id}`, null])),
+        }, error: null })
+      }
+      if (name === 'sync_apply_tool_state') {
+        const tool = String(args.p_tool)
+        const current = toolRows.get(tool)
+        const revision = current ? current.revision + 1 : 1
+        toolRows.set(tool, { data: args.p_data, revision })
+        return Promise.resolve({ data: { status: 'applied', revisions: { [`tool_state:${tool}`]: revision } }, error: null })
+      }
       return Promise.resolve({ data: null, error: null })
     },
   } }
 })
 
-import { loadScenarios, saveScenarios, deleteScenarios, saveGlobalConstants } from './storage'
+import {
+  loadScenarios, saveScenarios, deleteScenarios, saveGlobalConstants,
+  saveDriftItems, loadGlobalConstants, loadDriftItems,
+} from './storage'
 import { activateSyncIdentity, syncCoordinator } from './sync'
 
 // Tests run in the `node` env (no localStorage); storage's internal cache/flag
 // localStorage use safely no-ops there, so we only reset the mocked table.
 beforeEach(() => {
-  rows.length = 0; lastDeleteRpc = null; mutationError = null; mem.clear()
+  rows.length = 0; toolRows.clear(); lastDeleteRpc = null; mutationError = null; mem.clear()
   vi.stubGlobal('localStorage', {
     get length() { return mem.size },
     getItem: (key: string) => mem.get(key) ?? null,
@@ -73,13 +112,27 @@ describe('scenarios cloud mapping (savedAt ↔ saved_at)', () => {
   })
 })
 
-describe('saveScenarios is upsert-only (plan 43 — never deletes)', () => {
-  it('upserts the whole list', async () => {
+describe('saveScenarios is changed-row upsert-only (plan 43 — never deletes)', () => {
+  it('upserts every row when the cache is initially empty', async () => {
     await saveScenarios([
       { id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS },
       { id: 'b', name: 'B', savedAt: '2026-03-01', inputs: DEFAULT_INPUTS },
     ])
     expect(rows.map((r) => r.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('does not overwrite an unchanged sibling that another client edited', async () => {
+    const original = [
+      { id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS },
+      { id: 'b', name: 'B', savedAt: '2026-03-01', inputs: DEFAULT_INPUTS },
+    ]
+    await saveScenarios(original)
+    rows[0] = { ...rows[0], name: 'A från partnern', revision: 2 }
+
+    await saveScenarios([original[0], { ...original[1], name: 'B redigerad lokalt' }])
+
+    expect(rows.find((row) => row.id === 'a')?.name).toBe('A från partnern')
+    expect(rows.find((row) => row.id === 'b')?.name).toBe('B redigerad lokalt')
   })
 
   it('rejects when an upsert resolves with an error', async () => {
@@ -206,5 +259,17 @@ describe('prefs cloud writes', () => {
     mutationError = { message: 'Failed to fetch' }
     await expect(saveGlobalConstants({} as Parameters<typeof saveGlobalConstants>[0]))
       .rejects.toMatchObject({ category: 'offline' })
+  })
+
+  it('stores independently edited preference slices in separate tool rows', async () => {
+    const constants = { interestRate: 3.5 } as unknown as Parameters<typeof saveGlobalConstants>[0]
+    const drift = [{ id: 'd1', label: 'El', amount: 900 }]
+    await saveGlobalConstants(constants)
+    await saveDriftItems(drift)
+
+    expect(toolRows.get('bostadskalkyl-global-constants')?.data).toEqual(constants)
+    expect(toolRows.get('bostadskalkyl-drift-items')?.data).toEqual(drift)
+    expect(await loadGlobalConstants()).toEqual(constants)
+    expect(await loadDriftItems()).toEqual(drift)
   })
 })

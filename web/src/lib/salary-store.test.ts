@@ -35,6 +35,7 @@ beforeEach(async () => {
   Object.keys(mock().tables).forEach((k) => delete mock().tables[k])
   mock().control.fail = false
   mock().control.failing.clear()
+  mock().control.lostResponseOnce.clear()
 })
 
 function cache(): { submissions?: unknown[] } {
@@ -49,7 +50,7 @@ const sub = (over: Partial<Record<string, unknown>> = {}) => ({
 describe('read path', () => {
   it('cloud ok: list writes through to the cache', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mock().tables[TABLE] = [{ id: 's1', created_at: 't1', ...sub() }]
+    mock().tables[TABLE] = [{ id: 's1', created_at: 't1', revision: 1, ...sub() }]
     const rows = await store.list()
     expect(rows).toHaveLength(1)
     expect((cache().submissions || [])).toHaveLength(1)
@@ -86,11 +87,31 @@ describe('write path', () => {
     expect(syncCoordinator.isDirty(TABLE)).toBe(true)
   })
 
+  it('add: a lost response reuses the durable receipt instead of inserting twice', async () => {
+    mock().control.lostResponseOnce.add('sync_apply_rows')
+    await expect(store.add(sub() as never)).resolves.toBeTruthy()
+    expect(mock().tables[TABLE]).toHaveLength(1)
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.isDirty(TABLE)).toBe(false)
+  })
+
   it('remove: success patches the cache', async () => {
-    mock().tables[TABLE] = [{ id: 's1', created_at: 't1', ...sub() }]
+    mock().tables[TABLE] = [{ id: 's1', created_at: 't1', revision: 1, ...sub() }]
+    await store.list()
     const n = await store.remove('s1')
     expect(n).toBe(0)
     expect(mock().tables[TABLE]).toHaveLength(0)
+  })
+
+  it('remove: rejects a stale revision after another client changed the row', async () => {
+    mock().tables[TABLE] = [{ id: 's1', created_at: 't1', revision: 1, ...sub() }]
+    await store.list()
+    mock().tables[TABLE][0].revision = 2
+
+    await expect(store.remove('s1')).rejects.toMatchObject({ category: 'conflict' })
+    expect(mock().tables[TABLE]).toHaveLength(1)
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.getConflicts()).toHaveLength(1)
   })
 
   it('remove: cloud error throws', async () => {

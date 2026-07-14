@@ -16,7 +16,8 @@ import type { Inputs, Constants } from './calc'
 import { supabase } from './supabase'
 import { genId } from './id'
 import { syncCoordinator } from './sync'
-import { cachedTombstoneIds, loadTombstoneIds, withoutTombstones } from './sync-table'
+import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
+import { receiptRpc, rejectLegacyToolOperation, rememberRowRevisions, rememberToolRevision, revisionKey, syncRpcResult } from './sync-rpc'
 import { makeImportOnce, materializeImport } from './store-helpers'
 import { legacyImportAssignedToActive } from './legacy-data'
 
@@ -36,7 +37,11 @@ const SCEN_CACHE = 'bostadskalkyl_scenarios_cache_v1'
 const PREFS_CACHE = 'bostadskalkyl_prefs_cache_v1'
 const SCEN_TABLE = 'scenarios'
 const STATE = 'tool_state'
-const PREFS_TOOL = 'bostadskalkyl-prefs'
+const PREFS_TOOLS = {
+  globalConstants: 'bostadskalkyl-global-constants',
+  driftItems: 'bostadskalkyl-drift-items',
+  savingsItems: 'bostadskalkyl-savings-items',
+} as const
 const SCEN_LEGACY_FLAG = 'bostadskalkyl_scenarios_legacy_imported_v2'
 const PREFS_LEGACY_FLAG = 'bostadskalkyl_prefs_legacy_imported_v2'
 
@@ -103,47 +108,7 @@ function _writeScenCache(s: Scenario[]): void {
 }
 
 const SCEN_RESOURCE = 'scenarios'
-syncCoordinator.register(SCEN_RESOURCE, async (operation) => {
-  if (operation.operation === 'upsert') {
-    const rows = (operation.payload as { rows?: unknown })?.rows
-    if (!Array.isArray(rows)) throw { status: 400, message: 'Malformed scenario upsert' }
-    if (!rows.length) return
-    const seed = (operation.payload as { seed?: unknown }).seed === true
-    if (seed) {
-      for (const row of rows) {
-        const { error } = await supabase.from(SCEN_TABLE).upsert([row], { onConflict: 'id', ignoreDuplicates: true })
-        if ((error as { code?: string } | null)?.code === '23505') continue
-        if (error) throw error
-      }
-    } else {
-      const { error } = await supabase.from(SCEN_TABLE).upsert(rows, { onConflict: 'id' })
-      if (error) throw error
-    }
-    return
-  }
-  const ids = (operation.payload as { ids?: unknown })?.ids
-  if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) {
-    throw { status: 400, message: 'Malformed scenario delete' }
-  }
-  if (!ids.length) return
-  const { error } = await supabase.rpc('delete_household_rows', {
-    p_resource: SCEN_RESOURCE,
-    p_ids: ids,
-  })
-  if (error) throw error
-}, (operation) => {
-  const payload = operation.payload as { rows?: unknown; ids?: unknown; seed?: unknown }
-  if (operation.operation === 'upsert') {
-    if (!Array.isArray(payload?.rows) || !payload.rows.every((row) => !!row && typeof row === 'object'
-      && typeof (row as { id?: unknown }).id === 'string' && !!(row as { id?: string }).id)
-      || (payload.seed !== undefined && typeof payload.seed !== 'boolean')) return false
-    const ids = payload.rows.map((row) => (row as { id: string }).id)
-    return ids.length === operation.entityIds.length && ids.every((id, index) => id === operation.entityIds[index])
-  }
-  return Array.isArray(payload?.ids) && payload.ids.every((id) => typeof id === 'string' && !!id)
-    && payload.ids.length === operation.entityIds.length
-    && payload.ids.every((id, index) => id === operation.entityIds[index])
-})
+registerTableSync(SCEN_RESOURCE, SCEN_TABLE)
 
 const _importScopedScenarios = makeImportOnce(
   () => syncCoordinator.scopedStorageKey(SCEN_LEGACY_FLAG),
@@ -167,6 +132,7 @@ const _importScopedScenarios = makeImportOnce(
       await syncCoordinator.mutate({
         resource: SCEN_RESOURCE, operation: 'upsert', payload: { rows: scenarios.map(toRow), seed: true },
         entityIds: scenarios.map((scenario) => scenario.id),
+        expectedRevisions: Object.fromEntries(scenarios.map((scenario) => [`${SCEN_RESOURCE}:${scenario.id}`, null])),
         applyLocal: () => scope.write(SCEN_CACHE, JSON.stringify(scenarios)),
       })
       return true
@@ -186,13 +152,16 @@ export async function loadScenarios(): Promise<Scenario[]> {
   ])
   if (!scope.isActive() || syncCoordinator.isDirty(SCEN_RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
+  rememberRowRevisions(SCEN_RESOURCE, result.data as Record<string, unknown>[])
   const rows = withoutTombstones((result.data as Record<string, unknown>[]).map(fromRow), tombstones)
   if (scope.isActive()) scope.write(SCEN_CACHE, JSON.stringify(rows))
   return rows
 }
 
-// The store hands over the WHOLE list each time. UPSERT-ONLY: write every row,
-// never delete. Deriving deletions from "whatever isn't in my list" was a
+// The store hands over the whole list each time, but only new or changed rows
+// are sent to the server. This keeps optimistic conflicts scoped to the edited
+// scenario instead of letting an unchanged stale sibling overwrite a partner's
+// newer edit. Never derive deletions from "whatever isn't in my list"; that was a
 // data-loss trap — on a fresh device the hydrate read can fail quietly, leaving
 // the list `[]`; the first save would then delete the whole household's cloud
 // scenarios (plan 43 / audit C1). Real deletions go through deleteScenarios().
@@ -202,15 +171,11 @@ export async function loadScenarios(): Promise<Scenario[]> {
 // Server tombstones reject a stale device that later tries to recreate an
 // acknowledged deleted id; intentional recreation must use a fresh id.
 export async function saveScenarios(scenarios: Scenario[]): Promise<void> {
-  const rows = scenarios.map(toRow)
+  const cached = new Map(_readScenCache().map((scenario) => [scenario.id, JSON.stringify(toRow(scenario))]))
+  const changed = scenarios.filter((scenario) => cached.get(scenario.id) !== JSON.stringify(toRow(scenario)))
+  const rows = changed.map(toRow)
   if (!rows.length) { _writeScenCache(scenarios); return }
-  await syncCoordinator.mutate({
-    resource: SCEN_RESOURCE,
-    operation: 'upsert',
-    payload: { rows },
-    entityIds: scenarios.map((scenario) => scenario.id),
-    applyLocal: () => _writeScenCache(scenarios),
-  })
+  await queueTableUpsert(SCEN_RESOURCE, rows, changed.map((scenario) => scenario.id), () => _writeScenCache(scenarios))
 }
 
 // Explicit deletion — the ONLY path that removes cloud rows. Array `.in()` filter
@@ -219,15 +184,9 @@ export async function saveScenarios(scenarios: Scenario[]): Promise<void> {
 export async function deleteScenarios(ids: string[]): Promise<void> {
   const clean = ids.filter(Boolean)
   if (!clean.length) return
-  await syncCoordinator.mutate({
-    resource: SCEN_RESOURCE,
-    operation: 'delete',
-    payload: { ids: clean },
-    entityIds: clean,
-    applyLocal: () => {
-      const drop = new Set(clean)
-      _writeScenCache(_readScenCache().filter((scenario) => !drop.has(scenario.id)))
-    },
+  await queueTableDelete(SCEN_RESOURCE, clean, () => {
+    const drop = new Set(clean)
+    _writeScenCache(_readScenCache().filter((scenario) => !drop.has(scenario.id)))
   })
 }
 
@@ -314,25 +273,43 @@ function _writePrefsCache(p: Prefs): void {
   syncCoordinator.writeScoped(PREFS_CACHE, JSON.stringify(p))
 }
 
-const PREFS_RESOURCE = `tool_state:${PREFS_TOOL}`
-syncCoordinator.register(PREFS_RESOURCE, async (operation) => {
-  const payload = operation.payload as { tool?: unknown; data?: unknown; seed?: unknown }
-  if (!payload || payload.tool !== PREFS_TOOL || !('data' in payload)) {
-    throw { status: 400, message: 'Malformed preferences operation' }
-  }
-  const { error } = payload.seed === true
-    ? await supabase.from(STATE).insert({ tool: PREFS_TOOL, data: payload.data })
-    : await supabase.from(STATE).upsert(
-      { tool: PREFS_TOOL, data: payload.data }, { onConflict: 'household_id,tool' },
-    )
-  if (payload.seed === true && (error as { code?: string } | null)?.code === '23505') return
-  if (error) throw error
-}, (operation) => {
-  const payload = operation.payload as { tool?: unknown; data?: unknown; seed?: unknown }
-  return operation.operation === 'upsert' && payload?.tool === PREFS_TOOL && Object.prototype.hasOwnProperty.call(payload, 'data')
-    && (payload.seed === undefined || typeof payload.seed === 'boolean')
-    && operation.entityIds.length === 1 && operation.entityIds[0] === PREFS_TOOL
-})
+type PrefsKey = keyof Prefs
+
+function prefsResource(key: PrefsKey): string {
+  return `tool_state:${PREFS_TOOLS[key]}`
+}
+
+function registerPrefsSlice(key: PrefsKey): void {
+  const tool = PREFS_TOOLS[key]
+  const resource = prefsResource(key)
+  syncCoordinator.register(resource, async (operation) => {
+    const payload = operation.payload as { tool?: unknown; data?: unknown; seed?: unknown }
+    if (!payload || payload.tool !== tool || !Object.prototype.hasOwnProperty.call(payload, 'data')) {
+      throw { status: 400, message: 'Malformed preferences operation' }
+    }
+    await rejectLegacyToolOperation(operation, tool)
+    const keyName = revisionKey('tool_state', tool)
+    const { data, error } = await receiptRpc('sync_apply_tool_state', {
+      p_operation_id: operation.id,
+      p_tool: tool,
+      p_data: payload.data,
+      p_expected_revision: operation.expectedRevisions?.[keyName] ?? null,
+      p_seed: payload.seed === true,
+    })
+    if (error) throw error
+    return syncRpcResult(data)
+  }, (operation) => {
+    const payload = operation.payload as { tool?: unknown; data?: unknown; seed?: unknown }
+    return operation.operation === 'upsert' && payload?.tool === tool
+      && Object.prototype.hasOwnProperty.call(payload, 'data')
+      && (payload.seed === undefined || typeof payload.seed === 'boolean')
+      && operation.entityIds.length === 1 && operation.entityIds[0] === tool
+  })
+}
+
+registerPrefsSlice('globalConstants')
+registerPrefsSlice('driftItems')
+registerPrefsSlice('savingsItems')
 
 const _importScopedPrefs = makeImportOnce(
   () => syncCoordinator.scopedStorageKey(PREFS_LEGACY_FLAG),
@@ -362,10 +339,20 @@ const _importScopedPrefs = makeImportOnce(
     if (!legacy) return true
     if (!scope.isActive()) return false
     try {
-      await syncCoordinator.mutate({
-        resource: PREFS_RESOURCE, operation: 'upsert', payload: { tool: PREFS_TOOL, data: legacy, seed: true },
-        entityIds: [PREFS_TOOL], applyLocal: () => scope.write(PREFS_CACHE, JSON.stringify(legacy)),
-      })
+      const operations = (Object.keys(PREFS_TOOLS) as PrefsKey[])
+        .filter((key) => key !== 'globalConstants' || legacy?.globalConstants !== null)
+        .map((key) => {
+          const tool = PREFS_TOOLS[key]
+          return {
+            resource: prefsResource(key), operation: 'upsert' as const,
+            payload: { tool, data: legacy![key], seed: true }, entityIds: [tool],
+            expectedRevisions: { [revisionKey('tool_state', tool)]: null },
+          }
+        })
+      await syncCoordinator.mutateBatch(operations.map((operation, index) => ({
+        ...operation,
+        applyLocal: index === operations.length - 1 ? () => scope.write(PREFS_CACHE, JSON.stringify(legacy)) : undefined,
+      })))
       return true
     } catch { return false }
   },
@@ -373,19 +360,34 @@ const _importScopedPrefs = makeImportOnce(
 
 const _prefsInFlight = new Map<string, Promise<Prefs>>()
 
+async function _loadPrefsSlice<K extends PrefsKey>(
+  scope: ReturnType<typeof syncCoordinator.captureScope>, key: K, fallback: Prefs[K],
+): Promise<Prefs[K]> {
+  const tool = PREFS_TOOLS[key]
+  const resource = prefsResource(key)
+  if (!scope.isActive() || syncCoordinator.isDirty(resource)) return fallback
+  const { data, error } = await supabase.from(STATE).select('data,revision').eq('tool', tool).maybeSingle()
+  if (!scope.isActive() || syncCoordinator.isDirty(resource) || error || !data) return fallback
+  rememberToolRevision(tool, data)
+  const raw = data.data
+  if (key === 'globalConstants') return (raw && typeof raw === 'object' ? raw : null) as Prefs[K]
+  return (Array.isArray(raw) ? raw : []) as Prefs[K]
+}
+
 async function _loadPrefsFor(scope: ReturnType<typeof syncCoordinator.captureScope>): Promise<Prefs> {
   await _importScopedPrefs()
-  if (!scope.isActive() || syncCoordinator.isDirty(PREFS_RESOURCE)) return _readPrefsCacheFrom(scope)
-  const { data, error } = await supabase.from(STATE).select('data').eq('tool', PREFS_TOOL).maybeSingle()
-  if (!scope.isActive() || syncCoordinator.isDirty(PREFS_RESOURCE)) return _readPrefsCacheFrom(scope)
-  if (error) return _readPrefsCacheFrom(scope)
-  const blob = (data?.data as Partial<Prefs>) || {}
+  const cached = _readPrefsCacheFrom(scope)
+  const [globalConstants, driftItems, savingsItems] = await Promise.all([
+    _loadPrefsSlice(scope, 'globalConstants', cached.globalConstants),
+    _loadPrefsSlice(scope, 'driftItems', cached.driftItems),
+    _loadPrefsSlice(scope, 'savingsItems', cached.savingsItems),
+  ])
   const prefs: Prefs = {
-    globalConstants: blob.globalConstants ?? null,
-    driftItems: Array.isArray(blob.driftItems) ? blob.driftItems : [],
-    savingsItems: Array.isArray(blob.savingsItems) ? blob.savingsItems : [],
+    globalConstants,
+    driftItems,
+    savingsItems,
   }
-  scope.write(PREFS_CACHE, JSON.stringify(prefs))
+  if (scope.isActive()) scope.write(PREFS_CACHE, JSON.stringify(prefs))
   return prefs
 }
 
@@ -400,19 +402,19 @@ function _loadPrefs(): Promise<Prefs> {
   return loading
 }
 
-// Read current blob, merge the patched slice, then upsert. Merges against the cloud current so a sibling slice isn't
-// clobbered (whole-blob last-write-wins across concurrent edits — accepted).
-async function _savePrefs(patch: Partial<Prefs>): Promise<void> {
+async function _savePrefsSlice<K extends PrefsKey>(key: K, value: Prefs[K]): Promise<void> {
   const scope = syncCoordinator.captureScope()
-  const current = await _loadPrefsFor(scope)
-  if (!scope.isActive()) throw new Error('Sync identity changed while preferences were loading')
-  const merged: Prefs = { ...current, ...patch }
+  const current = _readPrefsCacheFrom(scope)
+  const next = { ...current, [key]: value }
+  const tool = PREFS_TOOLS[key]
+  const keyName = revisionKey('tool_state', tool)
   await syncCoordinator.mutate({
-    resource: PREFS_RESOURCE,
+    resource: prefsResource(key),
     operation: 'upsert',
-    payload: { tool: PREFS_TOOL, data: merged },
-    entityIds: [PREFS_TOOL],
-    applyLocal: () => _writePrefsCache(merged),
+    payload: { tool, data: value },
+    entityIds: [tool],
+    expectedRevisions: { [keyName]: syncCoordinator.getRevision(keyName) },
+    applyLocal: () => _writePrefsCache(next),
   })
 }
 
@@ -423,7 +425,7 @@ export async function loadGlobalConstants(): Promise<Constants | null> {
 }
 
 export async function saveGlobalConstants(c: Constants): Promise<void> {
-  await _savePrefs({ globalConstants: c })
+  await _savePrefsSlice('globalConstants', c)
 }
 
 // The scratch draft's constants (parallel to the draft inputs).
@@ -473,9 +475,9 @@ export function saveTheme(theme: string): Promise<void> {
 
 // ── Drift breakdown + savings line items (Phase 7) — prefs blob slices ───────
 export const loadDriftItems = async (): Promise<LineItem[]> => (await _loadPrefs()).driftItems
-export const saveDriftItems = async (items: LineItem[]): Promise<void> => { await _savePrefs({ driftItems: items }) }
+export const saveDriftItems = async (items: LineItem[]): Promise<void> => { await _savePrefsSlice('driftItems', items) }
 export const loadSavingsItems = async (): Promise<LineItem[]> => (await _loadPrefs()).savingsItems
-export const saveSavingsItems = async (items: LineItem[]): Promise<void> => { await _savePrefs({ savingsItems: items }) }
+export const saveSavingsItems = async (items: LineItem[]): Promise<void> => { await _savePrefsSlice('savingsItems', items) }
 
 export function loadDriftYearly(): Promise<boolean> {
   try {
