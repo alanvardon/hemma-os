@@ -725,26 +725,33 @@ export function derivedRate(part: LoanPart, payments: Payment[], opts?: { traili
 // convention is saldo × ränta × dagar/365, but Danske accrues over a 360-day
 // bankår (faktisk/360), which runs every charge 365/360 ≈ +1,4 % over the /365
 // arithmetic — at 1,2 Mkr × 3,93 % that's 4 061 kr vs 4 005 for a 31-day month.
-// Fitted as the observed daily rate factor Σ|charge| / Σ(balance × days) over
-// the trailing posting intervals, compared against listed/360 vs listed/365.
-// The accrual window shifts ±1–2 days around each posting (value dates), so
-// per-interval fits can't tell 1,4 % apart — over the whole window the noise
-// cancels. Thin or unusable history defaults to 365.
+//
+// The charged rentedagar are NOT the elapsed days between postings: a /360 bank
+// prices ~360 days per 365-day year (the household ledger charged 359 across
+// 364), so a rate-level fit of Σcharge/Σ(saldo × elapsed days) lands BETWEEN
+// the two hypotheses and flips with the value-date noise of the window. What
+// does discriminate is the integer-day property: on a /360 bank every charge is
+// a whole number of days × saldo × ränta/360 (131,00 kr/day on the household's
+// parts — exact), while under /365 the implied day counts land ~0.4 off a whole
+// number, and vice versa for a genuine /365 bank. Score each basis by that
+// distance over the trailing charges; flip to 360 only on decisive evidence
+// (near-exact under /360 AND a clear miss under /365 — a history billed at some
+// other rate misses under both and stays on the Swedish default).
 function interestYearBasis(part: LoanPart, real: Payment[], intRows: Payment[], listed: number): 360 | 365 {
-  const t = intRows.slice(-7)                     // ≤ 6 trailing intervals ≈ half a year,
-  let num = 0, den = 0, used = 0                  // short enough to sit inside one rate period
+  const t = intRows.slice(-7)                     // ≤ 6 trailing charges ≈ half a year,
+  let err360 = 0, err365 = 0, used = 0            // short enough to sit inside one rate period
   for (let i = 1; i < t.length; i++) {
-    const d = daysBetween(String(t[i - 1].date), String(t[i].date))
-    if (!d || d <= 0) continue
-    const bal = partBalanceAsOf(part, real, String(t[i - 1].date))
-    if (bal <= 0) continue
-    num += Math.abs(Number(t[i].amount))
-    den += bal * d
+    const bal = partBalanceAsOf(part, real, String(t[i - 1].date))  // accrual balance: after the PREVIOUS posting
+    const amt = Math.abs(Number(t[i].amount))
+    if (bal <= 0 || !(amt > 0)) continue
+    const d360 = amt / (bal * listed / 100 / 360) // implied rentedagar under each basis
+    const d365 = amt / (bal * listed / 100 / 365)
+    if (d360 < 1) continue                        // sub-day charge: integer distance is meaningless
+    err360 += Math.abs(d360 - Math.round(d360))
+    err365 += Math.abs(d365 - Math.round(d365))
     used++
   }
-  if (used < 3 || den <= 0) return 365
-  const daily = num / den
-  return Math.abs(daily - listed / 100 / 360) < Math.abs(daily - listed / 100 / 365) ? 360 : 365
+  return used >= 3 && err360 < 0.05 * used && err365 > 0.2 * used ? 360 : 365
 }
 
 // ── Expected next charge (plan 23) ─────────────────────────────────────────
