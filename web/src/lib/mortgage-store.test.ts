@@ -389,6 +389,68 @@ describe('banks & mortgages CRUD (plan 103)', () => {
     expect(row.original_balance).toBe(500000)
   })
 
+  // Plan 104 — the bank year-basis profile columns must round-trip through the
+  // COLS.banks allowlist (a field missing there is silently dropped and never
+  // persists — and the mock never enforces the server-side allowlist, so this
+  // is the only guard against that). Success + failure per the writes-and-
+  // failures rule.
+  it('addBank: persists year_basis + year_basis_source and round-trips via list', async () => {
+    const saved = await store.addBank({ label: 'Danske', year_basis: 360, year_basis_source: 'declared' })
+    const row = mock().tables.mortgage_banks[0]
+    expect(row.year_basis).toBe(360)                      // reached the DB column, not dropped by COLS.banks
+    expect(row.year_basis_source).toBe('declared')
+    const listed = await store.listBanks()
+    expect(listed[0].year_basis).toBe(360)                // read back out of the cloud
+    expect(listed[0].year_basis_source).toBe('declared')
+    expect((cache().banks as Bank[])[0].year_basis).toBe(360)
+    expect(saved.year_basis).toBe(360)
+  })
+
+  it('updateBank: patches the year-basis lock on the row and cache', async () => {
+    mock().tables.mortgage_banks = [{ id: 'b1', created_at: 't', label: 'Danske', revision: 1 }]
+    // Load through the sync layer first so b1's optimistic-concurrency revision
+    // is registered — an update against an unknown revision conflicts.
+    await store.listBanks()
+    const updated = await store.updateBank('b1', { year_basis: 360, year_basis_source: 'declared' })
+    expect(updated?.year_basis).toBe(360)
+    expect(mock().tables.mortgage_banks[0].year_basis).toBe(360)
+    expect(mock().tables.mortgage_banks[0].year_basis_source).toBe('declared')
+    expect((cache().banks as Bank[])[0].year_basis).toBe(360)
+  })
+
+  it('updateBank: can clear the lock back to auto (source → null)', async () => {
+    mock().tables.mortgage_banks = [{ id: 'b1', created_at: 't', label: 'Danske', year_basis: 360, year_basis_source: 'declared', revision: 1 }]
+    await store.listBanks()
+    const updated = await store.updateBank('b1', { year_basis: null, year_basis_source: null })
+    expect(updated?.year_basis_source).toBeNull()
+    // These two columns opt into explicit-null (NULLABLE_EXPLICIT) so the UPDATE
+    // actually clears them — a plain nullable column would stay 'declared'.
+    expect(mock().tables.mortgage_banks[0].year_basis_source).toBeNull()
+    expect(mock().tables.mortgage_banks[0].year_basis).toBeNull()
+  })
+
+  it('addBank: a cloud error keeps the year-basis lock dirty for replay', async () => {
+    mock().control.failing.add('mortgage_banks')
+    await expect(store.addBank({ label: 'Danske', year_basis: 360, year_basis_source: 'declared' })).rejects.toBeTruthy()
+    // Durable sync keeps the optimistic row cached + dirty; the lock must survive to reach the DB on replay.
+    expect((cache().banks as Bank[])[0].year_basis).toBe(360)
+    mock().control.failing.delete('mortgage_banks')
+    await sync.syncCoordinator.replay()
+    expect(mock().tables.mortgage_banks[0].year_basis).toBe(360)
+    expect(mock().tables.mortgage_banks[0].year_basis_source).toBe('declared')
+    expect(sync.syncCoordinator.isDirty('mortgage_banks')).toBe(false)
+  })
+
+  it('listBanks: a bank row lacking the profile columns falls back to detection without crashing', async () => {
+    // Legacy row (plan 103, no profile columns) — must load cleanly with the
+    // fields simply absent, so the forecast falls back to detection.
+    mock().tables.mortgage_banks = [{ id: 'b1', created_at: 't', label: 'Danske' }]
+    const [bank] = await store.listBanks()
+    expect(bank.label).toBe('Danske')
+    expect(bank.year_basis).toBeUndefined()
+    expect(bank.year_basis_source).toBeUndefined()
+  })
+
   it('removeMortgage/removeBank: success prunes the cache', async () => {
     const bank = await store.addBank({ label: 'Danske' })
     const m = await store.addMortgage({ bank_id: bank.id, label: 'Bolån', start_date: null, archived: false })

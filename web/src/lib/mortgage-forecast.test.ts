@@ -6,9 +6,9 @@ import {
   expectedCharge, expectedCharges, forecastInterest, reconcileCharge,
   matchPredictedRows, hasChargeInMonth, pendingCharge, pendingChargeSeries, partBalance,
   stalePredictedRows, makeLoanPart, effectiveDeclaredAmortization, declaredMonthlyAmortization,
-  projectMilestones,
+  projectMilestones, profileYearBasis, makeBank,
 } from './mortgage'
-import type { LoanPart, Payment, RatePeriod } from './mortgage'
+import type { LoanPart, Payment, RatePeriod, Bank, Mortgage } from './mortgage'
 
 function part(over: Partial<LoanPart> = {}): LoanPart {
   return { id: 'p1', created_at: '', label: 'Del 1', loan_number: '', start_balance: 0, start_date: '2026-01-01', archived: false, ...over }
@@ -596,6 +596,80 @@ describe('360-day bankår (Danske faktisk/360)', () => {
     ]
     const c = expectedCharge(part(), [bunden()], offRate)!
     expect(c.year_basis).toBe(365)
+  })
+})
+
+describe('bank profile: declared year-basis lock (plan 104, phase 1)', () => {
+  // A part wired to a bank via mortgage (part → mortgage → bank). CLEAN is a
+  // clean /365-shaped ledger at 3,65 %, so ledger detection reads it as 365 —
+  // a declared 360 must therefore override, proving the lock (not the ledger)
+  // decides. bunden so lockedBunden is true (the only path that pins a basis).
+  const bunden = () => period({ rate_type: 'bunden', end_date: '2027-12-31' })
+  const linkedPart = () => part({ mortgage_id: 'm1' })
+  const mortgages = (): Mortgage[] => [{ id: 'm1', created_at: '', bank_id: 'b1', label: 'Bolån', start_date: null, archived: false }]
+  const banks = (over: Partial<Bank> = {}): Bank[] => [{ id: 'b1', created_at: '', label: 'Danske', ...over }]
+  const opts = (over: Partial<Bank> = {}) => ({ banks: banks(over), mortgages: mortgages() })
+
+  it('profileYearBasis returns the basis ONLY when source is declared', () => {
+    expect(profileYearBasis(linkedPart(), mortgages(), banks({ year_basis: 360, year_basis_source: 'declared' }))).toBe(360)
+    expect(profileYearBasis(linkedPart(), mortgages(), banks({ year_basis: 365, year_basis_source: 'declared' }))).toBe(365)
+    // detected / suggested / null do NOT override in phase 1
+    expect(profileYearBasis(linkedPart(), mortgages(), banks({ year_basis: 360, year_basis_source: 'detected' }))).toBeNull()
+    expect(profileYearBasis(linkedPart(), mortgages(), banks({ year_basis: 360, year_basis_source: 'suggested' }))).toBeNull()
+    expect(profileYearBasis(linkedPart(), mortgages(), banks({ year_basis: 360, year_basis_source: null }))).toBeNull()
+    // no bank / no mortgage link → null
+    expect(profileYearBasis(part(), mortgages(), banks({ year_basis: 360, year_basis_source: 'declared' }))).toBeNull()
+    expect(profileYearBasis(linkedPart(), [], [])).toBeNull()
+  })
+
+  it('a declared 360 overrides ledger detection on the locked-bunden path', () => {
+    // CLEAN detects as 365; the declared lock forces 360.
+    // 1 000 000 × 3,65 % × 30/360 = 3 041,67 (vs /365's 3 000).
+    const c = expectedCharge(linkedPart(), [bunden()], CLEAN, opts({ year_basis: 360, year_basis_source: 'declared' }))!
+    expect(c.year_basis).toBe(360)
+    expect(c.interest).toBe(3041.67)
+  })
+
+  it('a declared 360 holds across the whole pending series regardless of ledger', () => {
+    const s = pendingChargeSeries(linkedPart(), [bunden()], CLEAN, 12, opts({ year_basis: 360, year_basis_source: 'declared' }))
+    expect(s.length).toBeGreaterThan(2)
+    expect(s.every(r => r.year_basis === 360)).toBe(true)
+  })
+
+  it('detected / suggested / null provenance falls back to detection (365 here)', () => {
+    for (const source of ['detected', 'suggested', null] as const) {
+      const c = expectedCharge(linkedPart(), [bunden()], CLEAN, opts({ year_basis: 360, year_basis_source: source }))!
+      expect(c.year_basis).toBe(365)
+      expect(c.interest).toBe(3000)                 // 1 000 000 × 3,65 % × 30/365
+    }
+  })
+
+  it('no bank / omitted opts reproduces the existing #305 behaviour byte-for-byte', () => {
+    const golden = expectedCharge(linkedPart(), [bunden()], CLEAN)!
+    // an empty opts bag and a bank with no declared lock are both identical to omitting it
+    expect(expectedCharge(linkedPart(), [bunden()], CLEAN, {})).toEqual(golden)
+    expect(expectedCharge(linkedPart(), [bunden()], CLEAN, opts({ year_basis: null, year_basis_source: null }))).toEqual(golden)
+    expect(golden.year_basis).toBe(365)
+  })
+
+  it('the derived/rörlig path ignores a declared 360 and stays 365', () => {
+    // rörlig → lockedBunden is false → the basis is never pinned.
+    const c = expectedCharge(linkedPart(), [period()], CLEAN, opts({ year_basis: 360, year_basis_source: 'declared' }))!
+    expect(c.year_basis).toBe(365)
+  })
+
+  it('makeBank clamps a malformed year_basis to null (→ detection)', () => {
+    expect(makeBank({ label: 'X', year_basis: 400, year_basis_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: 'declared' })
+    expect(makeBank({ label: 'X', year_basis: 360, year_basis_source: 'garbage' })).toEqual({ label: 'X', year_basis: 360, year_basis_source: null })
+    expect(makeBank({})).toEqual({ label: '', year_basis: null, year_basis_source: null })
+    // a declared but malformed basis therefore does not override — detection wins
+    const bad = expectedCharge(linkedPart(), [bunden()], CLEAN, { banks: [{ id: 'b1', created_at: '', label: 'X', year_basis: 400, year_basis_source: 'declared' }], mortgages: mortgages() })!
+    expect(bad.year_basis).toBe(365)
+  })
+
+  it('expectedCharges threads opts through to every part', () => {
+    const { rows } = expectedCharges([linkedPart()], [bunden()], CLEAN, opts({ year_basis: 360, year_basis_source: 'declared' }))
+    expect(rows[0].year_basis).toBe(360)
   })
 })
 
