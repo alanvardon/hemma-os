@@ -1,6 +1,6 @@
 /* studentloan-store.ts — persistence for the UK Student Loan tracker (plan 17).
    The whole inputs object persists as one row in the shared tool_state table
-   (tool = 'studentloan'), with a localStorage write-through cache for offline.
+   (tool = 'studentloan'), with a scoped cache and durable operation outbox.
    The persistence skeleton (cache, first-login import, load/save) lives in
    ./tool-store (createToolStateStore); only the `_merge` sanitizer and the key
    strings are tool-specific — same pattern as konsult-store.ts /

@@ -107,6 +107,7 @@ declare
     p_table
   );
 begin
+  if p_table <> 'tool_state' then rls_message := 'household write denied'; end if;
   execute format(
     'select count(*) from public.%I where %I = %L',
     p_table, p_key_column, p_own_key
@@ -168,21 +169,29 @@ begin
   ) into affected;
   return next extensions.is(affected, 0::bigint, format('%s: foreign update affects no rows', p_table));
 
-  execute format(
-    'with changed as (
-       delete from public.%I where %I = %L returning 1
-     ) select count(*) from changed',
-    p_table, p_key_column, p_foreign_key
-  ) into affected;
-  return next extensions.is(affected, 0::bigint, format('%s: foreign delete affects no rows', p_table));
-
-  execute format(
-    'with changed as (
-       delete from public.%I where %I = %L returning 1
-     ) select count(*) from changed',
-    p_table, p_key_column, p_insert_key
-  ) into affected;
-  return next extensions.is(affected, 1::bigint, format('%s: own delete succeeds', p_table));
+  if p_table = 'tool_state' then
+    execute format(
+      'with changed as (delete from public.%I where %I = %L returning 1) select count(*) from changed',
+      p_table, p_key_column, p_foreign_key
+    ) into affected;
+    return next extensions.is(affected, 0::bigint, format('%s: foreign delete affects no rows', p_table));
+    execute format(
+      'with changed as (delete from public.%I where %I = %L returning 1) select count(*) from changed',
+      p_table, p_key_column, p_insert_key
+    ) into affected;
+    return next extensions.is(affected, 1::bigint, format('%s: own delete succeeds', p_table));
+  else
+    return next extensions.throws_ok(
+      format('delete from public.%I where %I = %L', p_table, p_key_column, p_foreign_key),
+      '42501', format('permission denied for table %s', p_table),
+      format('%s: foreign direct delete is revoked', p_table)
+    );
+    return next extensions.throws_ok(
+      format('delete from public.%I where %I = %L', p_table, p_key_column, p_insert_key),
+      '42501', format('permission denied for table %s', p_table),
+      format('%s: own direct delete must use the durable RPC', p_table)
+    );
+  end if;
 end;
 $$;
 

@@ -1,7 +1,7 @@
 /* hushallsbudget-store.ts — persistence for the budget baseline (the pot).
    Phase 16d: reads and writes the whole BudgetState as one row in the shared
    `tool_state` table (tool = 'hushallsbudget', Decision 9 — camelCase keys stay
-   camelCase inside jsonb), with a localStorage write-through cache for offline.
+   camelCase inside jsonb), with a scoped cache and durable operation outbox.
    The persistence skeleton (cache, first-login import, load/save) lives in
    ./tool-store (createToolStateStore); only the `_migrate` transform and the key
    strings are tool-specific. Both exported signatures are async, so the call
@@ -51,6 +51,5 @@ const store = createToolStateStore<BudgetState>({
 // Read the shared budget. `null` means no budget stored yet, so the caller falls
 // back to the example budget.
 export const loadBudget = store.load
-// Persist the whole budget blob. Never rejects — the sole caller fires and
-// forgets (`void saveBudget(...)`).
+// Persist the whole budget blob through the durable outbox.
 export const saveBudget = store.save

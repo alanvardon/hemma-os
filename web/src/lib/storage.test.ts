@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { DEFAULT_INPUTS } from './calc'
 
+const mem = new Map<string, string>()
+
 // In-memory stand-in for the `scenarios` table, capturing what the facade
 // writes so we can assert the casing mapping (savedAt ↔ saved_at) and the
 // upsert-only save model (plan 43 — saves never delete; deletions are explicit).
 const rows: Record<string, unknown>[] = []
 // Records how delete().in() was called, so a test can assert it passes an ARRAY
 // of ids (supabase-js quotes them) rather than an interpolated string filter.
-let lastDeleteIn: { col: string; ids: unknown } | null = null
+let lastDeleteRpc: { resource: string; ids: unknown } | null = null
 let mutationError: { message: string; code?: string } | null = null
 vi.mock('./supabase', () => {
   const makeQuery = () => {
@@ -25,26 +27,38 @@ vi.mock('./supabase', () => {
         }
         return Promise.resolve({ data: null, error: null })
       },
-      delete: () => ({
-        in: (col: string, ids: string[]) => {
-          lastDeleteIn = { col, ids }
-          if (mutationError) return Promise.resolve({ data: null, error: mutationError })
-          const drop = new Set(ids.map(String))
-          for (let i = rows.length - 1; i >= 0; i--) if (drop.has(String(rows[i].id))) rows.splice(i, 1)
-          return Promise.resolve({ data: null, error: null })
-        },
-      }),
     })
     return q
   }
-  return { supabase: { from: () => makeQuery() } }
+  return { supabase: {
+    from: () => makeQuery(),
+    rpc: (_name: string, args: { p_resource: string; p_ids: string[] }) => {
+      lastDeleteRpc = { resource: args.p_resource, ids: args.p_ids }
+      if (mutationError) return Promise.resolve({ data: null, error: mutationError })
+      const drop = new Set(args.p_ids.map(String))
+      for (let i = rows.length - 1; i >= 0; i--) if (drop.has(String(rows[i].id))) rows.splice(i, 1)
+      return Promise.resolve({ data: null, error: null })
+    },
+  } }
 })
 
 import { loadScenarios, saveScenarios, deleteScenarios, saveGlobalConstants } from './storage'
+import { activateSyncIdentity, syncCoordinator } from './sync'
 
 // Tests run in the `node` env (no localStorage); storage's internal cache/flag
 // localStorage use safely no-ops there, so we only reset the mocked table.
-beforeEach(() => { rows.length = 0; lastDeleteIn = null; mutationError = null })
+beforeEach(() => {
+  rows.length = 0; lastDeleteRpc = null; mutationError = null; mem.clear()
+  vi.stubGlobal('localStorage', {
+    get length() { return mem.size },
+    getItem: (key: string) => mem.get(key) ?? null,
+    setItem: (key: string, value: string) => { mem.set(key, value) },
+    removeItem: (key: string) => { mem.delete(key) },
+    key: (index: number) => [...mem.keys()][index] ?? null,
+    clear: () => mem.clear(),
+  })
+  activateSyncIdentity({ userId: 'user-a', householdId: 'house-a' })
+})
 
 describe('scenarios cloud mapping (savedAt ↔ saved_at)', () => {
   it('writes saved_at (snake) and reads back savedAt (camel)', async () => {
@@ -73,6 +87,7 @@ describe('saveScenarios is upsert-only (plan 43 — never deletes)', () => {
     await expect(saveScenarios([
       { id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS },
     ])).rejects.toMatchObject({ category: 'validation' })
+    expect(syncCoordinator.isDirty('scenarios')).toBe(true)
   })
 
   it('saving a shorter list does NOT delete the omitted rows', async () => {
@@ -119,19 +134,70 @@ describe('deleteScenarios (the only path that removes cloud rows)', () => {
       category: 'unknown',
       message: 'Kunde inte spara ändringen. Försök igen.',
     })
+    expect(syncCoordinator.getOutbox()[0]).toMatchObject({ operation: 'delete', entityIds: ['a'] })
   })
 
-  it('passes an array to .in() (no interpolated string filter)', async () => {
+  it('passes an exact resource and id array to the durable delete RPC', async () => {
     await deleteScenarios(['id,with)chars', 'plain'])
-    expect(lastDeleteIn?.col).toBe('id')
-    expect(lastDeleteIn?.ids).toEqual(['id,with)chars', 'plain'])
+    expect(lastDeleteRpc?.resource).toBe('scenarios')
+    expect(lastDeleteRpc?.ids).toEqual(['id,with)chars', 'plain'])
   })
 
   it('no-ops on an empty id list (never issues a delete)', async () => {
     await saveScenarios([{ id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS }])
     await deleteScenarios([])
-    expect(lastDeleteIn).toBeNull()
+    expect(lastDeleteRpc).toBeNull()
     expect(rows.map((r) => r.id)).toEqual(['a'])
+  })
+})
+
+describe('scenario dirty-cache reconciliation', () => {
+  it('imports legacy scenarios only from the explicitly assigned active scope', async () => {
+    syncCoordinator.writeScoped('legacy-import-complete', '1')
+    syncCoordinator.writeScoped('bostadskalkyl_scenarios_v1', JSON.stringify([
+      { id: 'legacy', name: 'Äldre', savedAt: '2025-01-01', inputs: DEFAULT_INPUTS },
+    ]))
+    expect(await loadScenarios()).toMatchObject([{ id: 'legacy', name: 'Äldre' }])
+    expect(rows.map((row) => row.id)).toContain('legacy')
+  })
+
+  it('prefers an explicitly assigned newer scenario cache over the older backup', async () => {
+    syncCoordinator.writeScoped('legacy-import-complete', '1')
+    syncCoordinator.writeScoped('bostadskalkyl_scenarios_v1', JSON.stringify([
+      { id: 'old', name: 'Äldre backup', savedAt: '2025-01-01', inputs: DEFAULT_INPUTS },
+    ]))
+    syncCoordinator.writeScoped('bostadskalkyl_scenarios_cache_v1', JSON.stringify([
+      { id: 'new', name: 'Nyare lokal', savedAt: '2026-07-13', inputs: DEFAULT_INPUTS },
+    ]))
+    expect(await loadScenarios()).toMatchObject([{ id: 'new', name: 'Nyare lokal' }])
+    expect(rows.map((row) => row.id)).toContain('new')
+    expect(rows.map((row) => row.id)).not.toContain('old')
+  })
+
+  it('keeps a newer local scenario visible across reload and clears it after retry', async () => {
+    rows.push({ id: 'old', name: 'Cloud old', saved_at: '2026-01-01', inputs: {}, constants: null })
+    mutationError = { message: 'Failed to fetch' }
+    const local = { id: 'new', name: 'Local newer', savedAt: '2026-07-13', inputs: DEFAULT_INPUTS }
+
+    await expect(saveScenarios([local])).rejects.toMatchObject({ category: 'offline' })
+    mutationError = null
+    expect(await loadScenarios()).toEqual([local])
+    expect(rows.map((row) => row.id)).toEqual(['old'])
+
+    await syncCoordinator.replay()
+    expect(syncCoordinator.isDirty('scenarios')).toBe(false)
+    expect(rows.map((row) => row.id).sort()).toEqual(['new', 'old'])
+  })
+
+  it('keeps a failed delete tombstone visible across reload', async () => {
+    const scenario = { id: 'a', name: 'A', savedAt: '2026-01-01', inputs: DEFAULT_INPUTS }
+    await saveScenarios([scenario])
+    mutationError = { message: 'Failed to fetch' }
+    await expect(deleteScenarios(['a'])).rejects.toBeTruthy()
+    mutationError = null
+
+    expect(await loadScenarios()).toEqual([])
+    expect(rows.map((row) => row.id)).toEqual(['a'])
   })
 })
 

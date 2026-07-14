@@ -19,6 +19,7 @@ import * as Store from '../lib/mortgage-store'
 import { defaultSettings } from '../lib/mortgage'
 
 vi.mock('../lib/mortgage-store')
+vi.mock('../lib/hushallsbudget-store', () => ({ loadBudget: vi.fn(async () => null) }))
 vi.mock('@number-flow/react', () => ({
   default: ({ value }: { value: number }) => <span>{value}</span>,
 }))

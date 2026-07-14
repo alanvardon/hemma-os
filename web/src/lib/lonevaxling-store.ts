@@ -1,6 +1,6 @@
 /* lonevaxling-store.ts — persistence for Löneväxling. Phase 16g commit 2: the
    whole inputs object persists as one row in the shared tool_state table
-   (tool = 'lonevaxling'), with a localStorage write-through cache for offline.
+   (tool = 'lonevaxling'), with a scoped cache and durable operation outbox.
    The persistence skeleton (cache, first-login import, load/save) lives in
    ./tool-store (createToolStateStore); only the `_merge` sanitizer and the key
    strings are tool-specific. Exported signatures unchanged, so Lonevaxling.tsx
@@ -35,5 +35,5 @@ const store = createToolStateStore<LonevaxlingInputs>({
 
 // Read the persisted inputs. null = nothing stored yet (caller keeps defaults).
 export const load = store.load
-// Persist the whole inputs blob. Never rejects — the caller fires and forgets.
+// Persist through the durable outbox; rejects until the cloud acknowledges.
 export const save = store.save

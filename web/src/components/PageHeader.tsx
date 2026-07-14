@@ -24,7 +24,7 @@ export default function PageHeader({ backTo, title, tagline, saveVisible = false
         </div>
       </div>
       <div className="header-actions">
-        <span className={'save-state' + (saveVisible ? ' show' : '')}>Saved ✓</span>
+        <span className={'save-state' + (saveVisible ? ' show' : '')}>Sparat ✓</span>
         {actions}
       </div>
     </header>

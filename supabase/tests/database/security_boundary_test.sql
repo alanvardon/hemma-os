@@ -173,7 +173,10 @@ select ok(
   )
   and not has_function_privilege('public', 'public.unsettle_payment(text)', 'execute')
   and not has_function_privilege('anon', 'public.unsettle_payment(text)', 'execute')
-  and has_function_privilege('authenticated', 'public.unsettle_payment(text)', 'execute'),
+  and has_function_privilege('authenticated', 'public.unsettle_payment(text)', 'execute')
+  and not has_function_privilege('public', 'public.delete_household_rows(text,text[])', 'execute')
+  and not has_function_privilege('anon', 'public.delete_household_rows(text,text[])', 'execute')
+  and has_function_privilege('authenticated', 'public.delete_household_rows(text,text[])', 'execute'),
   'authenticated RPCs are not executable by PUBLIC or anon'
 );
 

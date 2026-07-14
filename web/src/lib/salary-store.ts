@@ -1,7 +1,7 @@
 /* salary-store.ts — append-only log of monthly salary submissions.
    Data-access module for the Hushållsbudget pot. Phase 16b: reads and writes the
-   Supabase `salary_submissions` table (cloud source-of-truth), with a
-   localStorage write-through CACHE so the log still renders offline. Every
+   Supabase `salary_submissions` table, with a scoped durable cache/outbox so
+   dirty local rows remain visible until cloud acknowledgement. Every
    exported signature is unchanged, so the call sites in Hushallsbudget.tsx don't
    change. supabase-js never throws — it returns { data, error } — so we check
    `error` and fall back to the cache on reads / surface it on writes.
@@ -15,9 +15,11 @@
 
 import type { SalarySubmission } from './hushallsbudget'
 import { supabase } from './supabase'
-import { toPersistenceError } from './persistence-error'
 import { genId } from './id'
-import { makeImportOnce } from './store-helpers'
+import { makeImportOnce, materializeImport } from './store-helpers'
+import { syncCoordinator } from './sync'
+import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
+import { legacyImportAssignedToActive } from './legacy-data'
 
 // Legacy pre-Supabase history — import source + backup. (Exported name kept for
 // back-compat; it is no longer the cache.)
@@ -25,6 +27,7 @@ export const STORAGE_KEY = 'bostadskalkyl_salary_log_v1'
 const CACHE_KEY = 'bostadskalkyl_salary_cache_v1'
 const IMPORT_FLAG = 'bostadskalkyl_salary_supabase_imported'
 const TABLE = 'salary_submissions'
+const RESOURCE = TABLE
 const VERSION = 2 // v2 adds income_items (itemised income per person)
 
 // Forward-migrate a stored row to the current shape. v1 rows have scalar
@@ -43,8 +46,12 @@ function _migrate(row: SalarySubmission): SalarySubmission {
 
 // ── localStorage cache (offline fallback) ───────────────────────────────────
 function _readCache(): SalarySubmission[] {
+  return _readCacheFrom(syncCoordinator.captureScope())
+}
+
+function _readCacheFrom(scope: ReturnType<typeof syncCoordinator.captureScope>): SalarySubmission[] {
   try {
-    const raw = localStorage.getItem(CACHE_KEY)
+    const raw = scope.read(CACHE_KEY)
     if (!raw) return []
     const data = JSON.parse(raw)
     if (!data || !Array.isArray(data.submissions)) return []
@@ -56,7 +63,7 @@ function _readCache(): SalarySubmission[] {
 
 function _writeCache(submissions: SalarySubmission[]): void {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ version: VERSION, submissions }))
+    syncCoordinator.writeScoped(CACHE_KEY, JSON.stringify({ version: VERSION, submissions }))
   } catch {
     /* private mode / quota — cache is best-effort */
   }
@@ -65,23 +72,23 @@ function _writeCache(submissions: SalarySubmission[]): void {
 // The pre-Supabase history, normalised + guaranteed id/created_at, ready to
 // upsert. Read-only: this key is never written after the swap, so the original
 // data survives even if every cloud write fails.
-function _readLegacy(): SalarySubmission[] {
+function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): SalarySubmission[] {
+  const raw = scope.read(STORAGE_KEY)
+  if (!raw) return []
+  let data: unknown
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const data = JSON.parse(raw)
-    const arr: SalarySubmission[] = Array.isArray(data)
-      ? data
-      : (data && Array.isArray(data.submissions)) ? data.submissions : []
-    return arr.map((r) => {
+    data = JSON.parse(raw)
+  } catch { return [] }
+  const arr: SalarySubmission[] = Array.isArray(data)
+    ? data
+    : (data && Array.isArray((data as { submissions?: unknown }).submissions))
+      ? (data as { submissions: SalarySubmission[] }).submissions : []
+  return materializeImport('salary-legacy', raw, () => arr.map((r) => {
       const row = _migrate({ ...r })
       if (!row.id) row.id = genId('sub')
       if (!row.created_at) row.created_at = new Date().toISOString()
       return row
-    })
-  } catch {
-    return []
-  }
+    }))
 }
 
 // Newest first (by created_at). Used for the cache fallback path; the cloud
@@ -118,14 +125,28 @@ function _row(s: SalarySubmission): Record<string, unknown> {
 // localStorage history into the cloud (keyed on id, so re-running adds nothing).
 // Runs per-origin/per-device — the real history lives on the live Pages origin,
 // so this matters there, not on localhost.
-const _importLocalOnce = makeImportOnce(IMPORT_FLAG, async () => {
-  const legacy = _readLegacy()
-  if (legacy.length) {
-    const { error } = await supabase.from(TABLE).upsert(legacy.map(_row), { onConflict: 'id' })
-    if (error) return false
-  }
-  return true
+const _importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(IMPORT_FLAG), async () => {
+  const scope = syncCoordinator.captureScope()
+  if (!legacyImportAssignedToActive() || !scope.isActive()) return true
+  const legacy = _readLegacy(scope)
+  if (!legacy.length) return true
+  if (!scope.isActive()) return false
+  try {
+    await syncCoordinator.mutateBatch([{
+      resource: RESOURCE,
+      operation: 'upsert',
+      payload: { rows: legacy.map(_row), seed: true },
+      entityIds: legacy.map((row) => row.id!),
+      applyLocal: () => {
+        const ids = new Set(legacy.map((row) => row.id))
+        _writeCache(_sortedDesc([...legacy, ..._readCache().filter((row) => !ids.has(row.id))]))
+      },
+    }])
+    return true
+  } catch { return false }
 })
+
+registerTableSync(RESOURCE, TABLE)
 
 // ── Public API (signatures unchanged) ───────────────────────────────────────
 
@@ -133,40 +154,40 @@ const _importLocalOnce = makeImportOnce(IMPORT_FLAG, async () => {
 // imported rows appear in this very call), then reads cloud; on any error
 // (offline / RLS / down) serves the last-known cache so the log still renders.
 export async function list(): Promise<SalarySubmission[]> {
+  const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select('*')
-    .order('created_at', { ascending: false })
-  if (error || !data) return _sortedDesc(_readCache())
-  const rows = (data as SalarySubmission[]).map(_migrate)
-  _writeCache(rows)
+  const fallback = () => _sortedDesc(withoutTombstones(_readCacheFrom(scope), cachedTombstoneIds(scope, RESOURCE)))
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCE)) return fallback()
+  const [result, tombstones] = await Promise.all([
+    supabase.from(TABLE).select('*').order('created_at', { ascending: false }),
+    loadTombstoneIds(scope, RESOURCE),
+  ])
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCE)) return fallback()
+  if (result.error || !result.data) return fallback()
+  const rows = withoutTombstones((result.data as SalarySubmission[]).map(_migrate), tombstones)
+  if (scope.isActive()) scope.write(CACHE_KEY, JSON.stringify({ version: VERSION, submissions: rows }))
   return rows
 }
 
-// Append one record. Stamps id + created_at (the DB would default them too),
-// inserts to the cloud, and — only once the write succeeded — patches the cache,
-// then resolves the saved row. A failed write throws WITHOUT touching the cache
-// (plan 47: no phantom cached rows), so the caller can surface it — NB the
-// pre-Supabase store never rejected here, so the call site guards for it.
+// Append one record. The stable id/timestamp and operation are durably queued
+// before the optimistic cache patch. A failed replay remains visibly dirty and
+// retryable; only server acknowledgement clears the operation.
 export async function add(record: SalarySubmission): Promise<SalarySubmission> {
   const saved: SalarySubmission = {
     ...record,
     id: record.id || genId('sub'),
     created_at: record.created_at || new Date().toISOString(),
   }
-  const { error } = await supabase.from(TABLE).insert(_row(saved))
-  if (error) throw toPersistenceError(error)
-  _writeCache([saved, ..._readCache().filter((r) => r.id !== saved.id)])
+  await queueTableUpsert(RESOURCE, [_row(saved)], [saved.id!], () => {
+    _writeCache([saved, ..._readCache().filter((r) => r.id !== saved.id)])
+  })
   return saved
 }
 
 // Drop one record by id; resolves the remaining (cached) count.
 export async function remove(id: string): Promise<number> {
-  const { error } = await supabase.from(TABLE).delete().eq('id', id)
-  if (error) throw toPersistenceError(error)
   const rows = _readCache().filter((r) => r.id !== id)
-  _writeCache(rows)
+  await queueTableDelete(RESOURCE, [id], () => _writeCache(rows))
   return rows.length
 }
 
@@ -191,24 +212,34 @@ export async function importJSON(text: string): Promise<number> {
       : null
   if (!incoming) throw new Error('No submissions found in that file.')
 
+  const scope = syncCoordinator.captureScope()
+  const normalized = materializeImport('salary-backup', text, () => incoming
+    .filter((raw) => !!raw && typeof raw === 'object')
+    .map((raw) => {
+      const row = _migrate({ ...raw })
+      if (!row.id) row.id = genId('sub')
+      if (!row.created_at) row.created_at = new Date().toISOString()
+      return row
+    }))
+
   const existing = await list()
+  if (!scope.isActive()) throw new Error('Sync identity changed during salary import')
   const seen = new Set(existing.map((r) => r.id))
 
   const toAdd: SalarySubmission[] = []
-  incoming.forEach((raw) => {
-    if (!raw || typeof raw !== 'object') return
-    const row = _migrate({ ...raw })
-    if (!row.id) row.id = genId('sub')
+  normalized.forEach((row) => {
     if (seen.has(row.id)) return // already have it — skip (idempotent restore)
-    if (!row.created_at) row.created_at = new Date().toISOString()
     seen.add(row.id)
     toAdd.push(row)
   })
 
   if (toAdd.length) {
-    const { error } = await supabase.from(TABLE).insert(toAdd.map(_row))
-    if (error) throw toPersistenceError(error)
-    _writeCache(_sortedDesc([...toAdd, ..._readCache()]))
+    await syncCoordinator.mutate({
+      resource: RESOURCE, operation: 'upsert', payload: { rows: toAdd.map(_row), seed: true },
+      entityIds: toAdd.map((row) => row.id!), applyLocal: () => {
+        _writeCache(_sortedDesc([...toAdd, ..._readCache()]))
+      },
+    })
   }
   return toAdd.length
 }

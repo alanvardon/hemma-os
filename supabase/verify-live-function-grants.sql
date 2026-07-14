@@ -23,6 +23,7 @@ where p.oid in (
   'public.email_may_sign_in(text)'::pg_catalog.regprocedure,
   'public.household_roster()'::pg_catalog.regprocedure,
   'public.settle_items(text,jsonb,text,text,numeric,text,text,timestamp with time zone)'::pg_catalog.regprocedure,
-  'public.unsettle_payment(text)'::pg_catalog.regprocedure
+  'public.unsettle_payment(text)'::pg_catalog.regprocedure,
+  'public.delete_household_rows(text,text[])'::pg_catalog.regprocedure
 )
 order by p.proname;
