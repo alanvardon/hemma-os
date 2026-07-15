@@ -181,7 +181,7 @@ test('a saved loan part survives a real reload (save → cloud → re-read)', as
   expect(errors).toEqual([])
 })
 
-test('an extra amortering is one canonical payment and one linked Insatser row after reload', async ({ page }) => {
+test('an extra amortering is one canonical payment and one linked Extra amorteringar row after reload', async ({ page }) => {
   const errors = trackPageErrors(page)
   await mockBackend(page)
   await page.goto('/#/bolanekoll')
@@ -214,14 +214,12 @@ test('an extra amortering is one canonical payment and one linked Insatser row a
   // is the exact resolved value used for the hero/KPI.
   await expect(remainingDebt).toHaveAttribute('data-current-debt', '980000')
   await expect(page.locator('#betalningar').locator('..')).toContainText(/20\s*000 kr/)
-  await expect(page.locator('#insatser')).toContainText('Extra amortering / Insats')
-  await expect(page.locator('#insatser')).toContainText(/20\s*000 kr/)
+  await expect(page.locator('#extra-amorteringar')).toContainText(/20\s*000 kr/)
 
   await page.reload()
   await expect(page.locator('.metric-chip', { hasText: 'Remaining debt' })).toHaveAttribute('data-current-debt', '980000')
   await expect(page.locator('#betalningar').locator('..')).toContainText(/20\s*000 kr/)
-  await expect(page.locator('#insatser')).toContainText('Extra amortering / Insats')
-  await expect(page.locator('#insatser')).toContainText(/20\s*000 kr/)
+  await expect(page.locator('#extra-amorteringar')).toContainText(/20\s*000 kr/)
   expect(errors).toEqual([])
 })
 

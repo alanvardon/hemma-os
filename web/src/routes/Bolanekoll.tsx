@@ -19,13 +19,13 @@ import {
   parseCsv, parseAmount, autoMapColumns, classifyKind,
   makePayment, flagDuplicates, assignPaymentsToPart,
   partBalance, totalBalance, totalAmortized, totalInterest, ranteavdrag, resolvePartBalance,
-  propertyValue, equity, loanToValue, otherOwner,
+  propertyValue, equity, loanToValue,
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
   expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
-  contributionSplit, settlement, todayISO,
+  todayISO,
   bankForPart, suggestBankProfile, bankProfileDrift,
 } from '../lib/mortgage'
 import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, ExpectedCharge, Bank, Mortgage } from '../lib/mortgage'
@@ -228,9 +228,11 @@ export default function Bolanekoll() {
   const ownedPct = useMemo(() => costBasisOwnedPct(price, balance), [price, balance])
   const cbSplit = useMemo(() => costBasisSplit(price, balance, payments, contributions, settings), [price, balance, payments, contributions, settings])
   const deposit = useMemo(() => derivedDeposit(price, parts, payments), [price, parts, payments])
-  // `down_payment` is a canonical Insats source even if an old/corrupt cache
-  // lacks its redundant classification flag.
-  const insatsPays = useMemo(() => payments.filter(p => p.kind === 'down_payment' || p.is_insats), [payments])
+  const downPayments = useMemo(() => payments.filter(p => p.kind === 'down_payment'), [payments])
+  const extraAmortizationPayments = useMemo(
+    () => payments.filter(p => p.kind === 'amortization' && p.is_insats),
+    [payments],
+  )
   const timeline = useMemo(() => equityTimeline(parts, payments, valuations, settings), [parts, payments, valuations, settings])
 
   const loanGroups = useMemo(() => groupLoanParts(parts, periods, payments, today), [parts, periods, payments, today])
@@ -419,9 +421,6 @@ export default function Bolanekoll() {
     if (r.drift == null || r.start_balance == null) return false
     return Math.abs(r.drift) >= Math.max(r.start_balance * 0.01, 5000)
   }), [parts, payments])
-
-  const contribSplit = useMemo(() => settings.track_contributions ? contributionSplit(payments, contributions, settings) : null, [payments, contributions, settings])
-  const settl = useMemo(() => settings.track_contributions ? settlement(payments, contributions, settings) : null, [payments, contributions, settings])
 
   const insightsReady = parts.length > 0 && valuations.length > 0 && payments.length > 0
 
@@ -616,7 +615,7 @@ export default function Bolanekoll() {
     try {
       await Store.saveSettings({ track_contributions: true })
       await refresh(); flashSaved()
-      showToast('Spårning av insatser är påslagen.')
+      showToast('Ägarfördelning från insatt kapital är påslagen.')
     } catch (err) { saveErr(err) }
   }
   async function handleSaveVal(data: Omit<Valuation, 'id' | 'created_at'>) {
@@ -835,7 +834,7 @@ export default function Bolanekoll() {
             <div className="split-head split-head-cta">
               <span className="split-head-label">Ägarandel · Ownership split</span>
               <button type="button" className="link-btn split-cta" onClick={() => handleEnableTracking()}>
-                Track who paid in what — turn on insatser →
+                Visa ägarfördelning från insatt kapital →
               </button>
             </div>
           )}
@@ -1588,6 +1587,7 @@ export default function Bolanekoll() {
               </DropdownMenu.Root>
             </div>
           </div>
+          <p className="contrib-note">Saldo är utgångspunkten för lånedelen. Bara betalningar och amorteringar med senare datum ändrar visad skuld; samma dags eller äldre rader kan redan ingå i Saldo.</p>
           <motion.div key={paymentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}>
             {!filteredPayments.length ? (
@@ -1623,7 +1623,7 @@ export default function Bolanekoll() {
                             {p.date || '—'}
                           </td>
                           <td className="col-part">{partNameById(p.loan_part_id)}</td>
-                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.source === 'predicted' && <span className="row-flag row-flag-predicted">förväntad</span>}{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}{estimatedPaymentIds.has(p.id) && <span className="row-flag row-flag-estimated">ränta saknas · uppskattat</span>}</td>
+                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.source === 'predicted' && <span className="row-flag row-flag-predicted">förväntad</span>}{p.kind === 'amortization' && p.is_insats && <span className="row-flag row-flag-insats">extra amortering</span>}{estimatedPaymentIds.has(p.id) && <span className="row-flag row-flag-estimated">ränta saknas · uppskattat</span>}</td>
                           <td className="num col-amount">{fmtMoney(p.amount)}</td>
                           <td className="num col-balance">{p.balance_after != null ? fmtMoney(p.balance_after) : '—'}</td>
                           <td className="col-act">
@@ -1640,7 +1640,7 @@ export default function Bolanekoll() {
                               <td colSpan={6}>
                                 <CellReveal reduce={reduceMotion}>
                                 <div className="pay-detail-inner">
-                                  <span className="pay-detail-label">Insats paid by</span>
+                                  <span className="pay-detail-label">Betalad av</span>
                                   {p.paid_split ? (
                                     <>
                                       <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(p.paid_split.a)}</span>
@@ -1648,7 +1648,7 @@ export default function Bolanekoll() {
                                     </>
                                   ) : (
                                     <span className="alloc-chip">{p.paid_by === 'joint'
-                                      ? 'Joint · split by ownership'
+                                      ? 'Gemensamt · enligt ägarfördelning'
                                       : <><b>{nameOf(p.paid_by === 'b' ? 'b' : 'a')}</b> {fmtMoney(p.amount)}</>}</span>
                                   )}
                                   {p.description && <span className="pay-detail-note">{p.description}</span>}
@@ -1681,41 +1681,48 @@ export default function Bolanekoll() {
           )}
         </section>
 
-        {/* ── Insatser — a linked projection of the canonical payment ledger ── */}
-        <section className="card" id="insatser">
+        {/* ── Linked canonical projections — neither section owns its own data. */}
+        <section className="card" id="kontantinsatser">
           <div className="card-head">
-            <h2>Insatser <span className="card-en">· Contributions</span></h2>
-            <span className="count-pill">{insatsPays.length}</span>
+            <h2>Kontantinsatser</h2>
+            <span className="count-pill">{downPayments.length}</span>
             <div className="card-actions"><a className="btn btn-ghost" href="#betalningar">Öppna Betalningar</a></div>
           </div>
-          <p className="contrib-note">Kontantinsatser och extra amorteringar redigeras i Betalningar. Den här vyn är alltid länkad till samma källposter.</p>
-          {!settings.track_contributions && (
-            <div className="empty-stub">
-              <p>Slå på spårning för att se den beräknade ägarfördelningen.</p>
-              <button type="button" className="btn btn-ghost" onClick={() => handleEnableTracking()}>Slå på spårning</button>
-            </div>
-          )}
-          {contribSplit && (
-            <>
-              <div className="split-row">
-                <div className={'split-card' + (settings.i_am !== 'b' ? ' is-accent' : '')}><span className="split-name">{nameOf('a')} · {fmtPct(contribSplit.a_pct)}</span><span className="split-val">{fmtMoney(contribSplit.a)}</span><span className="split-sub">insatt kapital</span></div>
-                <div className={'split-card' + (settings.i_am === 'b' ? ' is-accent' : '')}><span className="split-name">{nameOf('b')} · {fmtPct(contribSplit.b_pct)}</span><span className="split-val">{fmtMoney(contribSplit.b)}</span><span className="split-sub">insatt kapital</span></div>
-              </div>
-              <p className="contrib-note">{settl?.owes && settl.amount > 0
-                ? nameOf(settl.owes) + ' owes ' + nameOf(otherOwner(settl.owes)) + ' ' + fmtMoney(settl.amount) + ' to reach the target ownership split.'
-                : contribSplit.total > 0 ? 'Insatserna följer den valda ägarfördelningen.' : 'Lägg till en kontantinsats eller extra amortering i Betalningar.'}</p>
-            </>
-          )}
-          {!insatsPays.length ? <p className="empty">Inga kontantinsatser eller extra amorteringar ännu.</p> : (
+          <p className="contrib-note">Källposter av typen Kontantinsats. Redigera eller ta bort dem i samma Betalningar-liggare.</p>
+          {!downPayments.length ? <p className="empty">Inga kontantinsatser ännu.</p> : (
             <div className="table-wrap">
               <table className="data-table table-cards insats-table">
-                <thead><tr><th className="col-date">Datum</th><th>Typ</th><th>Betalad av</th><th>Lånedel</th><th className="num">Belopp</th><th className="col-act" /></tr></thead>
-                <tbody>{insatsPays.map(p => (
+                <thead><tr><th className="col-date">Datum</th><th>Betalad av</th><th>Lånedel</th><th className="num">Belopp</th><th className="col-act" /></tr></thead>
+                <tbody>{downPayments.map(p => (
                   <tr key={p.id} data-source-payment-id={p.id}>
                     <td className="col-date">{p.date || '—'}</td>
-                    <td>{p.kind === 'down_payment' ? 'Kontantinsats' : 'Extra amortering / Insats'}</td>
                     <td className="col-owner">{p.paid_split ? `${nameOf('a')} ${fmtMoney(p.paid_split.a)} · ${nameOf('b')} ${fmtMoney(p.paid_split.b)}` : p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
-                    <td className="col-part">{p.kind === 'down_payment' ? '—' : partNameById(p.loan_part_id)}</td>
+                    <td className="col-part">—</td>
+                    <td className="num col-amt">{fmtMoney(p.amount)}</td>
+                    <td className="col-act"><button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button><button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={() => { if (confirm('Ta bort betalningen?')) handleDeletePay(p.id) }}><Icon icon={X} /></button></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="card" id="extra-amorteringar">
+          <div className="card-head">
+            <h2>Extra amorteringar</h2>
+            <span className="count-pill">{extraAmortizationPayments.length}</span>
+            <div className="card-actions"><a className="btn btn-ghost" href="#betalningar">Öppna Betalningar</a></div>
+          </div>
+          <p className="contrib-note">Källposter av typen Extra amortering. Vanliga amorteringar visas bara i Betalningar.</p>
+          {!extraAmortizationPayments.length ? <p className="empty">Inga extra amorteringar ännu.</p> : (
+            <div className="table-wrap">
+              <table className="data-table table-cards insats-table">
+                <thead><tr><th className="col-date">Datum</th><th>Betalad av</th><th>Lånedel</th><th className="num">Belopp</th><th className="col-act" /></tr></thead>
+                <tbody>{extraAmortizationPayments.map(p => (
+                  <tr key={p.id} data-source-payment-id={p.id}>
+                    <td className="col-date">{p.date || '—'}</td>
+                    <td className="col-owner">{p.paid_split ? `${nameOf('a')} ${fmtMoney(p.paid_split.a)} · ${nameOf('b')} ${fmtMoney(p.paid_split.b)}` : p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
+                    <td className="col-part">{partNameById(p.loan_part_id)}</td>
                     <td className="num col-amt">{fmtMoney(p.amount)}</td>
                     <td className="col-act"><button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button><button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={() => { if (confirm('Ta bort betalningen?')) handleDeletePay(p.id) }}><Icon icon={X} /></button></td>
                   </tr>
