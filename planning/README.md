@@ -320,7 +320,7 @@ linked derived view.
 
 | File | Priority | Depends on | Scope | Summary | Owner | Effort |
 |------|----------|------------|-------|---------|-------|--------|
-| [107-bolanekoll-balance-propagation.md](107-bolanekoll-balance-propagation.md) | High | — | mortgage balance engine + persistence + Bolånekoll UI | Replace the competing Saldo/amortering branches with one chronological balance resolver; Betalning reduces principal by Betalning−Ränta (full amount provisionally when Ränta is missing, with an estimate warning), and every explicit Amortering remains separately additive. Route hero, debt, LTV/DTI, cost basis, charts, milestones, forecasts, hub and cross-tool figures through the same debt. Make Betalningar the sole editor and Insatser a linked view; migrate legacy contributions idempotently. | GPT-5.6 Sol | L |
+| [107-bolanekoll-balance-propagation.md](completed/107-bolanekoll-balance-propagation.md) | High | — | mortgage balance engine + persistence + Bolånekoll UI | Replace the competing Saldo/amortering branches with one chronological balance resolver; Betalning reduces principal by Betalning−Ränta (full amount provisionally when Ränta is missing, with an estimate warning), and every explicit Amortering remains separately additive. Route hero, debt, LTV/DTI, cost basis, charts, milestones, forecasts, hub and cross-tool figures through the same debt. Make Betalningar the sole editor and Insatser a linked view; migrate legacy contributions idempotently. | GPT-5.6 Sol | L |
 
 Standalone correctness plan; the owner approved the financial semantics and
 persisted-data consolidation on 2026-07-15. It does not change valuations,

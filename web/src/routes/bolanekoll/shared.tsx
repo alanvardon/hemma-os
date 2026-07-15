@@ -27,7 +27,7 @@ export function CellReveal({ reduce, children }: { reduce: boolean | null; child
 // Kind 'payment' is the bank's per-part "Betalning" — the TOTAL debited,
 // ränta included. Kind 'amortization' is genuine principal (manual rows,
 // insatser), so it keeps the label 'Amortering'.
-const KIND_LABELS: Record<string, string> = { interest: 'Ränta', amortization: 'Amortering', payment: 'Betalning', loan: 'Lån', fee: 'Avgift', other: 'Övrigt' }
+const KIND_LABELS: Record<string, string> = { interest: 'Ränta', amortization: 'Amortering', payment: 'Betalning', down_payment: 'Kontantinsats', loan: 'Lån', fee: 'Avgift', other: 'Övrigt' }
 export function kindLabel(k: string): string { return KIND_LABELS[k] || k || '—' }
 // Payments ledger paginates: show the most recent PAY_PAGE, reveal more on click.
 export const PAY_PAGE = 20

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   purchaseValuation, purchasePrice, costBasisEquity, costBasisOwnedPct,
   derivedDeposit, costBasisSplit, insatsPayments, totalAmortized, defaultSettings,
-  contributionSplit, makePayment,
+  contributionSplit, legacyContributionPayment, makePayment,
 } from './mortgage'
 import type { LoanPart, Payment, Valuation, Contribution } from './mortgage'
 
@@ -129,5 +129,67 @@ describe('contributionSplit honours a per-payment paid_split', () => {
     expect(p.paid_split).toEqual({ a: 120_000, b: 80_000 })
     const plain = makePayment({ amount: 5_000, kind: 'interest' })
     expect(plain.paid_split).toBeNull()
+  })
+})
+
+describe('contributionSplit uses canonical Betalning principal', () => {
+  it('attributes inferred principal jointly while explicit amortering keeps its owner', () => {
+    const pays: Payment[] = [
+      { id: 'pay', created_at: '', loan_part_id: 'part-1', date: '2024-02-01', kind: 'payment', description: '', amount: 6_000, balance_after: null, paid_by: 'a', paid_split: { a: 6_000, b: 0 }, source: 'manual' },
+      { id: 'interest', created_at: '', loan_part_id: 'part-1', date: '2024-02-28', kind: 'interest', description: '', amount: 3_000, balance_after: null, paid_by: 'b', source: 'manual' },
+      { id: 'extra', created_at: '', loan_part_id: 'part-1', date: '2024-02-28', kind: 'amortization', description: '', amount: 2_000, balance_after: null, paid_by: 'a', source: 'manual', is_insats: true },
+    ]
+
+    // Betalning principal is 3 000 and always joint → 1 500 each at the
+    // configured 50/50 target. The explicit 2 000 remains attributed to a.
+    expect(contributionSplit(pays, [], settings)).toMatchObject({
+      a: 3_500,
+      b: 1_500,
+      joint: 3_000,
+      total: 5_000,
+      a_pct: 70,
+      b_pct: 30,
+    })
+  })
+
+  it('revises the joint amount when a missing Ränta row arrives', () => {
+    const debit: Payment = { id: 'pay', created_at: '', loan_part_id: 'part-1', date: '2024-02-01', kind: 'payment', description: '', amount: 6_000, balance_after: null, paid_by: 'joint', source: 'manual' }
+    const interest: Payment = { ...debit, id: 'interest', date: '2024-02-28', kind: 'interest', amount: 3_000 }
+
+    expect(contributionSplit([debit], [], settings).joint).toBe(6_000)
+    expect(contributionSplit([debit, interest], [], settings).joint).toBe(3_000)
+  })
+})
+
+describe('canonical contribution payments', () => {
+  it('normalises Betalning and Ränta to joint without changing explicit amortering attribution', () => {
+    expect(makePayment({ kind: 'payment', paid_by: 'a', paid_split: { a: 6_000, b: 0 } })).toMatchObject({ paid_by: 'joint', paid_split: null })
+    expect(makePayment({ kind: 'interest', paid_by: 'b', paid_split: { a: 0, b: 3_000 } })).toMatchObject({ paid_by: 'joint', paid_split: null })
+    expect(makePayment({ kind: 'amortization', paid_by: 'a', paid_split: { a: 2_000, b: 0 } })).toMatchObject({ paid_by: 'a', paid_split: { a: 2_000, b: 0 } })
+  })
+
+  it('normalises a down payment to an attributable, loan-independent Insats row', () => {
+    expect(makePayment({ kind: 'down_payment', loan_part_id: 'part-1', paid_by: 'b', amount: 400_000 })).toMatchObject({
+      kind: 'down_payment', loan_part_id: null, paid_by: 'b', amount: 400_000, is_insats: true,
+    })
+  })
+
+  it('converts a legacy contribution deterministically and rejects invented financial fields', () => {
+    const legacy: Contribution = { id: 'c-a', created_at: '2021-09-01T10:00:00.000Z', owner: 'a', date: '2021-09-01', amount: 600_000, note: 'Kontantinsats' }
+    const expected = {
+      id: 'legacy-contribution:c-a', created_at: legacy.created_at, loan_part_id: null,
+      date: legacy.date, kind: 'down_payment', description: 'Kontantinsats', amount: 600_000,
+      paid_by: 'a', source: 'legacy-contribution:c-a', is_insats: true,
+    }
+    expect(legacyContributionPayment(legacy)).toMatchObject(expected)
+    expect(legacyContributionPayment(legacy)).toMatchObject(expected)
+    expect(legacyContributionPayment({ ...legacy, amount: 0 })).toBeNull()
+    expect(legacyContributionPayment({ ...legacy, date: '2021-02-30' })).toBeNull()
+    expect(legacyContributionPayment({ ...legacy, owner: undefined })).toBeNull()
+  })
+
+  it('counts a canonical down payment once when its legacy source row is also present', () => {
+    const canonical = legacyContributionPayment(contributions[0])!
+    expect(contributionSplit([canonical], contributions, settings)).toMatchObject({ a: 600_000, b: 400_000, total: 1_000_000 })
   })
 })

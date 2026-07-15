@@ -13,7 +13,7 @@
      cache is what makes the first-login import safe.
    - CACHE_KEY   — the write-through offline cache mirroring the whole envelope. */
 
-import { defaultSettings, makeRatePeriod } from './mortgage'
+import { defaultSettings, legacyContributionPayment, makeRatePeriod } from './mortgage'
 import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage } from './mortgage'
 import { supabase } from './supabase'
 import { makeImportOnce, materializeImport, stamp } from './store-helpers'
@@ -33,7 +33,7 @@ import {
 export const STORAGE_KEY = 'bostadskalkyl_mortgage_v1'
 const CACHE_KEY = 'bostadskalkyl_mortgage_cache_v1'
 const IMPORT_FLAG = 'bostadskalkyl_mortgage_supabase_imported'
-const VERSION = 4
+const VERSION = 5
 const STATE = 'tool_state'
 const SETTINGS_TOOL = 'bolanekoll-settings'
 const SETTINGS_RESOURCE = `tool_state:${SETTINGS_TOOL}`
@@ -156,7 +156,12 @@ const NOT_NULL_DEFAULTS: Record<string, unknown> = {
 // bank profile lock must be clearable back to auto (year_basis_source → null),
 // so these two columns opt into explicit-null. Scoped to just these columns to
 // avoid changing the omit-null behaviour every other table relies on.
-const NULLABLE_EXPLICIT: ReadonlySet<string> = new Set(['year_basis', 'year_basis_source', 'billing', 'billing_source'])
+const NULLABLE_EXPLICIT: ReadonlySet<string> = new Set([
+  'year_basis', 'year_basis_source', 'billing', 'billing_source',
+  // A payment can be reclassified as a kontantinsats. These values must then
+  // be cleared in the cloud row rather than omitted from the UPDATE payload.
+  'loan_part_id', 'balance_after', 'paid_split',
+])
 
 // A full insert row: id + created_at (client-stamped) + the data columns. A
 // null/undefined value is replaced by its NOT_NULL_DEFAULTS fallback if the
@@ -180,6 +185,35 @@ function _row(obj: { id?: string; created_at?: string }, cols: readonly string[]
 // ── localStorage cache (offline fallback) ────────────────────────────────────
 function _emptyEnvelope(): StoreEnvelope {
   return { version: VERSION, banks: [], mortgages: [], loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [], settings: defaultSettings() }
+}
+
+function canonicalPayment(row: Payment): Payment {
+  if (row.kind === 'payment' || row.kind === 'interest') return { ...row, paid_by: 'joint', paid_split: null }
+  if (row.kind === 'down_payment') return { ...row, loan_part_id: null, is_insats: true }
+  return row
+}
+
+function canonicalizeEnvelope(env: StoreEnvelope): { value: StoreEnvelope; rejectedContributions: number } {
+  const payments = env.payments.map(canonicalPayment)
+  const seen = new Set(payments.map((row) => row.id))
+  let rejectedContributions = 0
+  for (const contribution of env.contributions) {
+    const payment = legacyContributionPayment(contribution)
+    if (!payment) { rejectedContributions++; continue }
+    if (!seen.has(payment.id)) { seen.add(payment.id); payments.push(payment) }
+  }
+  return { value: { ...env, version: VERSION, payments, contributions: [] }, rejectedContributions }
+}
+
+function contributionFromPayment(payment: Payment): Contribution {
+  return {
+    id: payment.id,
+    created_at: payment.created_at,
+    owner: payment.paid_by,
+    date: payment.date,
+    amount: payment.amount,
+    note: payment.description,
+  }
 }
 
 function _envelope(raw: Record<string, unknown>, migrate: boolean): StoreEnvelope {
@@ -210,8 +244,9 @@ function _readCacheFrom(scope: ReturnType<typeof syncCoordinator.captureScope>):
     if (!data || typeof data !== 'object') { warning('cachen'); return _emptyEnvelope() }
     if (!parseFiniteJson(data).ok) { warning('cachen'); return _emptyEnvelope() }
     const parsed = salvageMortgageEnvelope(data)
-    if (parsed.rejected.length) warning('cachen')
-    return parsed.value
+    const canonical = canonicalizeEnvelope(parsed.value)
+    if (parsed.rejected.length || canonical.rejectedContributions) warning('cachen')
+    return canonical.value
   } catch { warning('cachen'); return _emptyEnvelope() }
 }
 
@@ -301,10 +336,12 @@ function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): Le
       payments: env.payments.map((r) => ({ loan_part_id: null, date: '', kind: 'payment', description: '', amount: 0, balance_after: null, paid_by: 'joint', source: '', is_insats: false, paid_split: null, ...(r as unknown as Record<string, unknown>) })),
       valuations: env.valuations.map((r) => ({ date: '', value: 0, note: '', is_purchase: false, ...(r as unknown as Record<string, unknown>) })),
       rate_periods: env.rate_periods.map((r) => ({ loan_part_id: null, start_date: '', end_date: null, rate: null, rate_type: 'rörlig', ...(r as unknown as Record<string, unknown>) })),
-      contributions: env.contributions.map((r) => ({ owner: 'joint', date: '', amount: 0, note: '', ...(r as unknown as Record<string, unknown>) })),
+      contributions: env.contributions,
       settings: { ...defaultSettings(), ...env.settings },
     }
-    return normalized
+    const canonical = canonicalizeEnvelope(normalized as StoreEnvelope)
+    if (canonical.rejectedContributions) warning('säkerhetskopian')
+    return canonical.value
   })
   const parsed = parseMortgageEnvelope(candidate)
   if (!parsed.ok) { warning('säkerhetskopian'); return { status: 'invalid' } }
@@ -335,7 +372,6 @@ const _importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(I
   add(T.periods, legacy.rate_periods, legacy.rate_periods.map(r => _row(r, COLS.periods)), () => _patchCache(e => { const ids = new Set(legacy.rate_periods.map(r => r.id)); e.rate_periods = [...legacy.rate_periods, ...e.rate_periods.filter(r => !ids.has(r.id))] }))
   add(T.payments, legacy.payments, legacy.payments.map(r => _row(r, COLS.payments)), () => _patchCache(e => { const ids = new Set(legacy.payments.map(r => r.id)); e.payments = [...legacy.payments, ...e.payments.filter(r => !ids.has(r.id))] }))
   add(T.valuations, legacy.valuations, legacy.valuations.map(r => _row(r, COLS.valuations)), () => _patchCache(e => { const ids = new Set(legacy.valuations.map(r => r.id)); e.valuations = [...legacy.valuations, ...e.valuations.filter(r => !ids.has(r.id))] }))
-  add(T.contributions, legacy.contributions, legacy.contributions.map(r => _row(r, COLS.contributions)), () => _patchCache(e => { const ids = new Set(legacy.contributions.map(r => r.id)); e.contributions = [...legacy.contributions, ...e.contributions.filter(r => !ids.has(r.id))] }))
   operations.push({
     resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: legacy.settings, seed: true }, entityIds: [SETTINGS_TOOL],
     expectedRevisions: { [SETTINGS_RESOURCE]: null }, applyLocal: () => _patchCache(e => { e.settings = legacy.settings }),
@@ -444,7 +480,7 @@ export async function loadMortgageSyncSnapshot(): Promise<MortgageSyncSnapshot |
   const snapshot: MortgageSyncSnapshot = {
     parts: withoutTombstones(parsedParts.value as LoanPart[], partTombstones),
     periods: withoutTombstones(parsedPeriods.value as RatePeriod[], periodTombstones),
-    payments: withoutTombstones(parsedPayments.value as Payment[], paymentTombstones),
+    payments: withoutTombstones(parsedPayments.value as Payment[], paymentTombstones).map(canonicalPayment),
   }
   const cache = _readCacheFrom(scope)
   {
@@ -607,19 +643,19 @@ export async function listPayments(): Promise<Payment[]> {
   if (result.error || !result.data) return fallback()
   rememberRowRevisions(RESOURCES.payments, result.data as unknown as Record<string, unknown>[])
   const parsed = salvageMortgageRows(result.data, 'payments'); if (parsed.rejected.length) warning('molnet')
-  const rows = withoutTombstones(parsed.value as Payment[], tombstones)
+  const rows = withoutTombstones(parsed.value as Payment[], tombstones).map(canonicalPayment)
   const cache = _readCacheFrom(scope); cache.payments = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return byDateDesc(rows)
 }
 
 export async function addPayment(record: Omit<Payment, 'id' | 'created_at'>): Promise<Payment> {
-  const saved = stamp(record, 'pay') as Payment
+  const saved = canonicalPayment(stamp(record, 'pay') as Payment)
   await queueTableUpsert(RESOURCES.payments, [_row(saved, COLS.payments)], [saved.id], () => _patchCache(e => { e.payments.push(saved) }))
   return saved
 }
 
 export async function addPayments(records: Array<Omit<Payment, 'id' | 'created_at'>>): Promise<Payment[]> {
-  const saved = records.map(r => stamp(r, 'pay') as Payment)
+  const saved = records.map(r => canonicalPayment(stamp(r, 'pay') as Payment))
   await queueTableUpsert(RESOURCES.payments, saved.map(r => _row(r, COLS.payments)), saved.map((row) => row.id), () => _patchCache(e => { e.payments = e.payments.concat(saved) }))
   return saved
 }
@@ -627,7 +663,7 @@ export async function addPayments(records: Array<Omit<Payment, 'id' | 'created_a
 export async function updatePayment(id: string, patch: Partial<Payment>): Promise<Payment | null> {
   const current = _readCache().payments.find((payment) => payment.id === id)
   if (!current) return null
-  const saved = { ...current, ...patch }
+  const saved = canonicalPayment({ ...current, ...patch })
   await queueTableUpsert(RESOURCES.payments, [_row(saved, COLS.payments)], [id], () => _patchCache(e => { e.payments = e.payments.map(p => p?.id === id ? saved : p) }))
   return saved
 }
@@ -719,38 +755,30 @@ export async function removeRatePeriod(id: string): Promise<number> {
 
 // ── Contributions ────────────────────────────────────────────────────────────
 export async function listContributions(): Promise<Contribution[]> {
-  const scope = syncCoordinator.captureScope()
-  await _importLocalOnce()
-  const fallback = () => byDateDesc(withoutTombstones(_readCacheFrom(scope).contributions, cachedTombstoneIds(scope, RESOURCES.contributions)))
-  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.contributions)) return fallback()
-  const [result, tombstones] = await Promise.all([supabase.from(T.contributions).select('*'), loadTombstoneIds(scope, RESOURCES.contributions)])
-  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.contributions)) return fallback()
-  if (result.error || !result.data) return fallback()
-  rememberRowRevisions(RESOURCES.contributions, result.data as unknown as Record<string, unknown>[])
-  const parsed = salvageMortgageRows(result.data, 'contributions'); if (parsed.rejected.length) warning('molnet')
-  const rows = withoutTombstones(parsed.value as Contribution[], tombstones)
-  const cache = _readCacheFrom(scope); cache.contributions = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
-  return byDateDesc(rows)
+  return byDateDesc((await listPayments()).filter((payment) => payment.kind === 'down_payment').map(contributionFromPayment))
 }
 
 export async function addContribution(record: Omit<Contribution, 'id' | 'created_at'>): Promise<Contribution> {
-  const saved = stamp(record, 'contrib') as Contribution
-  await queueTableUpsert(RESOURCES.contributions, [_row(saved, COLS.contributions)], [saved.id], () => _patchCache(e => { e.contributions.push(saved) }))
-  return saved
+  const saved = await addPayment({
+    loan_part_id: null, date: record.date, kind: 'down_payment', description: record.note,
+    amount: record.amount, balance_after: null, paid_by: record.owner, source: 'manual', is_insats: true,
+  })
+  return contributionFromPayment(saved)
 }
 
 export async function updateContribution(id: string, patch: Partial<Contribution>): Promise<Contribution | null> {
-  const current = _readCache().contributions.find((contribution) => contribution.id === id)
-  if (!current) return null
-  const saved = { ...current, ...patch }
-  await queueTableUpsert(RESOURCES.contributions, [_row(saved, COLS.contributions)], [id], () => _patchCache(e => { e.contributions = e.contributions.map(c => c?.id === id ? saved : c) }))
-  return saved
+  const saved = await updatePayment(id, {
+    ...(patch.date !== undefined ? { date: patch.date } : {}),
+    ...(patch.amount !== undefined ? { amount: patch.amount } : {}),
+    ...(patch.owner !== undefined ? { paid_by: patch.owner } : {}),
+    ...(patch.note !== undefined ? { description: patch.note } : {}),
+    kind: 'down_payment', loan_part_id: null, is_insats: true,
+  })
+  return saved ? contributionFromPayment(saved) : null
 }
 
 export async function removeContribution(id: string): Promise<number> {
-  let n = 0
-  await queueTableDelete(RESOURCES.contributions, [id], () => _patchCache(e => { e.contributions = e.contributions.filter(c => c?.id !== id); n = e.contributions.length }))
-  return n
+  return removePayment(id)
 }
 
 // ── Settings (tool_state blob) ───────────────────────────────────────────────
@@ -782,10 +810,10 @@ export async function saveSettings(patch: Partial<MortgageSettings>): Promise<Mo
 
 // ── Backup / restore ─────────────────────────────────────────────────────────
 export async function exportJSON(): Promise<string> {
-  const [banks, mortgages, loan_parts, payments, valuations, rate_periods, contributions, settings] = await Promise.all([
-    listBanks(), listMortgages(), listLoanParts(), listPayments(), listValuations(), listRatePeriods(), listContributions(), getSettings(),
+  const [banks, mortgages, loan_parts, payments, valuations, rate_periods, settings] = await Promise.all([
+    listBanks(), listMortgages(), listLoanParts(), listPayments(), listValuations(), listRatePeriods(), getSettings(),
   ])
-  return JSON.stringify({ version: VERSION, banks, mortgages, loan_parts, payments: byDateDesc(payments), valuations: byDateDesc(valuations), rate_periods, contributions: byDateDesc(contributions), settings }, null, 2)
+  return JSON.stringify({ version: VERSION, banks, mortgages, loan_parts, payments: byDateDesc(payments), valuations: byDateDesc(valuations), rate_periods, contributions: [], settings }, null, 2)
 }
 
 // Insert only the rows whose id isn't already present in the cloud (deduped
@@ -805,19 +833,32 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
   let parsed: Record<string, unknown>
   try { parsed = JSON.parse(text) } catch { throw new Error("That file isn't valid JSON.") }
   if (!parsed || typeof parsed !== 'object') throw new Error('No Bolånekoll data found.')
-  const valid = parseMortgageEnvelope(parsed)
+  // Contributions are the one retired legacy slice. Parse the rest strictly,
+  // salvage valid contribution siblings, and convert them to canonical payments.
+  const legacyContributions = salvageMortgageRows(parsed.contributions ?? [], 'contributions')
+  const valid = parseMortgageEnvelope({ ...parsed, contributions: [] })
   if (!valid.ok) throw new Error('Bolånekoll-säkerhetskopian innehåller ogiltiga eller ofullständiga uppgifter.')
   if (!parsed.loan_parts && !parsed.payments && !parsed.valuations && !parsed.rate_periods && !parsed.contributions && !parsed.banks && !parsed.mortgages) throw new Error('No Bolånekoll data found.')
+
+  const incomingPayments = valid.value.payments.map((row) => canonicalPayment(row as Payment))
+  const incomingIds = new Set(incomingPayments.map((row) => row.id))
+  let rejectedContributions = legacyContributions.rejected.length
+  for (const contribution of legacyContributions.value as Contribution[]) {
+    const payment = legacyContributionPayment(contribution)
+    if (!payment) { rejectedContributions++; continue }
+    if (!incomingIds.has(payment.id)) { incomingIds.add(payment.id); incomingPayments.push(payment) }
+  }
+  if (rejectedContributions) warning('säkerhetskopian')
 
   const scope = syncCoordinator.captureScope()
   const normalized = materializeImport('mortgage-backup', text, () => ({
     banks: valid.value.banks, mortgages: valid.value.mortgages,
-    loan_parts: valid.value.loan_parts, payments: valid.value.payments, valuations: valid.value.valuations,
-    rate_periods: valid.value.rate_periods, contributions: valid.value.contributions,
+    loan_parts: valid.value.loan_parts, payments: incomingPayments, valuations: valid.value.valuations,
+    rate_periods: valid.value.rate_periods,
   }))
 
-  const [banks, mortgages, parts, pays, vals, rates, contribs, existingSettings] = await Promise.all([
-    listBanks(), listMortgages(), listLoanParts(), listPayments(), listValuations(), listRatePeriods(), listContributions(), getSettings(),
+  const [banks, mortgages, parts, pays, vals, rates, existingSettings] = await Promise.all([
+    listBanks(), listMortgages(), listLoanParts(), listPayments(), listValuations(), listRatePeriods(), getSettings(),
   ])
   if (!scope.isActive()) throw new Error('Sync identity changed during mortgage import')
 
@@ -827,7 +868,6 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
   const newPays = _mergeRows(pays, normalized.payments)
   const newVals = _mergeRows(vals, normalized.valuations)
   const newRates = _mergeRows(rates, normalized.rate_periods)
-  const newContribs = _mergeRows(contribs, normalized.contributions)
   const operations: MutationInput[] = []
   const add = <T extends { id?: string }>(resource: string, rows: T[], projected: Record<string, unknown>[], applyLocal: () => void) => {
     const ids = rows.map(r => r.id!)
@@ -842,7 +882,6 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
   add(T.payments, newPays, newPays.map(r => _row(r, COLS.payments)), () => _patchCache(e => { e.payments = [...newPays, ...e.payments.filter(r => !new Set(newPays.map(x => x.id)).has(r.id))] }))
   add(T.valuations, newVals, newVals.map(r => _row(r, COLS.valuations)), () => _patchCache(e => { e.valuations = [...newVals, ...e.valuations.filter(r => !new Set(newVals.map(x => x.id)).has(r.id))] }))
   add(T.periods, newRates, newRates.map(r => _row(r, COLS.periods)), () => _patchCache(e => { e.rate_periods = [...newRates, ...e.rate_periods.filter(r => !new Set(newRates.map(x => x.id)).has(r.id))] }))
-  add(T.contributions, newContribs, newContribs.map(r => _row(r, COLS.contributions)), () => _patchCache(e => { e.contributions = [...newContribs, ...e.contributions.filter(r => !new Set(newContribs.map(x => x.id)).has(r.id))] }))
   if (parsed.settings && typeof parsed.settings === 'object') {
     const merged = { ...defaultSettings(), ...existingSettings, ...(parsed.settings as Partial<MortgageSettings>) }
     operations.push({
@@ -856,7 +895,7 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
 
   return {
     loan_parts: newParts.length, payments: newPays.length, valuations: newVals.length,
-    rate_periods: newRates.length, contributions: newContribs.length,
+    rate_periods: newRates.length, contributions: 0,
   }
 }
 

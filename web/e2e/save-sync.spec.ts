@@ -61,6 +61,11 @@ interface Backend {
 // cache). Everything else reads empty and accepts writes.
 async function mockBackend(page: Page): Promise<Backend> {
   const parts: Record<string, unknown>[] = []
+  const payments: Record<string, unknown>[] = []
+  const resources: Record<string, Record<string, unknown>[]> = {
+    mortgage_loan_parts: parts,
+    mortgage_payments: payments,
+  }
   const receipts = new Map<string, unknown>()
   const backend: Backend = {
     failInserts: false,
@@ -97,22 +102,23 @@ async function mockBackend(page: Page): Promise<Backend> {
       }
       const prior = receipts.get(body.p_operation_id)
       if (prior) return route.fulfill({ json: prior })
-      if (body.p_resource !== 'mortgage_loan_parts') return route.fulfill({ status: 400, json: {} })
+      const collection = resources[body.p_resource]
+      if (!collection) return route.fulfill({ status: 400, json: {} })
       const current = Object.fromEntries(body.p_rows.map((row) => {
-        const existing = parts.find((part) => part.id === row.id)
-        return [`mortgage_loan_parts:${String(row.id)}`, existing ? Number(existing.revision) : null]
+        const existing = collection.find((entry) => entry.id === row.id)
+        return [`${body.p_resource}:${String(row.id)}`, existing ? Number(existing.revision) : null]
       }))
       const conflict = Object.entries(current).some(([key, revision]) =>
         !(body.p_seed && revision !== null) && body.p_expected_revisions[key] !== revision)
       if (conflict) return route.fulfill({ json: { status: 'conflict', revisions: current } })
       const revisions: Record<string, number> = {}
       for (const row of body.p_rows) {
-        const index = parts.findIndex((part) => part.id === row.id)
-        const revision = index < 0 ? 1 : Number(parts[index].revision) + 1
+        const index = collection.findIndex((entry) => entry.id === row.id)
+        const revision = index < 0 ? 1 : Number(collection[index].revision) + 1
         const saved = { ...row, revision }
-        if (index < 0) parts.push(saved); else if (!body.p_seed) parts[index] = saved
-        revisions[`mortgage_loan_parts:${String(row.id)}`] = index >= 0 && body.p_seed
-          ? Number(parts[index].revision) : revision
+        if (index < 0) collection.push(saved); else if (!body.p_seed) collection[index] = saved
+        revisions[`${body.p_resource}:${String(row.id)}`] = index >= 0 && body.p_seed
+          ? Number(collection[index].revision) : revision
       }
       const response = { status: 'applied', revisions }
       receipts.set(body.p_operation_id, response)
@@ -120,6 +126,9 @@ async function mockBackend(page: Page): Promise<Backend> {
     }
     if (path === '/rest/v1/mortgage_loan_parts') {
       if (req.method() === 'GET') return route.fulfill({ json: parts })
+    }
+    if (path === '/rest/v1/mortgage_payments') {
+      if (req.method() === 'GET') return route.fulfill({ json: payments })
     }
     if (path.startsWith('/rest/')) {
       if (req.method() === 'GET') return route.fulfill({ json: [] })
@@ -169,6 +178,50 @@ test('a saved loan part survives a real reload (save → cloud → re-read)', as
   await page.reload()
   await expect(page.locator('.ld-name', { hasText: 'E2E Testlån' })).toBeVisible()
 
+  expect(errors).toEqual([])
+})
+
+test('an extra amortering is one canonical payment and one linked Insatser row after reload', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  await mockBackend(page)
+  await page.goto('/#/bolanekoll')
+
+  const partDialog = await openAddLoanPartDialog(page)
+  await partDialog.getByLabel('Label').fill('E2E amortering')
+  await partDialog.getByLabel('Start balance').fill('1000000')
+  await partDialog.getByRole('button', { name: 'Save' }).click()
+  await expect(partDialog).not.toBeVisible()
+
+  const paymentCard = page.locator('#betalningar').locator('..')
+  await paymentCard.getByRole('button', { name: '+ Lägg till' }).click()
+  const paymentDialog = page.locator('dialog.bk-dialog[open]')
+  await expect(paymentDialog.getByRole('heading', { name: 'Lägg till betalning' })).toBeVisible()
+  await paymentDialog.getByLabel('Typ').selectOption('extra_amortization')
+  // A Saldo/origination balance is post-transaction for its own date. Log the
+  // extra amortering on the following day so this test asserts the required
+  // post-anchor debt propagation rather than a same-day snapshot rule.
+  const nextDay = new Date()
+  nextDay.setDate(nextDay.getDate() + 1)
+  await paymentDialog.getByLabel('Datum').fill(nextDay.toISOString().slice(0, 10))
+  await paymentDialog.getByLabel('Belopp').fill('20000')
+  await paymentDialog.getByRole('button', { name: 'Spara' }).click()
+
+  await expect(page.locator('.bk-toast.show')).toHaveText('Payment saved.')
+  await expect(paymentDialog).not.toBeVisible()
+  const remainingDebt = page.locator('.metric-chip', { hasText: 'Remaining debt' })
+  // NumberFlow exposes each rolling digit to the DOM, so visible text is not a
+  // stable financial assertion. The metric's canonical current-debt attribute
+  // is the exact resolved value used for the hero/KPI.
+  await expect(remainingDebt).toHaveAttribute('data-current-debt', '980000')
+  await expect(page.locator('#betalningar').locator('..')).toContainText(/20\s*000 kr/)
+  await expect(page.locator('#insatser')).toContainText('Extra amortering / Insats')
+  await expect(page.locator('#insatser')).toContainText(/20\s*000 kr/)
+
+  await page.reload()
+  await expect(page.locator('.metric-chip', { hasText: 'Remaining debt' })).toHaveAttribute('data-current-debt', '980000')
+  await expect(page.locator('#betalningar').locator('..')).toContainText(/20\s*000 kr/)
+  await expect(page.locator('#insatser')).toContainText('Extra amortering / Insats')
+  await expect(page.locator('#insatser')).toContainText(/20\s*000 kr/)
   expect(errors).toEqual([])
 })
 

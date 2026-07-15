@@ -141,4 +141,159 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     expect(screen.getAllByText('Lånedel 1').length).toBeGreaterThan(0)
     expect(screen.queryByText('Loan part deleted.')).not.toBeInTheDocument()
   })
+
+  it('marks an unpaired Betalning as estimated and keeps its source dialog open when saving fails', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, original_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    const payment = {
+      id: 'pay1', created_at: '2026-02-01', loan_part_id: 'p1', date: '2026-02-01',
+      kind: 'payment' as const, description: '', amount: 6000, balance_after: null,
+      paid_by: 'joint' as const, source: 'manual', is_insats: false,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [payment], valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listPayments).mockResolvedValue([payment])
+    vi.mocked(Store.addPayment).mockRejectedValueOnce({ message: 'Failed to fetch' })
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ränta saknas för en eller flera betalningar')
+    await user.click(screen.getByRole('button', { name: '+ Lägg till' }))
+    const dialog = screen.getByRole('dialog', { name: 'Lägg till betalning' })
+    // Betalning is joint by definition: there is an explanation, but no
+    // individual payer/allocation control to accidentally attribute it.
+    expect(screen.queryByLabelText('Betalad av')).not.toBeInTheDocument()
+    expect(screen.getByText(/Gemensam post/)).toBeInTheDocument()
+    await user.type(screen.getByLabelText('Belopp'), '6000')
+    await user.click(screen.getByRole('button', { name: 'Spara' }))
+
+    expect(await screen.findByText('Ingen anslutning. Ändringen sparades inte i molnet.')).toBeInTheDocument()
+    expect((dialog as HTMLDialogElement).open).toBe(true)
+    expect(screen.getByLabelText('Belopp')).toHaveValue('6000')
+  })
+
+  it('makes Kontantinsats and extra amortering explicit canonical payment actions', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [], valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: '+ Lägg till' }))
+    const type = screen.getByLabelText('Typ')
+    await user.selectOptions(type, 'down_payment')
+    expect(screen.queryByLabelText('Lånedel')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Betalad av')).toBeInTheDocument()
+    await user.selectOptions(type, 'extra_amortization')
+    expect(screen.getByLabelText('Lånedel')).toBeInTheDocument()
+    expect(screen.getByLabelText('Betalad av')).toBeInTheDocument()
+  })
+
+  it('clears the dashboard estimate when matching Ränta or a later Saldo makes the result observed', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, original_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    const payment = {
+      id: 'pay1', created_at: '2026-02-01', loan_part_id: 'p1', date: '2026-02-01',
+      kind: 'payment' as const, description: '', amount: 6000, balance_after: null,
+      paid_by: 'joint' as const, source: 'manual', is_insats: false,
+    }
+    const interest = { ...payment, id: 'interest1', kind: 'interest' as const, amount: 3000 }
+    const laterSaldo = { ...payment, id: 'saldo1', date: '2026-03-01', kind: 'amortization' as const, amount: 3000, balance_after: 994000 }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [payment, interest, laterSaldo], valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listPayments).mockResolvedValue([payment, interest, laterSaldo])
+    renderBolanekoll()
+
+    await screen.findByText('Betalningar')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByText('ränta saknas · uppskattat')).not.toBeInTheDocument()
+  })
+
+  it('preserves and saves an explicit extra-amortering split, description, and source', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    const insats = {
+      id: 'insats1', created_at: '2026-02-01', loan_part_id: 'p1', date: '2026-02-01',
+      kind: 'amortization' as const, description: 'Extra insättning från banken', amount: 20_000,
+      balance_after: null, paid_by: 'joint' as const, paid_split: { a: 12_000, b: 8_000 }, source: 'import', is_insats: true,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [insats], valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listPayments).mockResolvedValue([insats])
+    vi.mocked(Store.updatePayment).mockResolvedValue(insats)
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Redigera i Betalningar' }))
+    expect(screen.getByLabelText('Alex · fördelning')).toHaveValue('12000')
+    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('8000')
+    await user.click(screen.getByRole('button', { name: 'Spara' }))
+
+    expect(await screen.findByText('Payment saved.')).toBeInTheDocument()
+    expect(Store.updatePayment).toHaveBeenCalledWith('insats1', expect.objectContaining({
+      kind: 'amortization', is_insats: true, paid_by: 'joint', paid_split: { a: 12000, b: 8000 },
+      description: 'Extra insättning från banken', source: 'import',
+    }))
+  })
+
+  it('normalizes edited Betalning and Ränta to joint records without a split', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    const payment = {
+      id: 'pay1', created_at: '2026-02-01', loan_part_id: 'p1', date: '2026-02-01',
+      kind: 'payment' as const, description: 'Bankens dragning', amount: 6000, balance_after: 994000,
+      paid_by: 'a' as const, paid_split: { a: 6000, b: 0 }, source: 'import', is_insats: false,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [payment], valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listPayments).mockResolvedValue([payment])
+    vi.mocked(Store.updatePayment).mockResolvedValue(payment)
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findAllByRole('button', { name: 'Edit' }).then(buttons => buttons.at(-1)!))
+    expect(screen.queryByLabelText('Betalad av')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Alex · fördelning')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Spara' }))
+
+    expect(await screen.findByText('Payment saved.')).toBeInTheDocument()
+    expect(Store.updatePayment).toHaveBeenCalledWith('pay1', expect.objectContaining({
+      kind: 'payment', balance_after: 994000, paid_by: 'joint', paid_split: null, description: 'Bankens dragning', source: 'import',
+    }))
+
+    await user.click((await screen.findAllByRole('button', { name: 'Edit' })).at(-1)!)
+    await user.selectOptions(screen.getByLabelText('Typ'), 'interest')
+    expect(screen.queryByLabelText('Betalad av')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Alex · fördelning')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Spara' }))
+    expect(Store.updatePayment).toHaveBeenLastCalledWith('pay1', expect.objectContaining({
+      kind: 'interest', balance_after: null, paid_by: 'joint', paid_split: null, description: 'Bankens dragning', source: 'import',
+    }))
+  })
 })

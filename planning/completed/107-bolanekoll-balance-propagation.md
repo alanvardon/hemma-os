@@ -1,6 +1,6 @@
 # Plan 107 — Make Betalningar the source of truth for debt and ownership
 
-**Status:** plan · **Priority:** High (financial correctness) · **Depends
+**Status:** completed · **Priority:** High (financial correctness) · **Depends
 on:** none; builds on the shipped mortgage model in plans 103–105 · **Effort:**
 L · **Owner model:** GPT-5.6 Sol · **Source:** production report 2026-07-15:
 adding Betalning, Amortering and Insats records did not move the Bolånekoll hero
@@ -117,6 +117,11 @@ betalning principal = max(0, sum(Betalning) - sum(Ränta))
   `interest-exceeds-payment`; it does not create negative amortering.
 - Multiple rows in a month are summed per loan part. A row on another part can
   never satisfy or alter this part's pairing.
+- Betalning and Ränta are household-joint records and cannot be attributed to
+  one person. Their inferred principal enters the joint contribution bucket and
+  follows the configured ownership-target split. Defensive loading treats any
+  legacy `paid_by:'a'|'b'` on these two kinds as joint; the UI must not offer an
+  individual payer for them.
 
 This provisional inference must be visible wherever it materially affects a
 decision. A quiet hint only beside the ledger is insufficient when the hero is
@@ -154,7 +159,7 @@ Betalningar becomes the only place to add or edit capital events:
 | Kontantinsats (`kind:'down_payment'`) | none | none; already represented by purchase price minus original loans | full amount by `paid_by` / `paid_split` | yes |
 | Amortering | required | full amount | full amount by `paid_by` / `paid_split` | no |
 | Extra amortering / Insats | required | full amount | full amount by `paid_by` / `paid_split` | yes |
-| Betalning | required | Betalning minus same-part/month Ränta; full amount provisionally if Ränta is absent | inferred principal by `paid_by` / `paid_split` | only if deliberately marked as Insats |
+| Betalning | required | Betalning minus same-part/month Ränta; full amount provisionally if Ränta is absent | always joint; inferred principal follows the configured ownership-target split | only if deliberately marked as Insats |
 
 - Add `down_payment` to `PaymentKind`. The database's `kind` column is already
   unconstrained text, so the new value needs no schema column or RLS change.
@@ -248,6 +253,10 @@ forecast rate rules while centralising the balance.
 - Betalning keeps optional Saldo. When it has no same-month Ränta and no
   authoritative later Saldo, show the warning before save and on the affected
   dashboard state; do not block the owner-approved provisional calculation.
+- Betalning and Ränta always save with `paid_by:'joint'` and no `paid_split`;
+  hide individual payer/allocation controls for these kinds. Amortering and
+  Extra amortering / Insats retain owner allocation because one owner may fund
+  them separately.
 - Explain that adding Ränta later revises the inferred principal and may reduce
   the displayed ownership.
 
@@ -291,11 +300,14 @@ Add a focused `mortgage-balance.test.ts` (or an equivalently cohesive file):
 7. Multiple loan parts/months never cross-pair Ränta and Betalning.
 8. Interest-only (`Betalning === Ränta`) produces zero principal; interest above
    payment produces zero plus a warning.
-9. Multiple payments/interests aggregate deterministically; order does not
+9. Betalning/Ränta inferred principal is always joint even when malformed legacy
+   rows carry an individual `paid_by`; no per-person payment allocation is
+   possible. Explicit Amortering/Insats attribution remains unchanged.
+10. Multiple payments/interests aggregate deterministically; order does not
    matter; debt floors at zero.
-10. `asOf` and month-end resolutions use the same engine and reproduce the
+11. `asOf` and month-end resolutions use the same engine and reproduce the
     current balance at the final date.
-11. Malformed dates/amounts, missing part ids, zero/negative values and
+12. Malformed dates/amounts, missing part ids, zero/negative values and
     conflicting same-date Saldo values follow explicit tested rules.
 
 ### Downstream invariant matrix

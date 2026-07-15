@@ -105,6 +105,14 @@
   .metric-warn { color: var(--warn); }
   .metric-chip.is-warn { background: var(--warn-faint); border-color: var(--warn-light); }
   .metric-chip.is-warn .metric-val { color: var(--warn); }
+  .payment-estimate-warning {
+    margin: 0.75rem 0 0; padding: 0.65rem 0.8rem;
+    border: 1px solid var(--warn-light); border-radius: var(--r-md);
+    background: var(--warn-faint); color: var(--ink-mid); font-size: 13px;
+  }
+  .payment-estimate-warning a { color: var(--warn); font-weight: 600; }
+  .dashboard-estimate-warning { margin: 0 0 1rem; }
+  .dashboard-estimate-parts { color: var(--ink-soft); }
 
   /* ── Owner equity split ─────────────────────────────────────── */
   /* The split percentages are stated once here, as a household fact; the
@@ -258,6 +266,7 @@
   .row-flag-match { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
   .row-flag-predicted { color: var(--ink-soft); background: var(--paper-warm); border-color: var(--rule); font-style: italic; }
   .row-flag-insats { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
+  .row-flag-estimated { color: var(--warn); background: var(--warn-faint); border-color: var(--warn-light); }
   .data-table tr.is-purchase td { background: var(--accent-faint); }
   .data-table tr.is-insats td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
   .icon-btn.is-on { color: var(--accent); }
