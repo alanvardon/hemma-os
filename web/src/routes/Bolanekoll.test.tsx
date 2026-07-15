@@ -296,4 +296,37 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
       kind: 'interest', balance_after: null, paid_by: 'joint', paid_split: null, description: 'Bankens dragning', source: 'import',
     }))
   })
+
+  it('projects only down payments and flagged extra amorteringar outside Betalningar', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    const base = { created_at: '2026-02-01', date: '2026-02-02', description: '', balance_after: null, paid_by: 'a' as const, source: 'manual' }
+    const downPayment = { ...base, id: 'down', loan_part_id: null, kind: 'down_payment' as const, amount: 150_000, is_insats: true }
+    const extra = { ...base, id: 'extra', loan_part_id: 'p1', kind: 'amortization' as const, amount: 20_000, is_insats: true }
+    const ordinary = { ...base, id: 'ordinary', loan_part_id: 'p1', kind: 'amortization' as const, amount: 5_000, is_insats: false }
+    const payments = [downPayment, extra, ordinary]
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments, valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listPayments).mockResolvedValue(payments)
+    renderBolanekoll()
+
+    await screen.findByText('Kontantinsatser')
+    const deposits = document.querySelector('#kontantinsatser')!
+    const extras = document.querySelector('#extra-amorteringar')!
+    expect(deposits.querySelector('[data-source-payment-id="down"]')).toBeInTheDocument()
+    expect(extras.querySelector('[data-source-payment-id="extra"]')).toBeInTheDocument()
+    expect(deposits.querySelector('[data-source-payment-id="ordinary"]')).not.toBeInTheDocument()
+    expect(extras.querySelector('[data-source-payment-id="ordinary"]')).not.toBeInTheDocument()
+    const paymentTable = document.querySelector('.payments-table')!
+    const depositLedgerRow = [...paymentTable.querySelectorAll('tbody > tr')].find(row => /150\s*000/.test(row.textContent || ''))!
+    const extraLedgerRow = [...paymentTable.querySelectorAll('tbody > tr')].find(row => /20\s*000/.test(row.textContent || ''))!
+    expect(depositLedgerRow).not.toHaveTextContent('extra amortering')
+    expect(extraLedgerRow).toHaveTextContent('extra amortering')
+    expect(document.querySelector('#betalningar')!.parentElement).toHaveTextContent(/5\s*000 kr/)
+  })
 })

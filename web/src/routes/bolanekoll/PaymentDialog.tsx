@@ -100,7 +100,7 @@ export default function PaymentDialog({ open, id, payments, parts, settings, onS
               <option value="payment">Betalning</option>
               <option value="interest">Ränta</option>
               <option value="amortization">Amortering</option>
-              <option value="extra_amortization">Extra amortering / Insats</option>
+              <option value="extra_amortization">Extra amortering</option>
               <option value="loan">Lån</option>
               <option value="fee">Avgift</option>
               <option value="other">Övrigt</option>
