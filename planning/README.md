@@ -326,3 +326,22 @@ Standalone correctness plan; the owner approved the financial semantics and
 persisted-data consolidation on 2026-07-15. It does not change valuations,
 statutory rules or rate forecasts. One branch/PR from `main`; never apply its
 data migration to production from an agent session.
+
+---
+
+# Sanitised staging refresh — 2026-07-15 (standalone)
+
+The owner currently has to merge a PR before testing it against representative
+household data. Plan 108 adds an isolated staging environment refreshed through
+a one-way, allow-listed sanitisation pipeline. Preview writes remain entirely
+inside staging; production is accessible only through a protected SELECT-only
+export role.
+
+| File | Priority | Depends on | Scope | Summary | Owner | Effort |
+|------|----------|------------|-------|---------|-------|--------|
+| [108-sanitised-staging-refresh.md](108-sanitised-staging-refresh.md) | High | — | Supabase environments + protected refresh + preview deployment | Manual, atomic production→staging refresh that preserves financial test shapes while removing identities, Auth, free text, original IDs, notification state and external integrations. A selected unmerged branch is built only with staging credentials and deployed to a separate staging URL; schema-changing PRs later receive isolated targets. | GPT-5.6 Sol | L |
+
+**Approval gates:** implementation adds a read-only production role and remote
+infrastructure. Before remote setup, the owner must approve the exact export
+allow-list, choose/reuse a staging Supabase project or persistent branch, and
+choose a separate preview host. Agents never export or inspect production data.
