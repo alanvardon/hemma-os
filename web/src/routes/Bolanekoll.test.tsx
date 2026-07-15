@@ -378,7 +378,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     expect(document.querySelector('[data-owner-cost-capital="b"]')).toHaveTextContent('521000')
   })
 
-  it('updates every debt-derived hero value for a same-day extra amortering and opens Betalningar', async () => {
+  it('updates every debt-derived hero value from predicted principal plus an extra amortering and opens Betalningar', async () => {
     const part = {
       id: 'p1', created_at: '2024-01-01', label: 'Bolån', loan_number: '',
       start_balance: 4_800_000, original_balance: 4_800_000,
@@ -388,13 +388,23 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     const payments = [
       {
         ...base, id: 'saldo', loan_part_id: 'p1', date: '2026-07-15',
-        kind: 'payment' as const, amount: 0, balance_after: 4_624_000,
+        kind: 'payment' as const, amount: 0, balance_after: 4_616_000,
         paid_by: 'joint' as const, is_insats: false,
       },
       {
         ...base, id: 'extra', loan_part_id: 'p1', date: '2026-07-15',
         kind: 'amortization' as const, amount: 8_000, balance_after: null,
         paid_by: 'a' as const, is_insats: true,
+      },
+      {
+        ...base, id: 'predicted-interest', loan_part_id: 'p1', date: '2026-07-31',
+        kind: 'interest' as const, amount: 3_438, balance_after: 4_608_000,
+        paid_by: 'joint' as const, source: 'predicted', is_insats: false,
+      },
+      {
+        ...base, id: 'predicted-payment', loan_part_id: 'p1', date: '2026-07-31',
+        kind: 'payment' as const, amount: 11_438, balance_after: 4_608_000,
+        paid_by: 'joint' as const, source: 'predicted', is_insats: false,
       },
     ]
     const valuations = [
@@ -414,14 +424,15 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     renderBolanekoll()
 
     await screen.findByText('Eget kapital · Marknadsvärde minus skuld')
-    expect(document.querySelector('[data-current-debt]')).toHaveAttribute('data-current-debt', '4616000')
-    expect(document.querySelector('[data-market-equity]')).toHaveAttribute('data-market-equity', '1034000')
+    expect(document.querySelector('[data-current-debt]')).toHaveAttribute('data-current-debt', '4600000')
+    expect(document.querySelector('[data-market-equity]')).toHaveAttribute('data-market-equity', '1050000')
     // NumberFlow is mocked as its raw numeric value in this component suite;
     // formatter/locale behaviour is covered by AnimatedNumber's own tests.
-    expect(screen.getByText('Remaining debt').parentElement).toHaveTextContent('4616000')
-    expect(screen.getByText('Loan-to-value').parentElement).toHaveTextContent('81.7')
-    expect(screen.getByText('Insatt kapital · Cost-basis equity').parentElement).toHaveTextContent('1034000')
-    expect(screen.getByText(/of the köpeskilling/)).toHaveTextContent('18.3')
+    expect(screen.getByText(/Remaining debt/).parentElement).toHaveTextContent('4600000')
+    expect(screen.getByText(/Loan-to-value/).parentElement).toHaveTextContent('81.42')
+    expect(screen.getByText('Insatt kapital · Cost-basis equity').parentElement).toHaveTextContent('1050000')
+    expect(screen.getByText(/of the köpeskilling/)).toHaveTextContent('18.58')
+    expect(screen.getAllByText(/Prognos 31 jul/).length).toBeGreaterThan(0)
 
     const openPayments = screen.getAllByRole('button', { name: 'Öppna Betalningar' })
     await user.click(openPayments[0])
