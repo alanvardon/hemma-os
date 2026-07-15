@@ -10,6 +10,8 @@ __pycache__/
 inspect-script.log
 .misc_notes/
 .DS_Store
+planning/
+
 
 # Node / build (root playwright deps + the React pilot)
 node_modules/

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { DEFAULT_INPUTS } from './calc'
+import { DEFAULT_CONSTANTS, DEFAULT_INPUTS } from './calc'
 
 const mem = new Map<string, string>()
 
@@ -109,6 +109,32 @@ describe('scenarios cloud mapping (savedAt ↔ saved_at)', () => {
     expect(loaded[0].savedAt).toBe('2026-01-02T00:00:00.000Z')
     expect((loaded[0] as unknown as Record<string, unknown>).saved_at).toBeUndefined()
     expect(loaded[0].inputs).toEqual(DEFAULT_INPUTS)
+  })
+
+  it('salvages malformed cloud rows and caches only the valid scenarios', async () => {
+    rows.push(
+      { id: 'valid', name: 'Valid', saved_at: '2026-01-02T00:00:00.000Z', inputs: DEFAULT_INPUTS },
+      { id: '', name: 'Malformed', saved_at: 'not-a-date', inputs: DEFAULT_INPUTS },
+    )
+
+    expect(await loadScenarios()).toMatchObject([{ id: 'valid', name: 'Valid' }])
+    const cache = JSON.parse(syncCoordinator.readScoped('bostadskalkyl_scenarios_cache_v1')!)
+    expect(cache).toMatchObject([{ id: 'valid', name: 'Valid' }])
+    expect(cache).toHaveLength(1)
+  })
+
+  it('rejects malformed scenario numeric, date, and id values before any mutation', async () => {
+    const malformed = [
+      { id: 'numeric', name: 'Malformed numeric', savedAt: '2026-01-02', inputs: { ...DEFAULT_INPUTS, salePrice: Number.NaN } },
+      { id: 'date', name: 'Malformed date', savedAt: 'not-a-date', inputs: DEFAULT_INPUTS },
+      { id: '', name: 'Malformed id', savedAt: '2026-01-02', inputs: DEFAULT_INPUTS },
+    ]
+    for (const scenario of malformed) {
+      await expect(saveScenarios([scenario] as never)).rejects.toMatchObject({ category: 'validation' })
+    }
+
+    expect(rows).toEqual([])
+    expect(syncCoordinator.getOutbox()).toEqual([])
   })
 })
 
@@ -262,7 +288,7 @@ describe('prefs cloud writes', () => {
   })
 
   it('stores independently edited preference slices in separate tool rows', async () => {
-    const constants = { interestRate: 3.5 } as unknown as Parameters<typeof saveGlobalConstants>[0]
+    const constants = DEFAULT_CONSTANTS
     const drift = [{ id: 'd1', label: 'El', amount: 900 }]
     await saveGlobalConstants(constants)
     await saveDriftItems(drift)

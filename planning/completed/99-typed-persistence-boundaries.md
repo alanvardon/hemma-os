@@ -1,6 +1,6 @@
 # Plan 99 — Validate persisted JSON and brand ids/dates
 
-**Status:** proposed · **Priority:** Low–Medium · **Effort:** M–L · **Owner
+**Status:** completed · **Priority:** Low–Medium · **Effort:** M–L · **Owner
 model:** GPT-5.6 Terra — owns the boundary inventory, parsers, branded-type
 rollout, and tests; escalate any financial-semantics ambiguity to the user
 

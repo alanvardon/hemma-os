@@ -13,13 +13,25 @@
 // write-through cache, so the cache write can't clobber the legacy data before
 // the first-login import uploads it (the key-split from 16b/16c/16e).
 import type { Inputs, Constants } from './calc'
+import {
+  parseBostadPrefs,
+  parseBostadScenarios,
+  parseBostadSession,
+  parseConstants,
+  parseDriftYearly,
+  parseInputs,
+  salvageBostadPrefs,
+  salvageBostadScenarios,
+  type BostadPrefs,
+  type RejectedRecord,
+} from './persistence-schema'
 import { supabase } from './supabase'
-import { genId } from './id'
 import { syncCoordinator } from './sync'
 import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
 import { receiptRpc, rejectLegacyToolOperation, rememberRowRevisions, rememberToolRevision, revisionKey, syncRpcResult } from './sync-rpc'
 import { makeImportOnce, materializeImport } from './store-helpers'
 import { legacyImportAssignedToActive } from './legacy-data'
+import { PersistenceError, reportPersistenceWarning } from './persistence-error'
 
 const KEYS = {
   scenarios: 'bostadskalkyl_scenarios_v1',
@@ -45,13 +57,12 @@ const PREFS_TOOLS = {
 const SCEN_LEGACY_FLAG = 'bostadskalkyl_scenarios_legacy_imported_v2'
 const PREFS_LEGACY_FLAG = 'bostadskalkyl_prefs_legacy_imported_v2'
 
+/** Application-facing scenario shape. Persistence is validated into branded values internally. */
 export interface Scenario {
   id: string
   name: string
   savedAt: string
   inputs: Inputs
-  // Per-scenario statutory constants. Absent on scenarios saved before this
-  // feature — those fall back to the global defaults at read time.
   constants?: Constants
 }
 
@@ -67,6 +78,12 @@ export interface Session {
   inputs: Inputs
   activeScenarioId: string | null
   isDirty: boolean
+}
+
+function warning(source: string, rejected: RejectedRecord[]): void {
+  if (!rejected.length) return
+  const count = `${rejected.length} ${rejected.length === 1 ? 'post' : 'poster'}`
+  reportPersistenceWarning(`Några sparade ${source} kunde inte läsas (${count}). Övriga sparade uppgifter finns kvar.`)
 }
 
 // One-time migration from the original unversioned keys (matches storage.js).
@@ -89,19 +106,33 @@ export function runMigrations(): void {
 // only here. toRow also coalesces the NOT-NULL columns so a legacy row missing
 // one still inserts (learned from 16e).
 const toRow = (s: Scenario): Record<string, unknown> => ({
-  id: s.id || genId('scen'), name: s.name ?? '', saved_at: s.savedAt ?? '',
-  inputs: s.inputs ?? {}, constants: s.constants ?? null,
-})
-const fromRow = (r: Record<string, unknown>): Scenario => ({
-  id: r.id as string, name: (r.name as string) ?? '', savedAt: (r.saved_at as string) ?? '',
-  inputs: r.inputs as Inputs, constants: (r.constants as Constants) ?? undefined,
+  id: s.id, name: s.name, saved_at: s.savedAt,
+  inputs: s.inputs, constants: s.constants ?? null,
 })
 
 function _readScenCache(): Scenario[] {
-  try { const raw = syncCoordinator.readScoped(SCEN_CACHE); const d = raw ? JSON.parse(raw) : null; return Array.isArray(d) ? d : [] } catch { return [] }
+  try {
+    const raw = syncCoordinator.readScoped(SCEN_CACHE)
+    if (!raw) return []
+    const parsed = salvageBostadScenarios(JSON.parse(raw))
+    warning('scenarier', parsed.rejected)
+    return parsed.value
+  } catch {
+    warning('scenarier', [{ record: 'scenario cache', reason: 'contains invalid JSON' }])
+    return []
+  }
 }
 function _readScenCacheFrom(scope: ReturnType<typeof syncCoordinator.captureScope>): Scenario[] {
-  try { const raw = scope.read(SCEN_CACHE); const d = raw ? JSON.parse(raw) : null; return Array.isArray(d) ? d : [] } catch { return [] }
+  try {
+    const raw = scope.read(SCEN_CACHE)
+    if (!raw) return []
+    const parsed = salvageBostadScenarios(JSON.parse(raw))
+    warning('scenarier', parsed.rejected)
+    return parsed.value
+  } catch {
+    warning('scenarier', [{ record: 'scenario cache', reason: 'contains invalid JSON' }])
+    return []
+  }
 }
 function _writeScenCache(s: Scenario[]): void {
   syncCoordinator.writeScoped(SCEN_CACHE, JSON.stringify(s))
@@ -121,11 +152,20 @@ const _importScopedScenarios = makeImportOnce(
       // newer than the pre-cloud import backup.
       const raw = scope.read(SCEN_CACHE) ?? scope.read(KEYS.scenarios)
       const parsed = raw ? JSON.parse(raw) : []
-      if (Array.isArray(parsed) && raw) scenarios = materializeImport('scenario-legacy', raw, () => parsed.map((scenario: Partial<Scenario>) => ({
-        id: scenario.id || genId('scen'), name: scenario.name ?? '', savedAt: scenario.savedAt ?? '',
-        inputs: (scenario.inputs ?? {}) as Inputs, constants: scenario.constants,
-      })))
-    } catch { return false }
+      if (raw) {
+        // An assigned backup is an explicit import: reject the complete batch
+        // on any bad record instead of uploading a partial backup unnoticed.
+        const valid = parseBostadScenarios(parsed)
+        if (!valid.ok) {
+          warning('scenarier från säkerhetskopian', valid.issues.map((issue) => ({ record: issue.path, reason: issue.reason })))
+          return false
+        }
+        scenarios = materializeImport('scenario-legacy', raw, () => valid.value)
+      }
+    } catch {
+      warning('scenarier från säkerhetskopian', [{ record: 'backup', reason: 'contains invalid JSON' }])
+      return false
+    }
     if (!scenarios.length) return true
     if (!scope.isActive()) return false
     try {
@@ -152,8 +192,10 @@ export async function loadScenarios(): Promise<Scenario[]> {
   ])
   if (!scope.isActive() || syncCoordinator.isDirty(SCEN_RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
+  const parsed = salvageBostadScenarios(result.data)
+  warning('scenarier', parsed.rejected)
   rememberRowRevisions(SCEN_RESOURCE, result.data as Record<string, unknown>[])
-  const rows = withoutTombstones((result.data as Record<string, unknown>[]).map(fromRow), tombstones)
+  const rows = withoutTombstones(parsed.value, tombstones)
   if (scope.isActive()) scope.write(SCEN_CACHE, JSON.stringify(rows))
   return rows
 }
@@ -171,11 +213,13 @@ export async function loadScenarios(): Promise<Scenario[]> {
 // Server tombstones reject a stale device that later tries to recreate an
 // acknowledged deleted id; intentional recreation must use a fresh id.
 export async function saveScenarios(scenarios: Scenario[]): Promise<void> {
+  const parsed = parseBostadScenarios(scenarios)
+  if (!parsed.ok) throw new PersistenceError('validation')
   const cached = new Map(_readScenCache().map((scenario) => [scenario.id, JSON.stringify(toRow(scenario))]))
-  const changed = scenarios.filter((scenario) => cached.get(scenario.id) !== JSON.stringify(toRow(scenario)))
+  const changed = parsed.value.filter((scenario) => cached.get(scenario.id) !== JSON.stringify(toRow(scenario)))
   const rows = changed.map(toRow)
-  if (!rows.length) { _writeScenCache(scenarios); return }
-  await queueTableUpsert(SCEN_RESOURCE, rows, changed.map((scenario) => scenario.id), () => _writeScenCache(scenarios))
+  if (!rows.length) { _writeScenCache(parsed.value); return }
+  await queueTableUpsert(SCEN_RESOURCE, rows, changed.map((scenario) => scenario.id), () => _writeScenCache(parsed.value))
 }
 
 // Explicit deletion — the ONLY path that removes cloud rows. Array `.in()` filter
@@ -193,8 +237,15 @@ export async function deleteScenarios(ids: string[]): Promise<void> {
 export function loadSession(): Promise<Session | null> {
   try {
     const raw = syncCoordinator.readScoped(KEYS.session)
-    return Promise.resolve(raw ? (JSON.parse(raw) as Session) : null)
+    if (!raw) return Promise.resolve(null)
+    const parsed = parseBostadSession(JSON.parse(raw))
+    if (!parsed.ok) {
+      warning('session', parsed.issues.map((issue) => ({ record: issue.path, reason: issue.reason })))
+      return Promise.resolve(null)
+    }
+    return Promise.resolve(parsed.value)
   } catch {
+    warning('session', [{ record: 'session', reason: 'contains invalid JSON' }])
     return Promise.resolve(null)
   }
 }
@@ -228,13 +279,21 @@ export function clearSession(): Promise<void> {
 export function loadDraft(): Promise<Inputs | null> {
   try {
     const raw = syncCoordinator.readScoped(KEYS.draft)
-    return Promise.resolve(raw ? (JSON.parse(raw) as Inputs) : null)
+    if (!raw) return Promise.resolve(null)
+    const parsed = parseInputs(JSON.parse(raw))
+    if (!parsed.ok) {
+      warning('utkast', parsed.issues.map((issue) => ({ record: issue.path, reason: issue.reason })))
+      return Promise.resolve(null)
+    }
+    return Promise.resolve(parsed.value)
   } catch {
+    warning('utkast', [{ record: 'draft', reason: 'contains invalid JSON' }])
     return Promise.resolve(null)
   }
 }
 
 export function saveDraft(inputs: Inputs): Promise<void> {
+  if (!parseInputs(inputs).ok) return Promise.reject(new PersistenceError('validation'))
   try {
     syncCoordinator.writeScoped(KEYS.draft, JSON.stringify(inputs))
   } catch {
@@ -257,16 +316,20 @@ export function clearDraft(): Promise<void> {
 // Each load/save reads/writes its slice of the shared blob.
 interface Prefs { globalConstants: Constants | null; driftItems: LineItem[]; savingsItems: LineItem[] }
 
+function asPrefs(prefs: BostadPrefs): Prefs {
+  return prefs
+}
+
 function _readPrefsCacheFrom(scope: ReturnType<typeof syncCoordinator.captureScope>): Prefs {
   try {
     const raw = scope.read(PREFS_CACHE)
-    const d = raw ? JSON.parse(raw) : null
-    if (d && typeof d === 'object') return {
-      globalConstants: d.globalConstants ?? null,
-      driftItems: Array.isArray(d.driftItems) ? d.driftItems : [],
-      savingsItems: Array.isArray(d.savingsItems) ? d.savingsItems : [],
-    }
-  } catch { /* ignore */ }
+    if (!raw) return { globalConstants: null, driftItems: [], savingsItems: [] }
+    const parsed = salvageBostadPrefs(JSON.parse(raw))
+    warning('inställningar', parsed.rejected)
+    return asPrefs(parsed.value)
+  } catch {
+    warning('inställningar', [{ record: 'preferences cache', reason: 'contains invalid JSON' }])
+  }
   return { globalConstants: null, driftItems: [], savingsItems: [] }
 }
 function _writePrefsCache(p: Prefs): void {
@@ -320,22 +383,32 @@ const _importScopedPrefs = makeImportOnce(
     try {
       const cached = scope.read(PREFS_CACHE)
       if (cached) {
-        const parsed = JSON.parse(cached) as Partial<Prefs>
-        legacy = {
-          globalConstants: parsed.globalConstants ?? null,
-          driftItems: Array.isArray(parsed.driftItems) ? parsed.driftItems : [],
-          savingsItems: Array.isArray(parsed.savingsItems) ? parsed.savingsItems : [],
+        const parsed = parseBostadPrefs(JSON.parse(cached))
+        if (!parsed.ok) {
+          warning('inställningar från säkerhetskopian', parsed.issues.map((issue) => ({ record: issue.path, reason: issue.reason })))
+          return false
         }
+        legacy = asPrefs(parsed.value)
       }
       const gc = scope.read(KEYS.globalConstants)
       const di = scope.read(KEYS.driftItems)
       const si = scope.read(KEYS.savingsItems)
-      if (!legacy && (gc !== null || di !== null || si !== null)) legacy = {
-        globalConstants: gc ? JSON.parse(gc) : null,
-        driftItems: di ? JSON.parse(di) : [],
-        savingsItems: si ? JSON.parse(si) : [],
+      if (!legacy && (gc !== null || di !== null || si !== null)) {
+        const parsed = parseBostadPrefs({
+          globalConstants: gc ? JSON.parse(gc) : null,
+          driftItems: di ? JSON.parse(di) : [],
+          savingsItems: si ? JSON.parse(si) : [],
+        })
+        if (!parsed.ok) {
+          warning('inställningar från säkerhetskopian', parsed.issues.map((issue) => ({ record: issue.path, reason: issue.reason })))
+          return false
+        }
+        legacy = asPrefs(parsed.value)
       }
-    } catch { return false }
+    } catch {
+      warning('inställningar från säkerhetskopian', [{ record: 'backup', reason: 'contains invalid JSON' }])
+      return false
+    }
     if (!legacy) return true
     if (!scope.isActive()) return false
     try {
@@ -370,8 +443,13 @@ async function _loadPrefsSlice<K extends PrefsKey>(
   if (!scope.isActive() || syncCoordinator.isDirty(resource) || error || !data) return fallback
   rememberToolRevision(tool, data)
   const raw = data.data
-  if (key === 'globalConstants') return (raw && typeof raw === 'object' ? raw : null) as Prefs[K]
-  return (Array.isArray(raw) ? raw : []) as Prefs[K]
+  const parsed = key === 'globalConstants'
+    ? salvageBostadPrefs({ globalConstants: raw, driftItems: [], savingsItems: [] })
+    : key === 'driftItems'
+      ? salvageBostadPrefs({ globalConstants: null, driftItems: raw, savingsItems: [] })
+      : salvageBostadPrefs({ globalConstants: null, driftItems: [], savingsItems: raw })
+  warning('inställningar', parsed.rejected)
+  return parsed.value[key] as Prefs[K]
 }
 
 async function _loadPrefsFor(scope: ReturnType<typeof syncCoordinator.captureScope>): Promise<Prefs> {
@@ -406,6 +484,8 @@ async function _savePrefsSlice<K extends PrefsKey>(key: K, value: Prefs[K]): Pro
   const scope = syncCoordinator.captureScope()
   const current = _readPrefsCacheFrom(scope)
   const next = { ...current, [key]: value }
+  const valid = parseBostadPrefs(next)
+  if (!valid.ok) throw new PersistenceError('validation')
   const tool = PREFS_TOOLS[key]
   const keyName = revisionKey('tool_state', tool)
   await syncCoordinator.mutate({
@@ -432,13 +512,20 @@ export async function saveGlobalConstants(c: Constants): Promise<void> {
 export function loadDraftConstants(): Promise<Constants | null> {
   try {
     const raw = syncCoordinator.readScoped(KEYS.draftConstants)
-    return Promise.resolve(raw ? (JSON.parse(raw) as Constants) : null)
+    if (!raw) return Promise.resolve(null)
+    const parsed = parseConstants(JSON.parse(raw))
+    if (!parsed.ok) {
+      warning('utkastets inställningar', parsed.issues.map((issue) => ({ record: issue.path, reason: issue.reason })))
+      return Promise.resolve(null)
+    }
+    return Promise.resolve(parsed.value)
   } catch {
     return Promise.resolve(null)
   }
 }
 
 export function saveDraftConstants(c: Constants): Promise<void> {
+  if (!parseConstants(c).ok) return Promise.reject(new PersistenceError('validation'))
   try {
     syncCoordinator.writeScoped(KEYS.draftConstants, JSON.stringify(c))
   } catch {
@@ -481,7 +568,12 @@ export const saveSavingsItems = async (items: LineItem[]): Promise<void> => { aw
 
 export function loadDriftYearly(): Promise<boolean> {
   try {
-    return Promise.resolve(syncCoordinator.readScoped(KEY_DRIFT_YEARLY) === 'true')
+    const parsed = parseDriftYearly(syncCoordinator.readScoped(KEY_DRIFT_YEARLY))
+    if (!parsed.ok) {
+      warning('driftvy', [{ record: 'driftYearly', reason: parsed.issues[0].reason }])
+      return Promise.resolve(false)
+    }
+    return Promise.resolve(parsed.value)
   } catch {
     return Promise.resolve(false)
   }

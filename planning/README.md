@@ -220,7 +220,7 @@ as eventual sync without a replay queue.
 | [96-live-supabase-security-verification.md](completed/96-live-supabase-security-verification.md) | Medium | deployed boundary | Live DB catalog + Auth hook verified; grant migration applied; header gaps documented separately | GPT-5.6 Sol | M | approval/access |
 | [97-durable-sync-cache-isolation.md](completed/97-durable-sync-cache-isolation.md) | High | all cloud stores | Durable household-scoped outbox, dirty-cache reconciliation, deletion tombstones, shared-device cleanup | GPT-5.6 Sol | L | 93 |
 | [98-optimistic-concurrency-tool-state.md](completed/98-optimistic-concurrency-tool-state.md) | Medium | blobs + row stores | Use server revisions to detect partner/device conflicts; split or atomically patch shared prefs | GPT-5.6 Sol | M–L | 93, 97 |
-| [99-typed-persistence-boundaries.md](99-typed-persistence-boundaries.md) | Low–Med | storage/import/domain seams | Runtime-validate JSON/cache/import rows and brand high-risk ids/dates | GPT-5.6 Terra | M–L | preferably 93, 97–98 |
+| [99-typed-persistence-boundaries.md](completed/99-typed-persistence-boundaries.md) | Low–Med | storage/import/domain seams | Runtime-validate JSON/cache/import rows and brand high-risk ids/dates | GPT-5.6 Terra | M–L | preferably 93, 97–98 |
 | [100-route-css-scoping.md](100-route-css-scoping.md) | Low | all route CSS | Scope tool selectors, remove import-order coupling, add a selector audit | GPT-5.6 Terra | M | coordinate with UI plans |
 | [101-route-store-decomposition.md](101-route-store-decomposition.md) | Low | large routes/stores | Incrementally extract orchestration and stable row-store mechanics after semantics are fixed | GPT-5.6 Sol | L | 93, 97–98 |
 
@@ -307,3 +307,22 @@ forbids promising without one). Independent of the 103–105 batch.
 data at an unauthenticated bearer-token URL. The plan is written so the token
 model and the `cost`/`notes` field-exposure decision (§5) can be settled before
 any code is written; do not build until approved.
+
+---
+
+# Bolånekoll balance propagation — 2026-07-15 (standalone)
+
+Production use exposed a financial-correctness gap: once a loan part has any
+Saldo, later Betalning/Amortering rows without their own Saldo do not move the
+current balance, freezing the hero and every ratio derived from debt. The owner
+also chose to collapse capital entry into Betalningar and retain Insatser as a
+linked derived view.
+
+| File | Priority | Depends on | Scope | Summary | Owner | Effort |
+|------|----------|------------|-------|---------|-------|--------|
+| [107-bolanekoll-balance-propagation.md](107-bolanekoll-balance-propagation.md) | High | — | mortgage balance engine + persistence + Bolånekoll UI | Replace the competing Saldo/amortering branches with one chronological balance resolver; Betalning reduces principal by Betalning−Ränta (full amount provisionally when Ränta is missing, with an estimate warning), and every explicit Amortering remains separately additive. Route hero, debt, LTV/DTI, cost basis, charts, milestones, forecasts, hub and cross-tool figures through the same debt. Make Betalningar the sole editor and Insatser a linked view; migrate legacy contributions idempotently. | GPT-5.6 Sol | L |
+
+Standalone correctness plan; the owner approved the financial semantics and
+persisted-data consolidation on 2026-07-15. It does not change valuations,
+statutory rules or rate forecasts. One branch/PR from `main`; never apply its
+data migration to production from an agent session.

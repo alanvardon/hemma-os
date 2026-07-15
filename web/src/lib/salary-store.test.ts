@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createSupabaseMock } from './testSupabaseMock'
+import { paymentId } from './persistence-schema'
 
 // See mortgage-store.test.ts for why this shape (vi.hoisted holder + a fresh
 // module import + manual mock-state clearing) is needed every test.
@@ -48,9 +49,19 @@ const sub = (over: Partial<Record<string, unknown>> = {}) => ({
 })
 
 describe('read path', () => {
+  it('parses a persisted salary month as YearMonth and rejects malformed months', () => {
+    const parsed = store.parseSubmission(sub())
+    expect(parsed?.month).toBe('2024-01')
+    if (!parsed) return
+    // @ts-expect-error A parsed salary month is not a payment id.
+    const wrongMonth: typeof parsed.month = paymentId('payment-1')
+    expect(wrongMonth).toBe('payment-1')
+    expect(store.parseSubmission(sub({ month: '2024-13' }))).toBeNull()
+  })
+
   it('cloud ok: list writes through to the cache', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mock().tables[TABLE] = [{ id: 's1', created_at: 't1', revision: 1, ...sub() }]
+    mock().tables[TABLE] = [{ id: 's1', created_at: '2026-07-15T10:00:00.000Z', revision: 1, ...sub() }]
     const rows = await store.list()
     expect(rows).toHaveLength(1)
     expect((cache().submissions || [])).toHaveLength(1)
@@ -62,6 +73,13 @@ describe('read path', () => {
     mock().control.failing.add(TABLE)
     const rows = await store.list()
     expect(rows.map((r) => r.id)).toEqual(['cached'])
+  })
+
+  it('cloud read salvages a valid submission and excludes its malformed sibling', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables[TABLE] = [{ id: 'valid', created_at: '2026-07-15T10:00:00.000Z', ...sub() }, { id: 'bad', created_at: '2026-07-15T10:00:00.000Z', ...sub({ month: '2024-13' }) }]
+    expect((await store.list()).map((row) => row.id)).toEqual(['valid'])
+    expect((cache().submissions as { id: string }[]).map((row) => row.id)).toEqual(['valid'])
   })
 })
 
@@ -96,7 +114,7 @@ describe('write path', () => {
   })
 
   it('remove: success patches the cache', async () => {
-    mock().tables[TABLE] = [{ id: 's1', created_at: 't1', revision: 1, ...sub() }]
+    mock().tables[TABLE] = [{ id: 's1', created_at: '2026-07-15T10:00:00.000Z', revision: 1, ...sub() }]
     await store.list()
     const n = await store.remove('s1')
     expect(n).toBe(0)
@@ -104,7 +122,7 @@ describe('write path', () => {
   })
 
   it('remove: rejects a stale revision after another client changed the row', async () => {
-    mock().tables[TABLE] = [{ id: 's1', created_at: 't1', revision: 1, ...sub() }]
+    mock().tables[TABLE] = [{ id: 's1', created_at: '2026-07-15T10:00:00.000Z', revision: 1, ...sub() }]
     await store.list()
     mock().tables[TABLE][0].revision = 2
 
@@ -145,6 +163,19 @@ describe('one-time legacy import', () => {
     expect(mem.get(IMPORT_FLAG)).toBeUndefined()
   })
 
+  it('invalid assigned legacy data neither mutates nor sets the flag, then retries after correction', async () => {
+    const key = scoped(store.STORAGE_KEY)
+    mem.set(key, JSON.stringify([{ id: 'legacy-1', ...sub({ month: '2024-13' }) }]))
+    await store.list()
+    expect(mock().tables[TABLE] || []).toHaveLength(0)
+    expect(mem.get(IMPORT_FLAG)).toBeUndefined()
+
+    mem.set(key, JSON.stringify([{ id: 'legacy-1', ...sub() }]))
+    await store.list()
+    expect(mock().tables[TABLE].some((row) => row.id === 'legacy-1')).toBe(true)
+    expect(mem.get(IMPORT_FLAG)).toBe('1')
+  })
+
   it('flag already set: legacy data is not re-imported', async () => {
     mem.set(IMPORT_FLAG, '1')
     mem.set(scoped(store.STORAGE_KEY), JSON.stringify([{ id: 'legacy-1', ...sub() }]))
@@ -156,7 +187,7 @@ describe('one-time legacy import', () => {
 describe('store-specific: v1 -> v2 migration (income_items synthesis)', () => {
   it('a v1 row (scalar income_a/income_b, no income_items) gets one item per person on read', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mock().tables[TABLE] = [{ id: 's1', created_at: 't1', ...sub({ income_a: 30000, income_b: 25000 }) }]
+    mock().tables[TABLE] = [{ id: 's1', created_at: '2026-07-15T10:00:00.000Z', ...sub({ income_a: 30000, income_b: 25000 }) }]
     delete (mock().tables[TABLE][0] as Record<string, unknown>).income_items
     const rows = await store.list()
     expect(rows[0].income_items).toEqual([
@@ -165,11 +196,23 @@ describe('store-specific: v1 -> v2 migration (income_items synthesis)', () => {
     ])
   })
 
+  it('uses the domain-neutral submission defaults for missing legacy names', () => {
+    expect(store.parseSubmission({ month: '2024-01', income_a: 1, income_b: 2 })?.person_a_name).toBe('')
+    expect(store.parseSubmission({ month: '2024-01', income_a: 1, income_b: 2 })?.person_b_name).toBe('')
+  })
+
   it('a v2 row (income_items already present) is returned untouched', async () => {
     mem.set(IMPORT_FLAG, '1')
     const items = [{ owner: 'a', label: 'Bonus', amount: 5000 }]
-    mock().tables[TABLE] = [{ id: 's1', created_at: 't1', ...sub(), income_items: items }]
+    mock().tables[TABLE] = [{ id: 's1', created_at: '2026-07-15T10:00:00.000Z', ...sub(), income_items: items }]
     const rows = await store.list()
     expect(rows[0].income_items).toEqual(items)
+  })
+})
+
+describe('import validation boundary', () => {
+  it('rejects a malformed backup before mutating Supabase', async () => {
+    await expect(store.importJSON(JSON.stringify([{ ...sub(), id: '', created_at: 'not-a-timestamp' }]))).rejects.toThrow()
+    expect(mock().tables[TABLE] || []).toHaveLength(0)
   })
 })

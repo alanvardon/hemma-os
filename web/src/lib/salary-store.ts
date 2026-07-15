@@ -21,6 +21,8 @@ import { syncCoordinator } from './sync'
 import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
 import { legacyImportAssignedToActive } from './legacy-data'
 import { rememberRowRevisions, revisionKey } from './sync-rpc'
+import { isRecord, parseFiniteJson, parseISODateTime, parseYearMonth, salvageFiniteJsonRows, type ISODateTime, type PersistedSalarySubmission, type RejectedRecord } from './persistence-schema'
+import { reportPersistenceWarning } from './persistence-error'
 
 // Legacy pre-Supabase history — import source + backup. (Exported name kept for
 // back-compat; it is no longer the cache.)
@@ -45,6 +47,50 @@ function _migrate(row: SalarySubmission): SalarySubmission {
   return row
 }
 
+function warning(rejected: RejectedRecord[]): void {
+  if (!rejected.length) return
+  const count = `${rejected.length} ${rejected.length === 1 ? 'post' : 'poster'}`
+  reportPersistenceWarning(`Några sparade löneunderlag kunde inte läsas (${count}). Övriga sparade uppgifter finns kvar.`)
+}
+
+export function parseSubmission(raw: unknown): PersistedSalarySubmission | null {
+  if (!isRecord(raw) || !parseFiniteJson(raw).ok) return null
+  const month = parseYearMonth(raw.month)
+  if (!month.ok) return null
+  const stringOrNull = (key: string) => raw[key] === undefined || raw[key] === null || typeof raw[key] === 'string'
+  const numberOrNull = (key: string) => raw[key] === undefined || raw[key] === null || (typeof raw[key] === 'number' && Number.isFinite(raw[key]))
+  if (!stringOrNull('id') || !stringOrNull('created_at') || !stringOrNull('month')
+    || !stringOrNull('person_a_name') || !stringOrNull('person_b_name') || !stringOrNull('transfer_from') || !stringOrNull('transfer_to') || !stringOrNull('note')
+    || !numberOrNull('income_a') || !numberOrNull('income_b') || !numberOrNull('transfer_amount') || !numberOrNull('equal_share')) return null
+  if (raw.id !== undefined && (typeof raw.id !== 'string' || !raw.id.trim())) return null
+  const created = raw.created_at === undefined || raw.created_at === null ? null : parseISODateTime(raw.created_at)
+  if (created && !created.ok) return null
+  if ((raw.transfer_from !== undefined && raw.transfer_from !== 'a' && raw.transfer_from !== 'b')
+    || (raw.transfer_to !== undefined && raw.transfer_to !== 'a' && raw.transfer_to !== 'b')) return null
+  if (raw.income_items !== undefined && (!Array.isArray(raw.income_items) || raw.income_items.some((item) => !isRecord(item)
+    || (item.owner !== 'a' && item.owner !== 'b') || typeof item.label !== 'string' || typeof item.amount !== 'number' || !Number.isFinite(item.amount)))) return null
+  const migrated = _migrate({
+    month: month.value, income_a: typeof raw.income_a === 'number' ? raw.income_a : 0, income_b: typeof raw.income_b === 'number' ? raw.income_b : 0,
+    income_items: Array.isArray(raw.income_items) ? raw.income_items as SalarySubmission['income_items'] : undefined,
+    person_a_name: typeof raw.person_a_name === 'string' ? raw.person_a_name : '', person_b_name: typeof raw.person_b_name === 'string' ? raw.person_b_name : '',
+    transfer_amount: typeof raw.transfer_amount === 'number' ? raw.transfer_amount : 0, transfer_from: raw.transfer_from === 'b' ? 'b' : 'a', transfer_to: raw.transfer_to === 'a' ? 'a' : 'b',
+    equal_share: typeof raw.equal_share === 'number' ? raw.equal_share : 0, note: typeof raw.note === 'string' ? raw.note : null,
+    ...(typeof raw.id === 'string' ? { id: raw.id } : {}), ...(typeof raw.created_at === 'string' ? { created_at: raw.created_at } : {}),
+  } as unknown as SalarySubmission)
+  const result = { ...migrated, month: month.value }
+  return created && created.ok ? { ...result, created_at: created.value as ISODateTime } : result as PersistedSalarySubmission
+}
+
+function salvageSubmissions(raw: unknown): { value: SalarySubmission[]; rejected: RejectedRecord[] } {
+  const base = salvageFiniteJsonRows(raw, 'löneunderlag')
+  const value: SalarySubmission[] = []
+  base.value.forEach((row, index) => {
+    const parsed = parseSubmission(row)
+    if (parsed) value.push(parsed); else base.rejected.push({ record: `löneunderlag ${index + 1}`, reason: 'has an invalid field' })
+  })
+  return { value, rejected: base.rejected }
+}
+
 // ── localStorage cache (offline fallback) ───────────────────────────────────
 function _readCache(): SalarySubmission[] {
   return _readCacheFrom(syncCoordinator.captureScope())
@@ -55,9 +101,12 @@ function _readCacheFrom(scope: ReturnType<typeof syncCoordinator.captureScope>):
     const raw = scope.read(CACHE_KEY)
     if (!raw) return []
     const data = JSON.parse(raw)
-    if (!data || !Array.isArray(data.submissions)) return []
-    return data.submissions.map(_migrate)
+    if (!isRecord(data) || !Array.isArray(data.submissions)) { warning([{ record: 'salary cache', reason: 'must be an object with submissions' }]); return [] }
+    const parsed = salvageSubmissions(data.submissions)
+    warning(parsed.rejected)
+    return parsed.value
   } catch {
+    warning([{ record: 'salary cache', reason: 'contains invalid JSON' }])
     return []
   }
 }
@@ -73,23 +122,28 @@ function _writeCache(submissions: SalarySubmission[]): void {
 // The pre-Supabase history, normalised + guaranteed id/created_at, ready to
 // upsert. Read-only: this key is never written after the swap, so the original
 // data survives even if every cloud write fails.
-function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): SalarySubmission[] {
+type LegacyRead = { status: 'absent' } | { status: 'invalid' } | { status: 'valid'; value: SalarySubmission[] }
+
+function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): LegacyRead {
   const raw = scope.read(STORAGE_KEY)
-  if (!raw) return []
+  if (raw === null) return { status: 'absent' }
   let data: unknown
   try {
     data = JSON.parse(raw)
-  } catch { return [] }
-  const arr: SalarySubmission[] = Array.isArray(data)
-    ? data
-    : (data && Array.isArray((data as { submissions?: unknown }).submissions))
-      ? (data as { submissions: SalarySubmission[] }).submissions : []
-  return materializeImport('salary-legacy', raw, () => arr.map((r) => {
-      const row = _migrate({ ...r })
+  } catch { warning([{ record: 'salary backup', reason: 'contains invalid JSON' }]); return { status: 'invalid' } }
+  if (!Array.isArray(data) && !(isRecord(data) && Array.isArray(data.submissions))) {
+    warning([{ record: 'salary backup', reason: 'must be an array or object with submissions' }]); return { status: 'invalid' }
+  }
+  const arr = Array.isArray(data) ? data : data.submissions
+  const valid = salvageSubmissions(arr)
+  if (valid.rejected.length) { warning(valid.rejected); return { status: 'invalid' } }
+  const value = materializeImport('salary-legacy', raw, () => valid.value.map((r) => {
+      const row = _migrate({ ...r } as SalarySubmission)
       if (!row.id) row.id = genId('sub')
       if (!row.created_at) row.created_at = new Date().toISOString()
       return row
     }))
+  return { status: 'valid', value }
 }
 
 // Newest first (by created_at). Used for the cache fallback path; the cloud
@@ -129,7 +183,10 @@ function _row(s: SalarySubmission): Record<string, unknown> {
 const _importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(IMPORT_FLAG), async () => {
   const scope = syncCoordinator.captureScope()
   if (!legacyImportAssignedToActive() || !scope.isActive()) return true
-  const legacy = _readLegacy(scope)
+  const legacyRead = _readLegacy(scope)
+  if (legacyRead.status === 'absent') return true
+  if (legacyRead.status === 'invalid') return false
+  const legacy = legacyRead.value
   if (!legacy.length) return true
   if (!scope.isActive()) return false
   try {
@@ -167,7 +224,9 @@ export async function list(): Promise<SalarySubmission[]> {
   if (!scope.isActive() || syncCoordinator.isDirty(RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
   rememberRowRevisions(RESOURCE, result.data as Record<string, unknown>[])
-  const rows = withoutTombstones((result.data as SalarySubmission[]).map(_migrate), tombstones)
+  const parsed = salvageSubmissions(result.data)
+  warning(parsed.rejected)
+  const rows = withoutTombstones(parsed.value, tombstones)
   if (scope.isActive()) scope.write(CACHE_KEY, JSON.stringify({ version: VERSION, submissions: rows }))
   return rows
 }
@@ -208,16 +267,13 @@ export async function exportJSON(): Promise<string> {
 export async function importJSON(text: string): Promise<number> {
   let parsed: unknown
   try { parsed = JSON.parse(text) } catch { throw new Error('That file isn’t valid JSON.') }
-  const incoming: SalarySubmission[] | null = Array.isArray(parsed)
-    ? (parsed as SalarySubmission[])
-    : (parsed && Array.isArray((parsed as { submissions?: unknown }).submissions))
-      ? ((parsed as { submissions: SalarySubmission[] }).submissions)
-      : null
+  const incoming = Array.isArray(parsed) ? parsed : (isRecord(parsed) && Array.isArray(parsed.submissions) ? parsed.submissions : null)
   if (!incoming) throw new Error('No submissions found in that file.')
+  const checked = salvageSubmissions(incoming)
+  if (checked.rejected.length) throw new Error(`Löneunderlaget innehåller ogiltiga poster: ${checked.rejected.map((r) => r.record).join(', ')}.`)
 
   const scope = syncCoordinator.captureScope()
-  const normalized = materializeImport('salary-backup', text, () => incoming
-    .filter((raw) => !!raw && typeof raw === 'object')
+  const normalized = materializeImport('salary-backup', text, () => checked.value
     .map((raw) => {
       const row = _migrate({ ...raw })
       if (!row.id) row.id = genId('sub')

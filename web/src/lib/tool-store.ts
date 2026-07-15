@@ -20,6 +20,8 @@ import { syncCoordinator } from './sync'
 import { makeImportOnce } from './store-helpers'
 import { legacyImportAssignedToActive } from './legacy-data'
 import { receiptRpc, rejectLegacyToolOperation, rememberToolRevision, revisionKey, syncRpcResult } from './sync-rpc'
+import { parseFiniteJson } from './persistence-schema'
+import { PersistenceError, reportPersistenceWarning } from './persistence-error'
 
 export interface ToolStateStoreConfig<T> {
   /** `tool_state.tool` discriminator, e.g. 'konsultkalkyl'. */
@@ -51,18 +53,19 @@ export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolState
   const table = cfg.table ?? 'tool_state'
   const { tool, storageKey, cacheKey, importFlag, merge } = cfg
   const resource = `tool_state:${tool}`
+  const warnInvalid = (source: string): void => reportPersistenceWarning(`Sparade uppgifter för ${tool} kunde inte läsas från ${source}. Övriga sparade uppgifter finns kvar.`)
 
   function readCache(): T | null {
-    try { const raw = syncCoordinator.readScoped(cacheKey); return raw ? merge(JSON.parse(raw)) : null } catch { return null }
+    try { const raw = syncCoordinator.readScoped(cacheKey); if (!raw) return null; const data = JSON.parse(raw); if (!parseFiniteJson(data).ok) { warnInvalid('cachen'); return null }; const value = merge(data); if (!value) warnInvalid('cachen'); return value } catch { warnInvalid('cachen'); return null }
   }
-  function readCapturedCache(scope: ReturnType<typeof syncCoordinator.captureScope>): T | null {
-    try { const raw = scope.read(cacheKey); return raw ? merge(JSON.parse(raw)) : null } catch { return null }
+  function readCapturedCache(scope: ReturnType<typeof syncCoordinator.captureScope>): T | null | undefined {
+    try { const raw = scope.read(cacheKey); if (raw === null) return undefined; const data = JSON.parse(raw); if (!parseFiniteJson(data).ok) { warnInvalid('cachen'); return null }; const value = merge(data); if (!value) { warnInvalid('cachen'); return null }; return value } catch { warnInvalid('cachen'); return null }
   }
   function writeCache(data: T): void {
     syncCoordinator.writeScoped(cacheKey, JSON.stringify(data))
   }
   function readLegacy(): T | null {
-    try { const raw = syncCoordinator.readScoped(storageKey); return raw ? merge(JSON.parse(raw)) : null } catch { return null }
+    try { const raw = syncCoordinator.readScoped(storageKey); if (!raw) return null; const data = JSON.parse(raw); if (!parseFiniteJson(data).ok) { warnInvalid('säkerhetskopian'); return null }; const value = merge(data); if (!value) warnInvalid('säkerhetskopian'); return value } catch { warnInvalid('säkerhetskopian'); return null }
   }
 
   const importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(importFlag), async () => {
@@ -70,10 +73,13 @@ export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolState
     if (!legacyImportAssignedToActive() || !scope.isActive()) return true
     // The cache can contain the failed local edit this plan is recovering;
     // the pre-cloud blob is only a fallback backup and may be older.
-    const legacy = readCapturedCache(scope) ?? (() => {
-      try { const raw = scope.read(storageKey); return raw ? merge(JSON.parse(raw)) : null } catch { return null }
-    })()
-    if (!legacy) return true
+    const cached = readCapturedCache(scope)
+    if (cached === null) return false
+    const legacy = cached === undefined ? (() => {
+      try { const raw = scope.read(storageKey); if (raw === null) return undefined; const data = JSON.parse(raw); if (!parseFiniteJson(data).ok) { warnInvalid('säkerhetskopian'); return null }; const value = merge(data); if (!value) { warnInvalid('säkerhetskopian'); return null }; return value } catch { warnInvalid('säkerhetskopian'); return null }
+    })() : cached
+    if (legacy === null) return false
+    if (legacy === undefined) return true
     if (!scope.isActive()) return false
     try {
       await syncCoordinator.mutate({
@@ -114,14 +120,16 @@ export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolState
   async function load(): Promise<T | null> {
     const scope = syncCoordinator.captureScope()
     await importLocalOnce()
-    if (!scope.isActive()) return readCapturedCache(scope)
-    if (syncCoordinator.isDirty(resource)) return readCapturedCache(scope)
+    if (!scope.isActive()) return readCapturedCache(scope) ?? null
+    if (syncCoordinator.isDirty(resource)) return readCapturedCache(scope) ?? null
     const { data, error } = await supabase.from(table).select('data,revision').eq('tool', tool).maybeSingle()
-    if (!scope.isActive() || syncCoordinator.isDirty(resource)) return readCapturedCache(scope)
-    if (error) return readCapturedCache(scope)
+    if (!scope.isActive() || syncCoordinator.isDirty(resource)) return readCapturedCache(scope) ?? null
+    if (error) return readCapturedCache(scope) ?? null
     if (!data) return null
     rememberToolRevision(tool, data)
+    if (!parseFiniteJson(data.data).ok) { warnInvalid('molnet'); return readCapturedCache(scope) ?? null }
     const merged = merge(data.data)
+    if (!merged) { warnInvalid('molnet'); return readCapturedCache(scope) ?? null }
     if (merged && scope.isActive()) scope.write(cacheKey, JSON.stringify(merged))
     return merged
   }
@@ -129,6 +137,7 @@ export function createToolStateStore<T>(cfg: ToolStateStoreConfig<T>): ToolState
   // Persist the whole blob. The local cache remains optimistic, but a rejected
   // cloud write is explicit: cache-only is not the same as saved.
   async function save(data: T): Promise<void> {
+    if (!parseFiniteJson(data).ok) throw new PersistenceError('validation')
     await syncCoordinator.mutate({
       resource,
       operation: 'upsert',

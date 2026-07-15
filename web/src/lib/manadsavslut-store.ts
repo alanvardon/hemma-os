@@ -21,6 +21,8 @@ import { makeImportOnce, materializeImport, stamp } from './store-helpers'
 import { syncCoordinator } from './sync'
 import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
 import { legacyImportAssignedToActive } from './legacy-data'
+import { parseFiniteJson, parseMonthEndEnvelope, salvageMonthEndEnvelope, salvageMonthEndRows } from './persistence-schema'
+import { reportPersistenceWarning } from './persistence-error'
 import {
   receiptRpc, rejectLegacyToolOperation, rememberRowRevisions, rememberToolRevision,
   revisionKey, syncRpcResult,
@@ -42,6 +44,10 @@ const VERSION = 1
 
 interface Envelope { version: number; items: Item[]; payments: Payment[]; settings: MonthEndSettings }
 
+function warning(source: string): void {
+  reportPersistenceWarning(`Några sparade månadsavslut kunde inte läsas från ${source}. Övriga sparade uppgifter finns kvar.`)
+}
+
 // Normalize a loaded item so older localStorage data and JSON backups gain the
 // personal carve-out fields with safe defaults (no migration script needed):
 //  - pre-personal items (no fields)        → personal_items: []
@@ -50,7 +56,7 @@ interface Envelope { version: number; items: Item[]; payments: Payment[]; settin
 //  - current items (personal_items present)→ re-derive the cached sums (idempotent)
 // Idempotent, so it is safe to run on cloud rows and cached rows alike.
 export function normalizeItem(it: Item): Item {
-  const raw = it as unknown as Record<string, unknown>
+  const raw = it as unknown as unknown as Record<string, unknown>
   let entries: PersonalEntry[] = normalizePersonalEntries(raw.personal_items)
   if (!entries.length) {
     const pa = Number(raw.personal_a) || 0, pb = Number(raw.personal_b) || 0
@@ -99,9 +105,9 @@ function _itemPatch(patch: Partial<Item>): Record<string, unknown> {
     'amount', 'fronted_by', 'owed_by', 'paid', 'pending', 'payment_id', 'note',
     'personal_items', 'personal_a', 'personal_b']
   const out: Record<string, unknown> = {}
-  for (const c of cols) if (c in patch) out[c] = (patch as Record<string, unknown>)[c]
+  for (const c of cols) if (c in patch) out[c] = (patch as unknown as Record<string, unknown>)[c]
   if ('personal_items' in patch) {
-    const sums = personalSums(normalizePersonalEntries((patch as Record<string, unknown>).personal_items))
+    const sums = personalSums(normalizePersonalEntries((patch as unknown as Record<string, unknown>).personal_items))
     out.personal_a = sums.a; out.personal_b = sums.b
   }
   return out
@@ -117,15 +123,13 @@ function _readCacheFrom(scope: ReturnType<typeof syncCoordinator.captureScope>):
   try {
     const raw = scope.read(CACHE_KEY)
     if (!raw) return empty
-    const d = JSON.parse(raw) as Record<string, unknown>
-    if (!d || typeof d !== 'object') return empty
-    return {
-      version: VERSION,
-      items: Array.isArray(d.items) ? (d.items as Item[]).map(normalizeItem) : [],
-      payments: Array.isArray(d.payments) ? (d.payments as Payment[]) : [],
-      settings: { ...defaultSettings(), ...((d.settings as Partial<MonthEndSettings>) || {}) },
-    }
-  } catch { return empty }
+    const d = JSON.parse(raw) as unknown as Record<string, unknown>
+    if (!d || typeof d !== 'object') { warning('cachen'); return empty }
+    if (!parseFiniteJson(d).ok) { warning('cachen'); return empty }
+    const parsed = salvageMonthEndEnvelope(d)
+    if (parsed.rejected.length) warning('cachen')
+    return { ...parsed.value, version: VERSION, items: parsed.value.items.map(normalizeItem) }
+  } catch { warning('cachen'); return empty }
 }
 
 function _writeCache(env: Envelope): void {
@@ -157,31 +161,40 @@ export function cachedSnapshot(): { items: Item[]; payments: Payment[]; settings
 // Read the pre-Supabase envelope from the legacy key — normalised, with
 // id/created_at guaranteed — ready to upsert. Read-only: STORAGE_KEY is never
 // written after the swap, so the original survives even if every upload fails.
-function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): { items: Item[]; payments: Payment[]; settings: MonthEndSettings | null } {
+type LegacyRead = { status: 'absent' } | { status: 'invalid' } | { status: 'valid'; value: { items: Item[]; payments: Payment[]; settings: MonthEndSettings | null } }
+
+function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): LegacyRead {
   const raw = scope.read(STORAGE_KEY)
-  if (!raw) return { items: [], payments: [], settings: null }
+  if (raw === null) return { status: 'absent' }
   let d: Record<string, unknown>
   try {
-    d = JSON.parse(raw) as Record<string, unknown>
-    if (!d || typeof d !== 'object') return { items: [], payments: [], settings: null }
-  } catch { return { items: [], payments: [], settings: null } }
-  return materializeImport('monthend-legacy', raw, () => {
-    const items = Array.isArray(d.items) ? (d.items as Item[]).map((r) => {
-      const row = normalizeItem({ ...r })
+    d = JSON.parse(raw) as unknown as Record<string, unknown>
+    if (!d || typeof d !== 'object' || !parseFiniteJson(d).ok
+      || (d.items !== undefined && !Array.isArray(d.items))
+      || (d.payments !== undefined && !Array.isArray(d.payments))
+      || (d.settings !== undefined && d.settings !== null && (typeof d.settings !== 'object' || Array.isArray(d.settings)))) { warning('säkerhetskopian'); return { status: 'invalid' } }
+  } catch { warning('säkerhetskopian'); return { status: 'invalid' } }
+  const candidate = materializeImport('monthend-legacy', raw, () => {
+    const items = ((d.items as unknown[] | undefined) ?? []).map((r) => {
+      if (!r || typeof r !== 'object' || Array.isArray(r)) return r
+      const row = { ...(r as Record<string, unknown>) }
       if (!row.id) row.id = genId('item')
       if (!row.created_at) row.created_at = new Date().toISOString()
-      return row
-    }) : []
-    const payments = Array.isArray(d.payments) ? (d.payments as Payment[]).map((r) => {
-      const row = { ...r }
+      return { date_purchased: '', description: '', enter_amount: 0, split: true, amount: 0, fronted_by: 'a' as const, owed_by: 'a' as const, paid: false, pending: false, payment_id: null, note: '', personal_items: [], personal_a: 0, personal_b: 0, source: 'manual', ...(row as unknown as Record<string, unknown>) }
+    })
+    const payments = ((d.payments as unknown[] | undefined) ?? []).map((r) => {
+      if (!r || typeof r !== 'object' || Array.isArray(r)) return r
+      const row = { ...(r as Record<string, unknown>) }
       if (!row.id) row.id = genId('pay')
       if (!row.created_at) row.created_at = new Date().toISOString()
-      return row
-    }) : []
-    const settings = (d.settings && typeof d.settings === 'object')
-      ? { ...defaultSettings(), ...(d.settings as Partial<MonthEndSettings>) } : null
-    return { items, payments, settings }
+      return { item_ids: [], from_person: null, to_person: null, amount: 0, period_label: '', note: '', ...(row as unknown as Record<string, unknown>) }
+    })
+    const settings = d.settings === undefined || d.settings === null ? defaultSettings() : { ...defaultSettings(), ...(d.settings as Partial<MonthEndSettings>) }
+    return { version: d.version ?? VERSION, items, payments, settings }
   })
+  const parsed = parseMonthEndEnvelope(candidate)
+  if (!parsed.ok) { warning('säkerhetskopian'); return { status: 'invalid' } }
+  return { status: 'valid', value: { ...parsed.value, items: parsed.value.items.map(normalizeItem) } }
 }
 
 // On the first authenticated load after the household exists, upsert the legacy
@@ -192,7 +205,10 @@ function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): { 
 const _importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(IMPORT_FLAG), async () => {
   const scope = syncCoordinator.captureScope()
   if (!legacyImportAssignedToActive() || !scope.isActive()) return true
-  const legacy = _readLegacy(scope)
+  const legacyRead = _readLegacy(scope)
+  if (legacyRead.status === 'absent') return true
+  if (legacyRead.status === 'invalid') return false
+  const legacy = legacyRead.value
   const operations = []
   if (legacy.items.length) operations.push({
     resource: ITEMS_RESOURCE, operation: 'upsert' as const, payload: { rows: legacy.items.map(_itemRow), seed: true },
@@ -307,8 +323,10 @@ export async function listItems(): Promise<Item[]> {
   ])
   if (!scope.isActive() || syncCoordinator.isDirty(ITEMS_RESOURCE) || syncCoordinator.isDirty(SETTLEMENT_RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
-  rememberRowRevisions(ITEMS_RESOURCE, result.data as Record<string, unknown>[])
-  const rows = withoutTombstones((result.data as Item[]).map(normalizeItem), tombstones)
+  rememberRowRevisions(ITEMS_RESOURCE, result.data as unknown as Record<string, unknown>[])
+  const parsed = salvageMonthEndRows(result.data, 'items')
+  if (parsed.rejected.length) warning('molnet')
+  const rows = withoutTombstones((parsed.value as unknown as Item[]).map(normalizeItem), tombstones)
   if (scope.isActive()) {
     const cache = _readCacheFrom(scope); cache.items = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   }
@@ -379,8 +397,10 @@ export async function listPayments(): Promise<Payment[]> {
   ])
   if (!scope.isActive() || syncCoordinator.isDirty(PAYMENTS_RESOURCE) || syncCoordinator.isDirty(SETTLEMENT_RESOURCE)) return fallback()
   if (result.error || !result.data) return fallback()
-  rememberRowRevisions(PAYMENTS_RESOURCE, result.data as Record<string, unknown>[])
-  const rows = withoutTombstones(result.data as Payment[], tombstones)
+  rememberRowRevisions(PAYMENTS_RESOURCE, result.data as unknown as Record<string, unknown>[])
+  const parsed = salvageMonthEndRows(result.data, 'payments')
+  if (parsed.rejected.length) warning('molnet')
+  const rows = withoutTombstones(parsed.value as unknown as Payment[], tombstones)
   const cache = _readCacheFrom(scope); cache.payments = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return rows
 }
@@ -469,18 +489,13 @@ export async function importJSON(text: string): Promise<{ items: number; payment
   let parsed: Record<string, unknown>
   try { parsed = JSON.parse(text) } catch { throw new Error('That file isn’t valid JSON.') }
   if (!parsed || typeof parsed !== 'object') throw new Error('No Månadsavslut data found in that file.')
-  const inItems = Array.isArray(parsed.items) ? (parsed.items as Item[]) : []
-  const inPays = Array.isArray(parsed.payments) ? (parsed.payments as Payment[]) : []
+  const valid = parseMonthEndEnvelope(parsed)
+  if (!valid.ok) throw new Error('Månadsavslutet innehåller ogiltiga eller ofullständiga uppgifter.')
   if (!parsed.items && !parsed.payments) throw new Error('No Månadsavslut data found in that file.')
 
   const scope = syncCoordinator.captureScope()
   const normalized = materializeImport('monthend-backup', text, () => ({
-    items: inItems.filter((raw) => !!raw && typeof raw === 'object').map((raw) => {
-      const row = normalizeItem({ ...raw }); if (!row.id) row.id = genId('item'); if (!row.created_at) row.created_at = new Date().toISOString(); return row
-    }),
-    payments: inPays.filter((raw) => !!raw && typeof raw === 'object').map((raw) => {
-      const row = { ...raw }; if (!row.id) row.id = genId('pay'); if (!row.created_at) row.created_at = new Date().toISOString(); return row
-    }),
+    items: valid.value.items.map(normalizeItem), payments: valid.value.payments,
   }))
 
   const [existingItems, existingPays, existingSettings] = await Promise.all([listItems(), listPayments(), getSettings()])

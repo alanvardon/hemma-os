@@ -56,10 +56,16 @@ function cache(): Record<string, unknown> {
   return JSON.parse(mem.get(CACHE_KEY) || '{}')
 }
 
+const CREATED = '2026-07-15T10:00:00.000Z'
+const loanPart = (id: string, over: Record<string, unknown> = {}) => ({ id, created_at: CREATED, label: 'Bolån', loan_number: '1', start_balance: 500_000, start_date: '2024-01-01', archived: false, ...over })
+const mortgagePayment = (id: string, loan_part_id: string | null = null, over: Record<string, unknown> = {}) => ({ id, created_at: CREATED, loan_part_id, date: '2024-02-01', kind: 'payment', description: '', amount: 0, balance_after: null, paid_by: 'joint', source: '', is_insats: false, paid_split: null, ...over })
+const ratePeriod = (id: string, loan_part_id: string | null = null, over: Record<string, unknown> = {}) => ({ id, created_at: CREATED, loan_part_id, start_date: '2024-01-01', end_date: null, rate: null, rate_type: 'rörlig', ...over })
+const bankRow = (id: string, over: Record<string, unknown> = {}) => ({ id, created_at: CREATED, label: 'Danske', ...over })
+
 describe('read path', () => {
   it('cloud ok: list writes through to the cache', async () => {
     mem.set(IMPORT_FLAG, '1') // no legacy data — skip the import path
-    mock().tables.mortgage_loan_parts = [{ id: 'p1', created_at: 't1', label: 'Bolån', loan_number: '123', start_balance: 100000, start_date: '2024-01-01', archived: false }]
+    mock().tables.mortgage_loan_parts = [loanPart('p1', { loan_number: '123', start_balance: 100000 })]
     const rows = await store.listLoanParts()
     expect(rows).toHaveLength(1)
     expect((cache().loan_parts as unknown[])).toHaveLength(1)
@@ -67,15 +73,22 @@ describe('read path', () => {
 
   it('cloud error: list falls back to the cache', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mem.set(CACHE_KEY, JSON.stringify({ version: 4, loan_parts: [{ id: 'cached', label: 'X' }], payments: [], valuations: [], rate_periods: [], contributions: [], settings: {} }))
+    mem.set(CACHE_KEY, JSON.stringify({ version: 4, banks: [], mortgages: [], loan_parts: [loanPart('cached', { label: 'X' })], payments: [], valuations: [], rate_periods: [], contributions: [], settings: {} }))
     mock().control.failing.add('mortgage_loan_parts')
     const rows = await store.listLoanParts()
-    expect(rows).toEqual([{ id: 'cached', label: 'X' }])
+    expect(rows).toMatchObject([{ id: 'cached', label: 'X' }])
+  })
+
+  it('cloud read salvages a valid loan part and excludes its malformed sibling', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.mortgage_loan_parts = [loanPart('valid'), loanPart('bad', { start_balance: 'not-a-number' })]
+    expect((await store.listLoanParts()).map((row) => row.id)).toEqual(['valid'])
+    expect((cache().loan_parts as { id: string }[]).map((row) => row.id)).toEqual(['valid'])
   })
 
   it('sync snapshot reports failure instead of presenting cached rows as live data', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mem.set(CACHE_KEY, JSON.stringify({ version: 4, loan_parts: [{ id: 'cached', label: 'X' }], payments: [], valuations: [], rate_periods: [], contributions: [], settings: {} }))
+    mem.set(CACHE_KEY, JSON.stringify({ version: 4, banks: [], mortgages: [], loan_parts: [loanPart('cached', { label: 'X' })], payments: [], valuations: [], rate_periods: [], contributions: [], settings: {} }))
     mock().control.failing.add('mortgage_rate_periods')
 
     expect(await store.loadMortgageSyncSnapshot()).toBeNull()
@@ -83,12 +96,12 @@ describe('read path', () => {
 
   it('sync snapshot returns all three live mortgage inputs together', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mock().tables.mortgage_loan_parts = [{ id: 'p1' }]
-    mock().tables.mortgage_rate_periods = [{ id: 'r1' }]
-    mock().tables.mortgage_payments = [{ id: 'pay1' }]
+    mock().tables.mortgage_loan_parts = [loanPart('p1')]
+    mock().tables.mortgage_rate_periods = [ratePeriod('r1', 'p1')]
+    mock().tables.mortgage_payments = [mortgagePayment('pay1', 'p1')]
 
-    expect(await store.loadMortgageSyncSnapshot()).toEqual({
-      parts: [{ id: 'p1' }], periods: [{ id: 'r1' }], payments: [{ id: 'pay1' }],
+    expect(await store.loadMortgageSyncSnapshot()).toMatchObject({
+      parts: [loanPart('p1')], periods: [ratePeriod('r1', 'p1')], payments: [mortgagePayment('pay1', 'p1')],
     })
   })
 })
@@ -137,7 +150,7 @@ describe('write path', () => {
   })
 
   it('updateLoanPart: patches the declared amortering on the row and cache', async () => {
-    mock().tables.mortgage_loan_parts = [{ id: 'p1', created_at: 't', label: 'Bolån', loan_number: '1', start_balance: 500000, start_date: '2024-01-01', archived: false, revision: 1 }]
+    mock().tables.mortgage_loan_parts = [loanPart('p1', { revision: 1 })]
     // Load through the sync layer first so the optimistic-concurrency revision
     // for p1 is registered — an update against an unknown revision conflicts.
     await store.listLoanParts()
@@ -175,10 +188,10 @@ describe('write path', () => {
   it('removeLoanPart: one RPC removes the part and all linked history before patching the cache', async () => {
     const envelope = {
       version: 4,
-      loan_parts: [{ id: 'p1' }, { id: 'p2' }],
-      payments: [{ id: 'pay1', loan_part_id: 'p1' }, { id: 'pay2', loan_part_id: 'p2' }],
+      loan_parts: [loanPart('p1'), loanPart('p2')],
+      payments: [mortgagePayment('pay1', 'p1'), mortgagePayment('pay2', 'p2')],
       valuations: [],
-      rate_periods: [{ id: 'rate1', loan_part_id: 'p1' }, { id: 'rate2', loan_part_id: 'p2' }],
+      rate_periods: [ratePeriod('rate1', 'p1'), ratePeriod('rate2', 'p2')],
       contributions: [], settings: {},
     }
     mem.set(CACHE_KEY, JSON.stringify(envelope))
@@ -200,9 +213,9 @@ describe('write path', () => {
     await expect(store.removeLoanPart('p1')).resolves.toBe(1)
 
     expect(calls[0]).toMatchObject({ p_loan_part_id: 'p1' })
-    expect(mock().tables.mortgage_loan_parts).toEqual([{ id: 'p2' }])
-    expect(mock().tables.mortgage_payments).toEqual([{ id: 'pay2', loan_part_id: 'p2' }])
-    expect(mock().tables.mortgage_rate_periods).toEqual([{ id: 'rate2', loan_part_id: 'p2' }])
+    expect(mock().tables.mortgage_loan_parts).toMatchObject([{ id: 'p2' }])
+    expect(mock().tables.mortgage_payments).toMatchObject([{ id: 'pay2', loan_part_id: 'p2' }])
+    expect(mock().tables.mortgage_rate_periods).toMatchObject([{ id: 'rate2', loan_part_id: 'p2' }])
     expect(cache()).toMatchObject({
       loan_parts: [{ id: 'p2' }],
       payments: [{ id: 'pay2', loan_part_id: 'p2' }],
@@ -213,8 +226,8 @@ describe('write path', () => {
   it('removeLoanPart: RPC failure keeps parent and children hidden behind a durable tombstone', async () => {
     const envelope = {
       version: 4,
-      loan_parts: [{ id: 'p1' }], payments: [{ id: 'pay1', loan_part_id: 'p1' }],
-      valuations: [], rate_periods: [{ id: 'rate1', loan_part_id: 'p1' }],
+      loan_parts: [loanPart('p1')], payments: [mortgagePayment('pay1', 'p1')],
+      valuations: [], rate_periods: [ratePeriod('rate1', 'p1')],
       contributions: [], settings: {},
     }
     mem.set(CACHE_KEY, JSON.stringify(envelope))
@@ -229,9 +242,9 @@ describe('write path', () => {
     expect(await store.listLoanParts()).toEqual([])
     expect(await store.listPayments()).toEqual([])
     expect(await store.listRatePeriods()).toEqual([])
-    expect(mock().tables.mortgage_loan_parts).toEqual([{ id: 'p1' }])
-    expect(mock().tables.mortgage_payments).toEqual([{ id: 'pay1', loan_part_id: 'p1' }])
-    expect(mock().tables.mortgage_rate_periods).toEqual([{ id: 'rate1', loan_part_id: 'p1' }])
+    expect(mock().tables.mortgage_loan_parts).toMatchObject([{ id: 'p1' }])
+    expect(mock().tables.mortgage_payments).toMatchObject([{ id: 'pay1', loan_part_id: 'p1' }])
+    expect(mock().tables.mortgage_rate_periods).toMatchObject([{ id: 'rate1', loan_part_id: 'p1' }])
     expect(sync.syncCoordinator.isDirty('mortgage-loan-part-cascade')).toBe(true)
 
     mock().control.failing.delete('sync_delete_mortgage_loan_part')
@@ -250,10 +263,10 @@ describe('write path', () => {
 
   it('keeps cascade-delete intent after an authorization failure', async () => {
     mem.set(CACHE_KEY, JSON.stringify({
-      version: 4, loan_parts: [{ id: 'p1' }], payments: [], valuations: [],
+      version: 4, banks: [], mortgages: [], loan_parts: [loanPart('p1')], payments: [], valuations: [],
       rate_periods: [], contributions: [], settings: {},
     }))
-    mock().tables.mortgage_loan_parts = [{ id: 'p1' }]
+    mock().tables.mortgage_loan_parts = [loanPart('p1')]
     await store.listLoanParts()
     mock().control.failing.add('sync_delete_mortgage_loan_part')
     mock().control.errors.sync_delete_mortgage_loan_part = { status: 403, message: 'JWT household membership denied' }
@@ -296,6 +309,20 @@ describe('one-time legacy import', () => {
     mock().control.failing.add('mortgage_loan_parts')
     await store.listLoanParts()
     expect(mem.get(IMPORT_FLAG)).toBeUndefined()
+  })
+
+  it('invalid assigned legacy data neither mutates nor sets the flag, then retries after correction', async () => {
+    const key = scoped(store.STORAGE_KEY)
+    mem.set(key, JSON.stringify({ version: 1, loan_parts: [{ id: 'p1', label: 'Legacy', loan_number: '1', start_balance: 100, start_date: '2024-01-01', archived: false, interest_rate: '2.5' }], payments: [], valuations: [], rate_periods: [], contributions: [], settings: {} }))
+    await store.listLoanParts()
+    expect(mock().tables.mortgage_loan_parts || []).toHaveLength(0)
+    expect(mock().tables.mortgage_rate_periods || []).toHaveLength(0)
+    expect(mem.get(IMPORT_FLAG)).toBeUndefined()
+
+    mem.set(key, JSON.stringify({ version: 1, loan_parts: [{ id: 'p1', label: 'Legacy', loan_number: '1', start_balance: 100, start_date: '2024-01-01', archived: false, interest_rate: 2.5 }], payments: [], valuations: [], rate_periods: [], contributions: [], settings: {} }))
+    await store.listLoanParts()
+    expect(mock().tables.mortgage_loan_parts.some((row) => row.id === 'p1')).toBe(true)
+    expect(mem.get(IMPORT_FLAG)).toBe('1')
   })
 
   it('flag already set: legacy data is not re-imported', async () => {
@@ -360,8 +387,8 @@ describe('banks & mortgages CRUD (plan 103)', () => {
   })
 
   it('listBanks/listMortgages: cloud ok writes through, cloud error falls back to cache', async () => {
-    mock().tables.mortgage_banks = [{ id: 'b1', created_at: 't', label: 'Danske' }]
-    mock().tables.mortgages = [{ id: 'm1', created_at: 't', bank_id: 'b1', label: 'Bolån', start_date: null, archived: false }]
+    mock().tables.mortgage_banks = [bankRow('b1')]
+    mock().tables.mortgages = [{ id: 'm1', created_at: CREATED, bank_id: 'b1', label: 'Bolån', start_date: null, archived: false }]
     expect(await store.listBanks()).toHaveLength(1)
     expect(await store.listMortgages()).toHaveLength(1)
     expect((cache().banks as unknown[])).toHaveLength(1)
@@ -372,7 +399,7 @@ describe('banks & mortgages CRUD (plan 103)', () => {
   })
 
   it('updateLoanPart: patches mortgage_id + original anchor on the part', async () => {
-    mock().tables.mortgage_loan_parts = [{ id: 'p1', created_at: 't', label: 'Bolån', loan_number: '', start_balance: 1000000, start_date: '2020-01-01', archived: false, revision: 1 }]
+    mock().tables.mortgage_loan_parts = [loanPart('p1', { loan_number: '', start_balance: 1000000, start_date: '2020-01-01', revision: 1 })]
     // Register p1's revision through the sync layer before the optimistic update.
     await store.listLoanParts()
     await store.updateLoanPart('p1', { mortgage_id: 'm1', original_balance: 1200000, original_date: '2020-01-01' })
@@ -407,7 +434,7 @@ describe('banks & mortgages CRUD (plan 103)', () => {
   })
 
   it('updateBank: patches the year-basis lock on the row and cache', async () => {
-    mock().tables.mortgage_banks = [{ id: 'b1', created_at: 't', label: 'Danske', revision: 1 }]
+    mock().tables.mortgage_banks = [bankRow('b1', { revision: 1 })]
     // Load through the sync layer first so b1's optimistic-concurrency revision
     // is registered — an update against an unknown revision conflicts.
     await store.listBanks()
@@ -419,7 +446,7 @@ describe('banks & mortgages CRUD (plan 103)', () => {
   })
 
   it('updateBank: can clear the lock back to auto (source → null)', async () => {
-    mock().tables.mortgage_banks = [{ id: 'b1', created_at: 't', label: 'Danske', year_basis: 360, year_basis_source: 'declared', revision: 1 }]
+    mock().tables.mortgage_banks = [bankRow('b1', { year_basis: 360, year_basis_source: 'declared', revision: 1 })]
     await store.listBanks()
     const updated = await store.updateBank('b1', { year_basis: null, year_basis_source: null })
     expect(updated?.year_basis_source).toBeNull()
@@ -440,7 +467,7 @@ describe('banks & mortgages CRUD (plan 103)', () => {
   })
 
   it('updateBank: can clear the billing pin back to auto (NULLABLE_EXPLICIT)', async () => {
-    mock().tables.mortgage_banks = [{ id: 'b1', created_at: 't', label: 'Danske', billing: 'month-end', billing_source: 'declared', revision: 1 }]
+    mock().tables.mortgage_banks = [{ id: 'b1', created_at: '2026-07-15T10:00:00.000Z', label: 'Danske', billing: 'month-end', billing_source: 'declared', revision: 1 }]
     await store.listBanks()
     await store.updateBank('b1', { billing: null, billing_source: null })
     expect(mock().tables.mortgage_banks[0].billing).toBeNull()
@@ -462,11 +489,11 @@ describe('banks & mortgages CRUD (plan 103)', () => {
   it('listBanks: a bank row lacking the profile columns falls back to detection without crashing', async () => {
     // Legacy row (plan 103, no profile columns) — must load cleanly with the
     // fields simply absent, so the forecast falls back to detection.
-    mock().tables.mortgage_banks = [{ id: 'b1', created_at: 't', label: 'Danske' }]
+    mock().tables.mortgage_banks = [bankRow('b1')]
     const [bank] = await store.listBanks()
     expect(bank.label).toBe('Danske')
-    expect(bank.year_basis).toBeUndefined()
-    expect(bank.year_basis_source).toBeUndefined()
+    expect(bank.year_basis).toBeNull()
+    expect(bank.year_basis_source).toBeNull()
   })
 
   it('removeMortgage/removeBank: success prunes the cache', async () => {
@@ -495,5 +522,12 @@ describe('store-specific: _row NOT-NULL fallbacks', () => {
     const record = { loan_part_id: 'p1', date: '2024-02-01', kind: 'payment', description: '', amount: 100, balance_after: null, source: '' } as unknown as Omit<Payment, 'id' | 'created_at'>
     await store.addPayment(record)
     expect(mock().tables.mortgage_payments[0].paid_by).toBe('joint')
+  })
+})
+
+describe('import validation boundary', () => {
+  it('rejects a malformed backup before mutating Supabase', async () => {
+    await expect(store.importJSON(JSON.stringify({ version: 4, loan_parts: [{ id: 'bad', created_at: CREATED, label: 'x', loan_number: '', start_balance: Number.NaN }] }))).rejects.toThrow()
+    expect(mock().tables.mortgage_loan_parts || []).toHaveLength(0)
   })
 })

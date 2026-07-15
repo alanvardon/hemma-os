@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import PersistenceNotice from './PersistenceNotice'
-import { reportPersistenceError } from '../lib/persistence-error'
+import { reportPersistenceError, reportPersistenceWarning } from '../lib/persistence-error'
 import { activateSyncIdentity, SYNC_STATUS_EVENT, syncCoordinator } from '../lib/sync'
 
 describe('PersistenceNotice', () => {
@@ -18,6 +18,12 @@ describe('PersistenceNotice', () => {
       'Ändringen kunde inte sparas. Kontrollera uppgifterna och försök igen.',
     )
     expect(screen.queryByText(/private_financial_schema/i)).not.toBeInTheDocument()
+  })
+
+  it('renders recoverable persistence warnings', async () => {
+    render(<PersistenceNotice />)
+    reportPersistenceWarning('En sparad rad kunde inte läsas.')
+    expect(await screen.findByRole('alert')).toHaveTextContent('En sparad rad kunde inte läsas.')
   })
 
   it.each([

@@ -67,3 +67,11 @@ export function reportPersistenceError(error: unknown): void {
     detail: { message: persistenceErrorMessage(error) },
   }))
 }
+
+/** Report recoverable invalid persisted data while keeping the valid records visible. */
+export function reportPersistenceWarning(message: string): void {
+  if (typeof window === 'undefined') return
+  // The app-level notice already handles this event. Warnings are recoverable
+  // but still need to be visible, rather than disappearing in a console log.
+  window.dispatchEvent(new CustomEvent(PERSISTENCE_ERROR_EVENT, { detail: { message } }))
+}
