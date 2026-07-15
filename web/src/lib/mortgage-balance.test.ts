@@ -55,6 +55,23 @@ describe('resolvePartBalance — chronological principal ledger', () => {
     expect(partBalance(part(), rows)).toBe(990_000)
   })
 
+  it('ignores predicted rows when resolving current observed debt', () => {
+    const rows = [
+      saldo('2024-01-31', 1_000_000),
+      payment({ id: 'extra', date: '2024-02-01', amount: 8_000, paid_by: 'a', is_insats: true }),
+      saldo('2024-03-01', 980_000, { id: 'future-prediction', source: 'predicted' }),
+    ]
+    expect(resolvePartBalance(part(), rows)).toMatchObject({ balance: 992_000, principalPaid: 8_000 })
+  })
+
+  it('accepts a same-day post-amortering Saldo as the authoritative balance', () => {
+    const rows = [
+      saldo('2024-02-01', 1_000_000),
+      payment({ id: 'extra-with-saldo', date: '2024-02-01', amount: 8_000, balance_after: 992_000, paid_by: 'a', is_insats: true }),
+    ]
+    expect(resolvePartBalance(part(), rows)).toMatchObject({ balance: 992_000 })
+  })
+
   it('uses a full unpaired Betalning provisionally and reports missing interest', () => {
     const rows = [saldo('2024-01-31', 1_000_000), payment({ kind: 'payment', amount: 6_000 })]
     expect(resolvePartBalance(part(), rows)).toMatchObject({

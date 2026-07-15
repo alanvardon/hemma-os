@@ -20,7 +20,7 @@ import {
   makePayment, flagDuplicates, assignPaymentsToPart,
   partBalance, totalBalance, totalAmortized, totalInterest, ranteavdrag, resolvePartBalance,
   propertyValue, equity, loanToValue,
-  purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit,
+  purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, marketEquitySplit, derivedDeposit,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
   expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
@@ -227,13 +227,14 @@ export default function Bolanekoll() {
   const costBasisEq = useMemo(() => costBasisEquity(price, balance), [price, balance])
   const ownedPct = useMemo(() => costBasisOwnedPct(price, balance), [price, balance])
   const cbSplit = useMemo(() => costBasisSplit(price, balance, payments, contributions, settings), [price, balance, payments, contributions, settings])
+  const marketSplit = useMemo(() => marketEquitySplit(value, balance, payments, contributions, settings), [value, balance, payments, contributions, settings])
   const deposit = useMemo(() => derivedDeposit(price, parts, payments), [price, parts, payments])
   const downPayments = useMemo(() => payments.filter(p => p.kind === 'down_payment'), [payments])
   const extraAmortizationPayments = useMemo(
     () => payments.filter(p => p.kind === 'amortization' && p.is_insats),
     [payments],
   )
-  const timeline = useMemo(() => equityTimeline(parts, payments, valuations, settings), [parts, payments, valuations, settings])
+  const timeline = useMemo(() => equityTimeline(parts, payments, valuations, settings, contributions), [parts, payments, valuations, settings, contributions])
 
   const loanGroups = useMemo(() => groupLoanParts(parts, periods, payments, today), [parts, periods, payments, today])
   // Next villkorsändring for the hero note: the soonest dated group. loanGroups
@@ -782,10 +783,10 @@ export default function Bolanekoll() {
         {/* ── Dashboard: one hero (market equity), cost-basis as a secondary row ── */}
         <section className="card dashboard-card">
           <div className="dash-main">
-            <p className="dash-label">Marknadsvärde · How much of the home is yours</p>
+            <p className="dash-label">Eget kapital · Marknadsvärde minus skuld</p>
             {hasValuation ? (
               <>
-                <p className="dash-headline">{M(eq, false, true)}</p>
+                <p className="dash-headline" data-market-equity={String(Math.round(eq))}>{M(eq, false, true)}</p>
                 <p className="dash-sub">{dashSub}</p>
               </>
             ) : (
@@ -815,13 +816,13 @@ export default function Bolanekoll() {
               </div>
               <div className="split-row">
                 <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
-                  <span className="split-name">{nameOf('a')} · {fmtPct(cbSplit.a_pct)}</span>
-                  <span className="split-val">{M(eq * cbSplit.a_pct / 100, false, true)}</span>
+                  <span className="split-name">{nameOf('a')} · {fmtPct(marketSplit.a_pct)}</span>
+                  <span className="split-val" data-owner-market-capital="a">{M(marketSplit.a, false, true)}</span>
                   <span className="split-sub">equity share</span>
                 </div>
                 <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
-                  <span className="split-name">{nameOf('b')} · {fmtPct(cbSplit.b_pct)}</span>
-                  <span className="split-val">{M(eq * cbSplit.b_pct / 100, false, true)}</span>
+                  <span className="split-name">{nameOf('b')} · {fmtPct(marketSplit.b_pct)}</span>
+                  <span className="split-val" data-owner-market-capital="b">{M(marketSplit.b, false, true)}</span>
                   <span className="split-sub">equity share</span>
                 </div>
               </div>
@@ -854,12 +855,12 @@ export default function Bolanekoll() {
                   <div className="split-row">
                     <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
                       <span className="split-name">{nameOf('a')} · {fmtPct(cbSplit.a_pct)}</span>
-                      <span className="split-val">{M(cbSplit.a, false, true)}</span>
+                      <span className="split-val" data-owner-cost-capital="a">{M(cbSplit.a, false, true)}</span>
                       <span className="split-sub">paid in · insatt</span>
                     </div>
                     <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
                       <span className="split-name">{nameOf('b')} · {fmtPct(cbSplit.b_pct)}</span>
-                      <span className="split-val">{M(cbSplit.b, false, true)}</span>
+                      <span className="split-val" data-owner-cost-capital="b">{M(cbSplit.b, false, true)}</span>
                       <span className="split-sub">paid in · insatt</span>
                     </div>
                   </div>
@@ -1587,7 +1588,7 @@ export default function Bolanekoll() {
               </DropdownMenu.Root>
             </div>
           </div>
-          <p className="contrib-note">Saldo är utgångspunkten för lånedelen. Bara betalningar och amorteringar med senare datum ändrar visad skuld; samma dags eller äldre rader kan redan ingå i Saldo.</p>
+          <p className="contrib-note">Saldo är utgångspunkten för lånedelen. Senare betalningar och amorteringar ändrar skulden med sitt belopp. För en amortering samma dag: ange Saldo efteråt om den inte redan ingår i bankens Saldo.</p>
           <motion.div key={paymentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}>
             {!filteredPayments.length ? (
