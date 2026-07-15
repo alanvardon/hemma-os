@@ -362,7 +362,7 @@ export function parseDriftYearly(raw: unknown): ParseResult<boolean> {
 // rather than in their React/store callers, so imported files, cache envelopes,
 // and database rows all get the same field-level contract.
 
-const mortgageKinds = ['interest', 'amortization', 'payment', 'loan', 'fee', 'other'] as const
+const mortgageKinds = ['interest', 'amortization', 'payment', 'down_payment', 'loan', 'fee', 'other'] as const
 const owners = ['a', 'b'] as const
 const paidBy = ['a', 'b', 'joint'] as const
 const rateTypes = ['rörlig', 'bunden'] as const

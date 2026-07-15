@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ChevronRight, Copy, EllipsisVertical, Flag, Pencil, Settings2, X } from 'lucide-react'
+import { ChevronRight, Copy, EllipsisVertical, Pencil, Settings2, X } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import RiksbankChart from '../components/charts/RiksbankChart'
@@ -18,9 +18,9 @@ import { useToolPageActive } from '../lib/toolTransition'
 import {
   parseCsv, parseAmount, autoMapColumns, classifyKind,
   makePayment, flagDuplicates, assignPaymentsToPart,
-  partBalance, totalBalance, totalAmortized, totalInterest, ranteavdrag,
+  partBalance, totalBalance, totalAmortized, totalInterest, ranteavdrag, resolvePartBalance,
   propertyValue, equity, loanToValue, otherOwner,
-  purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit, insatsPayments,
+  purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, derivedDeposit,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
   expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
@@ -28,7 +28,7 @@ import {
   contributionSplit, settlement, todayISO,
   bankForPart, suggestBankProfile, bankProfileDrift,
 } from '../lib/mortgage'
-import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, PaidBy, ExpectedCharge, Bank, Mortgage } from '../lib/mortgage'
+import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, ExpectedCharge, Bank, Mortgage } from '../lib/mortgage'
 import {
   fetchPolicyRate, nextDecision, lastDecision, decisionOutcome,
   detectChange, currentPoint, readAcknowledged, acknowledge, readSessionHidden, hideForSession,
@@ -42,9 +42,6 @@ import PartDialog from './bolanekoll/PartDialog'
 import ValuationDialog from './bolanekoll/ValuationDialog'
 import PaymentDialog from './bolanekoll/PaymentDialog'
 import CopyToPartsDialog from './bolanekoll/CopyToPartsDialog'
-import InsatsSplitDialog from './bolanekoll/InsatsSplitDialog'
-import EnableInsatserDialog from './bolanekoll/EnableInsatserDialog'
-import ContribDialog from './bolanekoll/ContribDialog'
 import SettingsDialog from './bolanekoll/SettingsDialog'
 import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
 
@@ -133,14 +130,11 @@ export default function Bolanekoll() {
   const [valDlg, setValDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [payDlg, setPayDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [copyDlg, setCopyDlg] = useState<{ open: boolean; source: Payment | null }>({ open: false, source: null })
-  const [insatsDlg, setInsatsDlg] = useState<{ open: boolean; payment: Payment | null }>({ open: false, payment: null })
-  const [enableDlg, setEnableDlg] = useState<{ open: boolean; payment: Payment | null }>({ open: false, payment: null })
   const [expandedPays, setExpandedPays] = useState<Set<string>>(new Set())
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const groupsSeeded = useRef(false)
   const [avslutadeOpen, setAvslutadeOpen] = useState(false)
   const reduceMotion = useReducedMotion()
-  const [contDlg, setContDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [settingsDlg, setSettingsDlg] = useState(false)
 
   // ── Riksbank policy-rate watcher (plan 70) ──────────────────────────────
@@ -197,6 +191,28 @@ export default function Bolanekoll() {
   // ── Derived data ───────────────────────────────────────────────────────────
   const today = todayISO()
   const balance = useMemo(() => totalBalance(parts, payments), [parts, payments])
+  // The balance resolver is also the provenance source for the dashboard: a
+  // provisional Betalning must never look like an observed Saldo result.
+  const balanceResolutions = useMemo(
+    () => new Map(parts.filter(p => !p.archived).map(p => [p.id, resolvePartBalance(p, payments)])),
+    [parts, payments],
+  )
+  const estimatedPartIds = useMemo(
+    () => new Set([...balanceResolutions.entries()]
+      .filter(([, result]) => result.warnings.includes('missing-interest'))
+      .map(([id]) => id)),
+    [balanceResolutions],
+  )
+  const estimatedPaymentIds = useMemo(() => new Set(payments
+    .filter(p => p.kind === 'payment' && p.loan_part_id && estimatedPartIds.has(p.loan_part_id))
+    .filter(p => {
+      const resolution = balanceResolutions.get(p.loan_part_id!)
+      if (!resolution || p.date <= resolution.anchor.date) return false
+      const hasInterest = payments.some(other => other.loan_part_id === p.loan_part_id
+        && other.kind === 'interest' && other.date?.slice(0, 7) === p.date?.slice(0, 7))
+      return !hasInterest
+    })
+    .map(p => p.id)), [payments, estimatedPartIds, balanceResolutions])
   const value = useMemo(() => propertyValue(valuations), [valuations])
   const eq = useMemo(() => equity(value, balance), [value, balance])
   const ltv = useMemo(() => loanToValue(balance, value), [balance, value])
@@ -212,7 +228,9 @@ export default function Bolanekoll() {
   const ownedPct = useMemo(() => costBasisOwnedPct(price, balance), [price, balance])
   const cbSplit = useMemo(() => costBasisSplit(price, balance, payments, contributions, settings), [price, balance, payments, contributions, settings])
   const deposit = useMemo(() => derivedDeposit(price, parts, payments), [price, parts, payments])
-  const insatsPays = useMemo(() => insatsPayments(payments), [payments])
+  // `down_payment` is a canonical Insats source even if an old/corrupt cache
+  // lacks its redundant classification flag.
+  const insatsPays = useMemo(() => payments.filter(p => p.kind === 'down_payment' || p.is_insats), [payments])
   const timeline = useMemo(() => equityTimeline(parts, payments, valuations, settings), [parts, payments, valuations, settings])
 
   const loanGroups = useMemo(() => groupLoanParts(parts, periods, payments, today), [parts, periods, payments, today])
@@ -592,16 +610,13 @@ export default function Bolanekoll() {
     try { await Store.removeRatePeriod(id); await refresh(); flashSaved() }
     catch (err) { saveErr(err) }
   }
-  // Turning tracking on is always an explicit user action — the dashboard CTA,
-  // the Insatser section's teaching state, or the ★ dialog. Never a retroactive
-  // window.confirm after the data has already changed (plan 87).
-  async function handleEnableTracking(pending?: Payment | null) {
+  // Turning tracking on is always an explicit user action; it never rewrites
+  // existing source records or opens a second contribution editor.
+  async function handleEnableTracking() {
     try {
       await Store.saveSettings({ track_contributions: true })
       await refresh(); flashSaved()
-      setEnableDlg({ open: false, payment: null })
-      if (pending) setInsatsDlg({ open: true, payment: pending })
-      else showToast('Contribution tracking on — log who paid what under Insatser.')
+      showToast('Spårning av insatser är påslagen.')
     } catch (err) { saveErr(err) }
   }
   async function handleSaveVal(data: Omit<Valuation, 'id' | 'created_at'>) {
@@ -614,33 +629,6 @@ export default function Bolanekoll() {
         for (const v of valuations) if (v.id !== savedId && v.is_purchase) await Store.updateValuation(v.id, { is_purchase: false })
       }
       await refresh(); flashSaved(); setValDlg({ open: false, id: null }); showToast(data.is_purchase ? 'Köpeskilling set.' : 'Valuation saved.')
-    } catch (err) { saveErr(err) }
-  }
-  async function handleToggleInsats(p: Payment) {
-    try {
-      await Store.updatePayment(p.id, { is_insats: !p.is_insats, ...(p.is_insats ? { paid_split: null } : {}) })
-      await refresh(); flashSaved()
-    } catch (err) { saveErr(err) }
-  }
-  // With contributions tracked, the ★ opens the split dialog instead of a plain
-  // toggle. With tracking off, flagging asks the feature question first (in-app
-  // dialog — decision before data); unflagging never prompts.
-  function handleStarClick(p: Payment) {
-    if (settings.track_contributions) setInsatsDlg({ open: true, payment: p })
-    else if (p.is_insats) handleToggleInsats(p)
-    else setEnableDlg({ open: true, payment: p })
-  }
-  async function handleSaveInsatsSplit(payment: Payment, split: { a: number; b: number }) {
-    try {
-      const paid_by: PaidBy = split.a > 0 && split.b > 0 ? 'joint' : split.a > 0 ? 'a' : split.b > 0 ? 'b' : payment.paid_by
-      await Store.updatePayment(payment.id, { is_insats: true, paid_split: split, paid_by })
-      await refresh(); flashSaved(); setInsatsDlg({ open: false, payment: null }); showToast('Insats allocation saved.')
-    } catch (err) { saveErr(err) }
-  }
-  async function handleRemoveInsats(payment: Payment) {
-    try {
-      await Store.updatePayment(payment.id, { is_insats: false, paid_split: null })
-      await refresh(); flashSaved(); setInsatsDlg({ open: false, payment: null }); showToast('Insats flag removed.')
     } catch (err) { saveErr(err) }
   }
   function toggleExpandPay(id: string) {
@@ -666,16 +654,6 @@ export default function Bolanekoll() {
       await refresh(); flashSaved(); setCopyDlg({ open: false, source: null })
       showToast(`Copied to ${targetIds.length} part${targetIds.length === 1 ? '' : 's'}.`)
     } catch (err) { saveErr(err) }
-  }
-  async function handleSaveCont(data: Omit<Contribution, 'id' | 'created_at'>) {
-    try {
-      if (contDlg.id) await Store.updateContribution(contDlg.id, data); else await Store.addContribution(data)
-      await refresh(); flashSaved(); setContDlg({ open: false, id: null }); showToast('Contribution saved.')
-    } catch (err) { saveErr(err) }
-  }
-  async function handleDeleteCont(id: string) {
-    try { await Store.removeContribution(id); await refresh(); flashSaved(); setContDlg({ open: false, id: null }); showToast('Contribution deleted.') }
-    catch (err) { saveErr(err) }
   }
   async function handleSaveSettings(patch: Partial<MortgageSettings>) {
     try { await Store.saveSettings(patch); await refresh(); flashSaved(); setSettingsDlg(false); showToast('Settings saved.') }
@@ -818,6 +796,13 @@ export default function Bolanekoll() {
               </div>
             )}
           </div>
+          {estimatedPartIds.size > 0 && (
+            <div className="payment-estimate-warning dashboard-estimate-warning" role="alert">
+              <b>Uppskattat saldo.</b> Ränta saknas för en eller flera betalningar — ägandet kan vara överskattat.
+              {' '}<a href="#betalningar">Visa berörda betalningar</a>
+              <span className="dashboard-estimate-parts"> · {parts.filter(p => estimatedPartIds.has(p.id)).map(p => p.label || p.id).join(', ')}</span>
+            </div>
+          )}
           {/* The ownership split is ONE fact (contributionSplit) applied to two
               bases below — market equity here, cost-basis further down. Each
               card carries "NAME · %" next to its figure (same pattern as the
@@ -887,7 +872,7 @@ export default function Bolanekoll() {
           </div>
 
           <div className="metric-row">
-            <div className="metric-chip"><span className="metric-label">Remaining debt</span><span className="metric-val">{M(balance, false, true)}</span></div>
+            <div className="metric-chip" data-current-debt={String(Math.round(balance))}><span className="metric-label">Remaining debt</span><span className="metric-val">{M(balance, false, true)}</span></div>
             <div className="metric-chip"><span className="metric-label">Property value</span><span className="metric-val">{hasValuation ? M(value, false, true) : '—'}</span></div>
             <div className="metric-chip"><span className="metric-label">Loan-to-value</span><span className="metric-val">{hasValuation ? P(ltv, true) : '—'}</span></div>
             <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{M(amortized, false, true)}</span></div>
@@ -1582,13 +1567,13 @@ export default function Bolanekoll() {
               )}
             </div>
           )}
-          <div className="card-head">
+          <div className="card-head" id="betalningar">
             <h2>Betalningar <span className="card-en">· Payments</span></h2>
             <span className="count-pill">{filteredPayments.length}</span>
             <div className="card-actions">
               <Segmented value={paymentFilter} onChange={setPaymentFilter} ariaLabel="Filter payments"
                 options={[{ v: 'all', label: 'All' }, ...parts.map(p => ({ v: p.id, label: p.label || 'part' }))]} />
-              <button type="button" className="btn btn-ghost" onClick={() => setPayDlg({ open: true, id: null })}>+ Add payment</button>
+              <button type="button" className="btn btn-ghost" onClick={() => setPayDlg({ open: true, id: null })}>+ Lägg till</button>
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger className="icon-btn" aria-label="More payment actions" title="More actions">
                   <Icon icon={EllipsisVertical} size={16} />
@@ -1638,11 +1623,10 @@ export default function Bolanekoll() {
                             {p.date || '—'}
                           </td>
                           <td className="col-part">{partNameById(p.loan_part_id)}</td>
-                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.source === 'predicted' && <span className="row-flag row-flag-predicted">förväntad</span>}{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}</td>
+                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.source === 'predicted' && <span className="row-flag row-flag-predicted">förväntad</span>}{p.is_insats && <span className="row-flag row-flag-insats">insats</span>}{estimatedPaymentIds.has(p.id) && <span className="row-flag row-flag-estimated">ränta saknas · uppskattat</span>}</td>
                           <td className="num col-amount">{fmtMoney(p.amount)}</td>
                           <td className="num col-balance">{p.balance_after != null ? fmtMoney(p.balance_after) : '—'}</td>
                           <td className="col-act">
-                            <button type="button" className={'icon-btn' + (p.is_insats ? ' is-on' : '')} title={settings.track_contributions ? (p.is_insats ? 'Edit insats split' : 'Flag as insats & split') : (p.is_insats ? 'Unflag insats' : 'Flag as insats')} aria-label={p.is_insats ? 'Unflag insats' : 'Flag as insats'} onClick={() => handleStarClick(p)}><Flag size={16} strokeWidth={1.75} fill={p.is_insats ? 'currentColor' : 'none'} aria-hidden /></button>
                             <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button>
                             {parts.length > 1 && (
                               <button type="button" className="icon-btn" title="Copy to parts" aria-label="Copy to parts" onClick={() => setCopyDlg({ open: true, source: p })}><Icon icon={Copy} /></button>
@@ -1667,7 +1651,6 @@ export default function Bolanekoll() {
                                       ? 'Joint · split by ownership'
                                       : <><b>{nameOf(p.paid_by === 'b' ? 'b' : 'a')}</b> {fmtMoney(p.amount)}</>}</span>
                                   )}
-                                  {!p.paid_split && settings.track_contributions && <button type="button" className="link-btn" onClick={() => setInsatsDlg({ open: true, payment: p })}>allocate…</button>}
                                   {p.description && <span className="pay-detail-note">{p.description}</span>}
                                 </div>
                                 </CellReveal>
@@ -1698,102 +1681,48 @@ export default function Bolanekoll() {
           )}
         </section>
 
-        {/* ── Contributions / insatser ── */}
-        {/* Always rendered (plan 87): before tracking is on, the section is the
-            teaching surface — heading, the three-concept legend and an explicit
-            way in — instead of only appearing once you've found the feature
-            elsewhere. Interactive bits stay gated on track_contributions. */}
-        <section className="card">
-            <div className="card-head">
-              <h2>Insatser <span className="card-en">· Contributions</span></h2>
-              {settings.track_contributions && <>
-                <span className="count-pill">{contributions.length}</span>
-                <div className="card-actions"><button type="button" className="btn btn-ghost" onClick={() => setContDlg({ open: true, id: null })}>+ Add contribution</button></div>
-              </>}
+        {/* ── Insatser — a linked projection of the canonical payment ledger ── */}
+        <section className="card" id="insatser">
+          <div className="card-head">
+            <h2>Insatser <span className="card-en">· Contributions</span></h2>
+            <span className="count-pill">{insatsPays.length}</span>
+            <div className="card-actions"><a className="btn btn-ghost" href="#betalningar">Öppna Betalningar</a></div>
+          </div>
+          <p className="contrib-note">Kontantinsatser och extra amorteringar redigeras i Betalningar. Den här vyn är alltid länkad till samma källposter.</p>
+          {!settings.track_contributions && (
+            <div className="empty-stub">
+              <p>Slå på spårning för att se den beräknade ägarfördelningen.</p>
+              <button type="button" className="btn btn-ghost" onClick={() => handleEnableTracking()}>Slå på spårning</button>
             </div>
-            {/* The three money concepts behind the paid-in split, named once —
-                so derived-vs-manual isn't a surprise on first contact. */}
-            <ul className="contrib-legend">
-              <li><b>Kontantinsats</b> — the down payment, derived: köpeskilling − lån{hasPurchase ? <> = <b>{fmtMoney(deposit)}</b></> : null}. Log who paid it as a lump sum here so the paid-in split is right.</li>
-              <li><b>Amortering</b> — counted per owner automatically from the payments in the ledger; the ★ there flags an extra amortering as an insats.</li>
-              <li><b>Engångsbelopp · Lump sums</b> — one-off contributions you add here yourself.</li>
-            </ul>
-            {!settings.track_contributions && (
-              <div className="empty-stub">
-                <p>Turn on insatser to see who has paid in what — each owner’s share of the home.</p>
-                <button type="button" className="btn btn-ghost" onClick={() => handleEnableTracking()}>Slå på · Turn on tracking</button>
+          )}
+          {contribSplit && (
+            <>
+              <div className="split-row">
+                <div className={'split-card' + (settings.i_am !== 'b' ? ' is-accent' : '')}><span className="split-name">{nameOf('a')} · {fmtPct(contribSplit.a_pct)}</span><span className="split-val">{fmtMoney(contribSplit.a)}</span><span className="split-sub">insatt kapital</span></div>
+                <div className={'split-card' + (settings.i_am === 'b' ? ' is-accent' : '')}><span className="split-name">{nameOf('b')} · {fmtPct(contribSplit.b_pct)}</span><span className="split-val">{fmtMoney(contribSplit.b)}</span><span className="split-sub">insatt kapital</span></div>
               </div>
-            )}
-            {contribSplit && (
-              <>
-                <div className="split-row">
-                  <div className={'split-card' + (settings.i_am !== 'b' ? ' is-accent' : '')}><span className="split-name">{nameOf('a')} · {fmtPct(contribSplit.a_pct)}</span><span className="split-val">{fmtMoney(contribSplit.a)}</span><span className="split-sub">paid in · insatt</span></div>
-                  <div className={'split-card' + (settings.i_am === 'b' ? ' is-accent' : '')}><span className="split-name">{nameOf('b')} · {fmtPct(contribSplit.b_pct)}</span><span className="split-val">{fmtMoney(contribSplit.b)}</span><span className="split-sub">paid in · insatt</span></div>
-                </div>
-                <p className="contrib-note">
-                  {settl?.owes && settl.amount > 0
-                    ? nameOf(settl.owes) + ' owes ' + nameOf(otherOwner(settl.owes)) + ' ' + fmtMoney(settl.amount) + ' to reach the target ownership split.'
-                    : contribSplit.total > 0 ? 'Contributions are in line with the target ownership split.'
-                      : 'Log who paid each amortering (in a payment) and any lump sums to build contribution-based ownership.'}
-                </p>
-              </>
-            )}
-            {settings.track_contributions && (!contributions.length ? <p className="empty">Inga engångsbelopp ännu · No lump sums yet.</p> : (
-              <div className="table-wrap">
-                <table className="data-table table-cards contrib-table">
-                  <thead><tr><th className="col-date">Date</th><th>Owner</th><th className="num">Amount</th><th>Note</th><th className="col-act"></th></tr></thead>
-                  <tbody>
-                    {contributions.map(c => (
-                      <tr key={c.id}>
-                        <td className="col-date">{c.date || '—'}</td>
-                        <td className="col-owner">{c.owner === 'joint' ? 'Gemensam · Joint' : nameOf(c.owner === 'b' ? 'b' : 'a')}</td>
-                        <td className="num col-amt">{fmtMoney(c.amount)}</td>
-                        <td className="col-note">{c.note || ''}</td>
-                        <td className="col-act">
-                          <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setContDlg({ open: true, id: c.id })}><Icon icon={Pencil} /></button>
-                          <button type="button" className="icon-btn" title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this contribution?')) handleDeleteCont(c.id) }}><Icon icon={X} /></button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))}
-            {insatsPays.length > 0 && (
-              <div className="insats-extra">
-                <p className="contrib-note">Extra amorteringar flaggade i liggaren · flagged in the ledger (info — these already lower your debt &amp; raise amortised):</p>
-                <div className="table-wrap">
-                  <table className="data-table table-cards insats-table">
-                    <thead><tr><th className="col-date">Date</th><th>Owner</th><th>Loan part</th><th className="num">Amount</th></tr></thead>
-                    <tbody>
-                      {/* A split payment becomes one row PER owner — each owner
-                          on its own line, their share in the Amount column. The
-                          amount never rides along in the owner name. */}
-                      {insatsPays.flatMap(p => {
-                        const rows = p.paid_split
-                          ? [
-                              { key: p.id + ':a', owner: nameOf('a'), amount: p.paid_split.a },
-                              { key: p.id + ':b', owner: nameOf('b'), amount: p.paid_split.b },
-                            ]
-                          : [{
-                              key: p.id,
-                              owner: p.paid_by === 'joint' ? 'Gemensam · Joint' : nameOf(p.paid_by === 'b' ? 'b' : 'a'),
-                              amount: p.amount,
-                            }]
-                        return rows.map(row => (
-                          <tr key={row.key}>
-                            <td className="col-date">{p.date || '—'}</td>
-                            <td className="col-owner">{row.owner}</td>
-                            <td className="col-part">{partNameById(p.loan_part_id)}</td>
-                            <td className="num col-amt">{fmtMoney(row.amount)}</td>
-                          </tr>
-                        ))
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+              <p className="contrib-note">{settl?.owes && settl.amount > 0
+                ? nameOf(settl.owes) + ' owes ' + nameOf(otherOwner(settl.owes)) + ' ' + fmtMoney(settl.amount) + ' to reach the target ownership split.'
+                : contribSplit.total > 0 ? 'Insatserna följer den valda ägarfördelningen.' : 'Lägg till en kontantinsats eller extra amortering i Betalningar.'}</p>
+            </>
+          )}
+          {!insatsPays.length ? <p className="empty">Inga kontantinsatser eller extra amorteringar ännu.</p> : (
+            <div className="table-wrap">
+              <table className="data-table table-cards insats-table">
+                <thead><tr><th className="col-date">Datum</th><th>Typ</th><th>Betalad av</th><th>Lånedel</th><th className="num">Belopp</th><th className="col-act" /></tr></thead>
+                <tbody>{insatsPays.map(p => (
+                  <tr key={p.id} data-source-payment-id={p.id}>
+                    <td className="col-date">{p.date || '—'}</td>
+                    <td>{p.kind === 'down_payment' ? 'Kontantinsats' : 'Extra amortering / Insats'}</td>
+                    <td className="col-owner">{p.paid_split ? `${nameOf('a')} ${fmtMoney(p.paid_split.a)} · ${nameOf('b')} ${fmtMoney(p.paid_split.b)}` : p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
+                    <td className="col-part">{p.kind === 'down_payment' ? '—' : partNameById(p.loan_part_id)}</td>
+                    <td className="num col-amt">{fmtMoney(p.amount)}</td>
+                    <td className="col-act"><button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button><button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={() => { if (confirm('Ta bort betalningen?')) handleDeletePay(p.id) }}><Icon icon={X} /></button></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
         </section>
 
         </>)}
@@ -1807,15 +1736,6 @@ export default function Bolanekoll() {
       <ValuationDialog open={valDlg.open} id={valDlg.id} valuations={valuations} onSave={handleSaveVal} onDelete={handleDeleteVal} onClose={() => setValDlg({ open: false, id: null })} />
       <PaymentDialog open={payDlg.open} id={payDlg.id} payments={payments} parts={parts} settings={settings} onSave={handleSavePay} onDelete={handleDeletePay} onClose={() => setPayDlg({ open: false, id: null })} />
       <CopyToPartsDialog open={copyDlg.open} source={copyDlg.source} parts={parts} onConfirm={ids => copyDlg.source && handleCopyToParts(copyDlg.source, ids)} onClose={() => setCopyDlg({ open: false, source: null })} />
-      <EnableInsatserDialog open={enableDlg.open} payment={enableDlg.payment}
-        onEnable={() => handleEnableTracking(enableDlg.payment)}
-        onFlagOnly={() => { const p = enableDlg.payment; setEnableDlg({ open: false, payment: null }); if (p) handleToggleInsats(p) }}
-        onClose={() => setEnableDlg({ open: false, payment: null })} />
-      <InsatsSplitDialog open={insatsDlg.open} payment={insatsDlg.payment} settings={settings}
-        onSave={split => insatsDlg.payment && handleSaveInsatsSplit(insatsDlg.payment, split)}
-        onRemove={() => insatsDlg.payment && handleRemoveInsats(insatsDlg.payment)}
-        onClose={() => setInsatsDlg({ open: false, payment: null })} />
-      <ContribDialog open={contDlg.open} id={contDlg.id} contributions={contributions} settings={settings} onSave={handleSaveCont} onDelete={handleDeleteCont} onClose={() => setContDlg({ open: false, id: null })} />
       <SettingsDialog open={settingsDlg} settings={settings} onSave={handleSaveSettings} onClose={() => setSettingsDlg(false)}
         onExportJSON={handleExportJSON} onExportCSV={handleExportCSV} onImportJSON={handleImportJSON} />
 

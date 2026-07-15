@@ -157,6 +157,17 @@ describe('Mortgage and month-end persistence schemas', () => {
     expect(parseMortgageEnvelope({ ...mortgageBackup, banks: [...mortgageBackup.banks, { ...mortgageBackup.banks[0] }] }).ok).toBe(false)
   })
 
+  it('accepts canonical down-payment rows without a loan-part reference', () => {
+    const parsed = parseMortgageEnvelope({
+      ...mortgageBackup,
+      payments: [{
+        ...mortgageBackup.payments[0], id: 'deposit-1', loan_part_id: null,
+        kind: 'down_payment', amount: 500_000, paid_by: 'a', is_insats: true,
+      }],
+    })
+    expect(parsed).toMatchObject({ ok: true })
+  })
+
   it('preserves large finite persisted values without clamping them', () => {
     const amount = Number.MAX_SAFE_INTEGER
     const parsed = parseMortgageEnvelope({

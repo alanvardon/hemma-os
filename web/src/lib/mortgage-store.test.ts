@@ -185,6 +185,40 @@ describe('write path', () => {
     await expect(store.addPayment({ loan_part_id: 'p1', date: '2024-02-01', kind: 'amortization', description: '', amount: 1000, balance_after: null, paid_by: 'joint', source: '' })).rejects.toBeTruthy()
   })
 
+  it('canonical down payment saves, edits and deletes through mortgage_payments', async () => {
+    const saved = await store.addPayment({
+      loan_part_id: 'must-be-cleared', date: '2024-02-01', kind: 'down_payment', description: 'Kontantinsats',
+      amount: 250_000, balance_after: null, paid_by: 'a', source: 'manual', is_insats: false,
+    })
+    expect(saved).toMatchObject({ loan_part_id: null, kind: 'down_payment', paid_by: 'a', is_insats: true })
+    expect(mock().tables.mortgage_payments[0]).toMatchObject({ id: saved.id, loan_part_id: null, kind: 'down_payment', is_insats: true })
+    expect(mock().tables.mortgage_contributions || []).toHaveLength(0)
+
+    const updated = await store.updatePayment(saved.id, { amount: 300_000, paid_by: 'b', loan_part_id: 'still-cleared', is_insats: false })
+    expect(updated).toMatchObject({ amount: 300_000, paid_by: 'b', loan_part_id: null, is_insats: true })
+    expect((cache().payments as Payment[])[0]).toMatchObject({ amount: 300_000, paid_by: 'b' })
+
+    await store.removePayment(saved.id)
+    expect(mock().tables.mortgage_payments).toHaveLength(0)
+    expect(cache().payments).toEqual([])
+  })
+
+  it('failed canonical payment save stays dirty and retries without writing the legacy table', async () => {
+    mock().control.failing.add('mortgage_payments')
+    await expect(store.addPayment({
+      loan_part_id: null, date: '2024-02-01', kind: 'down_payment', description: 'Kontantinsats',
+      amount: 250_000, balance_after: null, paid_by: 'a', source: 'manual', is_insats: true,
+    })).rejects.toBeTruthy()
+    expect((cache().payments as Payment[])[0]).toMatchObject({ kind: 'down_payment', amount: 250_000 })
+    expect(mock().tables.mortgage_contributions || []).toHaveLength(0)
+    expect(sync.syncCoordinator.isDirty('mortgage_payments')).toBe(true)
+
+    mock().control.failing.delete('mortgage_payments')
+    await sync.syncCoordinator.replay()
+    expect(mock().tables.mortgage_payments).toHaveLength(1)
+    expect(sync.syncCoordinator.isDirty('mortgage_payments')).toBe(false)
+  })
+
   it('removeLoanPart: one RPC removes the part and all linked history before patching the cache', async () => {
     const envelope = {
       version: 4,
@@ -334,6 +368,88 @@ describe('one-time legacy import', () => {
     }))
     await store.listLoanParts()
     expect(mock().tables.mortgage_loan_parts).toHaveLength(0)
+  })
+
+  it('converts legacy contributions into deterministic payments and never rewrites the legacy table', async () => {
+    mem.set(scoped(store.STORAGE_KEY), JSON.stringify({
+      version: 4, loan_parts: [], payments: [], valuations: [], rate_periods: [],
+      contributions: [{ id: 'deposit-a', created_at: CREATED, owner: 'a', date: '2024-01-01', amount: 200_000, note: 'Kontantinsats' }],
+      settings: {},
+    }))
+    await store.listPayments()
+    expect(mock().tables.mortgage_payments).toMatchObject([{
+      id: 'legacy-contribution:deposit-a', created_at: CREATED, loan_part_id: null,
+      kind: 'down_payment', paid_by: 'a', amount: 200_000, is_insats: true,
+      source: 'legacy-contribution:deposit-a',
+    }])
+    expect(mock().tables.mortgage_contributions || []).toHaveLength(0)
+    expect(cache()).toMatchObject({ contributions: [], payments: [{ id: 'legacy-contribution:deposit-a' }] })
+  })
+})
+
+describe('canonical legacy contribution envelopes', () => {
+  beforeEach(() => { mem.set(IMPORT_FLAG, '1') })
+
+  const legacyContribution = (over: Record<string, unknown> = {}) => ({
+    id: 'deposit-a', created_at: CREATED, owner: 'a', date: '2024-01-01', amount: 200_000, note: 'Kontantinsats', ...over,
+  })
+  const canonicalDeposit = () => ({
+    id: 'legacy-contribution:deposit-a', created_at: CREATED, loan_part_id: null, date: '2024-01-01',
+    kind: 'down_payment', description: 'Kontantinsats', amount: 200_000, balance_after: null,
+    paid_by: 'a', source: 'legacy-contribution:deposit-a', is_insats: true, paid_split: null,
+  })
+
+  it('canonicalizes cache rows once and discards malformed legacy financial rows', () => {
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 4, banks: [], mortgages: [], loan_parts: [], payments: [canonicalDeposit()], valuations: [], rate_periods: [],
+      contributions: [legacyContribution(), legacyContribution({ id: 'zero', amount: 0 }), legacyContribution({ id: 'ownerless', owner: undefined })], settings: {},
+    }))
+    expect(store.cachedSnapshot()).toMatchObject({
+      version: 5, contributions: [], payments: [{ id: 'legacy-contribution:deposit-a' }],
+    })
+  })
+
+  it('dedupes a migrated cloud row against the same legacy cached contribution', async () => {
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 4, banks: [], mortgages: [], loan_parts: [], payments: [], valuations: [], rate_periods: [],
+      contributions: [legacyContribution()], settings: {},
+    }))
+    mock().tables.mortgage_payments = [canonicalDeposit()]
+    expect(await store.listPayments()).toMatchObject([{ id: 'legacy-contribution:deposit-a' }])
+    expect((cache().payments as Payment[])).toHaveLength(1)
+    expect(cache().contributions).toEqual([])
+  })
+
+  it('imports a legacy backup once as a canonical payment and accepts reruns', async () => {
+    const backup = JSON.stringify({ version: 4, contributions: [legacyContribution()], settings: {} })
+    await expect(store.importJSON(backup)).resolves.toMatchObject({ payments: 1, contributions: 0 })
+    await expect(store.importJSON(backup)).resolves.toMatchObject({ payments: 0, contributions: 0 })
+    expect(mock().tables.mortgage_payments).toMatchObject([{ id: 'legacy-contribution:deposit-a', kind: 'down_payment' }])
+    expect(mock().tables.mortgage_contributions || []).toHaveLength(0)
+  })
+
+  it('does not duplicate a backup that already contains the canonical payment', async () => {
+    const backup = JSON.stringify({ version: 5, payments: [canonicalDeposit()], contributions: [legacyContribution()], settings: {} })
+    await expect(store.importJSON(backup)).resolves.toMatchObject({ payments: 1, contributions: 0 })
+    expect(mock().tables.mortgage_payments).toHaveLength(1)
+  })
+
+  it('does not invent payments for zero or missing-owner legacy rows', async () => {
+    const backup = JSON.stringify({
+      version: 4,
+      contributions: [legacyContribution({ id: 'zero', amount: 0 }), legacyContribution({ id: 'ownerless', owner: undefined })],
+      settings: {},
+    })
+    await expect(store.importJSON(backup)).resolves.toMatchObject({ payments: 0, contributions: 0 })
+    expect(mock().tables.mortgage_payments || []).toHaveLength(0)
+  })
+
+  it('exports canonical payments once and leaves the retired contribution slice empty', async () => {
+    mock().tables.mortgage_payments = [canonicalDeposit()]
+    const backup = JSON.parse(await store.exportJSON()) as { version: number; payments: Payment[]; contributions: unknown[] }
+    expect(backup.version).toBe(5)
+    expect(backup.payments).toMatchObject([{ id: 'legacy-contribution:deposit-a', kind: 'down_payment' }])
+    expect(backup.contributions).toEqual([])
   })
 })
 

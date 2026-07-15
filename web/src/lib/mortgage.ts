@@ -84,7 +84,7 @@ export interface Mortgage {
   bank_id: string | null; label: string; start_date: string | null; archived: boolean
 }
 
-export type PaymentKind = 'interest' | 'amortization' | 'payment' | 'loan' | 'fee' | 'other'
+export type PaymentKind = 'interest' | 'amortization' | 'payment' | 'down_payment' | 'loan' | 'fee' | 'other'
 export type Owner = 'a' | 'b'
 export type PaidBy = Owner | 'joint'
 
@@ -115,6 +115,34 @@ export interface Valuation {
 
 export interface Contribution {
   id: string; created_at: string; owner: PaidBy; date: string; amount: number; note: string
+}
+
+// Legacy contribution rows are retained in their old table for audit, but the
+// application consumes one canonical mortgage_payments row. The reserved
+// prefix is shared with the SQL data migration, making conversion deterministic
+// across cloud, cache and backup imports.
+export const LEGACY_CONTRIBUTION_PAYMENT_PREFIX = 'legacy-contribution:'
+
+export function legacyContributionPayment(contribution: Partial<Contribution>): Payment | null {
+  const id = typeof contribution.id === 'string' ? contribution.id.trim() : ''
+  const amount = Number(contribution.amount)
+  const owner = contribution.owner
+  if (!id || !validLedgerDate(contribution.date) || !isFinite(amount) || amount <= 0 || (owner !== 'a' && owner !== 'b' && owner !== 'joint')) return null
+  const canonicalId = LEGACY_CONTRIBUTION_PAYMENT_PREFIX + id
+  return {
+    id: canonicalId,
+    created_at: typeof contribution.created_at === 'string' ? contribution.created_at : '',
+    loan_part_id: null,
+    date: contribution.date,
+    kind: 'down_payment',
+    description: typeof contribution.note === 'string' ? contribution.note : '',
+    amount: r2(amount),
+    balance_after: null,
+    paid_by: owner,
+    source: canonicalId,
+    is_insats: true,
+    paid_split: null,
+  }
 }
 
 export interface MortgageSettings {
@@ -278,12 +306,14 @@ export function makeRatePeriod(p: Partial<RatePeriod>): Omit<RatePeriod, 'id' | 
 export function makePayment(p: Partial<Payment> & { specification?: string }): Omit<Payment, 'id' | 'created_at'> {
   const kind = p.kind || classifyKind(p.description || p.specification || '')
   const bal = p.balance_after
+  const isJoint = kind === 'payment' || kind === 'interest'
+  const isDownPayment = kind === 'down_payment'
   return {
-    loan_part_id: p.loan_part_id || null, date: p.date || '', kind,
+    loan_part_id: isDownPayment ? null : (p.loan_part_id || null), date: p.date || '', kind,
     description: p.description || '', amount: r2(Math.abs(Number(p.amount) || 0)),
     balance_after: (bal == null || (bal as unknown) === '') ? null : r2(Math.abs(Number(bal) || 0)),
-    paid_by: normPaidBy(p.paid_by), source: p.source || 'manual', is_insats: !!p.is_insats,
-    paid_split: p.paid_split ? { a: r2(Math.abs(Number(p.paid_split.a) || 0)), b: r2(Math.abs(Number(p.paid_split.b) || 0)) } : null,
+    paid_by: isJoint ? 'joint' : normPaidBy(p.paid_by), source: p.source || 'manual', is_insats: isDownPayment || !!p.is_insats,
+    paid_split: isJoint ? null : p.paid_split ? { a: r2(Math.abs(Number(p.paid_split.a) || 0)), b: r2(Math.abs(Number(p.paid_split.b) || 0)) } : null,
   }
 }
 
@@ -329,20 +359,141 @@ export function assignPaymentsToPart(
 
 // ── Mortgage math ──────────────────────────────────────────────────────────
 
-export function partBalance(part: LoanPart, payments: Payment[]): number {
-  if (!part) return 0
-  const mine = payments.filter(p => p?.loan_part_id === part.id)
-  const withBal = mine.filter(p => p.balance_after != null)
-  if (withBal.length) {
-    const latest = withBal.reduce((mx, p) => String(p.date) > mx ? String(p.date) : mx, '')
-    const same = withBal.filter(p => String(p.date) === latest)
-    return Math.max(0, r2(same.reduce((mn: number | null, p) => {
-      const b = Number(p.balance_after); return mn == null || b < mn ? b : mn
-    }, null) as number))
+export type BalanceWarning = 'missing-interest' | 'interest-exceeds-payment' | 'conflicting-saldo'
+
+export interface BalanceResolution {
+  balance: number
+  /** Principal applied after the active Saldo/origination anchor. */
+  principalPaid: number
+  anchor: { date: string; balance: number; source: 'saldo' | 'origination' }
+  quality: 'observed' | 'estimated'
+  warnings: BalanceWarning[]
+}
+
+function validLedgerDate(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!m) return false
+  const y = Number(m[1]), month = Number(m[2]), day = Number(m[3])
+  const date = new Date(Date.UTC(y, month - 1, day))
+  return date.getUTCFullYear() === y && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+function positiveLedgerAmount(value: unknown): number | null {
+  const amount = Number(value)
+  return isFinite(amount) && amount > 0 ? r2(amount) : null
+}
+
+interface InferredPaymentPrincipal {
+  principal: number
+  missingInterest: boolean
+  interestExceedsPayment: boolean
+}
+
+/**
+ * Infer Betalning principal per loan part and calendar month. This is shared by
+ * the balance resolver and ownership attribution so they can never disagree on
+ * how much of the bank debit was principal.
+ */
+function inferredPaymentPrincipal(payments: Payment[]): InferredPaymentPrincipal {
+  const groups = new Map<string, { payment: number; interest: number; interestRows: number }>()
+  for (const row of payments || []) {
+    if (!row?.loan_part_id || !validLedgerDate(row.date)) continue
+    if (row.kind !== 'payment' && row.kind !== 'interest') continue
+    const key = row.loan_part_id + '|' + monthKey(row.date)
+    const group = groups.get(key) ?? { payment: 0, interest: 0, interestRows: 0 }
+    if (row.kind === 'payment') {
+      const amount = positiveLedgerAmount(row.amount)
+      if (amount == null) continue
+      group.payment += amount
+    } else {
+      const amount = Number(row.amount)
+      if (!isFinite(amount) || amount < 0) continue
+      // A recorded zero-interest month is still an observed Ränta row and
+      // deliberately clears the missing-interest estimate.
+      group.interest += r2(amount)
+      group.interestRows++
+    }
+    groups.set(key, group)
   }
-  const start = Number(part.start_balance) || 0, sd = part.start_date
-  return Math.max(0, r2(start - mine.filter(p => p.kind === 'amortization' && !(sd && p.date < sd))
-    .reduce((s, p) => s + (Number(p.amount) || 0), 0)))
+
+  let principal = 0, missingInterest = false, interestExceedsPayment = false
+  for (const group of groups.values()) {
+    if (group.payment <= 0) continue
+    if (group.interestRows === 0) {
+      principal += group.payment
+      missingInterest = true
+    } else if (group.interest > group.payment) {
+      interestExceedsPayment = true
+    } else {
+      principal += group.payment - group.interest
+    }
+  }
+  return { principal: r2(principal), missingInterest, interestExceedsPayment }
+}
+
+/**
+ * Resolve one loan part from a single chronological principal ledger.
+ *
+ * Saldo is a post-transaction snapshot: the latest valid one at/before `asOf`
+ * becomes the anchor, and only strictly later rows may change that balance.
+ * Without Saldo, the explicit origination/start balance is the anchor.
+ */
+export function resolvePartBalance(part: LoanPart, payments: Payment[], asOf?: string): BalanceResolution {
+  const originalBalanceRaw = part?.original_balance
+  const originalBalance = originalBalanceRaw != null && isFinite(Number(originalBalanceRaw)) && Number(originalBalanceRaw) >= 0
+    ? r2(Number(originalBalanceRaw))
+    : isFinite(Number(part?.start_balance)) && Number(part?.start_balance) >= 0
+      ? r2(Number(part.start_balance))
+      : 0
+  const originalDate = validLedgerDate(part?.original_date) ? part.original_date!
+    : validLedgerDate(part?.start_date) ? part.start_date : ''
+
+  const mine = (payments || []).filter(row =>
+    row?.loan_part_id === part?.id && validLedgerDate(row.date) && (!asOf || row.date <= asOf))
+  const saldos = mine.filter(row => {
+    if (row.balance_after == null) return false
+    const balance = Number(row.balance_after)
+    return isFinite(balance) && balance >= 0
+  })
+
+  let anchor: BalanceResolution['anchor'] = {
+    date: originalDate,
+    balance: originalBalance,
+    source: 'origination',
+  }
+  let conflictingSaldo = false
+  if (saldos.length) {
+    const date = saldos.reduce((latest, row) => row.date > latest ? row.date : latest, '')
+    const balances = saldos.filter(row => row.date === date).map(row => r2(Number(row.balance_after)))
+    anchor = { date, balance: Math.min(...balances), source: 'saldo' }
+    conflictingSaldo = new Set(balances).size > 1
+  }
+
+  const later = mine.filter(row => row.date > anchor.date)
+  const explicitPrincipal = later.reduce((sum, row) => {
+    if (row.kind !== 'amortization') return sum
+    return sum + (positiveLedgerAmount(row.amount) ?? 0)
+  }, 0)
+  const inferred = inferredPaymentPrincipal(later)
+  const attemptedPrincipal = r2(explicitPrincipal + inferred.principal)
+  const principalPaid = Math.min(anchor.balance, attemptedPrincipal)
+
+  const warnings: BalanceWarning[] = []
+  if (inferred.missingInterest) warnings.push('missing-interest')
+  if (inferred.interestExceedsPayment) warnings.push('interest-exceeds-payment')
+  if (conflictingSaldo) warnings.push('conflicting-saldo')
+  return {
+    balance: Math.max(0, r2(anchor.balance - attemptedPrincipal)),
+    principalPaid: r2(principalPaid),
+    anchor,
+    quality: warnings.length ? 'estimated' : 'observed',
+    warnings,
+  }
+}
+
+export function partBalance(part: LoanPart, payments: Payment[]): number {
+  return part ? resolvePartBalance(part, payments).balance : 0
 }
 
 function partOriginal(part: LoanPart, payments: Payment[]): number {
@@ -495,28 +646,19 @@ function enumMonths(a: string, b: string): string[] {
 
 function mRange(parts: LoanPart[], payments: Payment[]): string[] {
   const keys = [
-    ...parts.map(p => monthKey(p?.start_date)),
-    ...payments.map(p => monthKey(p?.date)),
+    ...parts.map(p => {
+      const date = p?.original_date || p?.start_date
+      return validLedgerDate(date) ? monthKey(date) : ''
+    }),
+    ...payments.map(p => validLedgerDate(p?.date) ? monthKey(p.date) : ''),
   ].filter(Boolean).sort() as string[]
   return keys.length ? enumMonths(keys[0], keys[keys.length - 1]) : []
 }
 
 function partBalAsOfMk(part: LoanPart, payments: Payment[], mk: string): number {
-  const mine = payments.filter(p => p?.loan_part_id === part.id)
-  const wb = mine.filter(p => p.balance_after != null && monthKey(p.date) <= mk)
-  if (wb.length) {
-    const lm = wb.reduce((mx, p) => { const k = monthKey(p.date); return k > mx ? k : mx }, '')
-    const inM = wb.filter(p => monthKey(p.date) === lm)
-    const ld = inM.reduce((mx, p) => String(p.date) > mx ? String(p.date) : mx, '')
-    const sd = inM.filter(p => String(p.date) === ld)
-    return Math.max(0, r2(sd.reduce((mn: number | null, p) => {
-      const b = Number(p.balance_after); return mn == null || b < mn ? b : mn
-    }, null) as number))
-  }
-  const start = Number(part.start_balance) || 0
-  return Math.max(0, r2(start - mine.filter(p =>
-    p.kind === 'amortization' && monthKey(p.date) <= mk && !(part.start_date && p.date < part.start_date)
-  ).reduce((s, p) => s + (Number(p.amount) || 0), 0)))
+  // Day 31 is a deliberate lexical month-end sentinel; the resolver validates
+  // ledger row dates, not this inclusive upper bound.
+  return resolvePartBalance(part, payments, mk + '-31').balance
 }
 
 export function balanceTimeline(parts: LoanPart[], payments: Payment[]) {
@@ -558,20 +700,7 @@ function daysBetween(a: string, b: string): number | null {
 // ── Balance as-of date ─────────────────────────────────────────────────────
 
 function partBalanceAsOf(part: LoanPart, payments: Payment[], asOf?: string): number {
-  if (!part) return 0
-  const mine = payments.filter(p => p?.loan_part_id === part.id && !(asOf && p.date && p.date > asOf))
-  const wb = mine.filter(p => p.balance_after != null && p.date)
-  if (wb.length) {
-    const ld = wb.reduce((mx, p) => String(p.date) > mx ? String(p.date) : mx, '')
-    const sd = wb.filter(p => String(p.date) === ld)
-    return Math.max(0, r2(sd.reduce((mn: number | null, p) => {
-      const b = Number(p.balance_after); return mn == null || b < mn ? b : mn
-    }, null) as number))
-  }
-  const start = Number(part.start_balance) || 0
-  return Math.max(0, r2(start - mine.filter(p =>
-    p.kind === 'amortization' && !(part.start_date && p.date < part.start_date)
-  ).reduce((s, p) => s + (Number(p.amount) || 0), 0)))
+  return part ? resolvePartBalance(part, payments, asOf).balance : 0
 }
 
 function totalBalanceAsOf(parts: LoanPart[], payments: Payment[], asOf?: string): number {
@@ -1610,9 +1739,13 @@ export function bankForPart(part: LoanPart | null | undefined, mortgages: Mortga
 
 export function contributionSplit(payments: Payment[], contributions: Contribution[], s: Partial<MortgageSettings>) {
   const tot = { a: 0, b: 0, joint: 0 }
-  for (const c of contributions || []) if (c) tot[normPaidBy(c.owner)] += Number(c.amount) || 0
+  const canonicalLegacyIds = new Set((payments || []).map(p => p?.id).filter(Boolean))
+  for (const c of contributions || []) {
+    if (!c || canonicalLegacyIds.has(LEGACY_CONTRIBUTION_PAYMENT_PREFIX + c.id)) continue
+    tot[normPaidBy(c.owner)] += Number(c.amount) || 0
+  }
   for (const p of payments || []) {
-    if (p?.kind !== 'amortization') continue
+    if (p?.kind !== 'amortization' && p?.kind !== 'down_payment') continue
     // An explicit per-payment allocation (a co-funded insats) wins over paid_by.
     if (p.paid_split && ((Number(p.paid_split.a) || 0) || (Number(p.paid_split.b) || 0))) {
       tot.a += Number(p.paid_split.a) || 0
@@ -1621,6 +1754,11 @@ export function contributionSplit(payments: Payment[], contributions: Contributi
       tot[normPaidBy(p.paid_by)] += Number(p.amount) || 0
     }
   }
+  // Betalning/Ränta rows have no reliable individual payer attribution. Their
+  // inferred principal therefore enters the joint bucket and follows the
+  // configured ownership-target split. Explicit amortering above remains
+  // attributable via paid_by/paid_split.
+  tot.joint += inferredPaymentPrincipal(payments).principal
   const pct = ownerPercents(s), aJ = r2(tot.joint * (pct.a || 50) / 100)
   const aT = r2(tot.a + aJ), bT = r2(tot.b + (tot.joint - aJ)), sum = r2(aT + bT)
   return { a: aT, b: bT, joint: r2(tot.joint), total: sum, a_pct: sum > 0 ? r2(aT / sum * 100) : (pct.a || 50), b_pct: sum > 0 ? r2(bT / sum * 100) : (pct.b || 50) }
