@@ -429,6 +429,24 @@ describe('banks & mortgages CRUD (plan 103)', () => {
     expect(mock().tables.mortgage_banks[0].year_basis).toBeNull()
   })
 
+  it('addBank: persists the billing pin (plan 104 phase 2) and round-trips via list', async () => {
+    await store.addBank({ label: 'Danske', billing: 'month-end', billing_source: 'declared' })
+    const row = mock().tables.mortgage_banks[0]
+    expect(row.billing).toBe('month-end')                 // reached the DB column, not dropped by COLS.banks
+    expect(row.billing_source).toBe('declared')
+    const listed = await store.listBanks()
+    expect(listed[0].billing).toBe('month-end')
+    expect(listed[0].billing_source).toBe('declared')
+  })
+
+  it('updateBank: can clear the billing pin back to auto (NULLABLE_EXPLICIT)', async () => {
+    mock().tables.mortgage_banks = [{ id: 'b1', created_at: 't', label: 'Danske', billing: 'month-end', billing_source: 'declared', revision: 1 }]
+    await store.listBanks()
+    await store.updateBank('b1', { billing: null, billing_source: null })
+    expect(mock().tables.mortgage_banks[0].billing).toBeNull()
+    expect(mock().tables.mortgage_banks[0].billing_source).toBeNull()
+  })
+
   it('addBank: a cloud error keeps the year-basis lock dirty for replay', async () => {
     mock().control.failing.add('mortgage_banks')
     await expect(store.addBank({ label: 'Danske', year_basis: 360, year_basis_source: 'declared' })).rejects.toBeTruthy()

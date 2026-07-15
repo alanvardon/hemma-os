@@ -43,24 +43,37 @@ export interface Bank {
   // the forecast learner — 'detected'/'suggested'/null fall back to detection.
   year_basis?: number | null
   year_basis_source?: string | null
+  // Plan 104 (Phase 2) — the bank's billing cadence. 'month-end' = the bill
+  // lands on each month's last day; 'fixed' = a fixed day-of-month; null =
+  // detect from the ledger (isMonthEndBilling). Only a 'declared' billing_source
+  // pins the cadence; null/detected/suggested fall back to detection.
+  billing?: string | null
+  billing_source?: string | null
 }
 
 // Plan 104 — the closed sets a bank profile clamps to. Kept beside the type so
 // the normaliser and any future provenance UI share one source of truth.
 export const YEAR_BASES = [360, 365] as const
 export const YEAR_BASIS_SOURCES = ['detected', 'suggested', 'declared'] as const
+export const BILLING_MODES = ['month-end', 'fixed'] as const
+export const BILLING_SOURCES = YEAR_BASIS_SOURCES
 
 // Normalise a Bank record: default the profile columns to null, clamp
-// `year_basis` to exactly 360 | 365 (anything else → null → detection), and
-// `year_basis_source` to the allowed provenance set (else null). A malformed
-// profile therefore reads as "no lock" and the forecast falls back to
-// detection, never to a garbage basis.
+// `year_basis` to exactly 360 | 365 (anything else → null → detection),
+// `billing` to the allowed cadence set, and each `*_source` to the allowed
+// provenance set (else null). A malformed profile therefore reads as "no lock"
+// and the forecast falls back to detection, never to a garbage convention.
 export function makeBank(b: Partial<Bank>): Omit<Bank, 'id' | 'created_at'> {
   const yb = Number(b.year_basis)
   const year_basis = yb === 360 ? 360 : yb === 365 ? 365 : null
-  const src = b.year_basis_source
-  const year_basis_source = typeof src === 'string' && (YEAR_BASIS_SOURCES as readonly string[]).includes(src) ? src : null
-  return { label: b.label || '', year_basis, year_basis_source }
+  const inSet = (v: unknown, set: readonly string[]): string | null =>
+    typeof v === 'string' && set.includes(v) ? v : null
+  return {
+    label: b.label || '', year_basis,
+    year_basis_source: inSet(b.year_basis_source, YEAR_BASIS_SOURCES),
+    billing: inSet(b.billing, BILLING_MODES),
+    billing_source: inSet(b.billing_source, BILLING_SOURCES),
+  }
 }
 
 // Plan 103 — one bolån agreement, linked to exactly one Bank, holding many
@@ -979,10 +992,11 @@ function chargePeriodMonths(sortedDates: string[]): number {
 }
 
 // Plan 104 — optional entity context threaded into the forecast so it can read
-// the part's bank profile (part → mortgage → bank). Backward-compatible: when
-// omitted, profileYearBasis returns null and the forecast is byte-for-byte
-// identical to before (detection only).
-export interface ForecastOpts { banks?: Bank[]; mortgages?: Mortgage[] }
+// the part's bank profile (part → mortgage → bank) and pool the year-basis
+// learner across all of that bank's parts. Backward-compatible: when omitted,
+// profileYearBasis returns null and the bank-pooled learner is not engaged, so
+// the forecast is byte-for-byte identical to before (single-part detection only).
+export interface ForecastOpts { banks?: Bank[]; mortgages?: Mortgage[]; parts?: LoanPart[] }
 
 // The declared day-count year for a part's bank, or null when there is no
 // declared lock. ONLY a `year_basis_source === 'declared'` value short-circuits
@@ -993,6 +1007,126 @@ export function profileYearBasis(part: LoanPart | null | undefined, mortgages: M
   const bank = bankForPart(part, mortgages, banks)
   if (!bank || bank.year_basis_source !== 'declared') return null
   return bank.year_basis === 360 ? 360 : bank.year_basis === 365 ? 365 : null
+}
+
+// Plan 104 (Phase 2) — the declared billing cadence for a part's bank, or null
+// when there is no declared pin. Only a 'declared' billing_source overrides
+// isMonthEndBilling; null/detected/suggested fall back to ledger detection.
+export function profileBilling(part: LoanPart | null | undefined, mortgages: Mortgage[], banks: Bank[]): 'month-end' | 'fixed' | null {
+  const bank = bankForPart(part, mortgages, banks)
+  if (!bank || bank.billing_source !== 'declared') return null
+  return bank.billing === 'month-end' ? 'month-end' : bank.billing === 'fixed' ? 'fixed' : null
+}
+
+export interface LearnedBasis { basis: 360 | 365; confident: boolean; used: number; windows: number }
+
+// Plan 104 (Phase 2) — window-scoped, bank-pooled year-basis learner. The old
+// trailing-6 detector (interestYearBasis) scores the last ≤6 charges regardless
+// of rate period; under a rolling 3-month bunden those straddle two listed rates,
+// both the /360 and /365 scores blow up, and it reverts to the 365 default —
+// re-introducing the ~1,4 % undershoot every quarter. This scores integer-day-ness
+// WITHIN each rate period (inside one window the listed rate is constant, so a
+// faktisk/360 bank's charge ÷ (saldo × listed/360) is a whole number of days) and
+// POOLS the evidence across every bunden window of every part on the bank. A pair
+// whose accrual straddles a villkorsändring (prev + current charge in different
+// periods) is skipped, so a mixed-rate boundary never corrupts a score. Reuses
+// interestYearBasis's decision thresholds on the pooled evidence. Pure.
+export function learnYearBasis(bankParts: LoanPart[], periods: RatePeriod[], payments: Payment[]): LearnedBasis {
+  const real = (payments || []).filter(p => p?.source !== 'predicted')
+  let err360 = 0, err365 = 0, used = 0
+  const windows = new Set<string>()
+  for (const part of bankParts || []) {
+    if (!part) continue
+    const intRows = real
+      .filter(p => p?.loan_part_id === part.id && p.kind === 'interest' && p.date && Math.abs(Number(p.amount)) > 0)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    for (let i = 1; i < intRows.length; i++) {
+      const prevDate = String(intRows[i - 1].date), date = String(intRows[i].date)
+      // Whole accrual must sit inside ONE bunden period (constant listed rate).
+      const rp = effectiveRatePeriod(part, periods, date)
+      const rpPrev = effectiveRatePeriod(part, periods, prevDate)
+      if (!rp || rp.rate_type !== 'bunden' || !rpPrev || rpPrev.id !== rp.id) continue
+      const listed = rp.rate == null ? null : Number(rp.rate)
+      if (listed == null || !(listed > 0)) continue
+      const bal = partBalanceAsOf(part, real, prevDate)
+      const amt = Math.abs(Number(intRows[i].amount))
+      if (bal <= 0 || !(amt > 0)) continue
+      const d360 = amt / (bal * listed / 100 / 360)
+      const d365 = amt / (bal * listed / 100 / 365)
+      if (d360 < 1) continue // sub-day charge: integer distance is meaningless
+      err360 += Math.abs(d360 - Math.round(d360))
+      err365 += Math.abs(d365 - Math.round(d365))
+      used++; windows.add(rp.id)
+    }
+  }
+  const clear360 = used >= 3 && err360 < 0.05 * used && err365 > 0.2 * used
+  const basis: 360 | 365 = clear360 ? 360 : 365
+  // Suggest (cross the confidence gate) only on a clear 360 signal pooled from
+  // ≥ 2 windows — one thin quarter is not enough to lock a convention, and 365
+  // is the default (no lock to suggest).
+  const confident = clear360 && windows.size >= 2
+  return { basis, confident, used, windows: windows.size }
+}
+
+// The parts sharing `part`'s bank (for pooling the learner). Falls back to just
+// `part` when there is no bank context or the part has no resolvable bank.
+function sameBankParts(part: LoanPart, opts?: ForecastOpts): LoanPart[] {
+  const all = opts?.parts
+  if (!all || !all.length) return [part]
+  const bank = bankForPart(part, opts?.mortgages ?? [], opts?.banks ?? [])
+  if (!bank) return [part]
+  const pooled = all.filter(p => p && bankForPart(p, opts?.mortgages ?? [], opts?.banks ?? [])?.id === bank.id)
+  return pooled.length ? pooled : [part]
+}
+
+// The year-basis used for a locked-bunden charge: a declared lock wins; else the
+// bank-pooled learner IF entity context is present; else null so expectedCharge
+// falls back to the classic single-part detector (keeping no-context callers —
+// every existing #305 golden — byte-for-byte identical).
+function forecastYearBasis(part: LoanPart, periods: RatePeriod[], real: Payment[], opts?: ForecastOpts): 360 | 365 | null {
+  const declared = profileYearBasis(part, opts?.mortgages ?? [], opts?.banks ?? [])
+  if (declared != null) return declared
+  if (!opts?.parts || !opts.parts.length) return null // no bank context → classic detector
+  return learnYearBasis(sameBankParts(part, opts), periods, real).basis
+}
+
+// Plan 104 (Phase 2) — the suggest→confirm payload for a bank's Bankvillkor UI.
+// Runs the learner across the bank's parts and reports each field's provisional
+// value plus whether the pooled evidence crossed the confidence gate (→ offer a
+// "Lås detta?"). Billing is only ever suggested as 'month-end' when the ledger
+// reads clearly month-end across the bank's parts.
+export interface BankProfileSuggestion {
+  year_basis: { value: 360 | 365; confident: boolean }
+  billing: { value: 'month-end' | 'fixed'; confident: boolean }
+}
+export function suggestBankProfile(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]): BankProfileSuggestion {
+  const learned = learnYearBasis(parts || [], periods, payments)
+  const real = (payments || []).filter(p => p?.source !== 'predicted')
+  const ints = (parts || []).flatMap(p => real
+    .filter(r => r?.loan_part_id === p?.id && r.kind === 'interest' && r.date)
+    .map(r => String(r.date))).sort((a, b) => a.localeCompare(b))
+  const monthEnd = isMonthEndBilling(ints)
+  return {
+    year_basis: { value: learned.basis, confident: learned.confident },
+    // Cadence is a lower-stakes convention; suggest it whenever there is a
+    // month-end-shaped history to confirm (≥ 4 dated charges), never 'fixed'
+    // (fixed is the unremarkable default that needs no lock).
+    billing: { value: monthEnd ? 'month-end' : 'fixed', confident: monthEnd && ints.length >= 4 },
+  }
+}
+
+// Plan 104 (Phase 2) — drift safety valve: a declared lock must not hide a real
+// change. Returns the mismatch when the learner now confidently disagrees with a
+// declared value, so the UI can surface the #298-style stale banner. null when
+// there is no declared lock, or the fresh evidence still agrees / is inconclusive.
+export interface ProfileDrift { field: 'year_basis'; declared: 360 | 365; learned: 360 | 365 }
+export function bankProfileDrift(bank: Bank | null | undefined, parts: LoanPart[], periods: RatePeriod[], payments: Payment[]): ProfileDrift | null {
+  if (!bank || bank.year_basis_source !== 'declared') return null
+  const declared = bank.year_basis === 360 ? 360 : bank.year_basis === 365 ? 365 : null
+  if (declared == null) return null
+  const learned = learnYearBasis(parts || [], periods, payments)
+  if (learned.confident && learned.basis !== declared) return { field: 'year_basis', declared, learned: learned.basis }
+  return null
 }
 
 export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[], opts?: ForecastOpts): ExpectedCharge | null {
@@ -1013,7 +1147,11 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   let chargeDay: number
   let next_date: string
   let days: number
-  if (isMonthEndBilling(ints)) {
+  // A declared billing pin (plan 104 Phase 2) overrides ledger detection of the
+  // cadence; otherwise detect month-end billing from the history as before.
+  const billingPin = profileBilling(part, opts?.mortgages ?? [], opts?.banks ?? [])
+  const monthEndBilling = billingPin ? billingPin === 'month-end' : isMonthEndBilling(ints)
+  if (monthEndBilling) {
     // Bill lands on each month's last day (charge_day 31 makes addMonthsAtDay
     // clamp to the real length: Jul→31, Sep→30, Feb→28/29). Anchor on the last
     // charge's LOGICAL month-end so a weekend-rolled date (e.g. 1 Jun for May's
@@ -1063,11 +1201,14 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   // already encodes it (reverse-engineered on the /365 fiction), so only the
   // locked-bunden path fits a basis.
   // A declared bank profile is authoritative for the locked-bunden path (plan
-  // 104): use it when present, else fall back to ledger detection. Never pin a
-  // basis on the derived-rate path — it self-calibrates on the /365 fiction.
+  // 104): use it when present. Else, when entity context is supplied, the
+  // window-scoped bank-pooled learner (robust across a rolling villkorsändring);
+  // else the classic single-part trailing detector, so no-context callers (every
+  // existing #305 golden) stay byte-for-byte identical. Never pin a basis on the
+  // derived-rate path — it self-calibrates on the /365 fiction.
   const year_basis: ExpectedCharge['year_basis'] =
     lockedBunden
-      ? (profileYearBasis(part, opts?.mortgages ?? [], opts?.banks ?? []) ?? interestYearBasis(part, real, intRows, listed))
+      ? (forecastYearBasis(part, periods, real, opts) ?? interestYearBasis(part, real, intRows, listed))
       : 365
 
   const confidence: ExpectedCharge['confidence'] =
