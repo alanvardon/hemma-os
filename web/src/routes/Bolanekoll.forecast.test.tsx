@@ -107,7 +107,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const user = userEvent.setup()
     renderBolanekoll()
 
-    const logBtn = await screen.findByRole('button', { name: 'Logga förväntad rad' })
+    const logBtn = await screen.findByRole('button', { name: 'Godkänn rad' })
     expect(logBtn).toBeEnabled()
     await user.click(logBtn)
 
@@ -118,13 +118,13 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
       loan_part_id: 'p1', date: '2026-07-27', kind: 'interest',
       amount: 3000, balance_after: 1_000_000, source: 'predicted',
     })])
-    expect(await screen.findByText(/Förväntad rad loggad/)).toBeInTheDocument()
+    expect(await screen.findByText(/Rad godkänd och tillagd i Betalningar/)).toBeInTheDocument()
     // July is now covered, so the block ROLLS to August instead of going
     // quiet — there is always a next avisering. Pending rows show a MONTH,
     // not a date: the bank sets the exact day, so a date is false precision.
     await waitFor(() =>
       expect(document.querySelector('.prognos-row .col-date')?.textContent).toBe('aug 2026'))
-    expect(screen.getByRole('button', { name: 'Logga förväntad rad' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Godkänn rad' })).toBeEnabled()
   })
 
   it('renders ränta and amortering as separate line items and logs both via Logga alla', async () => {
@@ -146,7 +146,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
 
     // Ränta and amortering are SEPARATE line items, each with its own kind
     // chip and its own log button.
-    await screen.findAllByRole('button', { name: 'Logga förväntad rad' })
+    await screen.findAllByRole('button', { name: 'Godkänn rad' })
     const rows = document.querySelectorAll('.prognos-row')
     expect(rows).toHaveLength(2)
     expect(rows[0].querySelector('.kind-interest')?.textContent).toBe('Ränta')
@@ -157,7 +157,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     // not the current balance: 3 000 × 12 / 1 000 000 = 3,60 % per year.
     expect(rows[1].querySelector('.col-rate')?.textContent).toBe('3,60 %')
 
-    await user.click(screen.getByRole('button', { name: 'Logga alla förväntade rader' }))
+    await user.click(screen.getByRole('button', { name: 'Godkänn alla rader' }))
 
     expect(Store.addPayments).toHaveBeenCalledTimes(1)
     expect(Store.addPayments).toHaveBeenCalledWith([
@@ -183,7 +183,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     renderBolanekoll()
 
     // Click the ränta line's own button — only the interest row is written…
-    const buttons = await screen.findAllByRole('button', { name: 'Logga förväntad rad' })
+    const buttons = await screen.findAllByRole('button', { name: 'Godkänn rad' })
     await user.click(buttons[0])
     expect(Store.addPayments).toHaveBeenCalledWith([expect.objectContaining({ kind: 'interest' })])
     expect(vi.mocked(Store.addPayments).mock.calls[0][0]).toHaveLength(1)
@@ -222,7 +222,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const user = userEvent.setup()
     renderBolanekoll()
 
-    await screen.findAllByRole('button', { name: 'Logga förväntad rad' })
+    await screen.findAllByRole('button', { name: 'Godkänn rad' })
     const rows = document.querySelectorAll('.prognos-row')
     expect(rows).toHaveLength(2)
     expect(rows[0].querySelector('.kind-interest')?.textContent).toBe('Ränta')
@@ -231,7 +231,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     // off the principal share: 3 000 × 12 / 1 000 000 = 3,60 %.
     expect(rows[1].querySelector('.col-rate')?.textContent).toBe('3,60 %')
 
-    await user.click(screen.getByRole('button', { name: 'Logga alla förväntade rader' }))
+    await user.click(screen.getByRole('button', { name: 'Godkänn alla rader' }))
 
     expect(Store.addPayments).toHaveBeenCalledTimes(1)
     expect(Store.addPayments).toHaveBeenCalledWith([
@@ -263,13 +263,13 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const user = userEvent.setup()
     renderBolanekoll()
 
-    expect(await screen.findByText(/beräknades med en äldre prognosmodell/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Uppdatera förväntade rader' }))
+    expect(await screen.findByText(/godkända prognosrader beräknades med en äldre modell/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Uppdatera godkända rader' }))
 
     expect(Store.updatePayment).toHaveBeenCalledTimes(2)
     expect(Store.updatePayment).toHaveBeenCalledWith('stale-i', { amount: 4061, balance_after: B })
     expect(Store.updatePayment).toHaveBeenCalledWith('stale-b', { amount: 4061, balance_after: B })
-    expect(await screen.findByText(/förväntade rader uppdaterade till aktuell prognos/)).toBeInTheDocument()
+    expect(await screen.findByText(/godkända prognosrader uppdaterade till aktuell prognos/)).toBeInTheDocument()
   })
 
   it('a failed refresh surfaces the error toast and keeps the banner', async () => {
@@ -290,22 +290,22 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const user = userEvent.setup()
     renderBolanekoll()
 
-    await user.click(await screen.findByRole('button', { name: 'Uppdatera förväntade rader' }))
+    await user.click(await screen.findByRole('button', { name: 'Uppdatera godkända rader' }))
 
     expect(await screen.findByText('Ingen anslutning. Ändringen sparades inte i molnet.')).toBeInTheDocument()
     // The rows were not rewritten, so the banner must still be offering the fix.
-    expect(screen.getByRole('button', { name: 'Uppdatera förväntade rader' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Uppdatera godkända rader' })).toBeInTheDocument()
   })
 
   it('shows the month AFTER one already covered, without logging anything', async () => {
     seedStore([...HISTORY, PREDICTED])
     renderBolanekoll()
     // Settle on the ledger showing the predicted row's tag…
-    expect((await screen.findAllByText('förväntad')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('godkänd prognos')).length).toBeGreaterThan(0)
     // …and the block offers August (July is covered by the predicted row).
     await waitFor(() =>
       expect(document.querySelector('.prognos-row .col-date')?.textContent).toBe('aug 2026'))
-    expect(screen.getByRole('button', { name: 'Logga förväntad rad' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Godkänn rad' })).toBeEnabled()
     expect(Store.addPayments).not.toHaveBeenCalled()
   })
 
@@ -331,7 +331,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     renderBolanekoll()
 
     // Both parts show up front (All).
-    await screen.findAllByRole('button', { name: 'Logga förväntad rad' })
+    await screen.findAllByRole('button', { name: 'Godkänn rad' })
     const parts = () => [...document.querySelectorAll('.prognos-row .col-part')].map(n => n.textContent)
     expect(parts()).toEqual(['Lånedel 1', 'Lånedel 2'])
 
@@ -348,7 +348,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     renderBolanekoll()
 
     // Collapsed by default: only the next (loggable) month is shown.
-    await screen.findByRole('button', { name: 'Logga förväntad rad' })
+    await screen.findByRole('button', { name: 'Godkänn rad' })
     expect(document.querySelectorAll('.prognos-row')).toHaveLength(1)
 
     const toggle = screen.getByRole('button', { name: /Visa kommande månader/ })
@@ -361,7 +361,7 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     expect(future).toHaveLength(11)
     expect(future[0].querySelector('.col-date')?.textContent).toBe('aug 2026')
     expect(future[0].querySelector('button')).toBeNull()
-    expect(screen.getAllByRole('button', { name: 'Logga förväntad rad' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Godkänn rad' })).toHaveLength(1)
 
     await user.click(screen.getByRole('button', { name: 'Dölj kommande månader' }))
     expect(document.querySelectorAll('.prognos-row.is-future')).toHaveLength(0)
@@ -378,11 +378,11 @@ describe('Bolånekoll forecast — import supersede (plan 23 phase C)', () => {
       records.map((r, i) => ({ ...r, id: 'new' + i, created_at: '' } as Payment)))
     const user = userEvent.setup()
     renderBolanekoll()
-    await screen.findAllByText('förväntad') // page settled: predicted row visible in the ledger
+    await screen.findAllByText('godkänd prognos') // page settled: accepted prediction visible in the ledger
 
     await importCsv(CSV(3010)) // drift 10 kr — inside max(50 kr, 1 %)
     // Triage announces the supersede before anything is written.
-    expect(await screen.findByText(/ersätter förväntad avi/)).toBeInTheDocument()
+    expect(await screen.findByText(/ersätter godkänd prognosrad/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Add 1 row/ }))
 
     await waitFor(() => expect(Store.addPayments).toHaveBeenCalledTimes(1))
@@ -400,7 +400,7 @@ describe('Bolånekoll forecast — import supersede (plan 23 phase C)', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const user = userEvent.setup()
     renderBolanekoll()
-    await screen.findAllByText('förväntad') // page settled: predicted row visible in the ledger
+    await screen.findAllByText('godkänd prognos') // page settled: accepted prediction visible in the ledger
 
     await importCsv(CSV(3175)) // drift 175 kr — outside max(50 kr, 1 %)
     expect(await screen.findByText(/drift 175 kr/)).toBeInTheDocument()
@@ -417,7 +417,7 @@ describe('Bolånekoll forecast — import supersede (plan 23 phase C)', () => {
   it('shows the read-only reconcile badge when nothing was pre-logged', async () => {
     seedStore(HISTORY) // no predicted row in the ledger
     renderBolanekoll()
-    await screen.findByRole('button', { name: 'Logga förväntad rad' })
+    await screen.findByRole('button', { name: 'Godkänn rad' })
 
     await importCsv(CSV(3010))
     // ✓ matched against expectedCharge, not against a predicted row — the

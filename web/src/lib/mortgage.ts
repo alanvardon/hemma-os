@@ -366,7 +366,7 @@ export interface BalanceResolution {
   /** Principal applied after the active Saldo/origination anchor. */
   principalPaid: number
   anchor: { date: string; balance: number; source: 'saldo' | 'origination' }
-  quality: 'observed' | 'estimated' | 'projected'
+  quality: 'observed' | 'estimated'
   warnings: BalanceWarning[]
 }
 
@@ -435,13 +435,12 @@ function inferredPaymentPrincipal(payments: Payment[]): InferredPaymentPrincipal
 /**
  * Resolve one loan part from a single chronological principal ledger.
  *
- * Saldo is a post-transaction snapshot: the latest OBSERVED valid one at/before
- * `asOf` becomes the anchor. Later observed and logged predicted rows change
- * that balance through their principal amounts. A predicted balance_after is
- * supporting forecast data, never an observed anchor. A separately recorded
- * extra amortering is always additive, including on the anchor date; an extra
- * amortering carrying its own observed Saldo is represented by that snapshot.
- * Without Saldo, the explicit origination/start balance is the anchor.
+ * Saldo is a post-transaction snapshot: the latest valid one at/before `asOf`
+ * becomes the anchor. A prediction explicitly accepted into Betalningar is an
+ * authoritative ledger row despite retaining source:'predicted' for later
+ * reconciliation. A separately recorded amortering created after that accepted
+ * anchor remains additive even when its transaction date is earlier. Without
+ * Saldo, the explicit origination/start balance is the anchor.
  */
 export function resolvePartBalance(part: LoanPart, payments: Payment[], asOf?: string): BalanceResolution {
   const originalBalanceRaw = part?.original_balance
@@ -453,18 +452,9 @@ export function resolvePartBalance(part: LoanPart, payments: Payment[], asOf?: s
   const originalDate = validLedgerDate(part?.original_date) ? part.original_date!
     : validLedgerDate(part?.start_date) ? part.start_date : ''
 
-  const eligible = (payments || []).filter(row =>
+  const mine = (payments || []).filter(row =>
     row?.loan_part_id === part?.id && validLedgerDate(row.date) && (!asOf || row.date <= asOf))
-  // A real imported/manual row supersedes a logged prediction of the same
-  // part, month and kind. Zero-amount Saldo carrier rows do not suppress a
-  // genuine predicted Betalning for that month.
-  const observedKeys = new Set(eligible
-    .filter(row => row.source !== 'predicted' && positiveLedgerAmount(row.amount) != null)
-    .map(row => row.loan_part_id + '|' + monthKey(row.date) + '|' + row.kind))
-  const mine = eligible.filter(row => row.source !== 'predicted' ||
-    !observedKeys.has(row.loan_part_id + '|' + monthKey(row.date) + '|' + row.kind))
   const saldos = mine.filter(row => {
-    if (row.source === 'predicted') return false
     if (row.balance_after == null) return false
     const balance = Number(row.balance_after)
     return isFinite(balance) && balance >= 0
@@ -475,17 +465,23 @@ export function resolvePartBalance(part: LoanPart, payments: Payment[], asOf?: s
     balance: originalBalance,
     source: 'origination',
   }
+  let anchorCreatedAt = ''
   let conflictingSaldo = false
   if (saldos.length) {
     const date = saldos.reduce((latest, row) => row.date > latest ? row.date : latest, '')
     const balances = saldos.filter(row => row.date === date).map(row => r2(Number(row.balance_after)))
     anchor = { date, balance: Math.min(...balances), source: 'saldo' }
+    anchorCreatedAt = saldos
+      .filter(row => row.date === date && r2(Number(row.balance_after)) === anchor.balance)
+      .reduce((latest, row) => row.created_at > latest ? row.created_at : latest, '')
     conflictingSaldo = new Set(balances).size > 1
   }
 
   const later = mine.filter(row => row.date > anchor.date || (
-    row.date === anchor.date && (row.source === 'predicted' ||
-      (row.kind === 'amortization' && row.is_insats === true && row.balance_after == null))
+    row.kind === 'amortization' && row.balance_after == null && (
+      (row.date === anchor.date && row.is_insats === true) ||
+      (!!anchorCreatedAt && row.created_at > anchorCreatedAt)
+    )
   ))
   const explicitPrincipal = later.reduce((sum, row) => {
     if (row.kind !== 'amortization') return sum
@@ -503,7 +499,7 @@ export function resolvePartBalance(part: LoanPart, payments: Payment[], asOf?: s
     balance: Math.max(0, r2(anchor.balance - attemptedPrincipal)),
     principalPaid: r2(principalPaid),
     anchor,
-    quality: warnings.length ? 'estimated' : later.some(row => row.source === 'predicted') ? 'projected' : 'observed',
+    quality: warnings.length ? 'estimated' : 'observed',
     warnings,
   }
 }
