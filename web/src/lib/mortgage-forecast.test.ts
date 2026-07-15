@@ -7,6 +7,7 @@ import {
   matchPredictedRows, hasChargeInMonth, pendingCharge, pendingChargeSeries, partBalance,
   stalePredictedRows, makeLoanPart, effectiveDeclaredAmortization, declaredMonthlyAmortization,
   projectMilestones, profileYearBasis, makeBank,
+  learnYearBasis, suggestBankProfile, bankProfileDrift, profileBilling,
 } from './mortgage'
 import type { LoanPart, Payment, RatePeriod, Bank, Mortgage } from './mortgage'
 
@@ -659,9 +660,9 @@ describe('bank profile: declared year-basis lock (plan 104, phase 1)', () => {
   })
 
   it('makeBank clamps a malformed year_basis to null (→ detection)', () => {
-    expect(makeBank({ label: 'X', year_basis: 400, year_basis_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: 'declared' })
-    expect(makeBank({ label: 'X', year_basis: 360, year_basis_source: 'garbage' })).toEqual({ label: 'X', year_basis: 360, year_basis_source: null })
-    expect(makeBank({})).toEqual({ label: '', year_basis: null, year_basis_source: null })
+    expect(makeBank({ label: 'X', year_basis: 400, year_basis_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: 'declared', billing: null, billing_source: null })
+    expect(makeBank({ label: 'X', year_basis: 360, year_basis_source: 'garbage' })).toEqual({ label: 'X', year_basis: 360, year_basis_source: null, billing: null, billing_source: null })
+    expect(makeBank({})).toEqual({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null })
     // a declared but malformed basis therefore does not override — detection wins
     const bad = expectedCharge(linkedPart(), [bunden()], CLEAN, { banks: [{ id: 'b1', created_at: '', label: 'X', year_basis: 400, year_basis_source: 'declared' }], mortgages: mortgages() })!
     expect(bad.year_basis).toBe(365)
@@ -670,6 +671,98 @@ describe('bank profile: declared year-basis lock (plan 104, phase 1)', () => {
   it('expectedCharges threads opts through to every part', () => {
     const { rows } = expectedCharges([linkedPart()], [bunden()], CLEAN, opts({ year_basis: 360, year_basis_source: 'declared' }))
     expect(rows[0].year_basis).toBe(360)
+  })
+})
+
+describe('bank profile: window-scoped bank-pooled learner + billing pin (plan 104, phase 2)', () => {
+  // A rolling bunden: one steady 3,93 % window, then two quarterly re-fixes at
+  // 4,20 % and 3,60 %. Every charge is a whole number of days × that window's
+  // /360 day-value (131 / 140 / 120 kr) — a faktisk/360 bank. balance flat at B.
+  const B = 1_200_000
+  const linkedPart = () => part({ id: 'p1', mortgage_id: 'm1' })
+  const mortgages = (): Mortgage[] => [{ id: 'm1', created_at: '', bank_id: 'b1', label: 'Bolån', start_date: null, archived: false }]
+  const banks = (over: Partial<Bank> = {}): Bank[] => [{ id: 'b1', created_at: '', label: 'Danske', ...over }]
+  const learnerOpts = (over: Partial<Bank> = {}) => ({ banks: banks(over), mortgages: mortgages(), parts: [linkedPart()] })
+  const periods = (): RatePeriod[] => [
+    { id: 'w1', created_at: '', loan_part_id: 'p1', start_date: '2025-06-01', end_date: '2026-05-31', rate: 3.93, rate_type: 'bunden' },
+    { id: 'w2', created_at: '', loan_part_id: 'p1', start_date: '2026-06-01', end_date: '2026-08-31', rate: 4.20, rate_type: 'bunden' },
+    { id: 'w3', created_at: '', loan_part_id: 'p1', start_date: '2026-09-01', end_date: '2027-12-31', rate: 3.60, rate_type: 'bunden' },
+  ]
+  const row = (date: string, amount: number) => interestRow(date, amount, { id: 'i' + date, balance_after: B })
+  // 131/day (3,93 %) · 140/day (4,20 %) · 120/day (3,60 %)
+  const rolling = [
+    row('2026-02-28', 3930), row('2026-03-31', 4061), row('2026-04-30', 3930), row('2026-05-31', 4061), // w1
+    row('2026-06-30', 4200), row('2026-07-31', 4340), row('2026-08-31', 4340),                          // w2
+    row('2026-09-30', 3600), row('2026-10-31', 3720),                                                   // w3
+  ]
+
+  it('learnYearBasis scores WITHIN each window and pools across them → 360, confident', () => {
+    const r = learnYearBasis([linkedPart()], periods(), rolling)
+    expect(r.basis).toBe(360)
+    expect(r.windows).toBeGreaterThanOrEqual(2)  // pooled across ≥ 2 quarters
+    expect(r.confident).toBe(true)
+  })
+
+  it('one thin 3-month window alone stays below the confidence gate (detected, not suggested)', () => {
+    // Only w3's two charges → a single window → not enough to lock.
+    const oneWindow = [row('2026-09-30', 3600), row('2026-10-31', 3720)]
+    const r = learnYearBasis([linkedPart()], periods(), oneWindow)
+    expect(r.windows).toBeLessThan(2)
+    expect(r.confident).toBe(false)
+  })
+
+  it('the trailing-6 detector reverts to 365 across the rolling reset (documents the bug); the learner holds 360', () => {
+    // No entity context → expectedCharge falls back to the classic trailing-6
+    // detector, whose window straddles 3,60 %/4,20 %/3,93 % charges and reverts.
+    const buggy = expectedCharge(linkedPart(), periods(), rolling)!
+    expect(buggy.year_basis).toBe(365)
+    // With bank context the window-scoped bank-pooled learner stays 360.
+    const fixed = expectedCharge(linkedPart(), periods(), rolling, learnerOpts())!
+    expect(fixed.year_basis).toBe(360)
+  })
+
+  it('a declared 360 is correct across the reset regardless of the learner', () => {
+    const c = expectedCharge(linkedPart(), periods(), rolling, learnerOpts({ year_basis: 360, year_basis_source: 'declared' }))!
+    expect(c.year_basis).toBe(360)
+  })
+
+  it('suggestBankProfile offers a confident 360 lock on pooled evidence, not on one window', () => {
+    expect(suggestBankProfile([linkedPart()], periods(), rolling).year_basis).toEqual({ value: 360, confident: true })
+    const oneWindow = [row('2026-09-30', 3600), row('2026-10-31', 3720)]
+    expect(suggestBankProfile([linkedPart()], periods(), oneWindow).year_basis.confident).toBe(false)
+  })
+
+  it('bankProfileDrift flags a declared lock the fresh evidence now contradicts', () => {
+    // Declared 365, but the ledger reads a confident 360 → drift surfaced.
+    const drift = bankProfileDrift(banks({ year_basis: 365, year_basis_source: 'declared' })[0], [linkedPart()], periods(), rolling)
+    expect(drift).toEqual({ field: 'year_basis', declared: 365, learned: 360 })
+    // Declared 360 that matches → no drift.
+    expect(bankProfileDrift(banks({ year_basis: 360, year_basis_source: 'declared' })[0], [linkedPart()], periods(), rolling)).toBeNull()
+    // No declared lock → nothing to drift against.
+    expect(bankProfileDrift(banks({ year_basis: 360, year_basis_source: 'detected' })[0], [linkedPart()], periods(), rolling)).toBeNull()
+  })
+
+  it('the billing pin overrides ledger cadence detection both ways', () => {
+    // CLEAN bills on the 27th (fixed day) → detected as NOT month-end.
+    const bunden = () => period({ rate_type: 'bunden', end_date: '2027-12-31' })
+    const pin = (billing: string | null) => ({ banks: banks({ billing, billing_source: billing ? 'declared' : null }), mortgages: mortgages() })
+    // declared month-end → the next charge anchors to the month's last day
+    expect(expectedCharge(linkedPart(), [bunden()], CLEAN, pin('month-end'))!.next_date).toBe('2026-07-31')
+    // declared fixed → keeps the 27th day-of-month cadence
+    expect(expectedCharge(linkedPart(), [bunden()], CLEAN, pin('fixed'))!.next_date).toBe('2026-07-27')
+    // profileBilling only reads a DECLARED source
+    expect(profileBilling(linkedPart(), mortgages(), banks({ billing: 'month-end', billing_source: 'declared' }))).toBe('month-end')
+    expect(profileBilling(linkedPart(), mortgages(), banks({ billing: 'month-end', billing_source: 'detected' }))).toBeNull()
+  })
+
+  it('undeclared / no-context still reproduces the existing behaviour byte-for-byte', () => {
+    const golden = expectedCharge(part(), [period({ rate_type: 'bunden', end_date: '2027-12-31' })], CLEAN)!
+    expect(expectedCharge(part(), [period({ rate_type: 'bunden', end_date: '2027-12-31' })], CLEAN, {})).toEqual(golden)
+  })
+
+  it('makeBank clamps a malformed billing convention to null (→ detection)', () => {
+    expect(makeBank({ label: 'X', billing: 'weird', billing_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: null, billing_source: 'declared' })
+    expect(makeBank({ label: 'X', billing: 'month-end', billing_source: 'garbage' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: 'month-end', billing_source: null })
   })
 })
 

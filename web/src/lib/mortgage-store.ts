@@ -53,7 +53,7 @@ const RESOURCES = T
 // `household_id` (column default) + `updated_at` (trigger) are never sent. Field
 // names already match column names 1:1 (both snake_case), so a plain pick works.
 const COLS = {
-  banks: ['label', 'year_basis', 'year_basis_source'],
+  banks: ['label', 'year_basis', 'year_basis_source', 'billing', 'billing_source'],
   mortgages: ['bank_id', 'label', 'start_date', 'archived'],
   parts: ['label', 'loan_number', 'start_balance', 'start_date', 'archived', 'mortgage_id', 'original_balance', 'original_date', 'planned_amortization', 'planned_amortization_start', 'planned_amortization_end'],
   periods: ['loan_part_id', 'start_date', 'end_date', 'rate', 'rate_type'],
@@ -150,7 +150,7 @@ const NOT_NULL_DEFAULTS: Record<string, unknown> = {
 // bank profile lock must be clearable back to auto (year_basis_source → null),
 // so these two columns opt into explicit-null. Scoped to just these columns to
 // avoid changing the omit-null behaviour every other table relies on.
-const NULLABLE_EXPLICIT: ReadonlySet<string> = new Set(['year_basis', 'year_basis_source'])
+const NULLABLE_EXPLICIT: ReadonlySet<string> = new Set(['year_basis', 'year_basis_source', 'billing', 'billing_source'])
 
 // A full insert row: id + created_at (client-stamped) + the data columns. A
 // null/undefined value is replaced by its NOT_NULL_DEFAULTS fallback if the
