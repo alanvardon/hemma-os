@@ -307,3 +307,22 @@ forbids promising without one). Independent of the 103–105 batch.
 data at an unauthenticated bearer-token URL. The plan is written so the token
 model and the `cost`/`notes` field-exposure decision (§5) can be settled before
 any code is written; do not build until approved.
+
+---
+
+# Bolånekoll balance propagation — 2026-07-15 (standalone)
+
+Production use exposed a financial-correctness gap: once a loan part has any
+Saldo, later Betalning/Amortering rows without their own Saldo do not move the
+current balance, freezing the hero and every ratio derived from debt. The owner
+also chose to collapse capital entry into Betalningar and retain Insatser as a
+linked derived view.
+
+| File | Priority | Depends on | Scope | Summary | Owner | Effort |
+|------|----------|------------|-------|---------|-------|--------|
+| [107-bolanekoll-balance-propagation.md](107-bolanekoll-balance-propagation.md) | High | — | mortgage balance engine + persistence + Bolånekoll UI | Replace the competing Saldo/amortering branches with one chronological balance resolver; Betalning reduces principal by Betalning−Ränta (full amount provisionally when Ränta is missing, with an estimate warning), and every explicit Amortering remains separately additive. Route hero, debt, LTV/DTI, cost basis, charts, milestones, forecasts, hub and cross-tool figures through the same debt. Make Betalningar the sole editor and Insatser a linked view; migrate legacy contributions idempotently. | GPT-5.6 Sol | L |
+
+Standalone correctness plan; the owner approved the financial semantics and
+persisted-data consolidation on 2026-07-15. It does not change valuations,
+statutory rules or rate forecasts. One branch/PR from `main`; never apply its
+data migration to production from an agent session.
