@@ -26,6 +26,7 @@ import {
   expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   contributionSplit, settlement, todayISO,
+  bankForPart, suggestBankProfile, bankProfileDrift,
 } from '../lib/mortgage'
 import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, PaidBy, ExpectedCharge, Bank, Mortgage } from '../lib/mortgage'
 import {
@@ -315,10 +316,22 @@ export default function Bolanekoll() {
   // Expected next charge (plan 23): arithmetic from stored data — balance ×
   // rate × days/365 — calibrated against the real charge history. Read-only
   // here; writes happen only via the explicit log button / import supersede.
-  // Plan 104 — thread the bank entities into the forecast so a declared
-  // year-basis lock on a part's bank overrides ledger detection.
-  const forecastOpts = useMemo(() => ({ banks, mortgages }), [banks, mortgages])
+  // Plan 104 — thread the bank entities (and the full part list) into the
+  // forecast so a declared lock overrides detection AND the year-basis learner
+  // can pool evidence across all of a bank's parts (phase 2).
+  const forecastOpts = useMemo(() => ({ banks, mortgages, parts }), [banks, mortgages, parts])
   const prognos = useMemo(() => expectedCharges(parts, periods, payments, forecastOpts), [parts, periods, payments, forecastOpts])
+  // Plan 104 (phase 2) — the parts on the active bank, the learner's suggestion
+  // for them, and any drift between a declared lock and the fresh evidence.
+  const activeBankParts = useMemo(
+    () => activeBank ? parts.filter(p => bankForPart(p, mortgages, banks)?.id === activeBank.id) : [],
+    [activeBank, parts, mortgages, banks])
+  const bankSuggestion = useMemo(
+    () => activeBank ? suggestBankProfile(activeBankParts, periods, payments) : null,
+    [activeBank, activeBankParts, periods, payments])
+  const bankDrift = useMemo(
+    () => bankProfileDrift(activeBank, activeBankParts, periods, payments),
+    [activeBank, activeBankParts, periods, payments])
   const forecast = useMemo(() => forecastInterest(parts, periods, payments), [parts, periods, payments])
   // The next UNCOVERED charge per part: once a month is fully logged (or
   // imported), the Nästa avisering block rolls forward to the following month
@@ -557,6 +570,16 @@ export default function Bolanekoll() {
       })
       await refresh(); flashSaved()
       showToast(basis == null ? 'Bankår återställt till auto.' : `Bankår låst till faktisk/${basis}.`)
+    } catch (err) { saveErr(err) }
+  }
+  // Plan 104 (phase 2) — pin (or clear) the active bank's billing cadence.
+  async function handleSetBankBilling(billing: 'month-end' | 'fixed' | null) {
+    if (!activeBank) return
+    try {
+      await Store.updateBank(activeBank.id, { billing, billing_source: billing == null ? null : 'declared' })
+      await refresh(); flashSaved()
+      showToast(billing == null ? 'Aviseringsdag återställd till auto.'
+        : billing === 'month-end' ? 'Aviseringsdag låst till månadsslut.' : 'Aviseringsdag låst till fast dag.')
     } catch (err) { saveErr(err) }
   }
   async function handleSavePeriod(partId: string, data: Omit<RatePeriod, 'id' | 'created_at'>, existingId?: string) {
@@ -1225,27 +1248,62 @@ export default function Bolanekoll() {
                   <span className="ld-bank">{activeBank?.label || 'Okänd bank'}</span>
                   <span className="ld-mortgage-sep">·</span>
                   <span className="ld-mortgage-name">{activeMortgage.label || 'Bolån'}</span>
-                  {/* Plan 104 — minimal Bankvillkor affordance: lock the bank's
-                      day-count year for the bunden forecast, or leave it on auto. */}
+                  {/* Plan 104 — Bankvillkor: the bank's day-count year and billing
+                      cadence, each Auto (detected) or locked. A confident learner
+                      offers a lock (suggest → confirm); a lock that no longer matches
+                      the ledger surfaces a drift warning. */}
                   {activeBank && (() => {
-                    const locked = activeBank.year_basis_source === 'declared'
+                    const ybLocked = activeBank.year_basis_source === 'declared'
                       && (activeBank.year_basis === 360 || activeBank.year_basis === 365)
+                    const billLocked = activeBank.billing_source === 'declared'
+                      && (activeBank.billing === 'month-end' || activeBank.billing === 'fixed')
+                    const ybSug = bankSuggestion?.year_basis
                     return (
                       <span className="ld-bankvillkor">
-                        <span className="ld-bankvillkor-label">Bankår</span>
-                        <span className={'ld-bankvillkor-state' + (locked ? ' is-locked' : '')}>
-                          {locked ? `Låst faktisk/${activeBank.year_basis}` : 'Auto (upptäck)'}
-                        </span>
-                        <button type="button" className="btn btn-ghost btn-xs"
-                          aria-pressed={locked && activeBank.year_basis === 360}
-                          onClick={() => handleSetBankYearBasis(360)}>Lås faktisk/360</button>
-                        <button type="button" className="btn btn-ghost btn-xs"
-                          aria-pressed={locked && activeBank.year_basis === 365}
-                          onClick={() => handleSetBankYearBasis(365)}>Lås 365</button>
-                        {locked && (
+                        <span className="ld-bankvillkor-row">
+                          <span className="ld-bankvillkor-label">Bankår</span>
+                          <span className={'ld-bankvillkor-state' + (ybLocked ? ' is-locked' : '')}>
+                            {ybLocked ? `Låst faktisk/${activeBank.year_basis}` : 'Auto (upptäck)'}
+                          </span>
                           <button type="button" className="btn btn-ghost btn-xs"
-                            onClick={() => handleSetBankYearBasis(null)}>Auto</button>
+                            aria-pressed={ybLocked && activeBank.year_basis === 360}
+                            onClick={() => handleSetBankYearBasis(360)}>Lås faktisk/360</button>
+                          <button type="button" className="btn btn-ghost btn-xs"
+                            aria-pressed={ybLocked && activeBank.year_basis === 365}
+                            onClick={() => handleSetBankYearBasis(365)}>Lås 365</button>
+                          {ybLocked && (
+                            <button type="button" className="btn btn-ghost btn-xs"
+                              onClick={() => handleSetBankYearBasis(null)}>Auto</button>
+                          )}
+                        </span>
+                        {!ybLocked && ybSug?.confident && ybSug.value === 360 && (
+                          <span className="ld-bankvillkor-suggest">
+                            Historiken tyder på faktisk/360.
+                            <button type="button" className="btn btn-ghost btn-xs"
+                              onClick={() => handleSetBankYearBasis(360)}>Lås detta</button>
+                          </span>
                         )}
+                        {bankDrift && (
+                          <span className="ld-bankvillkor-drift" role="status">
+                            ⚠ Låst faktisk/{bankDrift.declared}, men färsk data tyder på faktisk/{bankDrift.learned}. Kontrollera villkoret.
+                          </span>
+                        )}
+                        <span className="ld-bankvillkor-row">
+                          <span className="ld-bankvillkor-label">Avisering</span>
+                          <span className={'ld-bankvillkor-state' + (billLocked ? ' is-locked' : '')}>
+                            {billLocked ? (activeBank.billing === 'month-end' ? 'Låst månadsslut' : 'Låst fast dag') : 'Auto (upptäck)'}
+                          </span>
+                          <button type="button" className="btn btn-ghost btn-xs"
+                            aria-pressed={billLocked && activeBank.billing === 'month-end'}
+                            onClick={() => handleSetBankBilling('month-end')}>Månadsslut</button>
+                          <button type="button" className="btn btn-ghost btn-xs"
+                            aria-pressed={billLocked && activeBank.billing === 'fixed'}
+                            onClick={() => handleSetBankBilling('fixed')}>Fast dag</button>
+                          {billLocked && (
+                            <button type="button" className="btn btn-ghost btn-xs"
+                              onClick={() => handleSetBankBilling(null)}>Auto</button>
+                          )}
+                        </span>
                       </span>
                     )
                   })()}
