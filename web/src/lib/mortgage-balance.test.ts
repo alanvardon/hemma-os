@@ -55,17 +55,17 @@ describe('resolvePartBalance — chronological principal ledger', () => {
     expect(partBalance(part(), rows)).toBe(990_000)
   })
 
-  it('uses predicted principal without trusting its stored Saldo as an observed anchor', () => {
+  it('promotes an accepted prediction Saldo to the authoritative ledger anchor', () => {
     const rows = [
       saldo('2024-01-31', 1_000_000),
       payment({ id: 'predicted-payment', date: '2024-02-29', kind: 'payment', amount: 11_438, balance_after: 980_000, source: 'predicted' }),
       payment({ id: 'predicted-interest', date: '2024-02-29', kind: 'interest', amount: 3_438, balance_after: 980_000, source: 'predicted' }),
     ]
     expect(resolvePartBalance(part(), rows)).toMatchObject({
-      balance: 992_000,
-      principalPaid: 8_000,
-      anchor: { date: '2024-01-31', balance: 1_000_000, source: 'saldo' },
-      quality: 'projected',
+      balance: 980_000,
+      principalPaid: 0,
+      anchor: { date: '2024-02-29', balance: 980_000, source: 'saldo' },
+      quality: 'observed',
     })
   })
 
@@ -83,15 +83,15 @@ describe('resolvePartBalance — chronological principal ledger', () => {
       const projected = index === 0 ? 1_008_000 : 1_200_000
       return [
         saldo('2026-06-30', observed, { id: `saldo-${loan.id}`, loan_part_id: loan.id }),
-        payment({ id: `interest-${loan.id}`, loan_part_id: loan.id, date: '2026-07-31', kind: 'interest', amount: interest, balance_after: projected, source: 'predicted' }),
-        payment({ id: `payment-${loan.id}`, loan_part_id: loan.id, date: '2026-07-31', kind: 'payment', amount: debit, balance_after: projected, source: 'predicted' }),
+        payment({ id: `interest-${loan.id}`, created_at: '2026-07-15T08:00:00Z', loan_part_id: loan.id, date: '2026-07-31', kind: 'interest', amount: interest, balance_after: projected, source: 'predicted' }),
+        payment({ id: `payment-${loan.id}`, created_at: '2026-07-15T08:00:00Z', loan_part_id: loan.id, date: '2026-07-31', kind: 'payment', amount: debit, balance_after: projected, source: 'predicted' }),
       ]
     })
 
     expect(totalBalance(parts, rows)).toBe(4_608_000)
     expect(totalBalance(parts, [...rows, payment({
       id: 'extra', loan_part_id: 'p1', date: '2026-07-15', amount: 8_000,
-      paid_by: 'a', is_insats: true,
+      created_at: '2026-07-15T09:00:00Z', paid_by: 'a', is_insats: true,
     })])).toBe(4_600_000)
   })
 

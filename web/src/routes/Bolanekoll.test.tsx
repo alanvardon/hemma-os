@@ -392,7 +392,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
         paid_by: 'joint' as const, is_insats: false,
       },
       {
-        ...base, id: 'extra', loan_part_id: 'p1', date: '2026-07-15',
+        ...base, id: 'extra', created_at: '2026-07-15T09:00:00Z', loan_part_id: 'p1', date: '2026-07-15',
         kind: 'amortization' as const, amount: 8_000, balance_after: null,
         paid_by: 'a' as const, is_insats: true,
       },
@@ -432,7 +432,6 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     expect(screen.getByText(/Loan-to-value/).parentElement).toHaveTextContent('81.42')
     expect(screen.getByText('Insatt kapital · Cost-basis equity').parentElement).toHaveTextContent('1050000')
     expect(screen.getByText(/of the köpeskilling/)).toHaveTextContent('18.58')
-    expect(screen.getAllByText(/Prognos 31 jul/).length).toBeGreaterThan(0)
 
     const openPayments = screen.getAllByRole('button', { name: 'Öppna Betalningar' })
     await user.click(openPayments[0])
