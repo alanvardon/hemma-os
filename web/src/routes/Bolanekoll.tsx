@@ -197,6 +197,12 @@ export default function Bolanekoll() {
     () => new Map(parts.filter(p => !p.archived).map(p => [p.id, resolvePartBalance(p, payments)])),
     [parts, payments],
   )
+  const projectedThrough = useMemo(() => {
+    if (![...balanceResolutions.values()].some(result => result.quality === 'projected')) return ''
+    const activeIds = new Set(parts.filter(p => !p.archived).map(p => p.id))
+    return payments.reduce((latest, p) => p.source === 'predicted' && p.loan_part_id &&
+      activeIds.has(p.loan_part_id) && p.date > latest ? p.date : latest, '')
+  }, [parts, payments, balanceResolutions])
   const estimatedPartIds = useMemo(
     () => new Set([...balanceResolutions.entries()]
       .filter(([, result]) => result.warnings.includes('missing-interest'))
@@ -736,7 +742,8 @@ export default function Bolanekoll() {
     ? 'Add a loan part and a property value to get started.'
     : !hasValuation
       ? 'Add a property value to see equity · ' + fmtMoney(balance) + ' owed across ' + parts.length + ' part' + (parts.length === 1 ? '' : 's') + '.'
-      : fmtPct(ltv) + ' loan-to-value · ' + fmtMoney(balance) + ' still owed to the bank.'
+      : (projectedThrough ? 'Prognos ' + fmtRateDate(projectedThrough) + ' · ' : '') +
+        fmtPct(ltv) + ' loan-to-value · ' + fmtMoney(balance) + ' still owed to the bank.'
 
   const bridgeLabel = bridgePeriod === 'ytd' ? 'i år' : bridgePeriod === '12m' ? 'senaste 12 mån' : 'sedan start'
   const wsum = Math.abs(bridge.amortization_gain) + Math.abs(bridge.appreciation_gain)
@@ -857,7 +864,7 @@ export default function Bolanekoll() {
                   <span className="cb-label">Insatt kapital · Cost-basis equity</span>
                   <span className="cb-val">{M(costBasisEq, false, true)}</span>
                 </div>
-                <p className="cb-sub">{P(ownedPct, true)} of the köpeskilling ({M(price, false, true)}) paid in — kontantinsats {M(deposit, false, true)} plus amortised.</p>
+                <p className="cb-sub">{projectedThrough && <>Prognos {fmtRateDate(projectedThrough)} · </>}{P(ownedPct, true)} of the köpeskilling ({M(price, false, true)}) paid in — kontantinsats {M(deposit, false, true)} plus amortised.</p>
                 {settings.track_contributions && (
                   <div className="split-row">
                     <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
@@ -879,9 +886,9 @@ export default function Bolanekoll() {
           </div>
 
           <div className="metric-row">
-            <div className="metric-chip" data-current-debt={String(Math.round(balance))}><span className="metric-label">Remaining debt</span><span className="metric-val">{M(balance, false, true)}</span></div>
+            <div className="metric-chip" data-current-debt={String(Math.round(balance))}><span className="metric-label">Remaining debt{projectedThrough && ' · projected'}</span><span className="metric-val">{M(balance, false, true)}</span></div>
             <div className="metric-chip"><span className="metric-label">Property value</span><span className="metric-val">{hasValuation ? M(value, false, true) : '—'}</span></div>
-            <div className="metric-chip"><span className="metric-label">Loan-to-value</span><span className="metric-val">{hasValuation ? P(ltv, true) : '—'}</span></div>
+            <div className="metric-chip"><span className="metric-label">Loan-to-value{projectedThrough && ' · projected'}</span><span className="metric-val">{hasValuation ? P(ltv, true) : '—'}</span></div>
             <div className="metric-chip"><span className="metric-label">Total amortised</span><span className="metric-val">{M(amortized, false, true)}</span></div>
           </div>
           {/* Reprice notice — deliberately absent until it's actionable: the

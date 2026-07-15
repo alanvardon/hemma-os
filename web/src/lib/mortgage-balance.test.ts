@@ -55,13 +55,44 @@ describe('resolvePartBalance — chronological principal ledger', () => {
     expect(partBalance(part(), rows)).toBe(990_000)
   })
 
-  it('ignores predicted rows when resolving current observed debt', () => {
+  it('uses predicted principal without trusting its stored Saldo as an observed anchor', () => {
     const rows = [
       saldo('2024-01-31', 1_000_000),
-      payment({ id: 'extra', date: '2024-02-01', amount: 8_000, paid_by: 'a', is_insats: true }),
-      saldo('2024-03-01', 980_000, { id: 'future-prediction', source: 'predicted' }),
+      payment({ id: 'predicted-payment', date: '2024-02-29', kind: 'payment', amount: 11_438, balance_after: 980_000, source: 'predicted' }),
+      payment({ id: 'predicted-interest', date: '2024-02-29', kind: 'interest', amount: 3_438, balance_after: 980_000, source: 'predicted' }),
     ]
-    expect(resolvePartBalance(part(), rows)).toMatchObject({ balance: 992_000, principalPaid: 8_000 })
+    expect(resolvePartBalance(part(), rows)).toMatchObject({
+      balance: 992_000,
+      principalPaid: 8_000,
+      anchor: { date: '2024-01-31', balance: 1_000_000, source: 'saldo' },
+      quality: 'projected',
+    })
+  })
+
+  it('resolves the reported four-part month-end total and a later extra amortering', () => {
+    const parts = [
+      part({ id: 'p1', label: 'Danske Bank 1', start_balance: 1_016_000, original_balance: 1_016_000 }),
+      part({ id: 'p2', label: 'Danske Bank 2', start_balance: 1_200_000, original_balance: 1_200_000 }),
+      part({ id: 'p3', label: 'Danske Bank 3', start_balance: 1_200_000, original_balance: 1_200_000 }),
+      part({ id: 'p4', label: 'Danske Bank 4', start_balance: 1_200_000, original_balance: 1_200_000 }),
+    ]
+    const rows: Payment[] = parts.flatMap((loan, index) => {
+      const observed = index === 0 ? 1_016_000 : 1_200_000
+      const interest = index === 0 ? 3_438 : 4_061
+      const debit = index === 0 ? 11_438 : 4_061
+      const projected = index === 0 ? 1_008_000 : 1_200_000
+      return [
+        saldo('2026-06-30', observed, { id: `saldo-${loan.id}`, loan_part_id: loan.id }),
+        payment({ id: `interest-${loan.id}`, loan_part_id: loan.id, date: '2026-07-31', kind: 'interest', amount: interest, balance_after: projected, source: 'predicted' }),
+        payment({ id: `payment-${loan.id}`, loan_part_id: loan.id, date: '2026-07-31', kind: 'payment', amount: debit, balance_after: projected, source: 'predicted' }),
+      ]
+    })
+
+    expect(totalBalance(parts, rows)).toBe(4_608_000)
+    expect(totalBalance(parts, [...rows, payment({
+      id: 'extra', loan_part_id: 'p1', date: '2026-07-15', amount: 8_000,
+      paid_by: 'a', is_insats: true,
+    })])).toBe(4_600_000)
   })
 
   it('accepts a same-day post-amortering Saldo as the authoritative balance', () => {
