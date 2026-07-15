@@ -197,13 +197,11 @@ test('an extra amortering is one canonical payment and one linked Extra amorteri
   const paymentDialog = page.locator('dialog.bk-dialog[open]')
   await expect(paymentDialog.getByRole('heading', { name: 'Lägg till betalning' })).toBeVisible()
   await paymentDialog.getByLabel('Typ').selectOption('extra_amortization')
-  // A Saldo/origination balance is post-transaction for its own date. Log the
-  // extra amortering on the following day so this test asserts the required
-  // post-anchor debt propagation rather than a same-day snapshot rule.
-  const nextDay = new Date()
-  nextDay.setDate(nextDay.getDate() + 1)
-  await paymentDialog.getByLabel('Datum').fill(nextDay.toISOString().slice(0, 10))
+  // Same-day rows need the bank's post-amortering Saldo to establish ordering
+  // against the origination snapshot. This is the manual entry path that was
+  // previously unavailable.
   await paymentDialog.getByLabel('Belopp').fill('20000')
+  await paymentDialog.getByLabel('Saldo efteråt (valfritt)').fill('980000')
   await paymentDialog.getByRole('button', { name: 'Spara' }).click()
 
   await expect(page.locator('.bk-toast.show')).toHaveText('Payment saved.')

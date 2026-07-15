@@ -50,6 +50,7 @@ export default function PaymentDialog({ open, id, payments, parts, settings, onS
   const set = <K extends keyof typeof form>(key: K, value: typeof form[K]) => setForm(current => ({ ...current, [key]: value }))
   const jointRecord = form.entryType === 'payment' || form.entryType === 'interest'
   const needsLoanPart = form.entryType !== 'down_payment'
+  const acceptsSaldo = form.entryType === 'payment' || form.entryType === 'amortization' || form.entryType === 'extra_amortization'
   const hasSplit = !jointRecord && (form.split_a.trim() !== '' || form.split_b.trim() !== '')
   const split = hasSplit ? { a: parseAmount(form.split_a) || 0, b: parseAmount(form.split_b) || 0 } : null
   const splitIsValid = !split || split.a + split.b === (parseAmount(form.amount) || 0)
@@ -79,9 +80,10 @@ export default function PaymentDialog({ open, id, payments, parts, settings, onS
       // those canonical fields rather than turning an allocation edit into a
       // lossy rewrite of a bank/imported record.
       description: rec?.description || '', source: rec?.source || 'manual',
-      // Saldo is meaningful only for a Betalning. Reclassifying a row must not
-      // leave a hidden post-transaction anchor behind on Ränta/Amortering.
-      balance_after: form.entryType === 'payment' && form.balance_after ? parseAmount(form.balance_after) : null,
+      // A bank-reported post-transaction Saldo is authoritative for both an
+      // ordinary and an extra amortering. Other row types must not retain a
+      // hidden balance anchor when reclassified.
+      balance_after: acceptsSaldo && form.balance_after ? parseAmount(form.balance_after) : null,
       paid_by,
       is_insats: form.entryType === 'down_payment' || form.entryType === 'extra_amortization',
       paid_split: jointRecord ? null : split,
@@ -115,7 +117,10 @@ export default function PaymentDialog({ open, id, payments, parts, settings, onS
           )}
           <FormField label="Datum"><input type="date" required value={form.date} onChange={e => set('date', e.target.value)} /></FormField>
           <FormField label="Belopp"><input type="text" required inputMode="decimal" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} /></FormField>
-          {form.entryType === 'payment' && <FormField label="Saldo efteråt (valfritt)"><input type="text" inputMode="decimal" placeholder="0" value={form.balance_after} onChange={e => set('balance_after', e.target.value)} /></FormField>}
+          {acceptsSaldo && <FormField label="Saldo efteråt (valfritt)"><input type="text" inputMode="decimal" placeholder="0" value={form.balance_after} onChange={e => set('balance_after', e.target.value)} /></FormField>}
+          {(form.entryType === 'amortization' || form.entryType === 'extra_amortization') && (
+            <p className="form-hint form-wide">Ange bankens Saldo efter amorteringen om den har samma datum som föregående Saldo. Annars räknas beloppet från det senaste tidigare Saldo.</p>
+          )}
           {jointRecord ? (
             <p className="form-hint form-wide">Gemensam post — betalningen och räntan kan inte fördelas på en person. Amorteringsdelen följer den valda ägarfördelningen.</p>
           ) : (

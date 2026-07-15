@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   purchaseValuation, purchasePrice, costBasisEquity, costBasisOwnedPct,
-  derivedDeposit, costBasisSplit, insatsPayments, totalAmortized, defaultSettings,
-  contributionSplit, legacyContributionPayment, makePayment,
+  derivedDeposit, costBasisSplit, marketEquitySplit, insatsPayments, totalAmortized, defaultSettings,
+  contributionSplit, equityTimeline, legacyContributionPayment, makePayment,
 } from './mortgage'
 import type { LoanPart, Payment, Valuation, Contribution } from './mortgage'
 
@@ -93,6 +93,48 @@ describe('costBasisSplit', () => {
   it('halves always sum to the cost-basis total', () => {
     const split = costBasisSplit(5_000_000, balance, payments, contributions, settings)
     expect(split.a + split.b).toBe(costBasisEquity(5_000_000, balance))
+  })
+  it('returns zero owner capital when no purchase price is configured', () => {
+    expect(costBasisSplit(0, balance, payments, contributions, settings)).toEqual({
+      a: 0, b: 0, a_pct: 50, b_pct: 50,
+    })
+  })
+
+  it('adds a personal extra amortering directly without redistributing prior capital', () => {
+    const baseCapital: Payment[] = [
+      { id: 'deposit-a', created_at: '', loan_part_id: null, date: '2024-01-01', kind: 'down_payment', description: '', amount: 521_000, balance_after: null, paid_by: 'a', source: 'manual', is_insats: true },
+      { id: 'deposit-b', created_at: '', loan_part_id: null, date: '2024-01-01', kind: 'down_payment', description: '', amount: 521_000, balance_after: null, paid_by: 'b', source: 'manual', is_insats: true },
+    ]
+    const extra: Payment = {
+      id: 'extra-a', created_at: '', loan_part_id: 'part-1', date: '2024-02-01', kind: 'amortization',
+      description: '', amount: 8_000, balance_after: 950_000, paid_by: 'a', source: 'manual', is_insats: true,
+    }
+
+    expect(costBasisSplit(2_000_000, 958_000, baseCapital, [], settings)).toMatchObject({
+      a: 521_000, b: 521_000, a_pct: 50, b_pct: 50,
+    })
+    expect(costBasisSplit(2_000_000, 950_000, [...baseCapital, extra], [], settings)).toMatchObject({
+      a: 529_000, b: 521_000,
+    })
+    expect(marketEquitySplit(2_000_000, 950_000, [...baseCapital, extra], [], settings)).toMatchObject({
+      a: 529_000, b: 521_000,
+    })
+    // A 200k market gain follows the configured 50/50 ownership target. The
+    // personal 8k amortering still moves only a's account.
+    expect(marketEquitySplit(2_200_000, 950_000, [...baseCapital, extra], [], settings)).toMatchObject({
+      a: 629_000, b: 621_000,
+    })
+
+    const loan = { ...part, start_balance: 958_000, original_balance: 958_000, start_date: '2024-01-01' }
+    const ledger: Payment[] = [
+      { id: 'saldo', created_at: '', loan_part_id: loan.id, date: '2024-01-31', kind: 'payment', description: '', amount: 0, balance_after: 958_000, paid_by: 'joint', source: 'manual' },
+      ...baseCapital,
+      extra,
+    ]
+    const values: Valuation[] = [{ id: 'value', created_at: '', date: '2024-01-01', value: 2_000_000, note: '', is_purchase: true }]
+    expect(equityTimeline([loan], ledger, values, settings).at(-1)).toMatchObject({
+      balance: 950_000, equity: 1_050_000, a_equity: 529_000, b_equity: 521_000,
+    })
   })
 })
 

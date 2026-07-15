@@ -449,8 +449,11 @@ export function resolvePartBalance(part: LoanPart, payments: Payment[], asOf?: s
   const originalDate = validLedgerDate(part?.original_date) ? part.original_date!
     : validLedgerDate(part?.start_date) ? part.start_date : ''
 
+  // Forecast rows are projections, not observed transactions. They must never
+  // become a Saldo anchor or move current/historical ownership figures.
   const mine = (payments || []).filter(row =>
-    row?.loan_part_id === part?.id && validLedgerDate(row.date) && (!asOf || row.date <= asOf))
+    row?.loan_part_id === part?.id && row.source !== 'predicted' &&
+    validLedgerDate(row.date) && (!asOf || row.date <= asOf))
   const saldos = mine.filter(row => {
     if (row.balance_after == null) return false
     const balance = Number(row.balance_after)
@@ -502,7 +505,7 @@ function partOriginal(part: LoanPart, payments: Payment[]): number {
   // start_balance, then to the loan-row / earliest-Saldo derivation.
   if (Number(part?.original_balance) > 0) return r2(Number(part.original_balance))
   if (Number(part?.start_balance) > 0) return r2(Number(part.start_balance))
-  const mine = payments.filter(p => p?.loan_part_id === part?.id)
+  const mine = payments.filter(p => p?.loan_part_id === part?.id && p.source !== 'predicted')
   const loans = mine.filter(p => p.kind === 'loan')
   if (loans.length) return r2(Math.max(...loans.map(p => Number(p.amount) || 0)))
   const wb = mine.filter(p => p.balance_after != null)
@@ -589,14 +592,37 @@ export function derivedDeposit(price: number, parts: LoanPart[], payments: Payme
   const orig = (parts || []).filter(p => p && !p.archived).reduce((s, p) => s + partOriginal(p, payments), 0)
   return r2(price - orig)
 }
-// Per-owner split of cost-basis equity, using the funded percentages from
-// contributionSplit (deposit contributions + amortering by paid_by) applied to
-// the cost-basis total, so the two halves always sum to the headline.
+export interface OwnerCapitalSplit { a: number; b: number; a_pct: number; b_pct: number }
+
+/**
+ * Direct capital accounts.
+ *
+ * Attributed payments remain with the person who funded them. Any equity for
+ * which the ledger has no attributable source (legacy opening equity, joint
+ * value growth, or an incomplete history) follows the configured ownership
+ * target. A new personal amortering therefore adds to that owner without
+ * redistributing capital already earned by the other owner.
+ */
+function directCapitalSplit(totalEquity: number, payments: Payment[], contributions: Contribution[], s: Partial<MortgageSettings>): OwnerCapitalSplit {
+  const known = contributionSplit(payments, contributions, s)
+  const target = ownerPercents(s)
+  if (!totalEquity) return { a: 0, b: 0, a_pct: target.a, b_pct: target.b }
+  const residual = r2(totalEquity - known.total)
+  const a = r2(known.a + residual * target.a / 100)
+  const b = r2(totalEquity - a)
+  return {
+    a, b,
+    a_pct: totalEquity ? r2(a / totalEquity * 100) : target.a,
+    b_pct: totalEquity ? r2(b / totalEquity * 100) : target.b,
+  }
+}
+
 export function costBasisSplit(price: number, balance: number, payments: Payment[], contributions: Contribution[], s: Partial<MortgageSettings>): { a: number; b: number; a_pct: number; b_pct: number } {
-  const eq = costBasisEquity(price, balance)
-  const cs = contributionSplit(payments, contributions, s)
-  const a = r2(eq * (cs.a_pct || 50) / 100)
-  return { a, b: r2(eq - a), a_pct: cs.a_pct, b_pct: cs.b_pct }
+  return directCapitalSplit(costBasisEquity(price, balance), payments, contributions, s)
+}
+
+export function marketEquitySplit(value: number, balance: number, payments: Payment[], contributions: Contribution[], s: Partial<MortgageSettings>): OwnerCapitalSplit {
+  return directCapitalSplit(equity(value, balance), payments, contributions, s)
 }
 // Payments flagged as insatser (extra amorteringar) — for the Insatser card.
 export function insatsPayments(payments: Payment[]): Payment[] {
@@ -650,7 +676,7 @@ function mRange(parts: LoanPart[], payments: Payment[]): string[] {
       const date = p?.original_date || p?.start_date
       return validLedgerDate(date) ? monthKey(date) : ''
     }),
-    ...payments.map(p => validLedgerDate(p?.date) ? monthKey(p.date) : ''),
+    ...payments.map(p => p?.source !== 'predicted' && validLedgerDate(p?.date) ? monthKey(p.date) : ''),
   ].filter(Boolean).sort() as string[]
   return keys.length ? enumMonths(keys[0], keys[keys.length - 1]) : []
 }
@@ -675,16 +701,26 @@ export interface ETEntry {
 }
 
 export function equityTimeline(
-  parts: LoanPart[], payments: Payment[], valuations: Valuation[], s: Partial<MortgageSettings>
+  parts: LoanPart[], payments: Payment[], valuations: Valuation[], s: Partial<MortgageSettings>, contributions: Contribution[] = []
 ): ETEntry[] {
-  const pct = clamp(s.my_ownership_pct ?? 50), me = s.i_am === 'b' ? 'b' : 'a'
   return balanceTimeline(parts, payments).map(row => {
-    const value = propertyValue(valuations, row.month + '-31')
-    const eq = r2(value - row.balance), mine = r2(eq * pct / 100), partner = r2(eq - mine)
+    const monthEnd = row.month + '-31'
+    const value = propertyValue(valuations, monthEnd)
+    const eq = r2(value - row.balance)
+    const split = marketEquitySplit(
+      value,
+      row.balance,
+      payments.filter(payment => payment.date <= monthEnd),
+      contributions.filter(contribution => contribution.date <= monthEnd),
+      s,
+    )
     return {
       month: row.month, label: row.label, value, balance: row.balance, bank: row.balance,
-      equity: eq, my_equity: mine,
-      a_equity: me === 'a' ? mine : partner, b_equity: me === 'a' ? partner : mine, partner_equity: partner,
+      equity: eq,
+      my_equity: s.i_am === 'b' ? split.b : split.a,
+      a_equity: split.a,
+      b_equity: split.b,
+      partner_equity: s.i_am === 'b' ? split.a : split.b,
     }
   })
 }
@@ -1745,6 +1781,7 @@ export function contributionSplit(payments: Payment[], contributions: Contributi
     tot[normPaidBy(c.owner)] += Number(c.amount) || 0
   }
   for (const p of payments || []) {
+    if (p?.source === 'predicted') continue
     if (p?.kind !== 'amortization' && p?.kind !== 'down_payment') continue
     // An explicit per-payment allocation (a co-funded insats) wins over paid_by.
     if (p.paid_split && ((Number(p.paid_split.a) || 0) || (Number(p.paid_split.b) || 0))) {
@@ -1758,7 +1795,7 @@ export function contributionSplit(payments: Payment[], contributions: Contributi
   // inferred principal therefore enters the joint bucket and follows the
   // configured ownership-target split. Explicit amortering above remains
   // attributable via paid_by/paid_split.
-  tot.joint += inferredPaymentPrincipal(payments).principal
+  tot.joint += inferredPaymentPrincipal((payments || []).filter(p => p?.source !== 'predicted')).principal
   const pct = ownerPercents(s), aJ = r2(tot.joint * (pct.a || 50) / 100)
   const aT = r2(tot.a + aJ), bT = r2(tot.b + (tot.joint - aJ)), sum = r2(aT + bT)
   return { a: aT, b: bT, joint: r2(tot.joint), total: sum, a_pct: sum > 0 ? r2(aT / sum * 100) : (pct.a || 50), b_pct: sum > 0 ? r2(bT / sum * 100) : (pct.b || 50) }

@@ -47,6 +47,11 @@ function renderBolanekoll() {
 // benign empty result. Individual tests override the one write they care about.
 beforeEach(() => {
   vi.stubGlobal('confirm', vi.fn(() => true))
+  vi.stubGlobal('ResizeObserver', class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  })
   vi.mocked(Store.cachedSnapshot).mockReturnValue({
     version: 1,
     banks: [], mortgages: [],
@@ -194,9 +199,11 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     const type = screen.getByLabelText('Typ')
     await user.selectOptions(type, 'down_payment')
     expect(screen.queryByLabelText('Lånedel')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Saldo efteråt (valfritt)')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Betalad av')).toBeInTheDocument()
     await user.selectOptions(type, 'extra_amortization')
     expect(screen.getByLabelText('Lånedel')).toBeInTheDocument()
+    expect(screen.getByLabelText('Saldo efteråt (valfritt)')).toBeInTheDocument()
     expect(screen.getByLabelText('Betalad av')).toBeInTheDocument()
   })
 
@@ -233,7 +240,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     const insats = {
       id: 'insats1', created_at: '2026-02-01', loan_part_id: 'p1', date: '2026-02-01',
       kind: 'amortization' as const, description: 'Extra insättning från banken', amount: 20_000,
-      balance_after: null, paid_by: 'joint' as const, paid_split: { a: 12_000, b: 8_000 }, source: 'import', is_insats: true,
+      balance_after: 980_000, paid_by: 'joint' as const, paid_split: { a: 12_000, b: 8_000 }, source: 'import', is_insats: true,
     }
     vi.mocked(Store.cachedSnapshot).mockReturnValue({
       version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [insats], valuations: [],
@@ -248,12 +255,13 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     await user.click(await screen.findByRole('button', { name: 'Redigera i Betalningar' }))
     expect(screen.getByLabelText('Alex · fördelning')).toHaveValue('12000')
     expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('8000')
+    expect(screen.getByLabelText('Saldo efteråt (valfritt)')).toHaveValue('980000')
     await user.click(screen.getByRole('button', { name: 'Spara' }))
 
     expect(await screen.findByText('Payment saved.')).toBeInTheDocument()
     expect(Store.updatePayment).toHaveBeenCalledWith('insats1', expect.objectContaining({
       kind: 'amortization', is_insats: true, paid_by: 'joint', paid_split: { a: 12000, b: 8000 },
-      description: 'Extra insättning från banken', source: 'import',
+      description: 'Extra insättning från banken', source: 'import', balance_after: 980000,
     }))
   })
 
@@ -328,5 +336,41 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     expect(depositLedgerRow).not.toHaveTextContent('extra amortering')
     expect(extraLedgerRow).toHaveTextContent('extra amortering')
     expect(document.querySelector('#betalningar')!.parentElement).toHaveTextContent(/5\s*000 kr/)
+  })
+
+  it('adds a personal extra amortering to debt, total equity, and only that owner capital account', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 958_000, original_balance: 958_000, start_date: '2026-01-01', archived: false,
+    }
+    const base = { created_at: '2026-01-01', description: '', source: 'manual' }
+    const payments = [
+      { ...base, id: 'saldo', loan_part_id: 'p1', date: '2026-01-31', kind: 'payment' as const, amount: 0, balance_after: 958_000, paid_by: 'joint' as const, is_insats: false },
+      { ...base, id: 'deposit-a', loan_part_id: null, date: '2026-01-01', kind: 'down_payment' as const, amount: 521_000, balance_after: null, paid_by: 'a' as const, is_insats: true },
+      { ...base, id: 'deposit-b', loan_part_id: null, date: '2026-01-01', kind: 'down_payment' as const, amount: 521_000, balance_after: null, paid_by: 'b' as const, is_insats: true },
+      { ...base, id: 'extra-a', loan_part_id: 'p1', date: '2026-02-01', kind: 'amortization' as const, amount: 8_000, balance_after: null, paid_by: 'a' as const, is_insats: true },
+    ]
+    const valuations = [
+      { id: 'purchase', created_at: '2026-01-01', date: '2026-01-01', value: 2_000_000, note: '', is_purchase: true },
+      { id: 'current', created_at: '2026-02-01', date: '2026-02-01', value: 2_000_000, note: '', is_purchase: false },
+    ]
+    const tracked = { ...defaultSettings(), track_contributions: true }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 5, banks: [], mortgages: [], loan_parts: [part], payments, valuations,
+      rate_periods: [], contributions: [], settings: tracked,
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listPayments).mockResolvedValue(payments)
+    vi.mocked(Store.listValuations).mockResolvedValue(valuations)
+    vi.mocked(Store.getSettings).mockResolvedValue(tracked)
+    renderBolanekoll()
+
+    await screen.findByText('Eget kapital · Marknadsvärde minus skuld')
+    expect(document.querySelector('[data-current-debt]')).toHaveAttribute('data-current-debt', '950000')
+    expect(document.querySelector('[data-market-equity]')).toHaveAttribute('data-market-equity', '1050000')
+    expect(document.querySelector('[data-owner-market-capital="a"]')).toHaveTextContent('529000')
+    expect(document.querySelector('[data-owner-market-capital="b"]')).toHaveTextContent('521000')
+    expect(document.querySelector('[data-owner-cost-capital="a"]')).toHaveTextContent('529000')
+    expect(document.querySelector('[data-owner-cost-capital="b"]')).toHaveTextContent('521000')
   })
 })
