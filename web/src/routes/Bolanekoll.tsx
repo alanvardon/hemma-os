@@ -526,7 +526,7 @@ export default function Bolanekoll() {
     if (drifted.length) {
       const lines = drifted.map(m =>
         (partNameById(m.predicted.loan_part_id) + ': förväntad ' + fmtMoney(m.recon.expected) + ' → faktisk ' + fmtMoney(m.recon.actual) + ' (drift ' + fmtMoney(Math.abs(m.recon.drift)) + ')'))
-      if (!confirm('Räntan avviker från prognosen — ränteändring, avgift eller extra amortering?\n\n' + lines.join('\n') + '\n\nErsätt de förväntade raderna med de importerade beloppen?')) return
+      if (!confirm('Räntan avviker från prognosen — ränteändring, avgift eller extra amortering?\n\n' + lines.join('\n') + '\n\nErsätt de godkända prognosraderna med de importerade beloppen?')) return
     }
     const predictedIds = [...new Set(matches.map(m => m.predicted.id))]
     try {
@@ -634,6 +634,13 @@ export default function Bolanekoll() {
   function toggleExpandPay(id: string) {
     setExpandedPays(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
   }
+
+  const openPayments = useCallback(() => {
+    const target = document.getElementById('betalningar')
+    if (!target) return
+    target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
+    target.focus({ preventScroll: true })
+  }, [reduceMotion])
   async function handleDeleteVal(id: string) {
     try { await Store.removeValuation(id); await refresh(); flashSaved(); setValDlg({ open: false, id: null }); showToast('Valuation deleted.') }
     catch (err) { saveErr(err) }
@@ -660,30 +667,29 @@ export default function Bolanekoll() {
     catch (err) { saveErr(err) }
   }
 
-  // Confirm-to-log (plan 23, decision 5): one click logs ONE expected
-  // transaction (a ränta, the bank's betalning, or a legacy amortering line)
-  // as a source:'predicted' row — the "stop typing" deliverable. The next
-  // real import replaces it (or prompts on drift). Rows only ever enter the
-  // ledger on this explicit click, never on visit.
+  // Accept-to-ledger: one click promotes an expected transaction into
+  // Betalningar. The retained source:'predicted' marker supports later drift
+  // checks/import reconciliation; financially the accepted row and its Saldo
+  // are authoritative immediately. Rows only enter on this explicit click.
   async function handleLogPredicted(entries: Array<{ charge: ExpectedCharge; kind: PendingKind; amount: number }>) {
     const toLog = entries.filter(e => e.amount > 0 && !hasChargeInMonth(payments, e.charge.loan_part_id, e.charge.next_date, e.kind))
     if (!toLog.length) return
     try {
       await Store.addPayments(toLog.map(e => makePayment({
         loan_part_id: e.charge.loan_part_id, date: e.charge.next_date, kind: e.kind,
-        description: 'Förväntad avi', amount: e.amount,
+        description: 'Godkänd prognos', amount: e.amount,
         // Post-charge saldo: the month's amortering (if any) has landed by statement time.
         balance_after: e.charge.balance - e.charge.amortization,
         source: 'predicted',
       })))
       await refresh(); flashSaved()
       showToast(toLog.length === 1
-        ? 'Förväntad rad loggad — nästa import ersätter den med bankens rad.'
-        : toLog.length + ' förväntade rader loggade — nästa import ersätter dem.')
+        ? 'Rad godkänd och tillagd i Betalningar.'
+        : toLog.length + ' rader godkända och tillagda i Betalningar.')
     } catch (err) { saveErr(err) }
   }
 
-  // Rewrite each stale förväntad row to the current forecast's amount and
+  // Rewrite each stale accepted forecast row to the current forecast's amount and
   // post-charge saldo. Explicit click only — same principle as logging.
   async function handleRefreshPredicted() {
     if (!staleRows.length) return
@@ -692,8 +698,8 @@ export default function Bolanekoll() {
         await Store.updatePayment(s.payment.id, { amount: s.amount, balance_after: s.balance_after })
       await refresh(); flashSaved()
       showToast(staleRows.length === 1
-        ? '1 förväntad rad uppdaterad till aktuell prognos.'
-        : staleRows.length + ' förväntade rader uppdaterade till aktuell prognos.')
+        ? '1 godkänd prognosrad uppdaterad till aktuell prognos.'
+        : staleRows.length + ' godkända prognosrader uppdaterade till aktuell prognos.')
     } catch (err) { saveErr(err) }
   }
 
@@ -1197,7 +1203,7 @@ export default function Bolanekoll() {
                             {t.specText || kindLabel(t.kind)}
                             {t.duplicate && <span className="row-flag">possible duplicate</span>}
                             {t.recon && (t.recon.ok
-                              ? <span className="row-flag row-flag-match">✓ {t.recon.predicted ? 'ersätter förväntad avi' : 'matchar prognosen'}</span>
+                              ? <span className="row-flag row-flag-match">✓ {t.recon.predicted ? 'ersätter godkänd prognosrad' : 'matchar prognosen'}</span>
                               : <span className="row-flag row-flag-drift">⚠ drift {fmtMoney(Math.abs(t.recon.drift))}{t.recon.predicted ? ' (förväntad ' + fmtMoney(t.amount - t.recon.drift) + ')' : ''}</span>)}
                             {auto && t.hasAmount && <span className={'row-flag' + (t.partMatched ? ' row-flag-refund' : '')}>{(t.partMatched ? '→ ' : 'no loan # → ') + partNameById(t.loan_part_id)}</span>}
                           </td>
@@ -1437,11 +1443,11 @@ export default function Bolanekoll() {
           {staleRows.length > 0 && (
             <div className="reconcile-banner">
               {staleRows.length === 1
-                ? '1 förväntad rad i liggaren beräknades med en äldre prognosmodell och stämmer inte längre med aktuell prognos.'
-                : staleRows.length + ' förväntade rader i liggaren beräknades med en äldre prognosmodell och stämmer inte längre med aktuell prognos.'}
+                ? '1 godkänd prognosrad beräknades med en äldre modell och stämmer inte längre med aktuell prognos.'
+                : staleRows.length + ' godkända prognosrader beräknades med en äldre modell och stämmer inte längre med aktuell prognos.'}
               {' '}
               <button type="button" className="btn btn-ghost" onClick={handleRefreshPredicted}>
-                Uppdatera förväntade rader
+                Uppdatera godkända rader
               </button>
             </div>
           )}
@@ -1472,7 +1478,7 @@ export default function Bolanekoll() {
                 </div>
                 {shownPending.length > 1 && (
                   <button type="button" className="btn btn-ghost prognos-log-btn prognos-log-all" onClick={() => handleLogPredicted(shownPending)}>
-                    Logga alla förväntade rader
+                    Godkänn alla rader
                   </button>
                 )}
               </div>
@@ -1517,7 +1523,7 @@ export default function Bolanekoll() {
                             </td>
                             <td className="col-act">
                               <button type="button" className="btn btn-ghost prognos-log-btn" onClick={() => handleLogPredicted([e])}>
-                                Logga förväntad rad
+                                Godkänn rad
                               </button>
                             </td>
                           </tr>
@@ -1567,7 +1573,7 @@ export default function Bolanekoll() {
               )}
             </div>
           )}
-          <div className="card-head" id="betalningar">
+          <div className="card-head" id="betalningar" tabIndex={-1}>
             <h2>Betalningar <span className="card-en">· Payments</span></h2>
             <span className="count-pill">{filteredPayments.length}</span>
             <div className="card-actions">
@@ -1588,7 +1594,7 @@ export default function Bolanekoll() {
               </DropdownMenu.Root>
             </div>
           </div>
-          <p className="contrib-note">Saldo är utgångspunkten för lånedelen. Senare betalningar och amorteringar ändrar skulden med sitt belopp. För en amortering samma dag: ange Saldo efteråt om den inte redan ingår i bankens Saldo.</p>
+          <p className="contrib-note">Saldo är utgångspunkten för lånedelen. Senare betalningar och amorteringar ändrar skulden med sitt belopp. En separat Extra amortering minskar alltid skulden, även om den har samma datum som senaste Saldo.</p>
           <motion.div key={paymentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}>
             {!filteredPayments.length ? (
@@ -1624,7 +1630,7 @@ export default function Bolanekoll() {
                             {p.date || '—'}
                           </td>
                           <td className="col-part">{partNameById(p.loan_part_id)}</td>
-                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.source === 'predicted' && <span className="row-flag row-flag-predicted">förväntad</span>}{p.kind === 'amortization' && p.is_insats && <span className="row-flag row-flag-insats">extra amortering</span>}{estimatedPaymentIds.has(p.id) && <span className="row-flag row-flag-estimated">ränta saknas · uppskattat</span>}</td>
+                          <td className="col-kind"><span className={'kind-tag kind-' + (p.kind || 'other')}>{kindLabel(p.kind)}</span>{p.source === 'predicted' && <span className="row-flag row-flag-predicted">godkänd prognos</span>}{p.kind === 'amortization' && p.is_insats && <span className="row-flag row-flag-insats">extra amortering</span>}{estimatedPaymentIds.has(p.id) && <span className="row-flag row-flag-estimated">ränta saknas · uppskattat</span>}</td>
                           <td className="num col-amount">{fmtMoney(p.amount)}</td>
                           <td className="num col-balance">{p.balance_after != null ? fmtMoney(p.balance_after) : '—'}</td>
                           <td className="col-act">
@@ -1687,7 +1693,7 @@ export default function Bolanekoll() {
           <div className="card-head">
             <h2>Kontantinsatser</h2>
             <span className="count-pill">{downPayments.length}</span>
-            <div className="card-actions"><a className="btn btn-ghost" href="#betalningar">Öppna Betalningar</a></div>
+            <div className="card-actions"><button type="button" className="btn btn-ghost" onClick={openPayments}>Öppna Betalningar</button></div>
           </div>
           <p className="contrib-note">Källposter av typen Kontantinsats. Redigera eller ta bort dem i samma Betalningar-liggare.</p>
           {!downPayments.length ? <p className="empty">Inga kontantinsatser ännu.</p> : (
@@ -1712,7 +1718,7 @@ export default function Bolanekoll() {
           <div className="card-head">
             <h2>Extra amorteringar</h2>
             <span className="count-pill">{extraAmortizationPayments.length}</span>
-            <div className="card-actions"><a className="btn btn-ghost" href="#betalningar">Öppna Betalningar</a></div>
+            <div className="card-actions"><button type="button" className="btn btn-ghost" onClick={openPayments}>Öppna Betalningar</button></div>
           </div>
           <p className="contrib-note">Källposter av typen Extra amortering. Vanliga amorteringar visas bara i Betalningar.</p>
           {!extraAmortizationPayments.length ? <p className="empty">Inga extra amorteringar ännu.</p> : (

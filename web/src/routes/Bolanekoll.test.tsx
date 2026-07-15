@@ -52,6 +52,10 @@ beforeEach(() => {
     unobserve() {}
     disconnect() {}
   })
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: vi.fn(),
+  })
   vi.mocked(Store.cachedSnapshot).mockReturnValue({
     version: 1,
     banks: [], mortgages: [],
@@ -372,5 +376,66 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     expect(document.querySelector('[data-owner-market-capital="b"]')).toHaveTextContent('521000')
     expect(document.querySelector('[data-owner-cost-capital="a"]')).toHaveTextContent('529000')
     expect(document.querySelector('[data-owner-cost-capital="b"]')).toHaveTextContent('521000')
+  })
+
+  it('updates every debt-derived hero value from predicted principal plus an extra amortering and opens Betalningar', async () => {
+    const part = {
+      id: 'p1', created_at: '2024-01-01', label: 'Bolån', loan_number: '',
+      start_balance: 4_800_000, original_balance: 4_800_000,
+      start_date: '2024-01-01', original_date: '2024-01-01', archived: false,
+    }
+    const base = { created_at: '2026-07-15T08:00:00Z', description: '', source: 'manual' }
+    const payments = [
+      {
+        ...base, id: 'saldo', loan_part_id: 'p1', date: '2026-07-15',
+        kind: 'payment' as const, amount: 0, balance_after: 4_616_000,
+        paid_by: 'joint' as const, is_insats: false,
+      },
+      {
+        ...base, id: 'extra', created_at: '2026-07-15T09:00:00Z', loan_part_id: 'p1', date: '2026-07-15',
+        kind: 'amortization' as const, amount: 8_000, balance_after: null,
+        paid_by: 'a' as const, is_insats: true,
+      },
+      {
+        ...base, id: 'predicted-interest', loan_part_id: 'p1', date: '2026-07-31',
+        kind: 'interest' as const, amount: 3_438, balance_after: 4_608_000,
+        paid_by: 'joint' as const, source: 'predicted', is_insats: false,
+      },
+      {
+        ...base, id: 'predicted-payment', loan_part_id: 'p1', date: '2026-07-31',
+        kind: 'payment' as const, amount: 11_438, balance_after: 4_608_000,
+        paid_by: 'joint' as const, source: 'predicted', is_insats: false,
+      },
+    ]
+    const valuations = [
+      {
+        id: 'purchase', created_at: '2024-01-01', date: '2024-01-01',
+        value: 5_650_000, note: '', is_purchase: true,
+      },
+    ]
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 5, banks: [], mortgages: [], loan_parts: [part], payments, valuations,
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listPayments).mockResolvedValue(payments)
+    vi.mocked(Store.listValuations).mockResolvedValue(valuations)
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await screen.findByText('Eget kapital · Marknadsvärde minus skuld')
+    expect(document.querySelector('[data-current-debt]')).toHaveAttribute('data-current-debt', '4600000')
+    expect(document.querySelector('[data-market-equity]')).toHaveAttribute('data-market-equity', '1050000')
+    // NumberFlow is mocked as its raw numeric value in this component suite;
+    // formatter/locale behaviour is covered by AnimatedNumber's own tests.
+    expect(screen.getByText(/Remaining debt/).parentElement).toHaveTextContent('4600000')
+    expect(screen.getByText(/Loan-to-value/).parentElement).toHaveTextContent('81.42')
+    expect(screen.getByText('Insatt kapital · Cost-basis equity').parentElement).toHaveTextContent('1050000')
+    expect(screen.getByText(/of the köpeskilling/)).toHaveTextContent('18.58')
+
+    const openPayments = screen.getAllByRole('button', { name: 'Öppna Betalningar' })
+    await user.click(openPayments[0])
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled()
+    expect(document.activeElement).toBe(document.getElementById('betalningar'))
   })
 })
