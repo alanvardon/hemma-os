@@ -436,7 +436,9 @@ function inferredPaymentPrincipal(payments: Payment[]): InferredPaymentPrincipal
  * Resolve one loan part from a single chronological principal ledger.
  *
  * Saldo is a post-transaction snapshot: the latest valid one at/before `asOf`
- * becomes the anchor, and only strictly later rows may change that balance.
+ * becomes the anchor. Later rows change that balance. A separately recorded
+ * extra amortering is always additive, including on the anchor date; an extra
+ * amortering carrying its own Saldo is already represented by that snapshot.
  * Without Saldo, the explicit origination/start balance is the anchor.
  */
 export function resolvePartBalance(part: LoanPart, payments: Payment[], asOf?: string): BalanceResolution {
@@ -473,7 +475,9 @@ export function resolvePartBalance(part: LoanPart, payments: Payment[], asOf?: s
     conflictingSaldo = new Set(balances).size > 1
   }
 
-  const later = mine.filter(row => row.date > anchor.date)
+  const later = mine.filter(row => row.date > anchor.date || (
+    row.date === anchor.date && row.kind === 'amortization' && row.is_insats === true && row.balance_after == null
+  ))
   const explicitPrincipal = later.reduce((sum, row) => {
     if (row.kind !== 'amortization') return sum
     return sum + (positiveLedgerAmount(row.amount) ?? 0)
