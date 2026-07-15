@@ -634,6 +634,13 @@ export default function Bolanekoll() {
   function toggleExpandPay(id: string) {
     setExpandedPays(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
   }
+
+  const openPayments = useCallback(() => {
+    const target = document.getElementById('betalningar')
+    if (!target) return
+    target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
+    target.focus({ preventScroll: true })
+  }, [reduceMotion])
   async function handleDeleteVal(id: string) {
     try { await Store.removeValuation(id); await refresh(); flashSaved(); setValDlg({ open: false, id: null }); showToast('Valuation deleted.') }
     catch (err) { saveErr(err) }
@@ -1567,7 +1574,7 @@ export default function Bolanekoll() {
               )}
             </div>
           )}
-          <div className="card-head" id="betalningar">
+          <div className="card-head" id="betalningar" tabIndex={-1}>
             <h2>Betalningar <span className="card-en">· Payments</span></h2>
             <span className="count-pill">{filteredPayments.length}</span>
             <div className="card-actions">
@@ -1588,7 +1595,7 @@ export default function Bolanekoll() {
               </DropdownMenu.Root>
             </div>
           </div>
-          <p className="contrib-note">Saldo är utgångspunkten för lånedelen. Senare betalningar och amorteringar ändrar skulden med sitt belopp. För en amortering samma dag: ange Saldo efteråt om den inte redan ingår i bankens Saldo.</p>
+          <p className="contrib-note">Saldo är utgångspunkten för lånedelen. Senare betalningar och amorteringar ändrar skulden med sitt belopp. En separat Extra amortering minskar alltid skulden, även om den har samma datum som senaste Saldo.</p>
           <motion.div key={paymentFilter} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
             transition={{ duration: reduceMotion ? 0 : 0.13, ease: [0.22, 1, 0.36, 1] }}>
             {!filteredPayments.length ? (
@@ -1687,7 +1694,7 @@ export default function Bolanekoll() {
           <div className="card-head">
             <h2>Kontantinsatser</h2>
             <span className="count-pill">{downPayments.length}</span>
-            <div className="card-actions"><a className="btn btn-ghost" href="#betalningar">Öppna Betalningar</a></div>
+            <div className="card-actions"><button type="button" className="btn btn-ghost" onClick={openPayments}>Öppna Betalningar</button></div>
           </div>
           <p className="contrib-note">Källposter av typen Kontantinsats. Redigera eller ta bort dem i samma Betalningar-liggare.</p>
           {!downPayments.length ? <p className="empty">Inga kontantinsatser ännu.</p> : (
@@ -1712,7 +1719,7 @@ export default function Bolanekoll() {
           <div className="card-head">
             <h2>Extra amorteringar</h2>
             <span className="count-pill">{extraAmortizationPayments.length}</span>
-            <div className="card-actions"><a className="btn btn-ghost" href="#betalningar">Öppna Betalningar</a></div>
+            <div className="card-actions"><button type="button" className="btn btn-ghost" onClick={openPayments}>Öppna Betalningar</button></div>
           </div>
           <p className="contrib-note">Källposter av typen Extra amortering. Vanliga amorteringar visas bara i Betalningar.</p>
           {!extraAmortizationPayments.length ? <p className="empty">Inga extra amorteringar ännu.</p> : (

@@ -72,6 +72,23 @@ describe('resolvePartBalance — chronological principal ledger', () => {
     expect(resolvePartBalance(part(), rows)).toMatchObject({ balance: 992_000 })
   })
 
+  it('applies a separate extra amortering even when it shares the latest Saldo date', () => {
+    const loan = part({ start_balance: 4_800_000, original_balance: 4_800_000 })
+    const rows = [
+      saldo('2026-07-15', 4_624_000),
+      payment({
+        id: 'manual-extra', date: '2026-07-15', amount: 8_000,
+        balance_after: null, paid_by: 'a', source: 'manual', is_insats: true,
+      }),
+    ]
+
+    expect(resolvePartBalance(loan, rows)).toMatchObject({
+      balance: 4_616_000,
+      principalPaid: 8_000,
+      anchor: { date: '2026-07-15', balance: 4_624_000, source: 'saldo' },
+    })
+  })
+
   it('uses a full unpaired Betalning provisionally and reports missing interest', () => {
     const rows = [saldo('2024-01-31', 1_000_000), payment({ kind: 'payment', amount: 6_000 })]
     expect(resolvePartBalance(part(), rows)).toMatchObject({
