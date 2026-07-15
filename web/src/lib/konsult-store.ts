@@ -20,7 +20,9 @@ function _merge(saved: unknown): KonsultInputs | null {
   const d = defaultInputs()
   for (const k of Object.keys(d) as (keyof KonsultInputs)[]) {
     const v = s[k]
-    if (typeof v === 'number' && isFinite(v)) d[k] = v
+    if (v === undefined) continue // absent legacy field → current default
+    if (typeof v !== 'number' || !Number.isFinite(v)) return null
+    d[k] = v
   }
   return d
 }

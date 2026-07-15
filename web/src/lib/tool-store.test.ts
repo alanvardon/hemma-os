@@ -138,6 +138,20 @@ describe('createToolStateStore', () => {
     expect(syncCoordinator.readScoped('flag')).toBe('1')
   })
 
+  it('keeps the flag unset and performs no mutation for invalid assigned legacy data, then retries corrected data', async () => {
+    syncCoordinator.writeScoped('legacy-import-complete', '1')
+    syncCoordinator.writeScoped('legacy', '{invalid')
+    const store = makeStore()
+    await store.load()
+    expect(state.row).toBeNull()
+    expect(syncCoordinator.readScoped('flag')).toBeNull()
+
+    syncCoordinator.writeScoped('legacy', JSON.stringify({ a: 3, b: 4 }))
+    await store.load()
+    expect(state.row).toMatchObject({ tool: 't', data: { a: 3, b: 4 } })
+    expect(syncCoordinator.readScoped('flag')).toBe('1')
+  })
+
   it('prefers an explicitly assigned newer cache over an older backup blob', async () => {
     syncCoordinator.writeScoped('legacy-import-complete', '1')
     syncCoordinator.writeScoped('legacy', JSON.stringify({ a: 1, b: 1 }))

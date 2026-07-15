@@ -20,7 +20,9 @@ function _merge(saved: unknown): LonevaxlingInputs | null {
   const d = defaultInputs()
   for (const k of Object.keys(d) as Array<keyof LonevaxlingInputs>) {
     const v = s[k]
-    if (typeof v === 'number' && isFinite(v)) (d as unknown as Record<string, number>)[k] = v
+    if (v === undefined) continue // absent legacy field → current default
+    if (typeof v !== 'number' || !Number.isFinite(v)) return null
+    ;(d as unknown as Record<string, number>)[k] = v
   }
   return d
 }

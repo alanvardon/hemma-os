@@ -21,12 +21,19 @@ function _merge(saved: unknown): StudentLoanInputs | null {
   const s = saved as Record<string, unknown>
   const d = defaultStudentLoanInputs()
 
-  const num = (key: keyof StudentLoanInputs): number | undefined => {
+  const num = (key: keyof StudentLoanInputs): number | undefined | null => {
     const v = s[key]
-    return typeof v === 'number' && isFinite(v) ? v : undefined
+    if (v === undefined) return undefined // absent legacy field → current default
+    return typeof v === 'number' && Number.isFinite(v) ? v : null
   }
 
-  d.balance_gbp = num('balance_gbp') ?? d.balance_gbp
+  const required = (key: keyof StudentLoanInputs): number | null => num(key) ?? null
+  const numberKeys: (keyof StudentLoanInputs)[] = ['balance_gbp', 'interest_rate', 'rate_stress', 'first_due_year', 'current_year', 'income_sek', 'fx_sek_per_gbp', 'salary_growth_pct', 'se_threshold_gbp', 'opportunity_rate_pct']
+  if (numberKeys.some((key) => num(key) === null)
+    || (s.slc_monthly_gbp !== undefined && num('slc_monthly_gbp') === null)
+    || (s.hold_threshold_flat !== undefined && typeof s.hold_threshold_flat !== 'boolean')) return null
+
+  d.balance_gbp = required('balance_gbp') ?? d.balance_gbp
   d.interest_rate = num('interest_rate') ?? d.interest_rate
   d.rate_stress = num('rate_stress') ?? d.rate_stress
   d.first_due_year = num('first_due_year') ?? d.first_due_year
@@ -39,7 +46,7 @@ function _merge(saved: unknown): StudentLoanInputs | null {
   if (typeof s.hold_threshold_flat === 'boolean') d.hold_threshold_flat = s.hold_threshold_flat
   // Optional: only set when the saved blob has a genuine finite number —
   // otherwise stays undefined (the "no SLC letter figure entered" state).
-  d.slc_monthly_gbp = num('slc_monthly_gbp')
+  d.slc_monthly_gbp = num('slc_monthly_gbp') ?? undefined
 
   return d
 }

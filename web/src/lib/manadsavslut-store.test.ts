@@ -48,11 +48,14 @@ const itemDraft = (over: Partial<Record<string, unknown>> = {}) => ({
   fronted_by: 'a', owed_by: 'b', paid: false, pending: false, payment_id: null, note: '',
   personal_items: [], personal_a: 0, personal_b: 0, source: '', ...over,
 })
+const CREATED = '2026-07-15T10:00:00.000Z'
+const itemRow = (id: string, over: Partial<Record<string, unknown>> = {}) => ({ id, created_at: CREATED, ...itemDraft(), ...over })
+const paymentRow = (id: string, over: Partial<Record<string, unknown>> = {}) => ({ id, created_at: CREATED, item_ids: [], from_person: null, to_person: null, amount: 0, period_label: '', note: '', ...over })
 
 describe('read path', () => {
   it('cloud ok: listItems writes through to the cache', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mock().tables.monthend_items = [{ id: 'i1', created_at: 't1', ...itemDraft() }]
+    mock().tables.monthend_items = [itemRow('i1')]
     const rows = await store.listItems()
     expect(rows).toHaveLength(1)
     expect((cache().items as unknown[])).toHaveLength(1)
@@ -60,10 +63,17 @@ describe('read path', () => {
 
   it('cloud error: listItems falls back to the cache', async () => {
     mem.set(IMPORT_FLAG, '1')
-    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [{ id: 'cached', description: 'X', personal_items: [] }], payments: [], settings: {} }))
+    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [itemRow('cached', { description: 'X' })], payments: [], settings: {} }))
     mock().control.failing.add('monthend_items')
     const rows = await store.listItems()
     expect(rows.map((r) => r.id)).toEqual(['cached'])
+  })
+
+  it('cloud read salvages a valid item and excludes its malformed sibling', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.monthend_items = [itemRow('valid'), itemRow('bad', { enter_amount: 'not-a-number' })]
+    expect((await store.listItems()).map((row) => row.id)).toEqual(['valid'])
+    expect((cache().items as { id: string }[]).map((row) => row.id)).toEqual(['valid'])
   })
 })
 
@@ -94,9 +104,9 @@ describe('write path', () => {
   // handler that records the args and returns success — cache patching is what
   // these assert on (the DB transaction is exercised by the migration itself).
   it('settle: one RPC records the payment and flips settled items to paid', async () => {
-    mock().tables.monthend_items = [{ id: 'i1', created_at: 't1', ...itemDraft() }]
+    mock().tables.monthend_items = [itemRow('i1')]
     // Seed the cache so the post-success patch has the item to flip.
-    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [{ id: 'i1', paid: false, payment_id: null, personal_items: [] }], payments: [], settings: {} }))
+    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [itemRow('i1')], payments: [], settings: {} }))
     await store.listItems()
     let seen: Record<string, unknown> | null = null
     mock().control.rpcHandlers.sync_settle_items = (raw) => {
@@ -113,7 +123,7 @@ describe('write path', () => {
   })
 
   it('settle: RPC failure keeps the settlement locally dirty', async () => {
-    mock().tables.monthend_items = [{ id: 'i1', created_at: 't1', ...itemDraft() }]
+    mock().tables.monthend_items = [itemRow('i1')]
     mock().control.failing.add('sync_settle_items')
     await expect(store.settle({ item_ids: ['i1'], from_person: 'b', to_person: 'a', amount: 100, period_label: '2024-01', note: '' })).rejects.toBeTruthy()
     expect((cache().payments as unknown[] | undefined) || []).toHaveLength(1)
@@ -145,10 +155,10 @@ describe('write path', () => {
   })
 
   it('removePayment: one RPC un-settles the items and deletes the payment', async () => {
-    mock().tables.monthend_items = [{ id: 'i1', paid: true, payment_id: 'pay1', personal_items: [] }]
-    mock().tables.monthend_payments = [{ id: 'pay1', item_ids: ['i1'] }]
+    mock().tables.monthend_items = [itemRow('i1', { paid: true, payment_id: 'pay1' })]
+    mock().tables.monthend_payments = [paymentRow('pay1', { item_ids: ['i1'] })]
     // Seed the cache so the post-success patch has rows to mutate + count.
-    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [{ id: 'i1', paid: true, payment_id: 'pay1', personal_items: [] }], payments: [{ id: 'pay1', item_ids: ['i1'] }], settings: {} }))
+    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [itemRow('i1', { paid: true, payment_id: 'pay1' })], payments: [paymentRow('pay1', { item_ids: ['i1'] })], settings: {} }))
     await Promise.all([store.listItems(), store.listPayments()])
     let seenId: string | null = null
     mock().control.rpcHandlers.sync_unsettle_payment = (raw) => {
@@ -204,6 +214,25 @@ describe('one-time legacy import', () => {
     expect(mem.get(IMPORT_FLAG)).toBeUndefined()
   })
 
+  it('rejects numeric strings in personal_a and personal_b before normalization, then imports corrected assigned data', async () => {
+    const key = scoped(store.STORAGE_KEY)
+    const envelope = (personal: Record<string, unknown>) => JSON.stringify({ version: 1, items: [{ id: 'item-1', description: 'Legacy', date_purchased: '2020-01-01', enter_amount: 50, split: true, amount: 50, fronted_by: 'a', owed_by: 'b', paid: false, pending: false, payment_id: null, note: '', ...personal }], payments: [], settings: {} })
+    mem.set(key, envelope({ personal_a: '12' }))
+    await store.listItems()
+    expect(mock().tables.monthend_items || []).toHaveLength(0)
+    expect(mem.get(IMPORT_FLAG)).toBeUndefined()
+
+    mem.set(key, envelope({ personal_b: '5' }))
+    await store.listItems()
+    expect(mock().tables.monthend_items || []).toHaveLength(0)
+    expect(mem.get(IMPORT_FLAG)).toBeUndefined()
+
+    mem.set(key, envelope({ personal_a: 12, personal_b: 5 }))
+    await store.listItems()
+    expect(mock().tables.monthend_items.some((row) => row.id === 'item-1')).toBe(true)
+    expect(mem.get(IMPORT_FLAG)).toBe('1')
+  })
+
   it('flag already set: legacy data is not re-imported', async () => {
     mem.set(IMPORT_FLAG, '1')
     mem.set(scoped(store.STORAGE_KEY), JSON.stringify({
@@ -237,5 +266,12 @@ describe('store-specific: normalizeItem (personal-items migration)', () => {
     expect(out.personal_a).toBe(10)
     expect(out.personal_b).toBe(5)
     expect(store.normalizeItem(out)).toEqual(out) // idempotent
+  })
+})
+
+describe('import validation boundary', () => {
+  it('rejects a malformed backup before mutating Supabase', async () => {
+    await expect(store.importJSON(JSON.stringify({ version: 1, items: [{ id: 'bad', created_at: CREATED, date_purchased: '', description: '', enter_amount: '100' }], payments: [] }))).rejects.toThrow()
+    expect(mock().tables.monthend_items || []).toHaveLength(0)
   })
 })
