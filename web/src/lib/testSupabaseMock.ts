@@ -179,6 +179,26 @@ export function createSupabaseMock() {
       }
       if (conflict) data = { status: 'conflict', revisions: current }
       else {
+        // Plan 109a payment-provenance trigger parity (the two rules a client
+        // write can violate): a NEW partless down payment must carry a
+        // mortgage_id unless its id has the reserved legacy-contribution
+        // prefix, and an assigned down-payment mortgage_id cannot be cleared.
+        if (input.p_resource === 'mortgage_payments') {
+          for (const incoming of input.p_rows) {
+            if (incoming.kind !== 'down_payment') continue
+            const partless = incoming.loan_part_id == null || incoming.loan_part_id === ''
+            if (!partless) continue
+            const existing = rowsOf(input.p_resource).find((row) => row.id === incoming.id)
+            const clearedNull = 'mortgage_id' in incoming && incoming.mortgage_id == null
+            const violates = existing
+              ? existing.mortgage_id != null && clearedNull
+              : incoming.mortgage_id == null && !String(incoming.id).startsWith('legacy-contribution:')
+            if (violates) return Promise.resolve({
+              data: null,
+              error: { message: 'down payment requires a mortgage agreement', code: '22023' },
+            })
+          }
+        }
         const revisions: Record<string, number> = {}
         for (const incoming of input.p_rows) {
           const id = String(incoming.id)
@@ -274,6 +294,132 @@ export function createSupabaseMock() {
           revisions[`monthend_items:${String(row.id)}`] = revision
         }
         data = { status: 'applied', revisions }
+      }
+    } else if (name === 'sync_change_mortgage_bank') {
+      // Mirrors the plan-109a RPC: validation failures are SQL errors
+      // (errcode 22023), a revision mismatch is a data-level conflict, and the
+      // client-generated new-agreement id is the idempotence key — a replay
+      // that finds it already created returns the existing payload as success.
+      const input = args as {
+        p_operation_id: string; p_old_mortgage_id: string; p_expected_old_revision: number
+        p_new_mortgage: Row; p_new_parts: Row[]; p_effective_date: string
+      }
+      const sqlError = (message: string) => Promise.resolve({ data: null, error: { message, code: '22023' } })
+      const mortgages = rowsOf('mortgages')
+      const newM = input.p_new_mortgage as { id?: unknown; label?: unknown; bank_id?: unknown } | null
+      if (!newM || typeof newM !== 'object'
+        || typeof newM.id !== 'string' || !newM.id || newM.id === input.p_old_mortgage_id
+        || typeof newM.label !== 'string' || typeof newM.bank_id !== 'string' || !newM.bank_id
+        || Object.keys(newM).some((key) => !['id', 'label', 'bank_id'].includes(key))) {
+        return sqlError('invalid mortgage payload')
+      }
+      if (!Array.isArray(input.p_new_parts) || input.p_new_parts.some((part) =>
+        !part || typeof part !== 'object'
+        || typeof part.id !== 'string' || !part.id
+        || typeof part.label !== 'string'
+        || typeof part.balance !== 'number' || (part.balance as number) < 0
+        || ('planned_amortization' in part && part.planned_amortization !== null
+          && (typeof part.planned_amortization !== 'number' || (part.planned_amortization as number) < 0))
+        || Object.keys(part).some((key) => !['id', 'label', 'balance', 'planned_amortization'].includes(key)))) {
+        return sqlError('invalid loan part payload')
+      }
+      const partsPayload = input.p_new_parts.slice().sort((a, b) => String(a.id).localeCompare(String(b.id)))
+      if (new Set(partsPayload.map((part) => part.id)).size !== partsPayload.length) return sqlError('invalid loan part payload')
+      const respond = (created: Row, old: Row): void => {
+        const partsJson = rowsOf('mortgage_loan_parts')
+          .filter((row) => row.mortgage_id === newM.id)
+          .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+          .map((row) => ({ ...row }))
+        const revisions: Record<string, number | null> = {
+          [`mortgages:${String(old.id)}`]: Number(old.revision ?? 1),
+          [`mortgages:${String(created.id)}`]: Number(created.revision ?? 1),
+        }
+        for (const row of partsJson) revisions[`mortgage_loan_parts:${String(row.id)}`] = Number(row.revision ?? 1)
+        data = { status: 'applied', mortgage: { ...created }, old_mortgage: { ...old }, parts: partsJson, revisions }
+      }
+      const existingNew = mortgages.find((row) => row.id === newM.id)
+      const old = mortgages.find((row) => row.id === input.p_old_mortgage_id)
+      if (existingNew) {
+        if (existingNew.archived || existingNew.bank_id !== newM.bank_id
+          || existingNew.start_date !== input.p_effective_date
+          || !old || !old.archived || old.end_date !== input.p_effective_date) {
+          return sqlError('bank change replay mismatch')
+        }
+        respond(existingNew, old)
+      } else if (!old || old.archived || Number(old.revision ?? 1) !== input.p_expected_old_revision) {
+        data = {
+          status: 'conflict',
+          revisions: { [`mortgages:${input.p_old_mortgage_id}`]: old ? Number(old.revision ?? 1) : null },
+        }
+      } else if (!rowsOf('mortgage_banks').some((row) => row.id === newM.bank_id)) {
+        return sqlError('bank is not in caller household')
+      } else if (typeof old.start_date === 'string' && old.start_date !== ''
+        && input.p_effective_date < old.start_date) {
+        return sqlError('effective date precedes agreement start')
+      } else {
+        old.archived = true
+        old.end_date = input.p_effective_date
+        old.revision = Number(old.revision ?? 1) + 1
+        const created: Row = {
+          id: newM.id, created_at: new Date().toISOString(), bank_id: newM.bank_id, label: newM.label,
+          start_date: input.p_effective_date, archived: false, end_date: null, revision: 1,
+        }
+        mortgages.push(created)
+        for (const part of partsPayload) {
+          rowsOf('mortgage_loan_parts').push({
+            id: part.id, created_at: new Date().toISOString(), mortgage_id: newM.id,
+            label: part.label, loan_number: '',
+            start_balance: part.balance, start_date: input.p_effective_date, archived: false,
+            original_balance: part.balance, original_date: input.p_effective_date,
+            planned_amortization: (part.planned_amortization as number | null | undefined) ?? null,
+            planned_amortization_start: part.planned_amortization != null ? input.p_effective_date : null,
+            planned_amortization_end: null,
+            revision: 1,
+          })
+        }
+        respond(created, old)
+      }
+    } else if (name === 'sync_revert_mortgage_bank_change') {
+      const input = args as { p_operation_id: string; p_mortgage_id: string; p_expected_revisions: Record<string, number | null> }
+      const sqlError = (message: string) => Promise.resolve({ data: null, error: { message, code: '22023' } })
+      const mortgages = rowsOf('mortgages')
+      const target = mortgages.find((row) => row.id === input.p_mortgage_id)
+      if (!target) {
+        data = { status: 'conflict', revisions: { [`mortgages:${input.p_mortgage_id}`]: null } }
+      } else if (target.archived) {
+        return sqlError('mortgage agreement is not active')
+      } else {
+        const previousMatches = mortgages.filter((row) => row.archived && row.end_date === target.start_date)
+        if (previousMatches.length !== 1) return sqlError('no unambiguous previous agreement')
+        const previous = previousMatches[0]
+        const parts = rowsOf('mortgage_loan_parts').filter((row) => row.mortgage_id === input.p_mortgage_id)
+        const partIds = new Set(parts.map((row) => String(row.id)))
+        const hasTransactions = rowsOf('mortgage_payments').some((row) =>
+          row.mortgage_id === input.p_mortgage_id || (row.loan_part_id != null && partIds.has(String(row.loan_part_id))))
+          || rowsOf('mortgage_rate_periods').some((row) => row.loan_part_id != null && partIds.has(String(row.loan_part_id)))
+        if (hasTransactions) return sqlError('mortgage agreement has recorded transactions')
+        const current: Record<string, number | null> = {
+          [`mortgages:${input.p_mortgage_id}`]: Number(target.revision ?? 1),
+          [`mortgages:${String(previous.id)}`]: Number(previous.revision ?? 1),
+        }
+        for (const row of parts) current[`mortgage_loan_parts:${String(row.id)}`] = Number(row.revision ?? 1)
+        const expected = input.p_expected_revisions ?? {}
+        const conflict = Object.keys(current).length !== Object.keys(expected).length
+          || Object.entries(current).some(([key, revision]) => expected[key] !== revision)
+        if (conflict) data = { status: 'conflict', revisions: current }
+        else {
+          tables.mortgage_loan_parts = rowsOf('mortgage_loan_parts').filter((row) => row.mortgage_id !== input.p_mortgage_id)
+          tables.mortgages = mortgages.filter((row) => row.id !== input.p_mortgage_id)
+          previous.archived = false
+          previous.end_date = null
+          previous.revision = Number(previous.revision ?? 1) + 1
+          const revisions: Record<string, number | null> = {
+            [`mortgages:${input.p_mortgage_id}`]: null,
+            [`mortgages:${String(previous.id)}`]: Number(previous.revision),
+          }
+          for (const id of partIds) revisions[`mortgage_loan_parts:${id}`] = null
+          data = { status: 'applied', mortgage: { ...previous }, revisions }
+        }
       }
     } else if (name === 'sync_delete_mortgage_loan_part') {
       const input = args as { p_loan_part_id: string; p_expected_revisions: Record<string, number | null> }

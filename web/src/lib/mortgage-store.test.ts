@@ -61,6 +61,7 @@ const loanPart = (id: string, over: Record<string, unknown> = {}) => ({ id, crea
 const mortgagePayment = (id: string, loan_part_id: string | null = null, over: Record<string, unknown> = {}) => ({ id, created_at: CREATED, loan_part_id, date: '2024-02-01', kind: 'payment', description: '', amount: 0, balance_after: null, paid_by: 'joint', source: '', is_insats: false, paid_split: null, ...over })
 const ratePeriod = (id: string, loan_part_id: string | null = null, over: Record<string, unknown> = {}) => ({ id, created_at: CREATED, loan_part_id, start_date: '2024-01-01', end_date: null, rate: null, rate_type: 'rörlig', ...over })
 const bankRow = (id: string, over: Record<string, unknown> = {}) => ({ id, created_at: CREATED, label: 'Danske', ...over })
+const mortgageRow = (id: string, over: Record<string, unknown> = {}) => ({ id, created_at: CREATED, bank_id: 'b1', label: 'Bolån', start_date: '2024-01-01', archived: false, end_date: null, revision: 1, ...over })
 
 describe('read path', () => {
   it('cloud ok: list writes through to the cache', async () => {
@@ -186,12 +187,14 @@ describe('write path', () => {
   })
 
   it('canonical down payment saves, edits and deletes through mortgage_payments', async () => {
+    // Plan 109a: a NEW partless down payment must carry the active agreement.
+    mock().tables.mortgages = [mortgageRow('m1')]
     const saved = await store.addPayment({
       loan_part_id: 'must-be-cleared', date: '2024-02-01', kind: 'down_payment', description: 'Kontantinsats',
       amount: 250_000, balance_after: null, paid_by: 'a', source: 'manual', is_insats: false,
     })
-    expect(saved).toMatchObject({ loan_part_id: null, kind: 'down_payment', paid_by: 'a', is_insats: true })
-    expect(mock().tables.mortgage_payments[0]).toMatchObject({ id: saved.id, loan_part_id: null, kind: 'down_payment', is_insats: true })
+    expect(saved).toMatchObject({ loan_part_id: null, kind: 'down_payment', paid_by: 'a', is_insats: true, mortgage_id: 'm1' })
+    expect(mock().tables.mortgage_payments[0]).toMatchObject({ id: saved.id, loan_part_id: null, kind: 'down_payment', is_insats: true, mortgage_id: 'm1' })
     expect(mock().tables.mortgage_contributions || []).toHaveLength(0)
 
     const updated = await store.updatePayment(saved.id, { amount: 300_000, paid_by: 'b', loan_part_id: 'still-cleared', is_insats: false })
@@ -204,6 +207,7 @@ describe('write path', () => {
   })
 
   it('failed canonical payment save stays dirty and retries without writing the legacy table', async () => {
+    mock().tables.mortgages = [mortgageRow('m1')]
     mock().control.failing.add('mortgage_payments')
     await expect(store.addPayment({
       loan_part_id: null, date: '2024-02-01', kind: 'down_payment', description: 'Kontantinsats',
@@ -405,7 +409,7 @@ describe('canonical legacy contribution envelopes', () => {
       contributions: [legacyContribution(), legacyContribution({ id: 'zero', amount: 0 }), legacyContribution({ id: 'ownerless', owner: undefined })], settings: {},
     }))
     expect(store.cachedSnapshot()).toMatchObject({
-      version: 5, contributions: [], payments: [{ id: 'legacy-contribution:deposit-a' }],
+      version: 6, contributions: [], payments: [{ id: 'legacy-contribution:deposit-a' }],
     })
   })
 
@@ -447,7 +451,7 @@ describe('canonical legacy contribution envelopes', () => {
   it('exports canonical payments once and leaves the retired contribution slice empty', async () => {
     mock().tables.mortgage_payments = [canonicalDeposit()]
     const backup = JSON.parse(await store.exportJSON()) as { version: number; payments: Payment[]; contributions: unknown[] }
-    expect(backup.version).toBe(5)
+    expect(backup.version).toBe(6)
     expect(backup.payments).toMatchObject([{ id: 'legacy-contribution:deposit-a', kind: 'down_payment' }])
     expect(backup.contributions).toEqual([])
   })
@@ -645,5 +649,321 @@ describe('import validation boundary', () => {
   it('rejects a malformed backup before mutating Supabase', async () => {
     await expect(store.importJSON(JSON.stringify({ version: 4, loan_parts: [{ id: 'bad', created_at: CREATED, label: 'x', loan_number: '', start_balance: Number.NaN }] }))).rejects.toThrow()
     expect(mock().tables.mortgage_loan_parts || []).toHaveLength(0)
+  })
+})
+
+// ── Plan 109a ────────────────────────────────────────────────────────────────
+
+describe('down payment agreement provenance (plan 109a)', () => {
+  beforeEach(() => { mem.set(IMPORT_FLAG, '1') })
+
+  const downPayment = (over: Record<string, unknown> = {}) => ({
+    loan_part_id: null, date: '2024-02-01', kind: 'down_payment' as const, description: 'Kontantinsats',
+    amount: 250_000, balance_after: null, paid_by: 'a' as const, source: 'manual', is_insats: true, ...over,
+  })
+
+  it('addPayment attaches the ACTIVE agreement id to a new down payment', async () => {
+    mock().tables.mortgages = [
+      mortgageRow('m-old', { archived: true, end_date: '2023-12-31', start_date: '2020-01-01' }),
+      mortgageRow('m-active', { start_date: '2024-01-01' }),
+    ]
+    const saved = await store.addPayment(downPayment() as Omit<Payment, 'id' | 'created_at'>)
+    expect(saved.mortgage_id).toBe('m-active')
+    expect(mock().tables.mortgage_payments[0]).toMatchObject({ id: saved.id, mortgage_id: 'm-active' })
+    expect((cache().payments as Payment[])[0].mortgage_id).toBe('m-active')
+  })
+
+  it('addPayment respects an explicitly supplied mortgage_id', async () => {
+    mock().tables.mortgages = [mortgageRow('m-active')]
+    const saved = await store.addPayment(downPayment({ mortgage_id: 'm-chosen' }) as Omit<Payment, 'id' | 'created_at'>)
+    expect(saved.mortgage_id).toBe('m-chosen')
+    expect(mock().tables.mortgage_payments[0].mortgage_id).toBe('m-chosen')
+  })
+
+  it('addContribution carries the active agreement id', async () => {
+    mock().tables.mortgages = [mortgageRow('m1')]
+    await store.addContribution({ owner: 'a', date: '2024-01-01', amount: 100_000, note: 'Insats' })
+    expect(mock().tables.mortgage_payments[0]).toMatchObject({ kind: 'down_payment', mortgage_id: 'm1' })
+  })
+
+  it('zero agreements: down payment save rejects with a clear error and queues nothing', async () => {
+    await expect(store.addPayment(downPayment() as Omit<Payment, 'id' | 'created_at'>))
+      .rejects.toMatchObject({ category: 'validation', message: expect.stringContaining('bolåneavtal') })
+    expect(mock().tables.mortgage_payments || []).toHaveLength(0)
+    expect((cache().payments as unknown[] | undefined) ?? []).toHaveLength(0)
+    expect(sync.syncCoordinator.getOutbox()).toEqual([])
+  })
+
+  it('an archived-only agreement set is treated as zero active agreements', async () => {
+    mock().tables.mortgages = [mortgageRow('m-old', { archived: true, end_date: '2023-12-31' })]
+    await expect(store.addPayment(downPayment() as Omit<Payment, 'id' | 'created_at'>))
+      .rejects.toMatchObject({ category: 'validation' })
+    expect(mock().tables.mortgage_payments || []).toHaveLength(0)
+  })
+
+  it('a part-linked payment sends explicit-null provenance so the database derives it', async () => {
+    const saved = await store.addPayment({
+      loan_part_id: 'p1', date: '2024-02-01', kind: 'amortization', description: '', amount: 1000,
+      balance_after: null, paid_by: 'joint', source: '', mortgage_id: 'stale-agreement',
+    } as Omit<Payment, 'id' | 'created_at'>)
+    const row = mock().tables.mortgage_payments.find((r) => r.id === saved.id)!
+    expect(row).toHaveProperty('mortgage_id', null)
+  })
+
+  it('a legacy null-provenance down payment stays editable without inventing an assignment', async () => {
+    mock().tables.mortgage_payments = [mortgagePayment('legacy-dp', null, { kind: 'down_payment', is_insats: true, amount: 100_000, mortgage_id: null, revision: 1 })]
+    await store.listPayments()
+    const updated = await store.updatePayment('legacy-dp', { amount: 120_000 })
+    expect(updated?.amount).toBe(120_000)
+    expect(mock().tables.mortgage_payments[0]).toMatchObject({ amount: 120_000, mortgage_id: null })
+  })
+
+  it('the mock enforces the trigger: a partless non-legacy down payment insert without mortgage_id fails', async () => {
+    const { data, error } = await mock().supabase.rpc('sync_apply_rows', {
+      p_operation_id: 'op-guard', p_resource: 'mortgage_payments',
+      p_rows: [mortgagePayment('dp-1', null, { kind: 'down_payment' })],
+      p_expected_revisions: { 'mortgage_payments:dp-1': null },
+    }) as { data: unknown; error: { message?: string; code?: string } | null }
+    expect(data).toBeNull()
+    expect(error).toMatchObject({ code: '22023', message: 'down payment requires a mortgage agreement' })
+  })
+})
+
+describe('bank change and revert (plan 109a)', () => {
+  beforeEach(() => { mem.set(IMPORT_FLAG, '1') })
+
+  async function seedActiveAgreement() {
+    mock().tables.mortgage_banks = [bankRow('b1'), bankRow('b2', { label: 'Nordea' })]
+    mock().tables.mortgages = [mortgageRow('m1', { start_date: '2024-01-01' })]
+    mock().tables.mortgage_loan_parts = [loanPart('p1', { mortgage_id: 'm1', revision: 1 })]
+    // Register server revisions through the sync layer, like the app does.
+    await Promise.all([store.listBanks(), store.listMortgages(), store.listLoanParts()])
+  }
+
+  const changeInput = () => ({
+    old_mortgage_id: 'm1', bank_id: 'b2', label: 'Nordea bolån',
+    parts: [{ label: 'Del 1', balance: 1_000_000, planned_amortization: 3000 }, { label: 'Del 2', balance: 500_000 }],
+    effective_date: '2026-08-01',
+  })
+
+  it('success: archives the old agreement, creates the new one with clean origination anchors, patches cache and revisions', async () => {
+    await seedActiveAgreement()
+    const { mortgage, parts } = await store.changeMortgageBank(changeInput())
+
+    const cloudOld = mock().tables.mortgages.find((row) => row.id === 'm1')!
+    const cloudNew = mock().tables.mortgages.find((row) => row.id === mortgage.id)!
+    expect(cloudOld).toMatchObject({ archived: true, end_date: '2026-08-01' })
+    expect(cloudNew).toMatchObject({ bank_id: 'b2', label: 'Nordea bolån', start_date: '2026-08-01', archived: false, end_date: null })
+    const newParts = mock().tables.mortgage_loan_parts.filter((row) => row.mortgage_id === mortgage.id)
+    expect(newParts).toHaveLength(2)
+    expect(newParts.find((row) => row.label === 'Del 1')).toMatchObject({
+      loan_number: '', start_balance: 1_000_000, start_date: '2026-08-01',
+      original_balance: 1_000_000, original_date: '2026-08-01',
+      planned_amortization: 3000, planned_amortization_start: '2026-08-01', planned_amortization_end: null,
+    })
+    expect(parts.map((part) => part.id).sort()).toEqual(newParts.map((row) => String(row.id)).sort())
+    // Old part is untouched — history stays with the old agreement.
+    expect(mock().tables.mortgage_loan_parts.find((row) => row.id === 'p1')).toMatchObject({ mortgage_id: 'm1' })
+    expect(cache()).toMatchObject({ mortgages: [{ id: 'm1', archived: true, end_date: '2026-08-01' }, { id: mortgage.id, archived: false }] })
+    expect(sync.syncCoordinator.isDirty('mortgage-bank-change')).toBe(false)
+    // Acknowledged revisions are recorded for later optimistic writes.
+    expect(sync.syncCoordinator.getRevision(`mortgages:${mortgage.id}`)).toBe(1)
+    expect(sync.syncCoordinator.getRevision('mortgages:m1')).toBe(2)
+  })
+
+  it('failure: keeps the optimistic state dirty, reads fall back to cache, replay applies exactly once', async () => {
+    await seedActiveAgreement()
+    mock().control.failing.add('sync_change_mortgage_bank')
+    await expect(store.changeMortgageBank(changeInput())).rejects.toBeTruthy()
+
+    // Cache/cloud disagreement: cloud still has the pre-change state…
+    expect(mock().tables.mortgages).toHaveLength(1)
+    // …but reads must serve the queued optimistic state, not overwrite it.
+    expect(sync.syncCoordinator.isDirty('mortgage-bank-change')).toBe(true)
+    const mortgages = await store.listMortgages()
+    expect(mortgages).toHaveLength(2)
+    expect(mortgages.find((row) => row.id === 'm1')).toMatchObject({ archived: true, end_date: '2026-08-01' })
+    expect(await store.listLoanParts()).toHaveLength(3)
+
+    mock().control.failing.delete('sync_change_mortgage_bank')
+    await sync.syncCoordinator.replay()
+    expect(sync.syncCoordinator.isDirty('mortgage-bank-change')).toBe(false)
+    expect(mock().tables.mortgages).toHaveLength(2)
+    expect(mock().tables.mortgage_loan_parts).toHaveLength(3)
+  })
+
+  it('lost response: the receipt makes the immediate retry a read — no duplicate agreements', async () => {
+    await seedActiveAgreement()
+    mock().control.lostResponseOnce.add('sync_change_mortgage_bank')
+    const { mortgage } = await store.changeMortgageBank(changeInput())
+    expect(mock().tables.mortgages.filter((row) => row.id === mortgage.id)).toHaveLength(1)
+    expect(mock().tables.mortgages).toHaveLength(2)
+    expect(mock().tables.mortgage_loan_parts).toHaveLength(3)
+    expect(sync.syncCoordinator.isDirty('mortgage-bank-change')).toBe(false)
+  })
+
+  it('idempotent replay under a NEW operation id returns the created payload as success', async () => {
+    await seedActiveAgreement()
+    const rpcArgs = {
+      p_old_mortgage_id: 'm1', p_expected_old_revision: 1,
+      p_new_mortgage: { id: 'm-new', label: 'Nordea bolån', bank_id: 'b2' },
+      p_new_parts: [{ id: 'p-new', label: 'Del 1', balance: 1_000_000 }],
+      p_effective_date: '2026-08-01',
+    }
+    const first = await mock().supabase.rpc('sync_change_mortgage_bank', { p_operation_id: 'op-1', ...rpcArgs }) as { data: { status: string } }
+    expect(first.data).toMatchObject({ status: 'applied' })
+    const replay = await mock().supabase.rpc('sync_change_mortgage_bank', { p_operation_id: 'op-2', ...rpcArgs }) as { data: { status: string; mortgage: { id: string } }; error: unknown }
+    expect(replay.error).toBeNull()
+    expect(replay.data).toMatchObject({ status: 'applied', mortgage: { id: 'm-new' } })
+    expect(mock().tables.mortgages.filter((row) => row.id === 'm-new')).toHaveLength(1)
+    expect(mock().tables.mortgage_loan_parts.filter((row) => row.mortgage_id === 'm-new')).toHaveLength(1)
+    // A replay whose payload does NOT match what was created is refused loudly.
+    const mismatch = await mock().supabase.rpc('sync_change_mortgage_bank', { p_operation_id: 'op-3', ...rpcArgs, p_effective_date: '2026-09-01' }) as { error: { message?: string; code?: string } | null }
+    expect(mismatch.error).toMatchObject({ code: '22023', message: 'bank change replay mismatch' })
+  })
+
+  it('conflict: no throw from the RPC, the operation keeps the current server revisions, keepConflict retries onto them', async () => {
+    await seedActiveAgreement()
+    // Another device bumped the agreement after our last read.
+    mock().tables.mortgages[0].revision = 5
+    await expect(store.changeMortgageBank(changeInput())).rejects.toMatchObject({ category: 'conflict' })
+    expect(mock().tables.mortgages[0]).toMatchObject({ archived: false }) // nothing applied
+    const conflicts = sync.syncCoordinator.getConflicts()
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0].conflictRevisions).toEqual({ 'mortgages:m1': 5 })
+
+    await sync.syncCoordinator.keepConflict(conflicts[0].id)
+    expect(sync.syncCoordinator.getConflicts()).toEqual([])
+    expect(mock().tables.mortgages.find((row) => row.id === 'm1')).toMatchObject({ archived: true, end_date: '2026-08-01' })
+    expect(mock().tables.mortgages).toHaveLength(2)
+  })
+
+  it('validation refusal (unknown bank) fails permanently with the SQL error category', async () => {
+    await seedActiveAgreement()
+    await expect(store.changeMortgageBank({ ...changeInput(), bank_id: 'not-a-bank' }))
+      .rejects.toMatchObject({ category: 'validation' })
+    expect(mock().tables.mortgages).toHaveLength(1)
+    expect(sync.syncCoordinator.getOutbox()).toMatchObject([{ resource: 'mortgage-bank-change', state: 'failed' }])
+  })
+
+  it('revert: deletes the pristine new agreement, reactivates the predecessor, clears revisions', async () => {
+    await seedActiveAgreement()
+    const { mortgage } = await store.changeMortgageBank(changeInput())
+    await store.revertMortgageBankChange(mortgage.id)
+
+    expect(mock().tables.mortgages).toHaveLength(1)
+    expect(mock().tables.mortgages[0]).toMatchObject({ id: 'm1', archived: false, end_date: null })
+    expect(mock().tables.mortgage_loan_parts.map((row) => row.id)).toEqual(['p1'])
+    expect(cache()).toMatchObject({ mortgages: [{ id: 'm1', archived: false, end_date: null }] })
+    expect((cache().loan_parts as LoanPart[]).map((row) => row.id)).toEqual(['p1'])
+    expect(sync.syncCoordinator.getRevision(`mortgages:${mortgage.id}`)).toBeNull()
+    expect(sync.syncCoordinator.isDirty('mortgage-bank-change-revert')).toBe(false)
+  })
+
+  it('revert refuses once any transaction references the new agreement or its parts', async () => {
+    await seedActiveAgreement()
+    const { mortgage, parts } = await store.changeMortgageBank(changeInput())
+    await store.addPayment({
+      loan_part_id: parts[0].id, date: '2026-08-15', kind: 'amortization', description: '',
+      amount: 3000, balance_after: null, paid_by: 'joint', source: '',
+    })
+    await expect(store.revertMortgageBankChange(mortgage.id)).rejects.toMatchObject({ category: 'validation' })
+    // Nothing was deleted or reactivated — partial reverts are impossible.
+    expect(mock().tables.mortgages).toHaveLength(2)
+    expect(mock().tables.mortgages.find((row) => row.id === 'm1')).toMatchObject({ archived: true })
+    expect(mock().tables.mortgage_loan_parts.filter((row) => row.mortgage_id === mortgage.id)).toHaveLength(2)
+  })
+
+  it('revert conflict: a stale revision map returns the current revisions without deleting anything', async () => {
+    await seedActiveAgreement()
+    const { mortgage } = await store.changeMortgageBank(changeInput())
+    // Another device edited the new agreement after our last read.
+    mock().tables.mortgages.find((row) => row.id === mortgage.id)!.revision = 9
+    await expect(store.revertMortgageBankChange(mortgage.id)).rejects.toMatchObject({ category: 'conflict' })
+    expect(mock().tables.mortgages).toHaveLength(2)
+    const conflicts = sync.syncCoordinator.getConflicts()
+    expect(conflicts[0].conflictRevisions).toMatchObject({ [`mortgages:${mortgage.id}`]: 9 })
+  })
+})
+
+describe('109a envelope compatibility and round-trips', () => {
+  beforeEach(() => { mem.set(IMPORT_FLAG, '1') })
+
+  it('an old v4 cache envelope without the 109a fields still loads', () => {
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 4,
+      banks: [bankRow('b1')],
+      mortgages: [{ id: 'm1', created_at: CREATED, bank_id: 'b1', label: 'Bolån', start_date: '2024-01-01', archived: false }],
+      loan_parts: [loanPart('p1')],
+      payments: [mortgagePayment('pay1', 'p1')],
+      valuations: [], rate_periods: [], contributions: [], settings: {},
+    }))
+    const snapshot = store.cachedSnapshot()
+    expect(snapshot.version).toBe(6)
+    expect(snapshot.banks).toMatchObject([{ id: 'b1' }])
+    expect(snapshot.mortgages).toMatchObject([{ id: 'm1' }])
+    expect(snapshot.payments).toMatchObject([{ id: 'pay1' }])
+  })
+
+  it('the new fields survive cloud → cache → export', async () => {
+    mock().tables.mortgage_banks = [bankRow('b1', { catalog_id: 'catalog-danske' })]
+    mock().tables.mortgages = [
+      mortgageRow('m-old', { archived: true, end_date: '2026-07-31', start_date: '2020-01-01' }),
+      mortgageRow('m1', { start_date: '2026-08-01' }),
+    ]
+    mock().tables.mortgage_payments = [mortgagePayment('dp1', null, { kind: 'down_payment', is_insats: true, mortgage_id: 'm1' })]
+
+    expect((await store.listBanks())[0].catalog_id).toBe('catalog-danske')
+    expect((await store.listMortgages()).find((row) => row.id === 'm-old')?.end_date).toBe('2026-07-31')
+    expect((await store.listPayments())[0].mortgage_id).toBe('m1')
+    expect((cache().banks as Bank[])[0].catalog_id).toBe('catalog-danske')
+
+    const backup = JSON.parse(await store.exportJSON()) as { banks: Bank[]; mortgages: Mortgage[]; payments: Payment[] }
+    expect(backup.banks[0].catalog_id).toBe('catalog-danske')
+    expect(backup.mortgages.find((row) => row.id === 'm-old')?.end_date).toBe('2026-07-31')
+    expect(backup.payments[0].mortgage_id).toBe('m1')
+  })
+
+  it('imports a backup carrying the new fields and retains every historical row exactly once on rerun', async () => {
+    const backup = JSON.stringify({
+      version: 6,
+      banks: [bankRow('b1', { catalog_id: 'catalog-danske', year_basis: null, year_basis_source: null, billing: null, billing_source: null })],
+      mortgages: [
+        mortgageRow('m-old', { archived: true, end_date: '2026-07-31', start_date: '2020-01-01', revision: undefined }),
+        mortgageRow('m1', { start_date: '2026-08-01', revision: undefined }),
+      ],
+      loan_parts: [loanPart('p1', { mortgage_id: 'm1' })],
+      payments: [
+        mortgagePayment('pay1', 'p1', { kind: 'amortization', amount: 1000 }),
+        mortgagePayment('dp1', null, { kind: 'down_payment', is_insats: true, amount: 100_000, mortgage_id: 'm1' }),
+      ],
+      valuations: [], rate_periods: [], contributions: [], settings: {},
+    })
+    await expect(store.importJSON(backup)).resolves.toMatchObject({ loan_parts: 1, payments: 2 })
+    expect(mock().tables.mortgage_banks[0]).toMatchObject({ catalog_id: 'catalog-danske' })
+    expect(mock().tables.mortgages.find((row) => row.id === 'm-old')).toMatchObject({ archived: true, end_date: '2026-07-31' })
+    expect(mock().tables.mortgage_payments.find((row) => row.id === 'dp1')).toMatchObject({ mortgage_id: 'm1' })
+    // Part-linked provenance is re-derived by the database, never client-asserted.
+    expect(mock().tables.mortgage_payments.find((row) => row.id === 'pay1')).toHaveProperty('mortgage_id', null)
+
+    // Re-running the same import adds nothing and duplicates nothing.
+    await expect(store.importJSON(backup)).resolves.toMatchObject({ loan_parts: 0, payments: 0 })
+    expect(mock().tables.mortgages).toHaveLength(2)
+    expect(mock().tables.mortgage_payments).toHaveLength(2)
+    expect(mock().tables.mortgage_loan_parts).toHaveLength(1)
+  })
+
+  it('imports an OLD backup without the new fields (defensive nullable migration)', async () => {
+    const backup = JSON.stringify({
+      version: 5,
+      banks: [{ id: 'b1', created_at: CREATED, label: 'Danske' }],
+      mortgages: [{ id: 'm1', created_at: CREATED, bank_id: 'b1', label: 'Bolån', start_date: '2024-01-01', archived: false }],
+      loan_parts: [loanPart('p1', { mortgage_id: 'm1' })],
+      payments: [mortgagePayment('pay1', 'p1', { kind: 'interest', amount: 900 })],
+      valuations: [], rate_periods: [], contributions: [], settings: {},
+    })
+    await expect(store.importJSON(backup)).resolves.toMatchObject({ loan_parts: 1, payments: 1 })
+    expect(mock().tables.mortgages).toHaveLength(1)
+    expect(mock().tables.mortgage_payments).toHaveLength(1)
   })
 })

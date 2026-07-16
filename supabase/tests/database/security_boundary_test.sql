@@ -11,7 +11,7 @@ select is(
     join pg_catalog.pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p')
   ),
-  17::bigint,
+  18::bigint,
   'the audited public-table inventory is complete'
 );
 

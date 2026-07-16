@@ -446,9 +446,11 @@ function parseBank(raw: unknown): ParseResult<Bank> {
   const year_basis_source = raw.year_basis_source === null || raw.year_basis_source === undefined ? success<string | null>(null) : parseEnum(raw.year_basis_source, ['detected', 'suggested', 'declared'] as const, 'year_basis_source')
   const billing = raw.billing === null || raw.billing === undefined ? success<string | null>(null) : parseEnum(raw.billing, BILLING_MODES, 'billing')
   const billing_source = raw.billing_source === null || raw.billing_source === undefined ? success<string | null>(null) : parseEnum(raw.billing_source, BILLING_SOURCES, 'billing_source')
-  const all = [...fields, year_basis, year_basis_source, billing, billing_source]
+  // Plan 109a — catalogue link. Nullable and absent on pre-109a data.
+  const catalog_id = nullable(raw.catalog_id, (v) => id(v, 'catalog_id', (x) => parseOpaqueId<'CatalogBankId'>(x, 'catalog_id')))
+  const all = [...fields, year_basis, year_basis_source, billing, billing_source, catalog_id]
   if (issueList(all).length) return { ok: false, issues: issueList(all) }
-  return success({ id: fieldValue(fields[0]) as string, created_at: fieldValue(fields[1]) as string, label: fieldValue(fields[2]) as string, year_basis: valueOf(year_basis), year_basis_source: valueOf(year_basis_source), billing: valueOf(billing), billing_source: valueOf(billing_source) })
+  return success({ id: fieldValue(fields[0]) as string, created_at: fieldValue(fields[1]) as string, label: fieldValue(fields[2]) as string, year_basis: valueOf(year_basis), year_basis_source: valueOf(year_basis_source), billing: valueOf(billing), billing_source: valueOf(billing_source), catalog_id: valueOf(catalog_id) })
 }
 
 function parseMortgage(raw: unknown): ParseResult<Mortgage> {
@@ -456,9 +458,11 @@ function parseMortgage(raw: unknown): ParseResult<Mortgage> {
   const fields = [id(raw.id, 'id', (v) => parseOpaqueId<'MortgageId'>(v, 'id')), datetime(raw.created_at, 'created_at'), text(raw.label, 'label'), boolean(raw.archived, 'archived')]
   const bank_id = nullable(raw.bank_id, (v) => parseOpaqueId<'BankId'>(v, 'bank_id'))
   const start_date = nullable(raw.start_date, (v) => dateOrBlank(v, 'start_date'))
-  const all = [...fields, bank_id, start_date]
+  // Plan 109a — agreement end state. '' is the preserved unknown-legacy marker.
+  const end_date = nullable(raw.end_date, (v) => dateOrBlank(v, 'end_date'))
+  const all = [...fields, bank_id, start_date, end_date]
   if (issueList(all).length) return { ok: false, issues: issueList(all) }
-  return success({ id: fieldValue(fields[0]) as string, created_at: fieldValue(fields[1]) as string, label: fieldValue(fields[2]) as string, archived: fieldValue(fields[3]) as boolean, bank_id: valueOf(bank_id), start_date: valueOf(start_date) })
+  return success({ id: fieldValue(fields[0]) as string, created_at: fieldValue(fields[1]) as string, label: fieldValue(fields[2]) as string, archived: fieldValue(fields[3]) as boolean, bank_id: valueOf(bank_id), start_date: valueOf(start_date), end_date: valueOf(end_date) })
 }
 
 function parseMortgagePayment(raw: unknown): ParseResult<PersistedMortgagePayment> {
@@ -466,6 +470,8 @@ function parseMortgagePayment(raw: unknown): ParseResult<PersistedMortgagePaymen
   const fields = [id(raw.id, 'id', parsePaymentId), datetime(raw.created_at, 'created_at'), dateOrBlank(raw.date, 'date'), parseEnum(raw.kind, mortgageKinds, 'kind'), text(raw.description, 'description'), finite(raw.amount, 'amount'), parseEnum(raw.paid_by, paidBy, 'paid_by'), text(raw.source, 'source')]
   const loan_part_id = nullable(raw.loan_part_id, (v) => id(v, 'loan_part_id', parseLoanPartId))
   const balance_after = nullable(raw.balance_after, (v) => finite(v, 'balance_after'))
+  // Plan 109a — agreement provenance. Nullable; absent on pre-109a data.
+  const mortgage_id = nullable(raw.mortgage_id, (v) => id(v, 'mortgage_id', (x) => parseOpaqueId<'MortgageId'>(x, 'mortgage_id')))
   const is_insats = field(raw, 'is_insats', false, (v) => boolean(v, 'is_insats'))
   let paid_split: { a: number; b: number } | null = null
   const splitIssues: ParseIssue[] = []
@@ -473,10 +479,10 @@ function parseMortgagePayment(raw: unknown): ParseResult<PersistedMortgagePaymen
     if (!isRecord(raw.paid_split)) splitIssues.push({ path: 'paid_split', reason: 'must be an object or null' })
     else { const a = finite(raw.paid_split.a, 'paid_split.a'); const b = finite(raw.paid_split.b, 'paid_split.b'); if (!a.ok) splitIssues.push(...a.issues); if (!b.ok) splitIssues.push(...b.issues); if (a.ok && b.ok) paid_split = { a: valueOf(a), b: valueOf(b) } }
   }
-  const all = [...fields, loan_part_id, balance_after, is_insats]
+  const all = [...fields, loan_part_id, balance_after, mortgage_id, is_insats]
   const issues = [...issueList(all), ...splitIssues]
   if (issues.length) return { ok: false, issues }
-  return success({ id: fieldValue(fields[0]) as PaymentId, created_at: fieldValue(fields[1]) as ISODateTime, date: fieldValue(fields[2]) as ISODate | '', kind: fieldValue(fields[3]) as MortgagePayment['kind'], description: fieldValue(fields[4]) as string, amount: fieldValue(fields[5]) as number, paid_by: fieldValue(fields[6]) as MortgagePayment['paid_by'], source: fieldValue(fields[7]) as string, loan_part_id: valueOf(loan_part_id), balance_after: valueOf(balance_after), is_insats: valueOf(is_insats), paid_split })
+  return success({ id: fieldValue(fields[0]) as PaymentId, created_at: fieldValue(fields[1]) as ISODateTime, date: fieldValue(fields[2]) as ISODate | '', kind: fieldValue(fields[3]) as MortgagePayment['kind'], description: fieldValue(fields[4]) as string, amount: fieldValue(fields[5]) as number, paid_by: fieldValue(fields[6]) as MortgagePayment['paid_by'], source: fieldValue(fields[7]) as string, loan_part_id: valueOf(loan_part_id), balance_after: valueOf(balance_after), mortgage_id: valueOf(mortgage_id), is_insats: valueOf(is_insats), paid_split })
 }
 
 function parseRatePeriod(raw: unknown): ParseResult<PersistedRatePeriod> {
@@ -541,6 +547,7 @@ export function parseMortgageEnvelope(raw: unknown): ParseResult<MortgageEnvelop
   valueOf(mortgages).forEach((row, index) => { if (row.bank_id && !bankIds.has(row.bank_id)) referenceIssues.push({ path: `mortgages[${index}].bank_id`, reason: 'references an unknown bank' }) })
   valueOf(loan_parts).forEach((row, index) => { if (row.mortgage_id && !mortgageIds.has(row.mortgage_id)) referenceIssues.push({ path: `loan_parts[${index}].mortgage_id`, reason: 'references an unknown mortgage' }) })
   valueOf(payments).forEach((row, index) => { if (row.loan_part_id && !partIds.has(row.loan_part_id)) referenceIssues.push({ path: `payments[${index}].loan_part_id`, reason: 'references an unknown loan part' }) })
+  valueOf(payments).forEach((row, index) => { if (row.mortgage_id && !mortgageIds.has(row.mortgage_id)) referenceIssues.push({ path: `payments[${index}].mortgage_id`, reason: 'references an unknown mortgage' }) })
   valueOf(rate_periods).forEach((row, index) => { if (row.loan_part_id && !partIds.has(row.loan_part_id)) referenceIssues.push({ path: `rate_periods[${index}].loan_part_id`, reason: 'references an unknown loan part' }) })
   if (referenceIssues.length) return { ok: false, issues: referenceIssues }
   return success({ version: valueOf(version), banks: valueOf(banks), mortgages: valueOf(mortgages), loan_parts: valueOf(loan_parts), payments: valueOf(payments), valuations: valueOf(valuations), rate_periods: valueOf(rate_periods), contributions: valueOf(contributions), settings: valueOf(settings) })
@@ -561,6 +568,11 @@ export function salvageMortgageEnvelope(raw: unknown): { value: MortgageEnvelope
   const mortgageIds = new Set(mortgages.map((row) => row.id))
   const loan_parts = salvage(raw.loan_parts ?? [], 'loan part', parseLoanPart).filter((row) => { if (!row.mortgage_id || mortgageIds.has(row.mortgage_id)) return true; rejected.push({ record: `loan part ${row.id}`, reason: 'references an unknown mortgage' }); return false })
   const partIds = new Set(loan_parts.map((row) => row.id))
+  // Deliberately no payment.mortgage_id → mortgages filter here: partial cache
+  // refreshes (loadMortgageSyncSnapshot) rewrite payments without touching the
+  // mortgages slice, so an agreement created on another device would make its
+  // payment history vanish from cached reads. Provenance pointing at an
+  // agreement missing from a passive read never invalidates the ledger row.
   const payments = salvage(raw.payments ?? [], 'payment', parseMortgagePayment).filter((row) => { if (!row.loan_part_id || partIds.has(row.loan_part_id)) return true; rejected.push({ record: `payment ${row.id}`, reason: 'references an unknown loan part' }); return false })
   const rate_periods = salvage(raw.rate_periods ?? [], 'rate period', parseRatePeriod).filter((row) => { if (!row.loan_part_id || partIds.has(row.loan_part_id)) return true; rejected.push({ record: `rate period ${row.id}`, reason: 'references an unknown loan part' }); return false })
   const valuations = salvage(raw.valuations ?? [], 'valuation', parseValuation); const contributions = salvage(raw.contributions ?? [], 'contribution', parseContribution)
