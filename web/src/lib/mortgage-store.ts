@@ -22,7 +22,7 @@ import { syncCoordinator } from './sync'
 import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
 import { legacyImportAssignedToActive } from './legacy-data'
 import { parseFiniteJson, parseMortgageEnvelope, parseISODate, parseLoanPartId, salvageMortgageEnvelope, salvageMortgageRows } from './persistence-schema'
-import { reportPersistenceWarning } from './persistence-error'
+import { PersistenceError, reportPersistenceWarning } from './persistence-error'
 import {
   receiptRpc, rejectLegacyToolOperation, rememberRowRevisions,
   rememberToolRevision, revisionKey, syncRpcResult,
@@ -33,7 +33,10 @@ import {
 export const STORAGE_KEY = 'bostadskalkyl_mortgage_v1'
 const CACHE_KEY = 'bostadskalkyl_mortgage_cache_v1'
 const IMPORT_FLAG = 'bostadskalkyl_mortgage_supabase_imported'
-const VERSION = 5
+// v6 (plan 109a): banks gain catalog_id, mortgages gain end_date, payments gain
+// mortgage_id — all nullable, so v4/v5 envelopes still load (the parsers treat
+// an absent field as null; no destructive migration step exists or is needed).
+const VERSION = 6
 const STATE = 'tool_state'
 const SETTINGS_TOOL = 'bolanekoll-settings'
 const SETTINGS_RESOURCE = `tool_state:${SETTINGS_TOOL}`
@@ -50,16 +53,24 @@ const T = {
 } as const
 
 const RESOURCES = T
+// Plan 109a — the two atomic bank-change RPCs get their own sync resources so
+// their queued operations keep the ordinary outbox/dirty/replay semantics.
+const BANK_CHANGE_RESOURCE = 'mortgage-bank-change'
+const BANK_REVERT_RESOURCE = 'mortgage-bank-change-revert'
+// Reads of mortgages/loan parts must fall back to the cache while a queued
+// bank change or revert is still unacknowledged, or the cloud read would
+// overwrite the optimistic archive/create with the pre-change state.
+const AGREEMENT_RESOURCES = [BANK_CHANGE_RESOURCE, BANK_REVERT_RESOURCE]
 
 // The writable data columns per table. `id` + `created_at` are added by `_row`;
 // `household_id` (column default) + `updated_at` (trigger) are never sent. Field
 // names already match column names 1:1 (both snake_case), so a plain pick works.
 const COLS = {
-  banks: ['label', 'year_basis', 'year_basis_source', 'billing', 'billing_source'],
-  mortgages: ['bank_id', 'label', 'start_date', 'archived'],
+  banks: ['label', 'year_basis', 'year_basis_source', 'billing', 'billing_source', 'catalog_id'],
+  mortgages: ['bank_id', 'label', 'start_date', 'archived', 'end_date'],
   parts: ['label', 'loan_number', 'start_balance', 'start_date', 'archived', 'mortgage_id', 'original_balance', 'original_date', 'planned_amortization', 'planned_amortization_start', 'planned_amortization_end'],
   periods: ['loan_part_id', 'start_date', 'end_date', 'rate', 'rate_type'],
-  payments: ['loan_part_id', 'date', 'kind', 'description', 'amount', 'balance_after', 'paid_by', 'source', 'is_insats', 'paid_split'],
+  payments: ['loan_part_id', 'date', 'kind', 'description', 'amount', 'balance_after', 'paid_by', 'source', 'is_insats', 'paid_split', 'mortgage_id'],
   valuations: ['date', 'value', 'note', 'is_purchase'],
   contributions: ['owner', 'date', 'amount', 'note'],
 } as const
@@ -152,16 +163,25 @@ const NOT_NULL_DEFAULTS: Record<string, unknown> = {
 // Plan 104 — columns that must be sent as an EXPLICIT null when null, not
 // dropped. The sync UPDATE (`sync_apply_one_row`) only assigns the keys present
 // in the payload, so an omitted key leaves the DB value untouched: a nullable
-// column can be SET but never CLEARED unless its key is present as null. The
-// bank profile lock must be clearable back to auto (year_basis_source → null),
-// so these two columns opt into explicit-null. Scoped to just these columns to
-// avoid changing the omit-null behaviour every other table relies on.
-const NULLABLE_EXPLICIT: ReadonlySet<string> = new Set([
-  'year_basis', 'year_basis_source', 'billing', 'billing_source',
+// column can be SET but never CLEARED unless its key is present as null.
+// Scoped per table (plan 109a) because column names repeat across tables:
+// loan-part rows must KEEP omit-null for mortgage_id (an explicit null would
+// clear a part's agreement link on any stale-cache edit), while payment rows
+// need explicit null so the database trigger derives provenance from the part.
+const NULLABLE_EXPLICIT: Partial<Record<keyof typeof COLS, ReadonlySet<string>>> = {
+  // The bank profile locks must be clearable back to auto; the catalogue link
+  // must be detachable back to a private custom bank.
+  banks: new Set(['year_basis', 'year_basis_source', 'billing', 'billing_source', 'catalog_id']),
+  // Un-archiving an agreement must clear end_date in the same write, or the
+  // database consistency CHECK ((end_date is null) = (not archived)) rejects it.
+  mortgages: new Set(['end_date']),
+  periods: new Set(['loan_part_id']),
   // A payment can be reclassified as a kontantinsats. These values must then
   // be cleared in the cloud row rather than omitted from the UPDATE payload.
-  'loan_part_id', 'balance_after', 'paid_split',
-])
+  // mortgage_id: explicit null lets the 109a trigger derive part-linked
+  // provenance (a stale client value would otherwise be rejected as a mismatch).
+  payments: new Set(['loan_part_id', 'balance_after', 'paid_split', 'mortgage_id']),
+}
 
 // A full insert row: id + created_at (client-stamped) + the data columns. A
 // null/undefined value is replaced by its NOT_NULL_DEFAULTS fallback if the
@@ -169,16 +189,27 @@ const NULLABLE_EXPLICIT: ReadonlySet<string> = new Set([
 // else dropped (nullable → left untouched on update). This means a legacy row
 // with, e.g., paid_by null inserts 'joint' rather than an explicit null, so it
 // works regardless of whether the DB column carries the default.
-function _row(obj: { id?: string; created_at?: string }, cols: readonly string[]): Record<string, unknown> {
+function _row(obj: { id?: string; created_at?: string }, table: keyof typeof COLS): Record<string, unknown> {
   const rec = obj as unknown as Record<string, unknown>
+  const explicit = NULLABLE_EXPLICIT[table]
   const out: Record<string, unknown> = {}
   if (rec.id != null) out.id = rec.id
   if (rec.created_at != null) out.created_at = rec.created_at
-  for (const c of cols) {
+  for (const c of COLS[table]) {
     if (rec[c] != null) out[c] = rec[c]
     else if (c in NOT_NULL_DEFAULTS) out[c] = NOT_NULL_DEFAULTS[c]
-    else if (NULLABLE_EXPLICIT.has(c)) out[c] = null
+    else if (explicit?.has(c)) out[c] = null
   }
+  return out
+}
+
+// Payment rows never send a client-side agreement id alongside a loan part:
+// the 109a database trigger derives part-linked provenance from the part row
+// itself, and a client value could only agree with it or be stale (and be
+// rejected as 'mortgage provenance mismatch'). Explicit null = "derive".
+function _paymentRow(payment: { id?: string; created_at?: string }): Record<string, unknown> {
+  const out = _row(payment, 'payments')
+  if (out.loan_part_id != null) out.mortgage_id = null
   return out
 }
 
@@ -323,8 +354,8 @@ function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): Le
   } catch { warning('säkerhetskopian'); return { status: 'invalid' } }
   const candidate = materializeImport('mortgage-legacy', raw, () => {
     const env = _envelope(data as unknown as Record<string, unknown>, true)
-    env.banks = env.banks.map(r => stamp({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null, ...(r as unknown as Record<string, unknown>) }, 'bank') as Bank)
-    env.mortgages = env.mortgages.map(r => stamp({ bank_id: null, label: '', start_date: null, archived: false, ...(r as unknown as Record<string, unknown>) }, 'mortgage') as Mortgage)
+    env.banks = env.banks.map(r => stamp({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null, catalog_id: null, ...(r as unknown as Record<string, unknown>) }, 'bank') as Bank)
+    env.mortgages = env.mortgages.map(r => stamp({ bank_id: null, label: '', start_date: null, archived: false, end_date: null, ...(r as unknown as Record<string, unknown>) }, 'mortgage') as Mortgage)
     env.loan_parts = env.loan_parts.map(r => stamp(r, 'part') as LoanPart)
     env.payments = env.payments.map(r => stamp(r, 'pay') as Payment)
     env.valuations = env.valuations.map(r => stamp(r, 'val') as Valuation)
@@ -333,7 +364,7 @@ function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): Le
     const normalized = {
       ...env,
       loan_parts: env.loan_parts.map((r) => ({ label: '', loan_number: '', start_balance: 0, start_date: '', archived: false, mortgage_id: null, original_balance: null, original_date: null, planned_amortization: null, planned_amortization_start: null, planned_amortization_end: null, ...(r as unknown as Record<string, unknown>) })),
-      payments: env.payments.map((r) => ({ loan_part_id: null, date: '', kind: 'payment', description: '', amount: 0, balance_after: null, paid_by: 'joint', source: '', is_insats: false, paid_split: null, ...(r as unknown as Record<string, unknown>) })),
+      payments: env.payments.map((r) => ({ loan_part_id: null, date: '', kind: 'payment', description: '', amount: 0, balance_after: null, paid_by: 'joint', source: '', is_insats: false, paid_split: null, mortgage_id: null, ...(r as unknown as Record<string, unknown>) })),
       valuations: env.valuations.map((r) => ({ date: '', value: 0, note: '', is_purchase: false, ...(r as unknown as Record<string, unknown>) })),
       rate_periods: env.rate_periods.map((r) => ({ loan_part_id: null, start_date: '', end_date: null, rate: null, rate_type: 'rörlig', ...(r as unknown as Record<string, unknown>) })),
       contributions: env.contributions,
@@ -368,10 +399,10 @@ const _importLocalOnce = makeImportOnce(() => syncCoordinator.scopedStorageKey(I
       expectedRevisions: Object.fromEntries(ids.map((id) => [revisionKey(resource, id), null])), applyLocal,
     })
   }
-  add(T.parts, legacy.loan_parts, legacy.loan_parts.map(r => _row(r, COLS.parts)), () => _patchCache(e => { const ids = new Set(legacy.loan_parts.map(r => r.id)); e.loan_parts = [...legacy.loan_parts, ...e.loan_parts.filter(r => !ids.has(r.id))] }))
-  add(T.periods, legacy.rate_periods, legacy.rate_periods.map(r => _row(r, COLS.periods)), () => _patchCache(e => { const ids = new Set(legacy.rate_periods.map(r => r.id)); e.rate_periods = [...legacy.rate_periods, ...e.rate_periods.filter(r => !ids.has(r.id))] }))
-  add(T.payments, legacy.payments, legacy.payments.map(r => _row(r, COLS.payments)), () => _patchCache(e => { const ids = new Set(legacy.payments.map(r => r.id)); e.payments = [...legacy.payments, ...e.payments.filter(r => !ids.has(r.id))] }))
-  add(T.valuations, legacy.valuations, legacy.valuations.map(r => _row(r, COLS.valuations)), () => _patchCache(e => { const ids = new Set(legacy.valuations.map(r => r.id)); e.valuations = [...legacy.valuations, ...e.valuations.filter(r => !ids.has(r.id))] }))
+  add(T.parts, legacy.loan_parts, legacy.loan_parts.map(r => _row(r, 'parts')), () => _patchCache(e => { const ids = new Set(legacy.loan_parts.map(r => r.id)); e.loan_parts = [...legacy.loan_parts, ...e.loan_parts.filter(r => !ids.has(r.id))] }))
+  add(T.periods, legacy.rate_periods, legacy.rate_periods.map(r => _row(r, 'periods')), () => _patchCache(e => { const ids = new Set(legacy.rate_periods.map(r => r.id)); e.rate_periods = [...legacy.rate_periods, ...e.rate_periods.filter(r => !ids.has(r.id))] }))
+  add(T.payments, legacy.payments, legacy.payments.map(r => _paymentRow(r)), () => _patchCache(e => { const ids = new Set(legacy.payments.map(r => r.id)); e.payments = [...legacy.payments, ...e.payments.filter(r => !ids.has(r.id))] }))
+  add(T.valuations, legacy.valuations, legacy.valuations.map(r => _row(r, 'valuations')), () => _patchCache(e => { const ids = new Set(legacy.valuations.map(r => r.id)); e.valuations = [...legacy.valuations, ...e.valuations.filter(r => !ids.has(r.id))] }))
   operations.push({
     resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: legacy.settings, seed: true }, entityIds: [SETTINGS_TOOL],
     expectedRevisions: { [SETTINGS_RESOURCE]: null }, applyLocal: () => _patchCache(e => { e.settings = legacy.settings }),
@@ -433,6 +464,101 @@ syncCoordinator.register(CASCADE_RESOURCE, async (operation) => {
     && operation.entityIds.length === 1 && operation.entityIds[0] === id
 })
 
+// ── Atomic bank change + revert (plan 109a; no UI until 109c) ────────────────
+// One durable outbox operation per call, replayed through the receipt RPCs.
+// The client-generated new-agreement id in the payload doubles as the server's
+// idempotence key: a lost response replayed later returns the already-created
+// payload as success instead of a spurious revision mismatch.
+export interface MortgageBankChangePart {
+  id: string
+  label: string
+  balance: number
+  planned_amortization?: number | null
+}
+
+export interface MortgageBankChangePayload {
+  old_mortgage_id: string
+  mortgage: { id: string; label: string; bank_id: string }
+  parts: MortgageBankChangePart[]
+  effective_date: string
+}
+
+function validBankChangePart(part: unknown): part is MortgageBankChangePart {
+  if (!part || typeof part !== 'object') return false
+  const p = part as Record<string, unknown>
+  return typeof p.id === 'string' && !!p.id
+    && typeof p.label === 'string'
+    && typeof p.balance === 'number' && Number.isFinite(p.balance) && p.balance >= 0
+    && (p.planned_amortization === undefined || p.planned_amortization === null
+      || (typeof p.planned_amortization === 'number' && Number.isFinite(p.planned_amortization) && p.planned_amortization >= 0))
+}
+
+function validBankChangePayload(payload: unknown): payload is MortgageBankChangePayload {
+  if (!payload || typeof payload !== 'object') return false
+  const p = payload as Record<string, unknown>
+  const mortgage = p.mortgage as Record<string, unknown> | undefined
+  if (typeof p.old_mortgage_id !== 'string' || !p.old_mortgage_id) return false
+  if (!mortgage || typeof mortgage !== 'object'
+    || typeof mortgage.id !== 'string' || !mortgage.id || mortgage.id === p.old_mortgage_id
+    || typeof mortgage.label !== 'string'
+    || typeof mortgage.bank_id !== 'string' || !mortgage.bank_id) return false
+  if (!parseISODate(p.effective_date).ok) return false
+  if (!Array.isArray(p.parts) || !p.parts.every(validBankChangePart)) return false
+  const ids = new Set(p.parts.map((part) => (part as MortgageBankChangePart).id))
+  return ids.size === p.parts.length && !ids.has(mortgage.id) && !ids.has(p.old_mortgage_id)
+}
+
+syncCoordinator.register(BANK_CHANGE_RESOURCE, async (operation) => {
+  const payload = operation.payload as MortgageBankChangePayload
+  if (!validBankChangePayload(payload)) throw { status: 400, message: 'Malformed bank change' }
+  const key = revisionKey(RESOURCES.mortgages, payload.old_mortgage_id)
+  const expected = operation.expectedRevisions?.[key]
+  if (expected == null) {
+    // No trusted base revision (the agreement was never loaded through the
+    // sync layer). Read the current one and surface a recoverable conflict —
+    // never guess a base for an archive-and-replace of financial history.
+    const { data, error } = await supabase.from(T.mortgages).select('id,revision').eq('id', payload.old_mortgage_id).maybeSingle()
+    if (error) throw error
+    const revision = Number((data as { revision?: unknown } | null)?.revision)
+    throw {
+      status: 409, message: 'bank change has no base revision',
+      currentRevisions: { [key]: Number.isSafeInteger(revision) && revision > 0 ? revision : null },
+    }
+  }
+  const { data, error } = await receiptRpc('sync_change_mortgage_bank', {
+    p_operation_id: operation.id,
+    p_old_mortgage_id: payload.old_mortgage_id,
+    p_expected_old_revision: expected,
+    // Rebuild both payloads key-by-key: the RPC hard-rejects any extra key.
+    p_new_mortgage: { id: payload.mortgage.id, label: payload.mortgage.label, bank_id: payload.mortgage.bank_id },
+    p_new_parts: payload.parts.map((part) => ({
+      id: part.id, label: part.label, balance: part.balance,
+      ...(part.planned_amortization !== undefined ? { planned_amortization: part.planned_amortization } : {}),
+    })),
+    p_effective_date: payload.effective_date,
+  })
+  if (error) throw error
+  return syncRpcResult(data)
+}, (operation) => operation.operation === 'upsert' && validBankChangePayload(operation.payload)
+  && operation.entityIds.length === 1
+  && operation.entityIds[0] === (operation.payload as MortgageBankChangePayload).mortgage.id)
+
+syncCoordinator.register(BANK_REVERT_RESOURCE, async (operation) => {
+  const id = (operation.payload as { id?: unknown })?.id
+  if (operation.operation !== 'delete' || typeof id !== 'string' || !id) throw { status: 400, message: 'Malformed bank change revert' }
+  const { data, error } = await receiptRpc('sync_revert_mortgage_bank_change', {
+    p_operation_id: operation.id,
+    p_mortgage_id: id,
+    p_expected_revisions: operation.expectedRevisions ?? {},
+  })
+  if (error) throw error
+  return syncRpcResult(data)
+}, (operation) => {
+  const id = (operation.payload as { id?: unknown })?.id
+  return operation.operation === 'delete' && typeof id === 'string' && !!id
+    && operation.entityIds.length === 1 && operation.entityIds[0] === id
+})
+
 // ── Loan parts ───────────────────────────────────────────────────────────────
 export interface MortgageSyncSnapshot {
   parts: LoanPart[]
@@ -454,7 +580,7 @@ export async function loadMortgageSyncSnapshot(): Promise<MortgageSyncSnapshot |
     }
   }
   await _importLocalOnce()
-  if (!scope.isActive() || [RESOURCES.parts, RESOURCES.periods, RESOURCES.payments, CASCADE_RESOURCE].some((resource) => syncCoordinator.isDirty(resource))) {
+  if (!scope.isActive() || [RESOURCES.parts, RESOURCES.periods, RESOURCES.payments, CASCADE_RESOURCE, ...AGREEMENT_RESOURCES].some((resource) => syncCoordinator.isDirty(resource))) {
     return fallback()
   }
   const [partsResult, periodsResult, paymentsResult, partTombstones, periodTombstones, paymentTombstones] = await Promise.all([
@@ -465,7 +591,7 @@ export async function loadMortgageSyncSnapshot(): Promise<MortgageSyncSnapshot |
     loadTombstoneIds(scope, RESOURCES.periods),
     loadTombstoneIds(scope, RESOURCES.payments),
   ])
-  if (!scope.isActive() || [RESOURCES.parts, RESOURCES.periods, RESOURCES.payments, CASCADE_RESOURCE].some((resource) => syncCoordinator.isDirty(resource))) {
+  if (!scope.isActive() || [RESOURCES.parts, RESOURCES.periods, RESOURCES.payments, CASCADE_RESOURCE, ...AGREEMENT_RESOURCES].some((resource) => syncCoordinator.isDirty(resource))) {
     return fallback()
   }
   if (partsResult.error || periodsResult.error || paymentsResult.error ||
@@ -496,11 +622,11 @@ export async function listLoanParts(): Promise<LoanPart[]> {
   const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
   const fallback = () => withoutTombstones(_readCacheFrom(scope).loan_parts, cachedTombstoneIds(scope, RESOURCES.parts))
-  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.parts) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.parts) || syncCoordinator.isDirty(CASCADE_RESOURCE) || AGREEMENT_RESOURCES.some((resource) => syncCoordinator.isDirty(resource))) return fallback()
   const [result, tombstones] = await Promise.all([
     supabase.from(T.parts).select('*').order('created_at', { ascending: true }), loadTombstoneIds(scope, RESOURCES.parts),
   ])
-  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.parts) || syncCoordinator.isDirty(CASCADE_RESOURCE)) return fallback()
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.parts) || syncCoordinator.isDirty(CASCADE_RESOURCE) || AGREEMENT_RESOURCES.some((resource) => syncCoordinator.isDirty(resource))) return fallback()
   if (result.error || !result.data) return fallback()
   rememberRowRevisions(RESOURCES.parts, result.data as unknown as Record<string, unknown>[])
   const parsed = salvageMortgageRows(result.data, 'loan_parts'); if (parsed.rejected.length) warning('molnet')
@@ -511,7 +637,7 @@ export async function listLoanParts(): Promise<LoanPart[]> {
 
 export async function addLoanPart(record: Omit<LoanPart, 'id' | 'created_at'>): Promise<LoanPart> {
   const saved = stamp(record, 'part') as LoanPart
-  await queueTableUpsert(RESOURCES.parts, [_row(saved, COLS.parts)], [saved.id], () => _patchCache(e => { e.loan_parts.push(saved) }))
+  await queueTableUpsert(RESOURCES.parts, [_row(saved, 'parts')], [saved.id], () => _patchCache(e => { e.loan_parts.push(saved) }))
   return saved
 }
 
@@ -519,7 +645,7 @@ export async function updateLoanPart(id: string, patch: Partial<LoanPart>): Prom
   const current = _readCache().loan_parts.find((part) => part.id === id)
   if (!current) return null
   const saved = { ...current, ...patch }
-  await queueTableUpsert(RESOURCES.parts, [_row(saved, COLS.parts)], [id], () => {
+  await queueTableUpsert(RESOURCES.parts, [_row(saved, 'parts')], [id], () => {
     _patchCache(e => { e.loan_parts = e.loan_parts.map(p => p?.id === id ? saved : p) })
   })
   return saved
@@ -576,7 +702,7 @@ export async function listBanks(): Promise<Bank[]> {
 
 export async function addBank(record: Omit<Bank, 'id' | 'created_at'>): Promise<Bank> {
   const saved = stamp(record, 'bank') as Bank
-  await queueTableUpsert(RESOURCES.banks, [_row(saved, COLS.banks)], [saved.id], () => _patchCache(e => { e.banks.push(saved) }))
+  await queueTableUpsert(RESOURCES.banks, [_row(saved, 'banks')], [saved.id], () => _patchCache(e => { e.banks.push(saved) }))
   return saved
 }
 
@@ -584,7 +710,7 @@ export async function updateBank(id: string, patch: Partial<Bank>): Promise<Bank
   const current = _readCache().banks.find((bank) => bank.id === id)
   if (!current) return null
   const saved = { ...current, ...patch }
-  await queueTableUpsert(RESOURCES.banks, [_row(saved, COLS.banks)], [id], () => _patchCache(e => { e.banks = e.banks.map(b => b?.id === id ? saved : b) }))
+  await queueTableUpsert(RESOURCES.banks, [_row(saved, 'banks')], [id], () => _patchCache(e => { e.banks = e.banks.map(b => b?.id === id ? saved : b) }))
   return saved
 }
 
@@ -599,11 +725,11 @@ export async function listMortgages(): Promise<Mortgage[]> {
   const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
   const fallback = () => withoutTombstones(_readCacheFrom(scope).mortgages, cachedTombstoneIds(scope, RESOURCES.mortgages))
-  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.mortgages)) return fallback()
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.mortgages) || AGREEMENT_RESOURCES.some((resource) => syncCoordinator.isDirty(resource))) return fallback()
   const [result, tombstones] = await Promise.all([
     supabase.from(T.mortgages).select('*').order('created_at', { ascending: true }), loadTombstoneIds(scope, RESOURCES.mortgages),
   ])
-  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.mortgages)) return fallback()
+  if (!scope.isActive() || syncCoordinator.isDirty(RESOURCES.mortgages) || AGREEMENT_RESOURCES.some((resource) => syncCoordinator.isDirty(resource))) return fallback()
   if (result.error || !result.data) return fallback()
   rememberRowRevisions(RESOURCES.mortgages, result.data as unknown as Record<string, unknown>[])
   const parsed = salvageMortgageRows(result.data, 'mortgages'); if (parsed.rejected.length) warning('molnet')
@@ -614,7 +740,7 @@ export async function listMortgages(): Promise<Mortgage[]> {
 
 export async function addMortgage(record: Omit<Mortgage, 'id' | 'created_at'>): Promise<Mortgage> {
   const saved = stamp(record, 'mort') as Mortgage
-  await queueTableUpsert(RESOURCES.mortgages, [_row(saved, COLS.mortgages)], [saved.id], () => _patchCache(e => { e.mortgages.push(saved) }))
+  await queueTableUpsert(RESOURCES.mortgages, [_row(saved, 'mortgages')], [saved.id], () => _patchCache(e => { e.mortgages.push(saved) }))
   return saved
 }
 
@@ -622,7 +748,7 @@ export async function updateMortgage(id: string, patch: Partial<Mortgage>): Prom
   const current = _readCache().mortgages.find((mortgage) => mortgage.id === id)
   if (!current) return null
   const saved = { ...current, ...patch }
-  await queueTableUpsert(RESOURCES.mortgages, [_row(saved, COLS.mortgages)], [id], () => _patchCache(e => { e.mortgages = e.mortgages.map(m => m?.id === id ? saved : m) }))
+  await queueTableUpsert(RESOURCES.mortgages, [_row(saved, 'mortgages')], [id], () => _patchCache(e => { e.mortgages = e.mortgages.map(m => m?.id === id ? saved : m) }))
   return saved
 }
 
@@ -630,6 +756,102 @@ export async function removeMortgage(id: string): Promise<number> {
   let n = 0
   await queueTableDelete(RESOURCES.mortgages, [id], () => _patchCache(e => { e.mortgages = e.mortgages.filter(m => m?.id !== id); n = e.mortgages.length }))
   return n
+}
+
+// ── Atomic bank change / Ångra bankbyte (plan 109a; exported, UI in 109c) ────
+
+export interface MortgageBankChangeInput {
+  /** The active agreement being closed. */
+  old_mortgage_id: string
+  /** The household's private bank profile the new agreement moves to. */
+  bank_id: string
+  /** Label for the new agreement ('' lets the UI render its fallback). */
+  label: string
+  /** Confirmed opening parts — drafts, not history (plan 109 decision 4). */
+  parts: Array<{ label: string; balance: number; planned_amortization?: number | null }>
+  /** ISO date; becomes the old agreement's end_date AND the new one's start_date. */
+  effective_date: string
+}
+
+/**
+ * Archive the active agreement and create its successor at the new bank, in
+ * one database transaction (`sync_change_mortgage_bank`). Returns the
+ * optimistically created rows (ids are client-generated up front — the new
+ * agreement id is the server's idempotence key, so a replay after a lost
+ * response can never produce two active agreements). A revision conflict
+ * rejects with a PersistenceError('conflict') and leaves the operation in the
+ * outbox with the server's current revisions attached for explicit resolution.
+ */
+export async function changeMortgageBank(input: MortgageBankChangeInput): Promise<{ mortgage: Mortgage; parts: LoanPart[] }> {
+  const mortgage: Mortgage = stamp({
+    bank_id: input.bank_id, label: input.label, start_date: input.effective_date, archived: false, end_date: null,
+  }, 'mort') as Mortgage
+  const parts: LoanPart[] = input.parts.map((part) => stamp({
+    label: part.label, loan_number: '',
+    start_balance: part.balance, start_date: input.effective_date, archived: false,
+    mortgage_id: mortgage.id, original_balance: part.balance, original_date: input.effective_date,
+    planned_amortization: part.planned_amortization ?? null,
+    planned_amortization_start: part.planned_amortization != null ? input.effective_date : null,
+    planned_amortization_end: null,
+  }, 'part') as LoanPart)
+  const payload: MortgageBankChangePayload = {
+    old_mortgage_id: input.old_mortgage_id,
+    mortgage: { id: mortgage.id, label: mortgage.label, bank_id: input.bank_id },
+    parts: parts.map((part) => ({
+      id: part.id, label: part.label, balance: part.start_balance,
+      ...(part.planned_amortization != null ? { planned_amortization: part.planned_amortization } : {}),
+    })),
+    effective_date: input.effective_date,
+  }
+  const oldKey = revisionKey(RESOURCES.mortgages, input.old_mortgage_id)
+  await syncCoordinator.mutate({
+    resource: BANK_CHANGE_RESOURCE, operation: 'upsert', payload, entityIds: [mortgage.id],
+    expectedRevisions: { [oldKey]: syncCoordinator.getRevision(oldKey) },
+    // Mirrors the RPC's own writes so the cache agrees until the next cloud
+    // read reconciles (server stamps created_at itself).
+    applyLocal: () => _patchCache(e => {
+      e.mortgages = e.mortgages
+        .map(m => m?.id === input.old_mortgage_id ? { ...m, archived: true, end_date: input.effective_date } : m)
+        .filter(m => m?.id !== mortgage.id)
+      e.mortgages.push(mortgage)
+      const partIds = new Set(parts.map((part) => part.id))
+      e.loan_parts = [...e.loan_parts.filter(p => !(p && partIds.has(p.id))), ...parts]
+    }),
+  })
+  return { mortgage, parts }
+}
+
+/**
+ * Ångra bankbyte: delete the (pristine) new agreement and its parts and
+ * reactivate the predecessor, atomically (`sync_revert_mortgage_bank_change`).
+ * The server refuses (validation error) when any payment or rate period
+ * references the new agreement or its parts — partial reverts are impossible.
+ */
+export async function revertMortgageBankChange(newMortgageId: string): Promise<void> {
+  const cache = _readCache()
+  const target = cache.mortgages.find(m => m?.id === newMortgageId)
+  const partIds = cache.loan_parts.filter(p => p?.mortgage_id === newMortgageId).map(p => p.id)
+  const previous = target
+    ? cache.mortgages.find(m => m && m.id !== newMortgageId && m.archived && (m.end_date ?? null) === (target.start_date ?? null))
+    : undefined
+  // The RPC verifies the expected revisions of the target, its parts AND the
+  // predecessor before touching anything; unknown entries stay null and simply
+  // surface as a recoverable conflict rather than guessing.
+  const keys = [
+    revisionKey(RESOURCES.mortgages, newMortgageId),
+    ...(previous ? [revisionKey(RESOURCES.mortgages, previous.id)] : []),
+    ...partIds.map((id) => revisionKey(RESOURCES.parts, id)),
+  ]
+  await syncCoordinator.mutate({
+    resource: BANK_REVERT_RESOURCE, operation: 'delete', payload: { id: newMortgageId }, entityIds: [newMortgageId],
+    expectedRevisions: Object.fromEntries(keys.map((key) => [key, syncCoordinator.getRevision(key)])),
+    applyLocal: () => _patchCache(e => {
+      e.loan_parts = e.loan_parts.filter(p => p?.mortgage_id !== newMortgageId)
+      e.mortgages = e.mortgages
+        .filter(m => m?.id !== newMortgageId)
+        .map(m => previous && m?.id === previous.id ? { ...m, archived: false, end_date: null } : m)
+    }),
+  })
 }
 
 // ── Payments ─────────────────────────────────────────────────────────────────
@@ -648,15 +870,41 @@ export async function listPayments(): Promise<Payment[]> {
   return byDateDesc(rows)
 }
 
+// Plan 109a — a NEW partless down payment must carry its agreement id (the
+// database trigger rejects the insert otherwise). Per the owner decision the
+// store defaults it to the household's one active agreement; callers (109c's
+// selector UI) may pass an explicit mortgage_id instead. Existing rows are
+// never re-assigned here — legacy null provenance stays until repaired in 109c.
+async function _activeMortgageId(): Promise<string> {
+  const active = (await listMortgages()).find((mortgage) => mortgage && !mortgage.archived)
+  if (!active) {
+    // Surfaces through persistenceErrorMessage verbatim (toPersistenceError
+    // returns an existing PersistenceError as-is), so the user sees why the
+    // save was refused instead of the generic validation copy.
+    throw Object.assign(new PersistenceError('validation'), {
+      message: 'Kontantinsatsen kunde inte sparas: hushållet saknar ett aktivt bolåneavtal.',
+    })
+  }
+  return active.id
+}
+
+async function _withDownPaymentProvenance(rows: Payment[]): Promise<Payment[]> {
+  if (!rows.some((row) => row.kind === 'down_payment' && row.mortgage_id == null)) return rows
+  const mortgageId = await _activeMortgageId()
+  return rows.map((row) => row.kind === 'down_payment' && row.mortgage_id == null
+    ? { ...row, mortgage_id: mortgageId }
+    : row)
+}
+
 export async function addPayment(record: Omit<Payment, 'id' | 'created_at'>): Promise<Payment> {
-  const saved = canonicalPayment(stamp(record, 'pay') as Payment)
-  await queueTableUpsert(RESOURCES.payments, [_row(saved, COLS.payments)], [saved.id], () => _patchCache(e => { e.payments.push(saved) }))
+  const [saved] = await _withDownPaymentProvenance([canonicalPayment(stamp(record, 'pay') as Payment)])
+  await queueTableUpsert(RESOURCES.payments, [_paymentRow(saved)], [saved.id], () => _patchCache(e => { e.payments.push(saved) }))
   return saved
 }
 
 export async function addPayments(records: Array<Omit<Payment, 'id' | 'created_at'>>): Promise<Payment[]> {
-  const saved = records.map(r => canonicalPayment(stamp(r, 'pay') as Payment))
-  await queueTableUpsert(RESOURCES.payments, saved.map(r => _row(r, COLS.payments)), saved.map((row) => row.id), () => _patchCache(e => { e.payments = e.payments.concat(saved) }))
+  const saved = await _withDownPaymentProvenance(records.map(r => canonicalPayment(stamp(r, 'pay') as Payment)))
+  await queueTableUpsert(RESOURCES.payments, saved.map(r => _paymentRow(r)), saved.map((row) => row.id), () => _patchCache(e => { e.payments = e.payments.concat(saved) }))
   return saved
 }
 
@@ -664,7 +912,7 @@ export async function updatePayment(id: string, patch: Partial<Payment>): Promis
   const current = _readCache().payments.find((payment) => payment.id === id)
   if (!current) return null
   const saved = canonicalPayment({ ...current, ...patch })
-  await queueTableUpsert(RESOURCES.payments, [_row(saved, COLS.payments)], [id], () => _patchCache(e => { e.payments = e.payments.map(p => p?.id === id ? saved : p) }))
+  await queueTableUpsert(RESOURCES.payments, [_paymentRow(saved)], [id], () => _patchCache(e => { e.payments = e.payments.map(p => p?.id === id ? saved : p) }))
   return saved
 }
 
@@ -699,7 +947,7 @@ export async function listValuations(): Promise<Valuation[]> {
 
 export async function addValuation(record: Omit<Valuation, 'id' | 'created_at'>): Promise<Valuation> {
   const saved = stamp(record, 'val') as Valuation
-  await queueTableUpsert(RESOURCES.valuations, [_row(saved, COLS.valuations)], [saved.id], () => _patchCache(e => { e.valuations.push(saved) }))
+  await queueTableUpsert(RESOURCES.valuations, [_row(saved, 'valuations')], [saved.id], () => _patchCache(e => { e.valuations.push(saved) }))
   return saved
 }
 
@@ -707,7 +955,7 @@ export async function updateValuation(id: string, patch: Partial<Valuation>): Pr
   const current = _readCache().valuations.find((valuation) => valuation.id === id)
   if (!current) return null
   const saved = { ...current, ...patch }
-  await queueTableUpsert(RESOURCES.valuations, [_row(saved, COLS.valuations)], [id], () => _patchCache(e => { e.valuations = e.valuations.map(v => v?.id === id ? saved : v) }))
+  await queueTableUpsert(RESOURCES.valuations, [_row(saved, 'valuations')], [id], () => _patchCache(e => { e.valuations = e.valuations.map(v => v?.id === id ? saved : v) }))
   return saved
 }
 
@@ -735,7 +983,7 @@ export async function listRatePeriods(): Promise<RatePeriod[]> {
 
 export async function addRatePeriod(record: Omit<RatePeriod, 'id' | 'created_at'>): Promise<RatePeriod> {
   const saved = stamp(record, 'rate') as RatePeriod
-  await queueTableUpsert(RESOURCES.periods, [_row(saved, COLS.periods)], [saved.id], () => _patchCache(e => { e.rate_periods.push(saved) }))
+  await queueTableUpsert(RESOURCES.periods, [_row(saved, 'periods')], [saved.id], () => _patchCache(e => { e.rate_periods.push(saved) }))
   return saved
 }
 
@@ -743,7 +991,7 @@ export async function updateRatePeriod(id: string, patch: Partial<RatePeriod>): 
   const current = _readCache().rate_periods.find((period) => period.id === id)
   if (!current) return null
   const saved = { ...current, ...patch }
-  await queueTableUpsert(RESOURCES.periods, [_row(saved, COLS.periods)], [id], () => _patchCache(e => { e.rate_periods = e.rate_periods.map(r => r?.id === id ? saved : r) }))
+  await queueTableUpsert(RESOURCES.periods, [_row(saved, 'periods')], [id], () => _patchCache(e => { e.rate_periods = e.rate_periods.map(r => r?.id === id ? saved : r) }))
   return saved
 }
 
@@ -876,12 +1124,12 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
       expectedRevisions: Object.fromEntries(ids.map((id) => [revisionKey(resource, id), null])), applyLocal,
     })
   }
-  add(T.banks, newBanks, newBanks.map(r => _row(r, COLS.banks)), () => _patchCache(e => { e.banks = [...newBanks, ...e.banks.filter(r => !new Set(newBanks.map(x => x.id)).has(r.id))] }))
-  add(T.mortgages, newMortgages, newMortgages.map(r => _row(r, COLS.mortgages)), () => _patchCache(e => { e.mortgages = [...newMortgages, ...e.mortgages.filter(r => !new Set(newMortgages.map(x => x.id)).has(r.id))] }))
-  add(T.parts, newParts, newParts.map(r => _row(r, COLS.parts)), () => _patchCache(e => { e.loan_parts = [...newParts, ...e.loan_parts.filter(r => !new Set(newParts.map(x => x.id)).has(r.id))] }))
-  add(T.payments, newPays, newPays.map(r => _row(r, COLS.payments)), () => _patchCache(e => { e.payments = [...newPays, ...e.payments.filter(r => !new Set(newPays.map(x => x.id)).has(r.id))] }))
-  add(T.valuations, newVals, newVals.map(r => _row(r, COLS.valuations)), () => _patchCache(e => { e.valuations = [...newVals, ...e.valuations.filter(r => !new Set(newVals.map(x => x.id)).has(r.id))] }))
-  add(T.periods, newRates, newRates.map(r => _row(r, COLS.periods)), () => _patchCache(e => { e.rate_periods = [...newRates, ...e.rate_periods.filter(r => !new Set(newRates.map(x => x.id)).has(r.id))] }))
+  add(T.banks, newBanks, newBanks.map(r => _row(r, 'banks')), () => _patchCache(e => { e.banks = [...newBanks, ...e.banks.filter(r => !new Set(newBanks.map(x => x.id)).has(r.id))] }))
+  add(T.mortgages, newMortgages, newMortgages.map(r => _row(r, 'mortgages')), () => _patchCache(e => { e.mortgages = [...newMortgages, ...e.mortgages.filter(r => !new Set(newMortgages.map(x => x.id)).has(r.id))] }))
+  add(T.parts, newParts, newParts.map(r => _row(r, 'parts')), () => _patchCache(e => { e.loan_parts = [...newParts, ...e.loan_parts.filter(r => !new Set(newParts.map(x => x.id)).has(r.id))] }))
+  add(T.payments, newPays, newPays.map(r => _paymentRow(r)), () => _patchCache(e => { e.payments = [...newPays, ...e.payments.filter(r => !new Set(newPays.map(x => x.id)).has(r.id))] }))
+  add(T.valuations, newVals, newVals.map(r => _row(r, 'valuations')), () => _patchCache(e => { e.valuations = [...newVals, ...e.valuations.filter(r => !new Set(newVals.map(x => x.id)).has(r.id))] }))
+  add(T.periods, newRates, newRates.map(r => _row(r, 'periods')), () => _patchCache(e => { e.rate_periods = [...newRates, ...e.rate_periods.filter(r => !new Set(newRates.map(x => x.id)).has(r.id))] }))
   if (parsed.settings && typeof parsed.settings === 'object') {
     const merged = { ...defaultSettings(), ...existingSettings, ...(parsed.settings as Partial<MortgageSettings>) }
     operations.push({

@@ -660,9 +660,9 @@ describe('bank profile: declared year-basis lock (plan 104, phase 1)', () => {
   })
 
   it('makeBank clamps a malformed year_basis to null (→ detection)', () => {
-    expect(makeBank({ label: 'X', year_basis: 400, year_basis_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: 'declared', billing: null, billing_source: null })
-    expect(makeBank({ label: 'X', year_basis: 360, year_basis_source: 'garbage' })).toEqual({ label: 'X', year_basis: 360, year_basis_source: null, billing: null, billing_source: null })
-    expect(makeBank({})).toEqual({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null })
+    expect(makeBank({ label: 'X', year_basis: 400, year_basis_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: 'declared', billing: null, billing_source: null, catalog_id: null })
+    expect(makeBank({ label: 'X', year_basis: 360, year_basis_source: 'garbage' })).toEqual({ label: 'X', year_basis: 360, year_basis_source: null, billing: null, billing_source: null, catalog_id: null })
+    expect(makeBank({})).toEqual({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null, catalog_id: null })
     // a declared but malformed basis therefore does not override — detection wins
     const bad = expectedCharge(linkedPart(), [bunden()], CLEAN, { banks: [{ id: 'b1', created_at: '', label: 'X', year_basis: 400, year_basis_source: 'declared' }], mortgages: mortgages() })!
     expect(bad.year_basis).toBe(365)
@@ -761,8 +761,8 @@ describe('bank profile: window-scoped bank-pooled learner + billing pin (plan 10
   })
 
   it('makeBank clamps a malformed billing convention to null (→ detection)', () => {
-    expect(makeBank({ label: 'X', billing: 'weird', billing_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: null, billing_source: 'declared' })
-    expect(makeBank({ label: 'X', billing: 'month-end', billing_source: 'garbage' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: 'month-end', billing_source: null })
+    expect(makeBank({ label: 'X', billing: 'weird', billing_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: null, billing_source: 'declared', catalog_id: null })
+    expect(makeBank({ label: 'X', billing: 'month-end', billing_source: 'garbage' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: 'month-end', billing_source: null, catalog_id: null })
   })
 })
 

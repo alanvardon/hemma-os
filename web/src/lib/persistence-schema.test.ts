@@ -184,6 +184,62 @@ describe('Mortgage and month-end persistence schemas', () => {
     expect(result.rejected).toHaveLength(1)
   })
 
+  // Plan 109a — catalog_id (banks), end_date (mortgages), mortgage_id (payments).
+  it('parses the 109a fields, round-trips them idempotently, and defaults them to null when absent', () => {
+    const current = {
+      ...mortgageBackup,
+      banks: [{ ...mortgageBackup.banks[0], catalog_id: 'catalog-danske' }],
+      mortgages: [
+        { ...mortgageBackup.mortgages[0], id: 'mortgage-old', archived: true, end_date: '2026-07-31' },
+        { ...mortgageBackup.mortgages[0], start_date: '2026-08-01' },
+      ],
+      loan_parts: [], rate_periods: [],
+      payments: [{ ...mortgageBackup.payments[0], loan_part_id: null, kind: 'down_payment', is_insats: true, mortgage_id: 'mortgage-1' }],
+    }
+    const parsed = parseMortgageEnvelope(current)
+    expect(parsed).toMatchObject({ ok: true })
+    if (!parsed.ok) return
+    expect(parsed.value.banks[0].catalog_id).toBe('catalog-danske')
+    expect(parsed.value.mortgages[0].end_date).toBe('2026-07-31')
+    expect(parsed.value.payments[0].mortgage_id).toBe('mortgage-1')
+    expect(parseMortgageEnvelope(parsed.value)).toEqual(parsed)
+
+    // The pre-109a fixture has none of the new fields: they migrate to null.
+    const legacy = parseMortgageEnvelope(mortgageBackup)
+    if (!legacy.ok) throw new Error('fixture must parse')
+    expect(legacy.value.banks[0].catalog_id).toBeNull()
+    expect(legacy.value.mortgages[0].end_date).toBeNull()
+    expect(legacy.value.payments[0].mortgage_id).toBeNull()
+  })
+
+  it("accepts the unknown-legacy '' end_date marker and rejects malformed 109a values", () => {
+    const archived = { ...mortgageBackup.mortgages[0], archived: true, end_date: '' }
+    expect(parseMortgageEnvelope({ ...mortgageBackup, mortgages: [archived], loan_parts: [], rate_periods: [], payments: [] }).ok).toBe(true)
+    expect(parseMortgageEnvelope({ ...mortgageBackup, mortgages: [{ ...archived, end_date: 'not-a-date' }], loan_parts: [], rate_periods: [], payments: [] }).ok).toBe(false)
+    expect(parseMortgageEnvelope({ ...mortgageBackup, banks: [{ ...mortgageBackup.banks[0], catalog_id: '' }] }).ok).toBe(false)
+    expect(parseMortgageEnvelope({ ...mortgageBackup, payments: [{ ...mortgageBackup.payments[0], mortgage_id: 42 }] }).ok).toBe(false)
+  })
+
+  it('strict import rejects payment provenance pointing at an unknown mortgage', () => {
+    expect(parseMortgageEnvelope({
+      ...mortgageBackup,
+      payments: [{ ...mortgageBackup.payments[0], mortgage_id: 'missing-mortgage' }],
+    }).ok).toBe(false)
+  })
+
+  it('salvage keeps a payment whose provenance points at a mortgage missing from a partial read', () => {
+    // Passive cache refreshes rewrite payments without the mortgages slice; an
+    // agreement created on another device must never hide payment history.
+    const result = salvageMortgageEnvelope({
+      ...mortgageBackup,
+      mortgages: [],
+      loan_parts: [{ ...mortgageBackup.loan_parts[0], mortgage_id: null }],
+      payments: [{ ...mortgageBackup.payments[0], mortgage_id: 'not-yet-cached-mortgage' }],
+    })
+    expect(result.value.payments).toHaveLength(1)
+    expect(result.value.payments[0].mortgage_id).toBe('not-yet-cached-mortgage')
+  })
+
   it('rejects all of a month-end import when items and payments disagree', () => {
     expect(parseMonthEndEnvelope({ version: 1, settings: {}, items: [{ id: 'item-1', created_at: '2026-07-15T10:00:00.000Z', date_purchased: '', description: '', enter_amount: 0, split: true, amount: 0, fronted_by: 'a', owed_by: 'b', paid: false, pending: false, payment_id: 'missing', note: '', personal_items: [], personal_a: 0, personal_b: 0, source: 'manual' }], payments: [] }).ok).toBe(false)
   })

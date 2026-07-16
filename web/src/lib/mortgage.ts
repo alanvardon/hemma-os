@@ -49,6 +49,11 @@ export interface Bank {
   // pins the cadence; null/detected/suggested fall back to detection.
   billing?: string | null
   billing_source?: string | null
+  // Plan 109a — optional link to the shared read-only bank catalogue
+  // (mortgage_bank_catalog). Null = private custom bank / legacy row. The
+  // catalogue label is denormalised into `label` on attach, so rendering never
+  // depends on a catalogue fetch.
+  catalog_id?: string | null
 }
 
 // Plan 104 — the closed sets a bank profile clamps to. Kept beside the type so
@@ -73,6 +78,7 @@ export function makeBank(b: Partial<Bank>): Omit<Bank, 'id' | 'created_at'> {
     year_basis_source: inSet(b.year_basis_source, YEAR_BASIS_SOURCES),
     billing: inSet(b.billing, BILLING_MODES),
     billing_source: inSet(b.billing_source, BILLING_SOURCES),
+    catalog_id: typeof b.catalog_id === 'string' && b.catalog_id ? b.catalog_id : null,
   }
 }
 
@@ -82,6 +88,10 @@ export function makeBank(b: Partial<Bank>): Omit<Bank, 'id' | 'created_at'> {
 export interface Mortgage {
   id: string; created_at: string; household_id?: string
   bank_id: string | null; label: string; start_date: string | null; archived: boolean
+  // Plan 109a — the agreement's explicit end state. The database keeps it
+  // consistent with `archived` ((end_date is null) = (not archived)); '' is the
+  // preserved "unknown legacy close date" marker on pre-109a archived rows.
+  end_date?: string | null
 }
 
 export type PaymentKind = 'interest' | 'amortization' | 'payment' | 'down_payment' | 'loan' | 'fee' | 'other'
@@ -104,6 +114,10 @@ export interface Payment {
   // Per-owner funding of THIS one payment, when a single line was co-funded in
   // unequal amounts. When set, it overrides paid_by for contribution attribution.
   paid_split?: { a: number; b: number } | null
+  // Plan 109a — agreement provenance. Part-linked rows derive it from their
+  // loan part in the database (a mismatching supplied value is rejected); new
+  // partless down payments require it; legacy rows keep null until repaired.
+  mortgage_id?: string | null
 }
 
 export interface Valuation {
