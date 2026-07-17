@@ -14,7 +14,7 @@
    - CACHE_KEY   — the write-through offline cache mirroring the whole envelope. */
 
 import { defaultSettings, legacyContributionPayment, makeRatePeriod } from './mortgage'
-import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage } from './mortgage'
+import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage, CatalogBank } from './mortgage'
 import { supabase } from './supabase'
 import { makeImportOnce, materializeImport, stamp } from './store-helpers'
 import type { MutationInput } from './sync-coordinator'
@@ -32,6 +32,11 @@ import {
 // back-compat; it is no longer the write target.)
 export const STORAGE_KEY = 'bostadskalkyl_mortgage_v1'
 const CACHE_KEY = 'bostadskalkyl_mortgage_cache_v1'
+// The shared, read-only bank catalogue (plan 109a) is not household data, so it
+// lives outside the household-scoped envelope in its own defensive cache: an
+// offline load or a fetch failure returns the last-seen rows (or an empty list)
+// rather than crashing the profile modal.
+const CATALOG_CACHE_KEY = 'bostadskalkyl_mortgage_catalog_v1'
 const IMPORT_FLAG = 'bostadskalkyl_mortgage_supabase_imported'
 // v6 (plan 109a): banks gain catalog_id, mortgages gain end_date, payments gain
 // mortgage_id — all nullable, so v4/v5 envelopes still load (the parsers treat
@@ -720,6 +725,47 @@ export async function removeBank(id: string): Promise<number> {
   return n
 }
 
+// ── Shared bank catalogue (plan 109a; read-only) ─────────────────────────────
+// Authenticated clients may SELECT `mortgage_bank_catalog` but never write it
+// (writes go through reviewed migrations). It is not household-scoped, so it is
+// a plain direct select — no outbox, no revisions — with a defensive cache so an
+// offline load or a cloud error returns the last-seen rows instead of crashing.
+function normalizeCatalogBank(row: unknown): CatalogBank | null {
+  if (!row || typeof row !== 'object') return null
+  const r = row as Record<string, unknown>
+  if (typeof r.id !== 'string' || !r.id || typeof r.label !== 'string') return null
+  const yb = Number(r.year_basis)
+  return {
+    id: r.id,
+    slug: typeof r.slug === 'string' ? r.slug : undefined,
+    label: r.label,
+    year_basis: yb === 360 ? 360 : yb === 365 ? 365 : null,
+    billing: r.billing === 'month-end' || r.billing === 'fixed' ? r.billing : null,
+  }
+}
+
+function _readCatalogCache(scope: ReturnType<typeof syncCoordinator.captureScope>): CatalogBank[] {
+  try {
+    const raw = scope.read(CATALOG_CACHE_KEY)
+    if (!raw) return []
+    const data = JSON.parse(raw)
+    return Array.isArray(data) ? data.map(normalizeCatalogBank).filter((b): b is CatalogBank => b != null) : []
+  } catch { return [] }
+}
+
+export async function listCatalogBanks(): Promise<CatalogBank[]> {
+  const scope = syncCoordinator.captureScope()
+  if (!scope.isActive()) return _readCatalogCache(scope)
+  const { data, error } = await supabase
+    .from('mortgage_bank_catalog')
+    .select('id,slug,label,year_basis,billing')
+    .order('label', { ascending: true })
+  if (!scope.isActive() || error || !data) return _readCatalogCache(scope)
+  const rows = (data as unknown[]).map(normalizeCatalogBank).filter((b): b is CatalogBank => b != null)
+  try { scope.write(CATALOG_CACHE_KEY, JSON.stringify(rows)) } catch { /* private mode / quota */ }
+  return rows
+}
+
 // ── Mortgages (plan 103) ─────────────────────────────────────────────────────
 export async function listMortgages(): Promise<Mortgage[]> {
   const scope = syncCoordinator.captureScope()
@@ -1148,4 +1194,4 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
 }
 
 // ── Re-export types for callers that only import from the store ──────────────
-export type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage }
+export type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage, CatalogBank }

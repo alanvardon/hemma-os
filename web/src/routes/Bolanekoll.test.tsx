@@ -70,18 +70,41 @@ beforeEach(() => {
   vi.mocked(Store.getSettings).mockResolvedValue(defaultSettings())
   vi.mocked(Store.listBanks).mockResolvedValue([])
   vi.mocked(Store.listMortgages).mockResolvedValue([])
+  vi.mocked(Store.listCatalogBanks).mockResolvedValue([])
 })
+
+// Plan 109c makes the mortgage agreement the parent of loan parts, so adding a
+// part requires an active agreement. Seed one (no parts) so the empty-hero shows
+// the "+ Lägg till lånedel" CTA instead of "Skapa bolåneavtal".
+const agreement = {
+  id: 'm1', created_at: '2026-01-01', bank_id: 'b1', label: 'Bolån',
+  start_date: '2026-01-01', archived: false, end_date: null,
+}
+const bank = {
+  id: 'b1', created_at: '2026-01-01', label: 'Min bank',
+  year_basis: null, year_basis_source: null, billing: null, billing_source: null, catalog_id: null,
+}
+function seedAgreement() {
+  vi.mocked(Store.listMortgages).mockResolvedValue([agreement])
+  vi.mocked(Store.listBanks).mockResolvedValue([bank])
+  vi.mocked(Store.cachedSnapshot).mockReturnValue({
+    version: 6, banks: [bank], mortgages: [agreement],
+    loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [],
+    settings: defaultSettings(),
+  })
+}
 
 describe('Bolanekoll — save failures surface to the user (regression for audit H2 / PR #237)', () => {
   it('shows an error toast and keeps the dialog open when addLoanPart rejects', async () => {
     // supabase-js throws plain {message} objects (not Error instances); mirror
     // that so the test also pins the stable offline-category copy.
+    seedAgreement()
     vi.mocked(Store.addLoanPart).mockRejectedValueOnce({ message: 'Failed to fetch' })
     const user = userEvent.setup()
     renderBolanekoll()
 
     // Empty-hero CTA only appears once the (mocked) cloud read resolves `loaded`.
-    await user.click(await screen.findByRole('button', { name: /Add loan part/i }))
+    await user.click(await screen.findByRole('button', { name: /Lägg till lånedel/i }))
 
     // Fill the label so the dialog has data that must NOT be lost on failure.
     const label = await screen.findByPlaceholderText('e.g. Lånedel 1 (rörlig)')
@@ -107,6 +130,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     // The mirror case, so the test above proves the try/catch, not merely that
     // the flow never completes. addLoanPart's return is only used for its side
     // effects here; refresh() re-reads via the list* mocks (still empty).
+    seedAgreement()
     vi.mocked(Store.addLoanPart).mockResolvedValueOnce({
       id: 'p1', created_at: '2026-01-01', label: 'Lånedel 1',
       loan_number: '', start_balance: 0, start_date: '2026-01-01',
@@ -114,7 +138,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     const user = userEvent.setup()
     renderBolanekoll()
 
-    await user.click(await screen.findByRole('button', { name: /Add loan part/i }))
+    await user.click(await screen.findByRole('button', { name: /Lägg till lånedel/i }))
     const label = await screen.findByPlaceholderText('e.g. Lånedel 1 (rörlig)')
     await user.type(label, 'Lånedel 1')
     const dialog = label.closest('dialog')!

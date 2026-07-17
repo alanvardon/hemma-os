@@ -460,33 +460,37 @@
   .contrib-legend li::before { content: '·'; position: absolute; left: 0.15rem; color: var(--ink-faint); }
   .contrib-legend b { color: var(--ink-mid); font-weight: 600; }
 
-  /* ── Lånedelar: grouped under the active mortgage (bank → lån) ──────── */
-  .ld-mortgage-head {
-    display: flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap;
-    margin-bottom: 0.6rem; font-size: 13px;
+  /* ── Bolåneavtal · agreement header (parts nested beneath) ─────────────
+     Plan 109c — the agreement is the visible parent: name · bank, the
+     relationship start ("hos banken sedan …"), an active badge, the nested
+     part count, a compact drift badge, and the profile/change/history actions.
+     The convention controls moved into the Bankprofil modal. */
+  .agreement-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 0.6rem 1rem; flex-wrap: wrap; margin-bottom: 0.7rem;
   }
-  .ld-mortgage-head .ld-bank { font-weight: 600; color: var(--ink); }
-  .ld-mortgage-head .ld-mortgage-sep { color: var(--ink-faint); }
-  .ld-mortgage-head .ld-mortgage-name { color: var(--ink-soft); }
-
-  /* Plan 104 — Bankvillkor affordance: year-basis + billing pins, suggest, drift. */
-  .ld-bankvillkor {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 0.3rem;
-    margin-left: auto; font-size: 12px;
+  .agreement-summary {
+    display: flex; align-items: baseline; gap: 0.4rem 0.5rem; flex-wrap: wrap; font-size: 13px;
   }
-  .ld-bankvillkor .ld-bankvillkor-row {
-    display: inline-flex; align-items: baseline; gap: 0.35rem; flex-wrap: wrap;
+  .agreement-summary .agreement-name { font-weight: 600; color: var(--ink); }
+  .agreement-summary .agreement-sep { color: var(--ink-faint); }
+  .agreement-summary .agreement-bank { color: var(--ink-soft); }
+  .agreement-summary .agreement-since { color: var(--ink-faint); font-size: 12px; }
+  .agreement-status {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.01em;
+    color: var(--accent); background: var(--accent-faint);
+    border: 1px solid var(--accent-light); border-radius: 999px; padding: 1px 8px;
   }
-  .ld-bankvillkor .ld-bankvillkor-label { color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.03em; font-size: 11px; min-width: 4.5em; }
-  .ld-bankvillkor .ld-bankvillkor-state { color: var(--ink-soft); }
-  .ld-bankvillkor .ld-bankvillkor-state.is-locked { color: var(--copper, var(--ink)); font-weight: 600; }
-  .ld-bankvillkor .ld-bankvillkor-suggest { color: var(--ink-soft); display: inline-flex; align-items: baseline; gap: 0.35rem; flex-wrap: wrap; }
-  .ld-bankvillkor .ld-bankvillkor-drift { color: var(--warn, #b8860b); font-weight: 500; max-width: 32ch; }
-  .ld-bankvillkor .btn-xs {
-    padding: 0.1rem 0.4rem; font-size: 11px; line-height: 1.5; border-radius: 6px;
+  .agreement-parts-count { color: var(--ink-faint); font-size: 12px; }
+  .agreement-drift-badge {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.01em; cursor: pointer;
+    color: var(--warn, #b8860b); background: var(--paper-warm);
+    border: 1px solid var(--warn, #b8860b); border-radius: 999px; padding: 1px 8px;
   }
-  .ld-bankvillkor .btn-xs[aria-pressed="true"] {
-    background: var(--copper, var(--accent, #b87333)); color: #fff; border-color: transparent;
+  .agreement-drift-badge:focus-visible { outline: none; box-shadow: var(--ring); }
+  .agreement-actions { display: inline-flex; gap: 0.35rem; flex-wrap: wrap; }
+  .agreement-actions .btn-sm {
+    padding: 0.2rem 0.6rem; font-size: 12px; line-height: 1.5; border-radius: 7px;
   }
 
   /* ── Lånedelar: grouped by villkorsändringsdag + rate ───────────────── */
@@ -544,6 +548,17 @@
   .lanedelar-table tr.ld-group.is-catchall > td { background: transparent; }
   .ld-needs { color: var(--ink-soft); font-style: italic; }
   .lanedelar-table tr.ld-group.is-catchall .ld-count { color: var(--ink-faint); }
+
+  /* Missing rate periods — prompt to add räntevillkor (plan 109c). The state a
+     fresh agreement is in right after a bank change; forecasts must not read 0 %. */
+  .missing-rate-prompt {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.8rem;
+    margin-bottom: 0.7rem; padding: 0.6rem 0.8rem;
+    background: var(--warn-faint); border: 1px solid var(--warn-light); border-radius: var(--r-md, 10px);
+    font-size: 13px; color: var(--ink-mid);
+  }
+  .missing-rate-parts { display: inline-flex; flex-wrap: wrap; gap: 0.35rem; }
+  .missing-rate-parts .btn-sm { padding: 0.2rem 0.6rem; font-size: 12px; line-height: 1.5; border-radius: 7px; }
 
   /* Avslutade — collapsed archive of settled parts */
   .avslutade-section { margin-top: 0.5rem; border-top: 1px solid var(--rule); padding-top: 0.6rem; }
@@ -632,6 +647,121 @@ dialog.bk-dialog {
 .bk-dialog .checkbox-field { flex-direction: row; align-items: center; gap: 0.55rem; }
 .bk-dialog .checkbox-field input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
 .bk-dialog .checkbox-field span { text-transform: none; font-weight: 550; color: var(--ink-mid); font-size: 13px; letter-spacing: 0; }
+/* Bank-profile modal (plan 109c): convention sections, source labels, drift. */
+.bk-dialog .bankprofil-section { margin-top: 1.1rem; }
+.bk-dialog .bankprofil-row-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.45rem;
+}
+.bk-dialog .bankprofil-label {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-soft);
+}
+.bk-dialog .bankprofil-label .card-en { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--ink-faint); }
+.bk-dialog .bankprofil-source {
+  font-size: 11px; font-weight: 600; color: var(--ink-soft);
+  background: var(--paper-warm); border: 1px solid var(--rule); border-radius: 999px; padding: 1px 8px;
+}
+.bk-dialog .bankprofil-suggest {
+  display: inline-flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap;
+  margin-top: 0.5rem; font-size: 12.5px; color: var(--ink-soft);
+}
+.bk-dialog .bankprofil-drift {
+  margin-top: 1rem; padding: 0.6rem 0.8rem; border-radius: 8px;
+  background: var(--paper-warm); border: 1px solid var(--warn, #b8860b);
+  color: var(--warn, #b8860b); font-size: 12.5px; font-weight: 500;
+}
+.bk-dialog .bankprofil-drift p { margin: 0.25rem 0; }
+.bk-dialog .btn-xs { padding: 0.1rem 0.45rem; font-size: 11px; line-height: 1.5; border-radius: 6px; }
+.bk-dialog .dialog-error {
+  margin-top: 0.9rem; padding: 0.55rem 0.75rem; border-radius: 8px;
+  background: var(--danger-faint, #fdecea); border: 1px solid var(--danger, #c0392b);
+  color: var(--danger, #c0392b); font-size: 13px; font-weight: 500;
+}
+/* ── Change-bank wizard (plan 109c) — progressive steps in one dialog ─────── */
+dialog.bk-wizard, dialog.bk-history { width: min(680px, calc(100vw - 2rem)); }
+.bk-dialog .wizard-steps {
+  display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; margin: 0 0 1.1rem; padding: 0; list-style: none;
+  font-size: 12px; font-weight: 600; color: var(--ink-faint);
+}
+.bk-dialog .wizard-step { display: inline-flex; align-items: center; gap: 0.4rem; }
+.bk-dialog .wizard-step-no {
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+  border-radius: 999px; border: 1px solid var(--rule); font-size: 11px; color: var(--ink-soft);
+}
+.bk-dialog .wizard-step.is-current { color: var(--ink); }
+.bk-dialog .wizard-step.is-current .wizard-step-no { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.bk-dialog .wizard-step.is-done .wizard-step-no { background: var(--accent-faint); color: var(--accent); border-color: var(--accent-light); }
+.bk-dialog .wizard-panel { min-height: 4rem; }
+.bk-dialog .wizard-warn {
+  margin: 0.6rem 0; padding: 0.5rem 0.75rem; border-radius: 8px;
+  background: var(--warn-faint); border: 1px solid var(--warn-light); color: var(--warn, #b8860b);
+  font-size: 12.5px; font-weight: 500;
+}
+.bk-dialog .wizard-drafts { display: flex; flex-direction: column; gap: 0.7rem; margin: 0.7rem 0; }
+.bk-dialog .wizard-draft {
+  display: flex; align-items: flex-end; gap: 0.6rem; padding: 0.6rem 0.7rem;
+  border: 1px solid var(--rule); border-radius: 10px; background: var(--paper-warm);
+}
+.bk-dialog .wizard-draft-fields { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem 0.7rem; min-width: 0; }
+.bk-dialog .wizard-draft-fields .form-field.form-wide { grid-column: 1 / -1; }
+.bk-dialog .wizard-draft-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; }
+.bk-dialog .wizard-prov {
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap;
+  color: var(--ink-soft); background: var(--paper-card); border: 1px solid var(--rule);
+  border-radius: 999px; padding: 1px 8px;
+}
+.bk-dialog .wizard-prov.is-estimated { color: var(--warn, #b8860b); border-color: var(--warn-light); }
+.bk-dialog .wizard-sum {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem;
+  margin-top: 0.8rem; padding-top: 0.6rem; border-top: 1px solid var(--rule);
+  font-size: 13px; color: var(--ink-mid);
+}
+.bk-dialog .wizard-sum b { font-variant-numeric: tabular-nums; color: var(--ink); font-size: 15px; }
+.bk-dialog .wizard-review-head, .bk-dialog .history-section-head {
+  font-size: 13px; font-weight: 700; color: var(--ink); margin: 0.4rem 0 0.6rem;
+}
+.bk-dialog .wizard-review-list { margin: 0 0 0.6rem; padding-left: 1.1rem; font-size: 13px; color: var(--ink-mid); }
+.bk-dialog .wizard-review-list li { margin-bottom: 0.5rem; }
+.bk-dialog .wizard-mismatch {
+  margin-top: 0.7rem; padding: 0.6rem 0.8rem; border-radius: 8px;
+  background: var(--danger-faint, #fdecea); border: 1px solid var(--danger, #c0392b);
+  font-size: 12.5px; color: var(--ink-mid);
+}
+.bk-dialog .wizard-mismatch p { margin: 0 0 0.5rem; }
+.bk-dialog .wizard-confirm-lead { font-size: 14px; color: var(--ink); margin: 0.4rem 0 0.6rem; }
+
+/* ── Tidigare avtal — history modal (plan 109c) ──────────────────────────── */
+.bk-dialog .history-revert {
+  margin-bottom: 1rem; padding: 0.7rem 0.85rem; border-radius: 10px;
+  background: var(--warn-faint); border: 1px solid var(--warn-light); font-size: 13px; color: var(--ink-mid);
+}
+.bk-dialog .history-revert p { margin: 0 0 0.55rem; }
+.bk-dialog .history-layout { display: grid; grid-template-columns: minmax(140px, 200px) 1fr; gap: 1rem; }
+.bk-dialog .history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.bk-dialog .history-item {
+  display: flex; flex-direction: column; gap: 0.1rem; width: 100%; text-align: left;
+  padding: 0.5rem 0.6rem; border: 1px solid var(--rule); border-radius: 9px;
+  background: var(--paper-warm); cursor: pointer; color: var(--ink-mid); font: inherit;
+}
+.bk-dialog .history-item.is-selected { border-color: var(--accent-light); background: var(--accent-faint); color: var(--ink); }
+.bk-dialog .history-item-bank { font-weight: 600; font-size: 13px; }
+.bk-dialog .history-item-dates { font-size: 11.5px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.bk-dialog .history-detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 0.55rem; margin-bottom: 0.7rem; }
+.bk-dialog .history-detail-name { font-weight: 600; color: var(--ink); }
+.bk-dialog .history-detail-bank { color: var(--ink-soft); font-size: 13px; }
+.bk-dialog .history-detail-range { color: var(--ink-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.bk-dialog .agreement-status.is-closed { color: var(--ink-soft); background: var(--paper-warm); border-color: var(--rule); }
+.bk-dialog .history-parts { list-style: none; margin: 0 0 0.6rem; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.bk-dialog .history-part { border: 1px solid var(--rule); border-radius: 9px; padding: 0.5rem 0.65rem; }
+.bk-dialog .history-part-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.6rem; }
+.bk-dialog .history-part-bal { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+.bk-dialog .history-part-head .icon-btn { margin-left: auto; }
+.bk-dialog .history-periods { list-style: none; margin: 0.4rem 0 0; padding: 0.4rem 0 0; border-top: 1px dashed var(--rule); font-size: 12px; color: var(--ink-soft); }
+.bk-dialog .history-periods li { display: flex; justify-content: space-between; gap: 0.6rem; font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) {
+  .bk-dialog .history-layout { grid-template-columns: 1fr; }
+  .bk-dialog .wizard-draft-fields { grid-template-columns: 1fr; }
+}
+
 .copy-parts-list { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.4rem; }
 .copy-part-row { display: flex; align-items: center; gap: 0.6rem; cursor: pointer; font-size: 14px; color: var(--ink-mid); }
 .copy-part-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }

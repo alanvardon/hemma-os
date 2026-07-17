@@ -78,6 +78,7 @@ function seedStore(payments: Payment[], part: LoanPart = PART) {
   vi.mocked(Store.getSettings).mockResolvedValue(defaultSettings())
   vi.mocked(Store.listBanks).mockResolvedValue([])
   vi.mocked(Store.listMortgages).mockResolvedValue([])
+  vi.mocked(Store.listCatalogBanks).mockResolvedValue([])
 }
 
 // Route a CSV through the hidden dropzone input. jsdom's File may lack .text(),

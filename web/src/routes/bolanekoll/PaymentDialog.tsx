@@ -3,12 +3,17 @@ import DialogShell from '../../components/DialogShell'
 import FormField from '../../components/FormField'
 import { usePersonNames } from '../../components/usePersonNames'
 import { makePayment, parseAmount, todayISO } from '../../lib/mortgage'
-import type { LoanPart, Payment, MortgageSettings, PaidBy } from '../../lib/mortgage'
+import type { LoanPart, Payment, MortgageSettings, PaidBy, Mortgage, Bank } from '../../lib/mortgage'
 
 type EntryType = 'down_payment' | 'payment' | 'interest' | 'amortization' | 'extra_amortization' | 'loan' | 'fee' | 'other'
 
 interface PayDlgProps {
   open: boolean; id: string | null; payments: Payment[]; parts: LoanPart[]; settings: MortgageSettings
+  // Plan 109c — a Kontantinsats (down payment) carries agreement provenance. The
+  // selector defaults to the active agreement but includes archived ones so a
+  // pre-refinance deposit records the right mortgage_id; part-linked rows derive
+  // it from their part in the database and never show this control.
+  mortgages: Mortgage[]; banks: Bank[]; activeMortgageId: string | null
   onSave: (data: Omit<Payment, 'id' | 'created_at'>) => void
   onDelete: (id: string) => void; onClose: () => void
 }
@@ -26,9 +31,9 @@ function paymentKind(type: EntryType): Payment['kind'] {
   return type === 'extra_amortization' ? 'amortization' : type
 }
 
-export default function PaymentDialog({ open, id, payments, parts, settings, onSave, onDelete, onClose }: PayDlgProps) {
+export default function PaymentDialog({ open, id, payments, parts, settings, mortgages, banks, activeMortgageId, onSave, onDelete, onClose }: PayDlgProps) {
   const rec = id ? payments.find(p => p.id === id) : null
-  const [form, setForm] = useState({ date: todayISO(), loan_part_id: '', entryType: 'payment' as EntryType, amount: '', balance_after: '', paid_by: 'joint' as PaidBy, split_a: '', split_b: '' })
+  const [form, setForm] = useState({ date: todayISO(), loan_part_id: '', entryType: 'payment' as EntryType, amount: '', balance_after: '', paid_by: 'joint' as PaidBy, split_a: '', split_b: '', mortgage_id: '' })
   useEffect(() => {
     if (!open) return
     const entryType = entryTypeFor(rec)
@@ -44,6 +49,10 @@ export default function PaymentDialog({ open, id, payments, parts, settings, onS
       paid_by: joint ? 'joint' : (rec?.paid_by || 'joint'),
       split_a: !joint && rec?.paid_split ? String(rec.paid_split.a) : '',
       split_b: !joint && rec?.paid_split ? String(rec.paid_split.b) : '',
+      // A new down payment defaults to the active agreement; editing keeps the
+      // row's own link. A legacy row with no link defaults to blank so the owner
+      // makes an explicit repair choice rather than the UI guessing.
+      mortgage_id: rec?.mortgage_id ?? (id ? '' : (activeMortgageId ?? '')),
     })
   }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -63,6 +72,17 @@ export default function PaymentDialog({ open, id, payments, parts, settings, onS
     return !hasInterest && !laterSaldo
   }, [form.date, form.entryType, form.loan_part_id, id, payments])
   const { a: aName, b: bName } = usePersonNames(settings.owner_a_name, settings.owner_b_name)
+  const isDownPayment = form.entryType === 'down_payment'
+  // Agreement options, active first then archived (newest close first). The
+  // deposit's provenance must be an explicit pick — legacy null rows show a
+  // repair hint rather than a silent default.
+  const mortgageOptions = useMemo(() => {
+    const label = (m: Mortgage) => (m.label || 'Bolån') + ' · ' + (m.bank_id ? (banks.find(b => b.id === m.bank_id)?.label || 'okänd bank') : 'okänd bank') + (m.archived ? ' (avslutat)' : '')
+    const active = mortgages.filter(m => m && !m.archived)
+    const closed = mortgages.filter(m => m && m.archived).sort((a, b) => String(b.end_date ?? '').localeCompare(String(a.end_date ?? '')))
+    return [...active, ...closed].map(m => ({ id: m.id, label: label(m) }))
+  }, [mortgages, banks])
+  const needsRepair = isDownPayment && !!id && !rec?.mortgage_id
 
   function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -71,23 +91,30 @@ export default function PaymentDialog({ open, id, payments, parts, settings, onS
     const paid_by: PaidBy = jointRecord ? 'joint'
       : split ? split.a > 0 && split.b > 0 ? 'joint' : split.a > 0 ? 'a' : split.b > 0 ? 'b' : form.paid_by
         : form.paid_by
-    onSave(makePayment({
-      date: form.date,
-      loan_part_id: needsLoanPart ? form.loan_part_id || null : null,
-      kind,
-      amount: parseAmount(form.amount),
-      // The dialog currently does not edit notes/import provenance. Preserve
-      // those canonical fields rather than turning an allocation edit into a
-      // lossy rewrite of a bank/imported record.
-      description: rec?.description || '', source: rec?.source || 'manual',
-      // A bank-reported post-transaction Saldo is authoritative for both an
-      // ordinary and an extra amortering. Other row types must not retain a
-      // hidden balance anchor when reclassified.
-      balance_after: acceptsSaldo && form.balance_after ? parseAmount(form.balance_after) : null,
-      paid_by,
-      is_insats: form.entryType === 'down_payment' || form.entryType === 'extra_amortization',
-      paid_split: jointRecord ? null : split,
-    }))
+    onSave({
+      ...makePayment({
+        date: form.date,
+        loan_part_id: needsLoanPart ? form.loan_part_id || null : null,
+        kind,
+        amount: parseAmount(form.amount),
+        // The dialog currently does not edit notes/import provenance. Preserve
+        // those canonical fields rather than turning an allocation edit into a
+        // lossy rewrite of a bank/imported record.
+        description: rec?.description || '', source: rec?.source || 'manual',
+        // A bank-reported post-transaction Saldo is authoritative for both an
+        // ordinary and an extra amortering. Other row types must not retain a
+        // hidden balance anchor when reclassified.
+        balance_after: acceptsSaldo && form.balance_after ? parseAmount(form.balance_after) : null,
+        paid_by,
+        is_insats: form.entryType === 'down_payment' || form.entryType === 'extra_amortization',
+        paid_split: jointRecord ? null : split,
+      }),
+      // Only a Kontantinsats carries an explicit agreement id (part-linked rows
+      // derive it in the database). makePayment drops mortgage_id, so re-attach
+      // the chosen one here; blank falls through to the store's active-agreement
+      // default for a brand-new deposit.
+      ...(isDownPayment && form.mortgage_id ? { mortgage_id: form.mortgage_id } : {}),
+    })
   }
 
   return (
@@ -114,6 +141,19 @@ export default function PaymentDialog({ open, id, payments, parts, settings, onS
                 {parts.map(p => <option key={p.id} value={p.id}>{p.label || p.id}</option>)}
               </select>
             </FormField>
+          )}
+          {isDownPayment && mortgageOptions.length > 0 && (
+            <FormField label="Bolåneavtal" wide>
+              <select className="select" value={form.mortgage_id} onChange={e => set('mortgage_id', e.target.value)}>
+                {needsRepair && <option value="">— välj avtal —</option>}
+                {mortgageOptions.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </select>
+            </FormField>
+          )}
+          {needsRepair && (
+            <p className="form-hint form-wide payment-estimate-warning" role="alert">
+              Den här kontantinsatsen saknar koppling till ett bolåneavtal. Välj avtalet den hör till för att koppla den — ingen koppling gissas åt dig.
+            </p>
           )}
           <FormField label="Datum"><input type="date" required value={form.date} onChange={e => set('date', e.target.value)} /></FormField>
           <FormField label="Belopp"><input type="text" required inputMode="decimal" placeholder="0" value={form.amount} onChange={e => set('amount', e.target.value)} /></FormField>
