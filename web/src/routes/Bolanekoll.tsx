@@ -22,6 +22,7 @@ import {
   propertyValue, equity, loanToValue,
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, marketEquitySplit, derivedDeposit,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
+  partsForMortgage, paymentsForMortgage, partsMissingRateTerms,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
   expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
@@ -45,6 +46,8 @@ import CopyToPartsDialog from './bolanekoll/CopyToPartsDialog'
 import SettingsDialog from './bolanekoll/SettingsDialog'
 import BankProfileDialog, { type BankProfileSaveInput } from './bolanekoll/BankProfileDialog'
 import AgreementDialog, { type CreateAgreementInput } from './bolanekoll/AgreementDialog'
+import BankChangeWizard, { type BankChangeResult } from './bolanekoll/BankChangeWizard'
+import AgreementHistoryDialog from './bolanekoll/AgreementHistoryDialog'
 import { type BankSelection } from './bolanekoll/BankPicker'
 import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
 
@@ -142,6 +145,8 @@ export default function Bolanekoll() {
   const [settingsDlg, setSettingsDlg] = useState(false)
   const [profileDlg, setProfileDlg] = useState(false)
   const [createDlg, setCreateDlg] = useState(false)
+  const [changeDlg, setChangeDlg] = useState(false)
+  const [historyDlg, setHistoryDlg] = useState(false)
 
   // ── Riksbank policy-rate watcher (plan 70) ──────────────────────────────
   // Best-effort only: the fetch never blocks the calculator, and a failure
@@ -375,6 +380,31 @@ export default function Bolanekoll() {
   const agreementCount = useMemo(
     () => activeBank ? mortgages.filter(m => m && m.bank_id === activeBank.id).length : 0,
     [activeBank, mortgages])
+  // Plan 109c — the active parts still lacking a current rate period. A fresh
+  // agreement right after a bank change is entirely in this state (rates are
+  // deliberately not copied); the card prompts for Lägg till räntevillkor until
+  // every part has one, so the forecast never silently reads as 0 %.
+  const missingRate = useMemo(() => partsMissingRateTerms(activeParts, periods), [activeParts, periods])
+  // Plan 109c — Ångra bankbyte is offered only while the new (active) agreement
+  // is still pristine: no payment references its parts (or itself as a partless
+  // down payment) and no rate period touches its parts. Computed client-side for
+  // display; the revert RPC re-verifies before deleting anything.
+  const activeAgreementParts = useMemo(
+    () => activeMortgage ? partsForMortgage(parts, activeMortgage.id) : [],
+    [parts, activeMortgage])
+  const bankChangePredecessor = useMemo<Mortgage | null>(
+    () => activeMortgage
+      ? (mortgages.find(m => m && m.archived && m.id !== activeMortgage.id
+          && (m.end_date ?? null) === (activeMortgage.start_date ?? null)) ?? null)
+      : null,
+    [mortgages, activeMortgage])
+  const canRevertBankChange = useMemo(() => {
+    if (!activeMortgage || !bankChangePredecessor) return false
+    const partIds = new Set(activeAgreementParts.map(p => p.id))
+    const hasPeriods = periods.some(pr => pr.loan_part_id && partIds.has(pr.loan_part_id))
+    const hasPayments = paymentsForMortgage(payments, parts, activeMortgage.id).length > 0
+    return !hasPeriods && !hasPayments
+  }, [activeMortgage, bankChangePredecessor, activeAgreementParts, periods, payments, parts])
   const forecast = useMemo(() => forecastInterest(parts, periods, payments), [parts, periods, payments])
   // The next UNCOVERED charge per part: once a month is fully logged (or
   // imported), the Nästa avisering block rolls forward to the following month
@@ -641,6 +671,33 @@ export default function Bolanekoll() {
       start_date: input.start_date || null, archived: false, end_date: null,
     })
     await refresh(); flashSaved(); showToast('Bolåneavtal skapat.')
+  }
+  // Plan 109c — one atomic bank change: resolve the chosen bank (creating a
+  // private profile for a catalogue/custom pick), then archive the active
+  // agreement and open its successor in a single RPC. Surfaces the failure BOTH
+  // as a toast AND by rethrowing, so the wizard stays open with a visible error
+  // and the old agreement stays active (no partial switch).
+  async function handleChangeBank(result: BankChangeResult): Promise<void> {
+    if (!activeMortgage) throw new Error('no active agreement')
+    try {
+      const bankId = await resolveBankSelection(result.selection, null)
+      if (!bankId) throw new Error('no bank selected')
+      await Store.changeMortgageBank({
+        old_mortgage_id: activeMortgage.id, bank_id: bankId, label: result.label,
+        parts: result.parts, effective_date: result.effective_date,
+      })
+      await refresh(); flashSaved(); showToast('Bankbyte genomfört. Lägg till räntevillkor för de nya lånedelarna.')
+    } catch (err) { saveErr(err); throw err }
+  }
+  // Plan 109c — Ångra bankbyte: atomically delete the pristine new agreement and
+  // reactivate the predecessor. Same dual surfacing; the history modal keeps the
+  // inline error and stays open on failure (the RPC guarantees no partial state).
+  async function handleRevertBankChange(): Promise<void> {
+    if (!activeMortgage) throw new Error('no active agreement')
+    try {
+      await Store.revertMortgageBankChange(activeMortgage.id)
+      await refresh(); flashSaved(); showToast('Bankbytet ångrades.')
+    } catch (err) { saveErr(err); throw err }
   }
   async function handleSavePeriod(partId: string, data: Omit<RatePeriod, 'id' | 'created_at'>, existingId?: string) {
     try {
@@ -1314,9 +1371,28 @@ export default function Bolanekoll() {
               </div>
               <div className="agreement-actions">
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => setProfileDlg(true)}>Bankprofil</button>
-                <button type="button" className="btn btn-ghost btn-sm" disabled title="Kommer i nästa steg">Byt bank</button>
-                <button type="button" className="btn btn-ghost btn-sm" disabled title="Kommer i nästa steg">Tidigare avtal</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setChangeDlg(true)}>Byt bank</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setHistoryDlg(true)}>Tidigare avtal</button>
               </div>
+            </div>
+          )}
+          {/* Plan 109c — parts without a current rate period (the state a fresh
+              agreement is in right after a bank change): prompt to add räntevillkor
+              so the forecast never silently reads as 0 %. Clears once every part
+              has a rate period. */}
+          {activeMortgage && missingRate.length > 0 && (
+            <div className="missing-rate-prompt" role="status">
+              <span className="missing-rate-text">
+                <b>Räntevillkor saknas.</b> {missingRate.length === 1 ? 'En lånedel' : missingRate.length + ' lånedelar'} saknar en aktuell ränteperiod — prognosen kan inte räknas förrän den är satt.
+              </span>
+              <span className="missing-rate-parts">
+                {missingRate.map(m => (
+                  <button key={m.loan_part_id} type="button" className="btn btn-ghost btn-sm"
+                    onClick={() => setPartDlg({ open: true, id: m.loan_part_id })}>
+                    + Lägg till räntevillkor: {m.label || 'lånedel'}
+                  </button>
+                ))}
+              </span>
             </div>
           )}
           {!parts.length ? (
@@ -1731,7 +1807,7 @@ export default function Bolanekoll() {
                   <tr key={p.id} data-source-payment-id={p.id}>
                     <td className="col-date">{p.date || '—'}</td>
                     <td className="col-owner">{p.paid_split ? `${nameOf('a')} ${fmtMoney(p.paid_split.a)} · ${nameOf('b')} ${fmtMoney(p.paid_split.b)}` : p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
-                    <td className="col-part">—</td>
+                    <td className="col-part">{p.mortgage_id ? '—' : <span className="row-flag row-flag-estimated" title="Saknar koppling till bolåneavtal — öppna för att koppla">⚠ ej kopplad</span>}</td>
                     <td className="num col-amt">{fmtMoney(p.amount)}</td>
                     <td className="col-act"><button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button><button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={() => { if (confirm('Ta bort betalningen?')) handleDeletePay(p.id) }}><Icon icon={X} /></button></td>
                   </tr>
@@ -1775,7 +1851,9 @@ export default function Bolanekoll() {
         onSave={handleSavePart} onDelete={handleDeletePart} onClose={() => setPartDlg({ open: false, id: null })}
         onSavePeriod={handleSavePeriod} onDeletePeriod={handleDeletePeriod} />
       <ValuationDialog open={valDlg.open} id={valDlg.id} valuations={valuations} onSave={handleSaveVal} onDelete={handleDeleteVal} onClose={() => setValDlg({ open: false, id: null })} />
-      <PaymentDialog open={payDlg.open} id={payDlg.id} payments={payments} parts={parts} settings={settings} onSave={handleSavePay} onDelete={handleDeletePay} onClose={() => setPayDlg({ open: false, id: null })} />
+      <PaymentDialog open={payDlg.open} id={payDlg.id} payments={payments} parts={parts} settings={settings}
+        mortgages={mortgages} banks={banks} activeMortgageId={activeMortgage?.id ?? null}
+        onSave={handleSavePay} onDelete={handleDeletePay} onClose={() => setPayDlg({ open: false, id: null })} />
       <CopyToPartsDialog open={copyDlg.open} source={copyDlg.source} parts={parts} onConfirm={ids => copyDlg.source && handleCopyToParts(copyDlg.source, ids)} onClose={() => setCopyDlg({ open: false, source: null })} />
       <SettingsDialog open={settingsDlg} settings={settings} onSave={handleSaveSettings} onClose={() => setSettingsDlg(false)}
         onExportJSON={handleExportJSON} onExportCSV={handleExportCSV} onImportJSON={handleImportJSON} />
@@ -1786,6 +1864,21 @@ export default function Bolanekoll() {
 
       <AgreementDialog open={createDlg} banks={banks} catalogBanks={catalogBanks}
         onSave={handleCreateAgreement} onClose={() => setCreateDlg(false)} />
+
+      {activeMortgage && (
+        <BankChangeWizard open={changeDlg} currentBankId={activeBank?.id ?? null}
+          currentAgreementLabel={activeMortgage.label || 'Bolån'} banks={banks} catalogBanks={catalogBanks}
+          parts={activeAgreementParts} payments={payments}
+          onConfirm={handleChangeBank} onClose={() => setChangeDlg(false)} />
+      )}
+
+      <AgreementHistoryDialog open={historyDlg} mortgages={mortgages} banks={banks}
+        parts={parts} periods={periods} payments={payments}
+        canRevert={canRevertBankChange} revertTargetLabel={activeMortgage?.label || 'Bolån'}
+        onRevert={handleRevertBankChange}
+        onEditPart={(id) => setPartDlg({ open: true, id })}
+        onEditPayment={(id) => setPayDlg({ open: true, id })}
+        onClose={() => setHistoryDlg(false)} />
 
       {/* ── Toast ── */}
       <div className={'bk-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>

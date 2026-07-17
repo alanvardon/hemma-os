@@ -27,17 +27,26 @@ export function selectionValue(sel: BankSelection): string {
 // dialogs. Household banks come first (reuse keeps their private locks), then
 // catalogue banks not yet attached, then "Egen bank…". Catalogue rows are
 // read-only identity — never editable inputs (plan 109 decision 1).
-export default function BankPicker({ banks, catalogBanks, selection, customLabel, onChange, onCustomLabel }: {
+export default function BankPicker({ banks, catalogBanks, selection, customLabel, onChange, onCustomLabel, excludeBankId }: {
   banks: Bank[]
   catalogBanks: CatalogBank[]
   selection: BankSelection
   customLabel: string
   onChange: (sel: BankSelection) => void
   onCustomLabel: (label: string) => void
+  // The change-bank wizard passes the current agreement's bank so it can never
+  // be offered as a "change" — its catalogue row is offered again instead, so a
+  // genuine re-selection of the same catalogue bank stays possible if intended.
+  excludeBankId?: string | null
 }) {
+  // Household banks the picker offers — the current bank is dropped when the
+  // caller excludes it (a bank change must move to a different profile).
+  const householdBanks = useMemo(
+    () => excludeBankId ? banks.filter(b => b.id !== excludeBankId) : banks,
+    [banks, excludeBankId])
   // Catalogue banks the household hasn't already attached (attached ones show
   // under their household row, so we don't offer a duplicate).
-  const attached = useMemo(() => new Set(banks.map(b => b.catalog_id).filter(Boolean)), [banks])
+  const attached = useMemo(() => new Set(householdBanks.map(b => b.catalog_id).filter(Boolean)), [householdBanks])
   const unattachedCatalog = useMemo(
     () => catalogBanks.filter(c => !attached.has(c.id)),
     [catalogBanks, attached])
@@ -58,9 +67,9 @@ export default function BankPicker({ banks, catalogBanks, selection, customLabel
     <>
       <FormField label="Bank" wide>
         <select className="select" value={selectionValue(selection)} onChange={e => handleSelect(e.target.value)}>
-          {banks.length > 0 && (
+          {householdBanks.length > 0 && (
             <optgroup label="Dina banker">
-              {banks.map(b => <option key={b.id} value={'existing:' + b.id}>{b.label || 'Namnlös bank'}</option>)}
+              {householdBanks.map(b => <option key={b.id} value={'existing:' + b.id}>{b.label || 'Namnlös bank'}</option>)}
             </optgroup>
           )}
           {unattachedCatalog.length > 0 && (
