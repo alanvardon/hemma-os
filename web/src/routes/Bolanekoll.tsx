@@ -74,6 +74,16 @@ function fmtChargeMonth(iso: string): string {
     .replace(/\./g, '')
 }
 
+/** The rate input is deliberately stricter than parseAmount(): a trailing
+ * decimal separator is normal while typing, but must not become 0 % (or a
+ * silently truncated saved value) when the field loses focus. */
+function parseScenarioRate(raw: string): number | null {
+  const normalized = raw.trim().replace(',', '.')
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) return null
+  const value = Number(normalized)
+  return Number.isFinite(value) && value >= 0 ? value : null
+}
+
 // The change banner is a nudge about NEWS — after this many days the new rate
 // is just "the rate" and the banner stays quiet even if never dismissed
 // (a first visit shouldn't announce a nine-month-old cut).
@@ -91,11 +101,13 @@ export default function Bolanekoll() {
     feedback: { toast, saved, showToast, flashSaved, showError: saveErr },
     actions: workspaceActions,
   } = useMortgageWorkspace()
-  const { refresh } = workspaceActions
+  const { refresh, settings: settingsActions } = workspaceActions
   const [bridgePeriod, setBridgePeriod] = useState<'ytd' | '12m' | 'all'>('ytd')
   const [extraAmort, setExtraAmort] = useState('')
-  // Rate what-if: null means "untouched" (field shows the live blended prefill).
+  // Rate what-if: null means no local draft. The display then follows the saved
+  // household assumption, or the live blended prefill when that is also null.
   const [whatIfRate, setWhatIfRate] = useState<string | null>(null)
+  const [scenarioRateError, setScenarioRateError] = useState('')
   // Whole-household shared costs (joint costs only) pulled from Hushållsbudget,
   // for the rate what-if's "total per month" chips. null until loaded / no budget.
   const [householdCosts, setHouseholdCosts] = useState<number | null>(null)
@@ -104,6 +116,9 @@ export default function Bolanekoll() {
   const [isDragging, setIsDragging] = useState(false)
   const [importCfg, setImportCfg] = useState<ImportCfg | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const whatIfRateRef = useRef<HTMLInputElement>(null)
+  const savedScenarioRateRef = useRef<number | null>(settings.what_if_rate_pct)
+  const scenarioRateSavingRef = useRef<number | null>(null)
 
   const [partDlg, setPartDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [valDlg, setValDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
@@ -151,6 +166,7 @@ export default function Bolanekoll() {
   currencyState.current = settings.currency || 'SEK'
 
   useEffect(() => { document.title = (settings.property_name || 'Bolånekoll') + ' · Hemma·OS' }, [settings.property_name])
+  useEffect(() => { savedScenarioRateRef.current = settings.what_if_rate_pct }, [settings.what_if_rate_pct])
   // Pull the household's shared-cost total from Hushållsbudget once, for the
   // rate what-if's "total per month" chips. Read-only: never writes the budget.
   useEffect(() => { let live = true; loadBudget().then(b => { if (live && b) setHouseholdCosts(computeBudget(b).costsJoint) }); return () => { live = false } }, [])
@@ -325,11 +341,55 @@ export default function Bolanekoll() {
   const extra = Math.max(0, parseAmount(extraAmort) || 0)
   const base = useMemo(() => monthlyAmortizationRate(activeViewParts, activeViewPayments), [activeViewParts, activeViewPayments])
   const ms = useMemo(() => projectMilestones(activeViewParts, activeViewPayments, valuations, settings, { extraMonthly: extra }), [activeViewParts, activeViewPayments, valuations, settings, extra])
-  // Rate what-if — derive the hypothetical rate rather than seeding via effect, so
-  // the prefill tracks the async-loaded blended rate. Takes `base` (observed
-  // amortization), NOT `extra`: the rate comparison ignores the extra-amortering
-  // input (plan 82, decision 7).
-  const hypRate = whatIfRate == null ? blended : (() => { const n = parseAmount(whatIfRate); return isFinite(n) && n >= 0 ? n : 0 })()
+  // Rate what-if — derive the editable value rather than seeding via effect, so
+  // an untouched null setting continues to track an async-loaded blended rate.
+  // Takes `base` (observed amortization), NOT `extra`: the rate comparison
+  // ignores the extra-amortering input (plan 82, decision 7).
+  const savedScenarioRate = settings.what_if_rate_pct
+  const fallbackScenarioRate = savedScenarioRate ?? blended
+  const shownScenarioRate = whatIfRate ?? fallbackScenarioRate.toFixed(2)
+  const draftScenarioRate = whatIfRate == null ? null : parseScenarioRate(whatIfRate)
+  const hypRate = draftScenarioRate ?? fallbackScenarioRate
+
+  async function commitScenarioRate(draft: string): Promise<void> {
+    const rate = parseScenarioRate(draft)
+    if (rate == null) {
+      setScenarioRateError('Ange en giltig ränta på 0 % eller mer.')
+      whatIfRateRef.current?.focus()
+      return
+    }
+    // Enter may be followed by blur. Once this exact value is persisted (or is
+    // already being written), that second browser event must not create a
+    // second cloud mutation or a misleading second success flash.
+    if (rate === savedScenarioRateRef.current || rate === scenarioRateSavingRef.current) {
+      setWhatIfRate(rate.toFixed(2))
+      setScenarioRateError('')
+      return
+    }
+    setScenarioRateError('')
+    scenarioRateSavingRef.current = rate
+    try {
+      const saved = await settingsActions.save({ what_if_rate_pct: rate })
+      if (saved) {
+        savedScenarioRateRef.current = rate
+        setWhatIfRate(rate.toFixed(2))
+        return
+      }
+      // The workspace action surfaces the persistence category in its existing
+      // toast. Keep this targeted message beside the draft as a retry cue.
+      setScenarioRateError('Kunde inte spara räntan. Försök igen.')
+      whatIfRateRef.current?.focus()
+    } finally {
+      scenarioRateSavingRef.current = null
+    }
+  }
+
+  function adjustScenarioRate(delta: number): void {
+    const draft = Math.max(0, hypRate + delta).toFixed(2)
+    setWhatIfRate(draft)
+    setScenarioRateError('')
+    void commitScenarioRate(draft)
+  }
   // Amortering in the what-if = observed monthly amortering + whatever's typed in
   // "Extra amortering", so nu/vid read as the full monthly payment (interest +
   // amortering), not interest alone.
@@ -1033,12 +1093,20 @@ export default function Bolanekoll() {
                   <label className="proj-field" htmlFor="whatIfRate">Ränta i scenariot / %</label>
                   <div className="rate-stepper">
                     <button type="button" className="rate-step" aria-label="−0,01 procentenheter"
-                      onClick={() => setWhatIfRate(Math.max(0, hypRate - 0.01).toFixed(2))}>−</button>
+                      onMouseDown={event => event.preventDefault()}
+                      onClick={() => adjustScenarioRate(-0.01)}>−</button>
                     <input type="text" id="whatIfRate" className="proj-input rate-input" inputMode="decimal" autoComplete="off"
-                      value={whatIfRate ?? blended.toFixed(2)} onChange={e => setWhatIfRate(e.target.value)} />
+                      ref={whatIfRateRef} value={shownScenarioRate}
+                      aria-invalid={scenarioRateError ? true : undefined}
+                      aria-describedby={scenarioRateError ? 'whatIfRate-error' : undefined}
+                      onChange={e => { setWhatIfRate(e.target.value); setScenarioRateError('') }}
+                      onBlur={e => { void commitScenarioRate(e.target.value) }}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void commitScenarioRate(e.currentTarget.value) } }} />
                     <button type="button" className="rate-step" aria-label="+0,01 procentenheter"
-                      onClick={() => setWhatIfRate((hypRate + 0.01).toFixed(2))}>+</button>
+                      onMouseDown={event => event.preventDefault()}
+                      onClick={() => adjustScenarioRate(0.01)}>+</button>
                   </div>
+                  {scenarioRateError && <p id="whatIfRate-error" className="proj-note" role="alert">{scenarioRateError}</p>}
                 </>
               )}
             </div>

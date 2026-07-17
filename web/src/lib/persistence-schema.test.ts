@@ -135,6 +135,25 @@ describe('Mortgage and month-end persistence schemas', () => {
     if (parsed.ok) expect(parsed.value.banks[0]).toMatchObject({ year_basis: null, year_basis_source: null })
     expect(parseMortgageEnvelope({ ...legacy, banks: [{ ...legacy.banks[0], year_basis: 999 }] }).ok).toBe(false)
   })
+
+  it('migrates an omitted scenario rate to null, round-trips a finite rate, and rejects invalid persisted values', () => {
+    const legacy = parseMortgageEnvelope(mortgageBackup)
+    if (!legacy.ok) throw new Error('fixture must parse')
+    expect(legacy.value.settings.what_if_rate_pct).toBeNull()
+
+    const current = parseMortgageEnvelope({
+      ...mortgageBackup,
+      settings: { what_if_rate_pct: 3.45 },
+    })
+    expect(current).toMatchObject({ ok: true })
+    if (!current.ok) return
+    expect(current.value.settings.what_if_rate_pct).toBe(3.45)
+    expect(parseMortgageEnvelope(current.value)).toEqual(current)
+
+    for (const what_if_rate_pct of [-0.01, Number.NaN, Number.POSITIVE_INFINITY, '3,45']) {
+      expect(parseMortgageEnvelope({ ...mortgageBackup, settings: { what_if_rate_pct } }).ok).toBe(false)
+    }
+  })
   it('parses current mortgage data idempotently, including Bank/Mortgage references', () => {
     const first = parseMortgageEnvelope(mortgageBackup)
     expect(first.ok).toBe(true)

@@ -325,6 +325,27 @@ describe('write path', () => {
   })
 })
 
+describe('scenario-rate settings persistence (plan 117)', () => {
+  beforeEach(() => { mem.set(IMPORT_FLAG, '1') })
+
+  it('persists a scenario rate through cache, export, and import', async () => {
+    await store.saveSettings({ what_if_rate_pct: 3.45 })
+    expect((cache().settings as { what_if_rate_pct: number | null }).what_if_rate_pct).toBe(3.45)
+    expect((await store.getSettings()).what_if_rate_pct).toBe(3.45)
+
+    const exported = JSON.parse(await store.exportJSON()) as { settings: { what_if_rate_pct: number | null } }
+    expect(exported.settings.what_if_rate_pct).toBe(3.45)
+
+    const backup = JSON.stringify({
+      version: 6,
+      banks: [], mortgages: [], loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [],
+      settings: { what_if_rate_pct: 2.75 },
+    })
+    await store.importJSON(backup)
+    expect(store.cachedSnapshot().settings.what_if_rate_pct).toBe(2.75)
+  })
+})
+
 describe('one-time legacy import', () => {
   beforeEach(() => { mem.set(scoped('legacy-import-complete'), '1') })
   it('legacy present + no cloud row: seeded once and the flag is set', async () => {
