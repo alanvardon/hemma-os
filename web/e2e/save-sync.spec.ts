@@ -59,12 +59,27 @@ interface Backend {
 // parts are recorded and served back on subsequent GETs, so a reload proves
 // the real save→read round trip (not just the localStorage write-through
 // cache). Everything else reads empty and accepts writes.
+//
+// Plan 109c additions: banks/mortgages/rate periods join the generic
+// sync_apply_rows table map (agreement creation, bank-profile edits, rate
+// periods all go through the same outbox RPC as loan parts), plus two
+// hand-written mocks for the atomic bank-change/revert RPCs
+// (sync_change_mortgage_bank / sync_revert_mortgage_bank_change) that mirror
+// the real migration's request/response contract
+// (supabase/migrations/20260716100000_mortgage_agreement_lifecycle.sql) —
+// archive-then-insert for a switch, delete-then-reactivate for a revert.
 async function mockBackend(page: Page): Promise<Backend> {
   const parts: Record<string, unknown>[] = []
   const payments: Record<string, unknown>[] = []
+  const banks: Record<string, unknown>[] = []
+  const mortgages: Record<string, unknown>[] = []
+  const periods: Record<string, unknown>[] = []
   const resources: Record<string, Record<string, unknown>[]> = {
     mortgage_loan_parts: parts,
     mortgage_payments: payments,
+    mortgage_banks: banks,
+    mortgages,
+    mortgage_rate_periods: periods,
   }
   const receipts = new Map<string, unknown>()
   const backend: Backend = {
@@ -115,7 +130,13 @@ async function mockBackend(page: Page): Promise<Backend> {
       for (const row of body.p_rows) {
         const index = collection.findIndex((entry) => entry.id === row.id)
         const revision = index < 0 ? 1 : Number(collection[index].revision) + 1
-        const saved = { ...row, revision }
+        // The real sync_apply_rows UPDATE only assigns the keys present in the
+        // payload (mortgage-store.ts's NULLABLE_EXPLICIT comment) — an omitted
+        // nullable column (e.g. a part edit that never threads mortgage_id
+        // through) leaves the DB value untouched. Merge onto the existing row
+        // rather than replacing it, or an update would silently null out any
+        // column the client didn't resend.
+        const saved = index < 0 ? { ...row, revision } : { ...collection[index], ...row, revision }
         if (index < 0) collection.push(saved); else if (!body.p_seed) collection[index] = saved
         revisions[`${body.p_resource}:${String(row.id)}`] = index >= 0 && body.p_seed
           ? Number(collection[index].revision) : revision
@@ -124,11 +145,100 @@ async function mockBackend(page: Page): Promise<Backend> {
       receipts.set(body.p_operation_id, response)
       return route.fulfill({ json: response })
     }
-    if (path === '/rest/v1/mortgage_loan_parts') {
-      if (req.method() === 'GET') return route.fulfill({ json: parts })
+    // Atomic bank change: archive the old agreement and insert the new
+    // agreement + parts in one step, mirroring sync_change_mortgage_bank.
+    if (path === '/rest/v1/rpc/sync_change_mortgage_bank' && req.method() === 'POST') {
+      const body = req.postDataJSON() as {
+        p_operation_id: string
+        p_old_mortgage_id: string
+        p_expected_old_revision: number | null
+        p_new_mortgage: { id: string; label: string; bank_id: string }
+        p_new_parts: Array<{ id: string; label: string; balance: number; planned_amortization?: number | null }>
+        p_effective_date: string
+      }
+      const prior = receipts.get(body.p_operation_id)
+      if (prior) return route.fulfill({ json: prior })
+      const oldRow = mortgages.find((m) => m.id === body.p_old_mortgage_id)
+      const oldRevision = oldRow ? Number(oldRow.revision) : null
+      if (!oldRow || oldRow.archived || oldRevision !== body.p_expected_old_revision) {
+        return route.fulfill({
+          json: { status: 'conflict', revisions: { [`mortgages:${body.p_old_mortgage_id}`]: oldRevision } },
+        })
+      }
+      oldRow.archived = true
+      oldRow.end_date = body.p_effective_date
+      oldRow.revision = oldRevision + 1
+      const newMortgage: Record<string, unknown> = {
+        id: body.p_new_mortgage.id, bank_id: body.p_new_mortgage.bank_id, label: body.p_new_mortgage.label,
+        start_date: body.p_effective_date, archived: false, end_date: null,
+        revision: 1, created_at: new Date().toISOString(),
+      }
+      mortgages.push(newMortgage)
+      const newParts = body.p_new_parts.map((part) => ({
+        id: part.id, label: part.label, loan_number: '',
+        start_balance: part.balance, start_date: body.p_effective_date, archived: false,
+        mortgage_id: newMortgage.id, original_balance: part.balance, original_date: body.p_effective_date,
+        planned_amortization: part.planned_amortization ?? null,
+        planned_amortization_start: part.planned_amortization != null ? body.p_effective_date : null,
+        planned_amortization_end: null, revision: 1, created_at: new Date().toISOString(),
+      }))
+      parts.push(...newParts)
+      const revisions: Record<string, number | null> = {
+        [`mortgages:${oldRow.id}`]: Number(oldRow.revision),
+        [`mortgages:${newMortgage.id}`]: 1,
+      }
+      for (const p of newParts) revisions[`mortgage_loan_parts:${p.id}`] = 1
+      const response = { status: 'applied', mortgage: newMortgage, old_mortgage: oldRow, parts: newParts, revisions }
+      receipts.set(body.p_operation_id, response)
+      return route.fulfill({ json: response })
     }
-    if (path === '/rest/v1/mortgage_payments') {
-      if (req.method() === 'GET') return route.fulfill({ json: payments })
+    // Ångra bankbyte: delete the pristine new agreement + its parts and
+    // reactivate the predecessor, mirroring sync_revert_mortgage_bank_change.
+    if (path === '/rest/v1/rpc/sync_revert_mortgage_bank_change' && req.method() === 'POST') {
+      const body = req.postDataJSON() as {
+        p_operation_id: string
+        p_mortgage_id: string
+        p_expected_revisions: Record<string, number | null>
+      }
+      const prior = receipts.get(body.p_operation_id)
+      if (prior) return route.fulfill({ json: prior })
+      const target = mortgages.find((m) => m.id === body.p_mortgage_id)
+      if (!target) {
+        return route.fulfill({ json: { status: 'conflict', revisions: { [`mortgages:${body.p_mortgage_id}`]: null } } })
+      }
+      const previous = mortgages.find((m) =>
+        m.id !== target.id && m.archived && (m.end_date ?? null) === (target.start_date ?? null))
+      if (!previous) return route.fulfill({ status: 400, json: {} })
+      const partIds = parts.filter((p) => p.mortgage_id === target.id).map((p) => String(p.id))
+      const current: Record<string, number | null> = {
+        [`mortgages:${target.id}`]: Number(target.revision),
+        [`mortgages:${previous.id}`]: Number(previous.revision),
+      }
+      for (const id of partIds) {
+        const p = parts.find((row) => row.id === id)
+        current[`mortgage_loan_parts:${id}`] = p ? Number(p.revision) : null
+      }
+      const mismatch = Object.entries(current).some(([key, rev]) => body.p_expected_revisions[key] !== rev)
+      if (mismatch) return route.fulfill({ json: { status: 'conflict', revisions: current } })
+      for (const id of partIds) {
+        const index = parts.findIndex((p) => p.id === id)
+        if (index >= 0) parts.splice(index, 1)
+      }
+      const targetIndex = mortgages.findIndex((m) => m.id === target.id)
+      if (targetIndex >= 0) mortgages.splice(targetIndex, 1)
+      previous.archived = false
+      previous.end_date = null
+      previous.revision = Number(previous.revision) + 1
+      const revisions: Record<string, number | null> = {
+        [`mortgages:${target.id}`]: null, [`mortgages:${previous.id}`]: Number(previous.revision),
+      }
+      for (const id of partIds) revisions[`mortgage_loan_parts:${id}`] = null
+      const response = { status: 'applied', mortgage: previous, revisions }
+      receipts.set(body.p_operation_id, response)
+      return route.fulfill({ json: response })
+    }
+    if (resources[path.slice('/rest/v1/'.length)] && req.method() === 'GET') {
+      return route.fulfill({ json: resources[path.slice('/rest/v1/'.length)] })
     }
     if (path.startsWith('/rest/')) {
       if (req.method() === 'GET') return route.fulfill({ json: [] })
@@ -148,14 +258,85 @@ function trackPageErrors(page: Page): Error[] {
   return errors
 }
 
+// Every tool dialog is a <dialog class="bk-dialog"> in the DOM — [open]
+// selects the one showModal() actually opened. Plan 109c can have two native
+// <dialog>s open at once (e.g. editing an archived part from inside Tidigare
+// avtal opens PartDialog on top of the still-open history dialog, or adding a
+// rate period from inside the part dialog), so a plain hasText filter is
+// unreliable — e.g. PartDialog's own "+ Add rate period" trigger button text
+// also matches a hasText filter meant for the nested PeriodDialog. Filter by
+// the dialog's <h3 class="dialog-title"> HEADING instead — exactly one per
+// dialog, so a substring match against just that element is unambiguous.
+function dialogWithHeading(page: Page, heading: string) {
+  return page.locator('dialog.bk-dialog[open]').filter({ has: page.locator('.dialog-title', { hasText: heading }) })
+}
+
+// BankPicker's <select> is wrapped by FormField's `<label><span>Bank</span>
+// <select>…</select></label>`. Its computed accessible name is "Bank" PLUS the
+// currently selected option's own text (the label wraps the control, and a
+// <select>'s rendered option is real DOM text), so getByLabel('Bank') never
+// matches a stable, exact string. Target the field structurally instead: the
+// <label> whose caption <span> is exactly "Bank".
+function bankSelect(dialog: import('@playwright/test').Locator) {
+  return dialog.locator('label.form-field:has(span:text-is("Bank")) select')
+}
+
+// Plan 109c — a mortgage agreement is the parent of the loan parts; the first
+// empty-hero action creates it (label/start date + a bank) before any loan
+// part can be added. The picker only offers "Egen bank…" in a fresh household
+// (no catalogue rows are seeded and no household bank exists yet).
+async function createAgreement(page: Page, opts: { label?: string; bankLabel?: string } = {}) {
+  await page.locator('.empty-hero').getByRole('button', { name: 'Skapa bolåneavtal' }).click()
+  const dialog = dialogWithHeading(page, 'Skapa bolåneavtal')
+  await expect(dialog.getByRole('heading', { name: 'Skapa bolåneavtal', exact: false })).toBeVisible()
+  if (opts.label) await dialog.getByLabel('Namn').fill(opts.label)
+  await bankSelect(dialog).selectOption({ label: 'Egen bank…' })
+  await dialog.getByLabel('Bankens namn').fill(opts.bankLabel ?? 'E2E Bank')
+  await dialog.getByRole('button', { name: 'Skapa' }).click()
+  await expect(dialog).not.toBeVisible()
+}
+
 async function openAddLoanPartDialog(page: Page) {
-  // Fresh household → the empty-hero is the entry point.
-  await page.locator('.empty-hero').getByRole('button', { name: '+ Add loan part' }).click()
-  // Every tool dialog is a <dialog class="bk-dialog"> in the DOM — [open]
-  // selects the one showModal() actually opened.
+  // Fresh household → the empty-hero is the entry point, but a loan part now
+  // requires an agreement to exist first (plan 109c).
+  await createAgreement(page)
+  await page.locator('.empty-hero').getByRole('button', { name: '+ Lägg till lånedel' }).click()
   const dialog = page.locator('dialog.bk-dialog[open]')
   await expect(dialog.getByRole('heading', { name: 'Add loan part' })).toBeVisible()
   return dialog
+}
+
+// Adds the FIRST loan part of a freshly created (empty) agreement — the
+// empty-hero's "+ Lägg till lånedel" CTA, same dialog as openAddLoanPartDialog
+// uses but without also creating the agreement (the caller already did that).
+async function addFirstLoanPart(page: Page, label: string, startBalance: string) {
+  await page.locator('.empty-hero').getByRole('button', { name: '+ Lägg till lånedel' }).click()
+  const dialog = page.locator('dialog.bk-dialog[open]')
+  await expect(dialog.getByRole('heading', { name: 'Add loan part' })).toBeVisible()
+  await dialog.getByLabel('Label').fill(label)
+  await dialog.getByLabel('Start balance').fill(startBalance)
+  await dialog.getByRole('button', { name: 'Save' }).click()
+  await expect(dialog).not.toBeVisible()
+}
+
+// Drives the Byt bank wizard end to end (Bank → Lånedelar → Granska →
+// Bekräfta) to a brand-new custom bank, optionally renaming the (single)
+// copied draft loan part. Assumes no total mismatch (default balances), so
+// the sum-mismatch acknowledgement checkbox never appears.
+async function switchBank(page: Page, opts: { newAgreementLabel: string; newBankLabel: string; renameDraft?: string }) {
+  await page.getByRole('button', { name: 'Byt bank' }).click()
+  const dialog = dialogWithHeading(page, 'Byt bank')
+  await expect(dialog.getByRole('heading', { name: 'Byt bank', exact: false })).toBeVisible()
+  await dialog.getByLabel('Namn på nytt avtal').fill(opts.newAgreementLabel)
+  await bankSelect(dialog).selectOption({ label: 'Egen bank…' })
+  await dialog.getByLabel('Bankens namn').fill(opts.newBankLabel)
+  await dialog.getByRole('button', { name: 'Nästa' }).click() // → step 2, Lånedelar
+  // exact: true — a substring match also catches the draft's "Ta bort lånedel" button.
+  if (opts.renameDraft) await dialog.getByLabel('Lånedel', { exact: true }).fill(opts.renameDraft)
+  await dialog.getByRole('button', { name: 'Nästa' }).click() // → step 3, Granska
+  await dialog.getByRole('button', { name: 'Nästa' }).click() // → step 4, Bekräfta
+  await dialog.getByRole('button', { name: 'Byt bank' }).click() // atomic confirm
+  await expect(dialog).not.toBeVisible()
 }
 
 test('a saved loan part survives a real reload (save → cloud → re-read)', async ({ page }) => {
@@ -224,10 +405,16 @@ test('an extra amortering is one canonical payment and one linked Extra amorteri
 test('a failed save survives reload and replays after connectivity returns', async ({ page }) => {
   const errors = trackPageErrors(page)
   const backend = await mockBackend(page)
-  backend.failInserts = true
   await page.goto('/#/bolanekoll')
+  // Create the agreement (a normal, succeeding write) before flipping
+  // failInserts — this test is specifically about a loan-part save failing,
+  // not about the agreement itself failing to create.
+  await createAgreement(page)
+  backend.failInserts = true
 
-  const dialog = await openAddLoanPartDialog(page)
+  await page.locator('.empty-hero').getByRole('button', { name: '+ Lägg till lånedel' }).click()
+  const dialog = page.locator('dialog.bk-dialog[open]')
+  await expect(dialog.getByRole('heading', { name: 'Add loan part' })).toBeVisible()
   await dialog.getByLabel('Label').fill('Spöklån')
   await dialog.getByRole('button', { name: 'Save' }).click()
 
@@ -297,6 +484,185 @@ test('a stale device can reload the cloud version or keep its own version', asyn
   await page.reload()
   await expect(page.locator('.ld-name', { hasText: 'Behåll min version' })).toBeVisible()
   await expect(page.locator('.ld-name', { hasText: 'Ny molnversion' })).toHaveCount(0)
+
+  expect(errors).toEqual([])
+})
+
+// ── Plan 109c — bank change / Ångra bankbyte / history (acceptance criteria) ──
+
+test('a bank switch survives reload with clean parts and a missing-rate prompt', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  await mockBackend(page)
+  await page.goto('/#/bolanekoll')
+
+  await createAgreement(page, { label: 'Bolån hos Gamla banken', bankLabel: 'Gamla banken' })
+  await addFirstLoanPart(page, 'Del 1', '500000')
+
+  await switchBank(page, {
+    newAgreementLabel: 'Bolån hos Nya banken', newBankLabel: 'Nya banken', renameDraft: 'Del 1 (ny bank)',
+  })
+
+  await expect(page.locator('.bk-toast.show')).toHaveText(
+    'Bankbyte genomfört. Lägg till räntevillkor för de nya lånedelarna.',
+  )
+  await expect(page.locator('.agreement-name')).toHaveText('Bolån hos Nya banken')
+  await expect(page.locator('.agreement-bank')).toHaveText('Nya banken')
+  // Rates are deliberately never copied — the fresh agreement's part(s) must
+  // prompt for räntevillkor instead of silently forecasting at 0 %.
+  await expect(page.locator('.missing-rate-prompt')).toBeVisible()
+  await expect(page.getByRole('button', { name: '+ Lägg till räntevillkor: Del 1 (ny bank)' })).toBeVisible()
+  await expect(page.locator('.ld-name', { hasText: 'Del 1 (ny bank)' })).toBeVisible()
+  // NOTE (found while writing this spec, reported rather than fixed here per
+  // scope): the main ledger table (Bolanekoll.tsx `loanGroups` / `groupLoanParts`)
+  // still filters loan parts by their own `!part.archived` flag, not by agreement
+  // membership. A bank change only archives the AGREEMENT (mortgage.ts's own
+  // "Agreement scoping (plan 109b)" comment documents that this is intentional
+  // and that active scoping must go through the mortgage link instead), so the
+  // OLD agreement's part — never itself archived — still renders in the ACTIVE
+  // ledger alongside the new one after a switch. Left un-asserted here; see the
+  // final report.
+
+  await page.getByRole('button', { name: 'Tidigare avtal' }).click()
+  const history = dialogWithHeading(page, 'Tidigare avtal')
+  await expect(history.locator('.agreement-status.is-closed')).toHaveText('Avslutat')
+  await expect(history.locator('.history-detail-bank')).toHaveText('Gamla banken')
+  await expect(history.locator('.history-parts')).toContainText('Del 1')
+  await history.getByRole('button', { name: 'Stäng' }).click()
+  await expect(history).not.toBeVisible()
+
+  // page.reload(), NOT a same-hash page.goto — see project_web_landmines.md.
+  await page.reload()
+
+  await expect(page.locator('.agreement-name')).toHaveText('Bolån hos Nya banken')
+  await expect(page.locator('.agreement-bank')).toHaveText('Nya banken')
+  await expect(page.locator('.missing-rate-prompt')).toBeVisible()
+  await expect(page.getByRole('button', { name: '+ Lägg till räntevillkor: Del 1 (ny bank)' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Tidigare avtal' }).click()
+  const historyAfterReload = dialogWithHeading(page, 'Tidigare avtal')
+  await expect(historyAfterReload.locator('.agreement-status.is-closed')).toHaveText('Avslutat')
+  await expect(historyAfterReload.locator('.history-detail-bank')).toHaveText('Gamla banken')
+  await expect(historyAfterReload.locator('.history-parts')).toContainText('Del 1')
+
+  expect(errors).toEqual([])
+})
+
+test('Ångra bankbyte reverts a pristine switch, survives reload, and disappears once the new agreement has a transaction', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  await mockBackend(page)
+  await page.goto('/#/bolanekoll')
+
+  await createAgreement(page, { label: 'Bolån A', bankLabel: 'Bank A' })
+  await addFirstLoanPart(page, 'Del 1', '400000')
+
+  await switchBank(page, { newAgreementLabel: 'Bolån B', newBankLabel: 'Bank B', renameDraft: 'Del 1 hos Bank B' })
+  await expect(page.locator('.agreement-bank')).toHaveText('Bank B')
+
+  await page.getByRole('button', { name: 'Tidigare avtal' }).click()
+  const history = dialogWithHeading(page, 'Tidigare avtal')
+  await expect(history.getByRole('group', { name: 'Ångra bankbyte' })).toBeVisible()
+
+  page.once('dialog', (d) => d.accept())
+  await history.getByRole('button', { name: 'Ångra bankbyte' }).click()
+
+  await expect(page.locator('.bk-toast.show')).toHaveText('Bankbytet ångrades.')
+  await expect(history).not.toBeVisible()
+  await expect(page.locator('.agreement-name')).toHaveText('Bolån A')
+  await expect(page.locator('.agreement-bank')).toHaveText('Bank A')
+
+  await page.reload()
+  await expect(page.locator('.agreement-name')).toHaveText('Bolån A')
+  await expect(page.locator('.agreement-bank')).toHaveText('Bank A')
+
+  // Switch again, then record a transaction on the new agreement — Ångra
+  // bankbyte must disappear permanently once history exists (plan acceptance).
+  await switchBank(page, { newAgreementLabel: 'Bolån C', newBankLabel: 'Bank C', renameDraft: 'Del 1 hos Bank C' })
+  await expect(page.locator('.agreement-bank')).toHaveText('Bank C')
+
+  const paymentCard = page.locator('#betalningar').locator('..')
+  await paymentCard.getByRole('button', { name: '+ Lägg till' }).click()
+  const paymentDialog = page.locator('dialog.bk-dialog[open]')
+  await expect(paymentDialog.getByRole('heading', { name: 'Lägg till betalning' })).toBeVisible()
+  await paymentDialog.getByLabel('Typ').selectOption('extra_amortization')
+  await paymentDialog.getByLabel('Lånedel').selectOption({ label: 'Del 1 hos Bank C' })
+  await paymentDialog.getByLabel('Belopp').fill('5000')
+  await paymentDialog.getByLabel('Saldo efteråt (valfritt)').fill('395000')
+  await paymentDialog.getByRole('button', { name: 'Spara' }).click()
+  await expect(paymentDialog).not.toBeVisible()
+
+  await page.getByRole('button', { name: 'Tidigare avtal' }).click()
+  const historyAfterTransaction = dialogWithHeading(page, 'Tidigare avtal')
+  await expect(historyAfterTransaction.getByRole('group', { name: 'Ångra bankbyte' })).toHaveCount(0)
+
+  expect(errors).toEqual([])
+})
+
+test('archived rate periods and transactions stay editable and attached to the archived agreement after reload', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  await mockBackend(page)
+  await page.goto('/#/bolanekoll')
+
+  await createAgreement(page, { label: 'Bolån hos Första banken', bankLabel: 'Första banken' })
+  await addFirstLoanPart(page, 'Ursprunglig del', '300000')
+
+  // Give the original part a rate period and a logged transaction before the
+  // bank change, so history has real data to keep, edit and re-verify.
+  const row = page.locator('tr.ld-member', { hasText: 'Ursprunglig del' })
+  await row.getByRole('button', { name: 'Edit' }).click()
+  const partDialog = dialogWithHeading(page, 'Edit loan part')
+  await partDialog.getByRole('button', { name: '+ Add rate period' }).click()
+  const periodDialog = dialogWithHeading(page, 'Add rate period')
+  await periodDialog.getByLabel('Interest rate %').fill('3.5')
+  await periodDialog.getByRole('button', { name: 'Save' }).click()
+  await expect(periodDialog).not.toBeVisible()
+  await partDialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(partDialog).not.toBeVisible()
+
+  const paymentCard = page.locator('#betalningar').locator('..')
+  await paymentCard.getByRole('button', { name: '+ Lägg till' }).click()
+  const paymentDialog = page.locator('dialog.bk-dialog[open]')
+  await expect(paymentDialog.getByRole('heading', { name: 'Lägg till betalning' })).toBeVisible()
+  await paymentDialog.getByLabel('Typ').selectOption('extra_amortization')
+  await paymentDialog.getByLabel('Belopp').fill('10000')
+  await paymentDialog.getByLabel('Saldo efteråt (valfritt)').fill('290000')
+  await paymentDialog.getByRole('button', { name: 'Spara' }).click()
+  await expect(paymentDialog).not.toBeVisible()
+
+  await switchBank(page, {
+    newAgreementLabel: 'Bolån hos Andra banken', newBankLabel: 'Andra banken', renameDraft: 'Ny del',
+  })
+
+  await page.getByRole('button', { name: 'Tidigare avtal' }).click()
+  const history = dialogWithHeading(page, 'Tidigare avtal')
+  await expect(history.locator('.history-parts')).toContainText('Ursprunglig del')
+  await expect(history.locator('.history-periods')).toContainText('3,50 %')
+  await expect(history.locator('.history-payments')).toContainText(/10\s*000 kr/)
+
+  // Edit the archived part's label from history — this must not reactivate it
+  // or move it to the active agreement.
+  await history.getByRole('button', { name: 'Redigera lånedel' }).click()
+  const archivedPartDialog = dialogWithHeading(page, 'Edit loan part')
+  await archivedPartDialog.getByLabel('Label').fill('Ursprunglig del (redigerad)')
+  await archivedPartDialog.getByRole('button', { name: 'Save' }).click()
+  await expect(archivedPartDialog).not.toBeVisible()
+
+  await expect(history.locator('.history-parts')).toContainText('Ursprunglig del (redigerad)')
+  await expect(page.locator('.agreement-name')).toHaveText('Bolån hos Andra banken')
+  // NOTE: not asserting the edited part's absence from the main ledger here —
+  // see the equivalent NOTE in the bank-switch test above (a pre-existing
+  // main-ledger scoping gap, reported rather than fixed in this stage). The
+  // mortgage_id link itself is proven unchanged by the history assertions
+  // above/below (the row stays attached to the archived agreement, not moved).
+
+  await history.getByRole('button', { name: 'Stäng' }).click()
+  await page.reload()
+
+  await page.getByRole('button', { name: 'Tidigare avtal' }).click()
+  const historyAfterReload = dialogWithHeading(page, 'Tidigare avtal')
+  await expect(historyAfterReload.locator('.history-parts')).toContainText('Ursprunglig del (redigerad)')
+  await expect(historyAfterReload.locator('.history-periods')).toContainText('3,50 %')
+  await expect(historyAfterReload.locator('.history-payments')).toContainText(/10\s*000 kr/)
+  await expect(page.locator('.agreement-name')).toHaveText('Bolån hos Andra banken')
 
   expect(errors).toEqual([])
 })
