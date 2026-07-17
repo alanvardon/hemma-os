@@ -1317,6 +1317,118 @@ export function bankProfileDrift(bank: Bank | null | undefined, parts: LoanPart[
   return null
 }
 
+// ── Effective bank profile (plan 109b) ───────────────────────────────────────
+// Resolves the convention values the UI presents (and 109c wires into the
+// forecast context) with the owner-confirmed precedence (2026-07-16):
+//
+//   1. household-declared lock        (the owner's stated contract fact)
+//   2. confident household detection  (the household's own ledger is direct
+//                                      evidence of the actual contract)
+//   3. curated catalogue value        (a generic default for the bank)
+//   4. generic fallback               (365 / fixed — the Swedish conventions)
+//
+// CONFIDENCE THRESHOLD — a financial-correctness parameter, anchored on the
+// plan-104 promotion criterion (the same rule that offers "Lås detta?"):
+//   • year_basis: `learnYearBasis` — confident only on a clear /360 signal
+//     pooled from ≥ 2 bunden rate-period windows with ≥ 3 usable charge pairs,
+//     where the implied rentedagar are near-integral under /360
+//     (err360 < 0.05·n) AND clearly not under /365 (err365 > 0.2·n). 365 is
+//     the null-hypothesis default and is never itself "confident".
+//   • billing: `suggestBankProfile` — confident only for 'month-end', when
+//     ≥ 70 % of ≥ 4 dated charges cluster at a month boundary with ≥ 2
+//     genuinely late-month dates. 'fixed' is the unremarkable default and has
+//     no promotable criterion, so a fixed-day reading never outranks a lock
+//     or catalogue value.
+// Detection is recomputed fresh from the ledger on every resolution; a stored
+// 'detected'/'suggested' provenance value never short-circuits (plan-104
+// phase-1 rule: only 'declared' locks).
+//
+// A conflict between a lock/catalogue value and fresh confident evidence is
+// returned as typed DRIFT — the resolution never silently rewrites either
+// profile. Profiles carry parameters, not algorithms: no `if (bank === ...)`.
+
+// The shared read-only catalogue row (mortgage_bank_catalog, plan 109a) as the
+// domain layer consumes it. Nullable curated parameters; unknown facts stay null.
+export interface CatalogBank {
+  id: string
+  slug?: string
+  label: string
+  year_basis?: number | null
+  billing?: string | null
+}
+
+export type ConventionSource = 'declared' | 'detected' | 'catalog' | 'default'
+export interface EffectiveConvention<T> { value: T; source: ConventionSource }
+
+type ConventionValue = 360 | 365 | 'month-end' | 'fixed'
+export interface ConventionDriftWarning {
+  field: 'year_basis' | 'billing'
+  /** Which profile the confident ledger evidence contradicts. */
+  against: 'declared' | 'catalog'
+  /** The value that profile holds. */
+  held: ConventionValue
+  /** What the household's own ledger confidently reads. */
+  observed: ConventionValue
+  /** The value the resolution actually uses (the lock when against 'declared'; the detection when against 'catalog'). */
+  effective: ConventionValue
+}
+
+export interface EffectiveBankProfile {
+  year_basis: EffectiveConvention<360 | 365>
+  billing: EffectiveConvention<'month-end' | 'fixed'>
+  drift: ConventionDriftWarning[]
+}
+
+// One field's precedence walk. A drift entry is appended when confident
+// evidence contradicts the winning lock, or the catalogue value the detection
+// outranked — the two "would have used a different number" cases the owner
+// must see (plan 109 adversarial review, 2026-07-16).
+function resolveConvention<T extends ConventionValue>(
+  field: ConventionDriftWarning['field'],
+  declared: T | null, detected: T | null, catalogValue: T | null, fallback: T,
+  drift: ConventionDriftWarning[],
+): EffectiveConvention<T> {
+  if (declared != null) {
+    if (detected != null && detected !== declared)
+      drift.push({ field, against: 'declared', held: declared, observed: detected, effective: declared })
+    return { value: declared, source: 'declared' }
+  }
+  if (detected != null) {
+    if (catalogValue != null && catalogValue !== detected)
+      drift.push({ field, against: 'catalog', held: catalogValue, observed: detected, effective: detected })
+    return { value: detected, source: 'detected' }
+  }
+  if (catalogValue != null) return { value: catalogValue, source: 'catalog' }
+  return { value: fallback, source: 'default' }
+}
+
+// `parts` are the bank's parts (pool the ledger evidence across them, exactly
+// as suggestBankProfile does). Malformed lock/catalogue values (a year_basis
+// of 400, a billing of 'weird') are void — they fall through the precedence
+// rather than becoming a garbage convention.
+export function effectiveBankProfile(
+  bank: Bank | null | undefined,
+  catalog: CatalogBank | null | undefined,
+  parts: LoanPart[], periods: RatePeriod[], payments: Payment[],
+): EffectiveBankProfile {
+  const suggestion = suggestBankProfile(parts || [], periods || [], payments || [])
+  const drift: ConventionDriftWarning[] = []
+  const asYearBasis = (v: unknown): 360 | 365 | null => v === 360 ? 360 : v === 365 ? 365 : null
+  const asBilling = (v: unknown): 'month-end' | 'fixed' | null =>
+    v === 'month-end' ? 'month-end' : v === 'fixed' ? 'fixed' : null
+  return {
+    year_basis: resolveConvention('year_basis',
+      bank?.year_basis_source === 'declared' ? asYearBasis(bank.year_basis) : null,
+      suggestion.year_basis.confident ? suggestion.year_basis.value : null,
+      asYearBasis(catalog?.year_basis), 365, drift),
+    billing: resolveConvention('billing',
+      bank?.billing_source === 'declared' ? asBilling(bank.billing) : null,
+      suggestion.billing.confident ? suggestion.billing.value : null,
+      asBilling(catalog?.billing), 'fixed', drift),
+    drift,
+  }
+}
+
 export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[], opts?: ForecastOpts): ExpectedCharge | null {
   if (!part) return null
   // Calibrate on REAL rows only — the bank stays ground truth. Including a
@@ -1792,6 +1904,137 @@ export function bankForPart(part: LoanPart | null | undefined, mortgages: Mortga
   const m = mortgageForPart(part, mortgages)
   if (!m?.bank_id) return null
   return (banks || []).find(b => b?.id === m.bank_id) ?? null
+}
+
+// ── Agreement scoping (plan 109b) ────────────────────────────────────────────
+// An agreement spans the lifetime of one bank relationship (plan 109 lifecycle
+// model): a villkorsändringsdag expires a RATE PERIOD, a same-bank restructure
+// archives/creates PARTS within the agreement, and only a bank change closes
+// an agreement. The bank-change RPC archives the AGREEMENT, not the old parts,
+// so active scoping must go through the mortgage link — a part is out of the
+// active picture because its agreement closed, not because its own archived
+// flag flipped.
+
+// The single active (unarchived) agreement, or null when none exists yet /
+// only history remains. The database's partial unique index guarantees at
+// most one.
+export function activeMortgage(mortgages: Mortgage[]): Mortgage | null {
+  return (mortgages || []).find(m => m && !m.archived) ?? null
+}
+
+// The parts attached to one agreement (archived parts included — history views
+// and lifetime figures need them; active-debt callers layer the part-level
+// archived filter via totalBalance et al.). A null/unknown agreement scopes to
+// nothing: legacy unlinked rows are a repair state, never silently adopted.
+export function partsForMortgage(parts: LoanPart[], mortgageId: string | null | undefined): LoanPart[] {
+  if (!mortgageId) return []
+  return (parts || []).filter(p => p?.mortgage_id === mortgageId)
+}
+
+// One agreement's ledger rows: part-linked rows through the agreement's parts;
+// partless rows (down payments) through their own mortgage_id provenance
+// (plan 109a). Used for archived-agreement history views and for scoping the
+// active forecast so it can never consume an old agreement's transactions.
+export function paymentsForMortgage(payments: Payment[], parts: LoanPart[], mortgageId: string | null | undefined): Payment[] {
+  if (!mortgageId) return []
+  const ids = new Set(partsForMortgage(parts, mortgageId).map(p => p.id))
+  return (payments || []).filter(p => p != null &&
+    (p.loan_part_id ? ids.has(p.loan_part_id) : p.mortgage_id === mortgageId))
+}
+
+// Lifetime amortised principal across the FULL agreement history: every part
+// (archived and old-agreement parts included) contributes its own
+// origination-to-resolved-balance reduction exactly once. Debt transfers
+// contribute zero by construction — a refinance payoff is never recorded as
+// amortisation, so the old part keeps its closing balance (orig − closing)
+// while the new part starts at that same figure (opening − current). The old
+// closing debt and the new opening debt therefore cancel instead of double
+// counting (plan 109 decision 6).
+export function lifetimeAmortized(parts: LoanPart[], payments: Payment[]): number {
+  return r2((parts || []).filter(p => p != null).reduce((s, p) =>
+    s + Math.max(0, r2(partOriginal(p, payments) - partBalance(p, payments))), 0))
+}
+
+// Typed "rate terms missing" signal: the active parts with NO effective rate
+// period (no period carrying a rate at all — the state every part is in right
+// after a bank change, since rates are deliberately not copied). The forecast
+// already returns null for such a part rather than projecting 0 %; this gives
+// the UI the explicit list for its Lägg till räntevillkor prompt (109c).
+export interface MissingRateTerms { loan_part_id: string; label: string }
+export function partsMissingRateTerms(parts: LoanPart[], periods: RatePeriod[]): MissingRateTerms[] {
+  return (parts || []).filter(p => p && !p.archived && !effectiveRatePeriod(p, periods || []))
+    .map(p => ({ loan_part_id: p.id, label: p.label }))
+}
+
+// ── Copy preview (plan 109b — agreement-agnostic; plan 109 decision 4) ───────
+// Pure function from (parts, payments, effective date) to proposed part drafts
+// plus warnings. It knows nothing about the destination agreement — the
+// change-bank wizard and a future same-bank restructure flow reuse it
+// unchanged.
+//
+// Copies ONLY: the label; the resolved outstanding balance at the effective
+// date (plan-107 canonical resolver) as the opening/original balance; the
+// planned monthly amortisation effective AT that date as an editable
+// suggestion (its start date is reset to the effective date and its end date
+// cleared by the consumer — an old plan's dates belong to the old contract).
+// Never copies: loan/account numbers, old origination amounts/dates, rate
+// periods/rates/binding types/condition-change dates, payments/fees/down
+// payments/extra amortisations, forecast rows, historical IDs/revisions/
+// timestamps — the draft shape cannot even express them.
+//
+// The resolver's observed/estimated quality and warnings are carried through:
+// malformed or uncertain history is surfaced, never silently turned into a
+// clean opening balance.
+
+export type CopyPreviewWarning = 'invalid-effective-date'
+
+export interface CopyPartDraft {
+  /** Reference to the part the draft was derived from (display only — never persisted onto the new part). */
+  source_part_id: string
+  label: string
+  /** Resolved outstanding balance at the effective date — the proposed opening/original balance. */
+  balance: number
+  balance_quality: BalanceResolution['quality']
+  balance_source: BalanceResolution['anchor']['source']
+  /** Editable suggestion (kr/mån); null = no plan effective at the date. */
+  planned_amortization: number | null
+  warnings: BalanceWarning[]
+}
+
+export interface CopyPreview {
+  effective_date: string
+  drafts: CopyPartDraft[]
+  total_balance: number
+  /** True when any draft balance is an estimate — the wizard must warn before confirm. */
+  estimated: boolean
+  warnings: CopyPreviewWarning[]
+}
+
+export function copyPartsPreview(parts: LoanPart[], payments: Payment[], effectiveDate: string): CopyPreview {
+  // A malformed effective date cannot anchor a balance: refuse with a typed
+  // warning rather than resolving against a garbage as-of bound.
+  if (!validLedgerDate(effectiveDate)) {
+    return { effective_date: String(effectiveDate ?? ''), drafts: [], total_balance: 0, estimated: false, warnings: ['invalid-effective-date'] }
+  }
+  const drafts = (parts || []).filter(p => p && !p.archived).map((part): CopyPartDraft => {
+    const resolved = resolvePartBalance(part, payments || [], effectiveDate)
+    return {
+      source_part_id: part.id,
+      label: part.label,
+      balance: resolved.balance,
+      balance_quality: resolved.quality,
+      balance_source: resolved.anchor.source,
+      planned_amortization: effectiveDeclaredAmortization(part, effectiveDate),
+      warnings: resolved.warnings,
+    }
+  })
+  return {
+    effective_date: effectiveDate,
+    drafts,
+    total_balance: r2(drafts.reduce((s, d) => s + d.balance, 0)),
+    estimated: drafts.some(d => d.balance_quality === 'estimated'),
+    warnings: [],
+  }
 }
 
 // ── Contributions ──────────────────────────────────────────────────────────
