@@ -7,7 +7,7 @@ import {
   matchPredictedRows, hasChargeInMonth, pendingCharge, pendingChargeSeries, partBalance,
   stalePredictedRows, makeLoanPart, effectiveDeclaredAmortization, declaredMonthlyAmortization,
   projectMilestones, profileYearBasis, makeBank,
-  learnYearBasis, suggestBankProfile, bankProfileDrift, profileBilling,
+  learnYearBasis, suggestBankProfile, bankProfileDrift, profileBilling, strictRatePeriodCoverage,
 } from './mortgage'
 import type { LoanPart, Payment, RatePeriod, Bank, Mortgage } from './mortgage'
 
@@ -852,6 +852,99 @@ describe('pendingCharge (rolls past covered months)', () => {
   })
 })
 
+describe('strictRatePeriodCoverage (known-terms boundary)', () => {
+  it('distinguishes no usable terms, covered dates and dates outside known terms', () => {
+    const p = part()
+    expect(strictRatePeriodCoverage(p, [], '2026-07-27')).toBe('unconfigured')
+    expect(strictRatePeriodCoverage(p, [
+      period({ rate: null }),
+      period({ id: 'other', loan_part_id: 'p2' }),
+    ], '2026-07-27')).toBe('unconfigured')
+
+    const known = [period({ start_date: '2026-01-01', end_date: '2026-07-27' })]
+    expect(strictRatePeriodCoverage(p, known, '2026-07-27')).toBe('covered')
+    expect(strictRatePeriodCoverage(p, known, '2026-07-28')).toBe('outside-known-terms')
+  })
+
+  it('requires the charge date itself to be inside a successor and does not bridge gaps', () => {
+    const periods = [
+      period({ end_date: '2026-06-30' }),
+      period({ id: 'r2', start_date: '2026-08-01', end_date: null, rate: 4.1 }),
+    ]
+    expect(strictRatePeriodCoverage(part(), periods, '2026-07-27')).toBe('outside-known-terms')
+    expect(strictRatePeriodCoverage(part(), periods, '2026-08-01')).toBe('covered')
+  })
+})
+
+describe('pending charge known-terms boundary', () => {
+  const loggedJuly: Payment = {
+    id: 'pred-july', created_at: '', loan_part_id: 'p1', date: '2026-07-27', kind: 'interest',
+    description: 'Förväntad avi', amount: 3000, balance_after: 1_000_000, paid_by: 'joint', source: 'predicted',
+  }
+
+  it('keeps the next uncovered monthly charge before the end date and on the end date', () => {
+    const before = pendingCharge(part(), [period({ end_date: '2026-08-31' })], CLEAN)
+    expect(before?.next_date).toBe('2026-07-27')
+    expect(before?.interest).toBe(3000)
+
+    const onBoundary = pendingCharge(part(), [period({ end_date: '2026-07-27' })], CLEAN)
+    expect(onBoundary?.next_date).toBe('2026-07-27')
+    expect(onBoundary?.interest).toBe(3000)
+  })
+
+  it('returns no pending charge or series when the last valid month is fully logged', () => {
+    const periods = [period({ end_date: '2026-07-27' })]
+    const payments = [...CLEAN, loggedJuly]
+    expect(expectedCharge(part(), periods, payments)?.next_date).toBe('2026-07-27')
+    expect(pendingCharge(part(), periods, payments)).toBeNull()
+    expect(pendingChargeSeries(part(), periods, payments)).toEqual([])
+  })
+
+  it('suppresses the first calculated charge when it is already after the end date', () => {
+    const periods = [period({ end_date: '2026-07-26' })]
+    const diagnostic = expectedCharge(part(), periods, CLEAN)
+    expect(diagnostic?.next_date).toBe('2026-07-27')
+    expect(diagnostic?.interest).toBe(3000)
+    expect(pendingCharge(part(), periods, CLEAN)).toBeNull()
+    expect(pendingChargeSeries(part(), periods, CLEAN)).toEqual([])
+  })
+
+  it('suppresses a quarterly cadence that jumps over the end date', () => {
+    const quarterly = [
+      interestRow('2025-12-27', 9100),
+      interestRow('2026-03-27', 9000),
+      interestRow('2026-06-27', 9200),
+    ]
+    expect(expectedCharge(part(), [period({ end_date: '2026-08-31' })], quarterly)?.next_date).toBe('2026-09-27')
+    expect(pendingCharge(part(), [period({ end_date: '2026-08-31' })], quarterly)).toBeNull()
+  })
+
+  it('keeps a charge covered by a successor period', () => {
+    const periods = [
+      period({ end_date: '2026-06-30' }),
+      period({ id: 'r2', start_date: '2026-07-01', end_date: '2027-06-30', rate: 4.1 }),
+    ]
+    const charge = pendingCharge(part(), periods, CLEAN)
+    expect(charge?.next_date).toBe('2026-07-27')
+    expect(charge?.interest).toBe(3369.86)
+  })
+
+  it('suppresses a charge in the gap before a later successor starts', () => {
+    const periods = [
+      period({ end_date: '2026-06-30' }),
+      period({ id: 'r2', start_date: '2026-08-01', end_date: null, rate: 4.1 }),
+    ]
+    expect(pendingCharge(part(), periods, CLEAN)).toBeNull()
+    expect(pendingChargeSeries(part(), periods, CLEAN)).toEqual([])
+  })
+
+  it('preserves the existing derived-rate forecast when no usable terms are configured', () => {
+    const charge = pendingCharge(part(), [], CLEAN)
+    expect(charge?.next_date).toBe('2026-07-27')
+    expect(charge?.interest).toBe(3000)
+  })
+})
+
 describe('pendingChargeSeries (coming-months preview)', () => {
   it('projects a year of avier from the pending one, months chained by cadence', () => {
     const s = pendingChargeSeries(part(), [period()], CLEAN)
@@ -898,6 +991,16 @@ describe('pendingChargeSeries (coming-months preview)', () => {
     ]
     const s = pendingChargeSeries(part(), periods, CLEAN)
     expect(s).toHaveLength(12)
+  })
+
+  it('stops before a gap even when a later successor exists', () => {
+    const periods = [
+      period({ rate_type: 'bunden', end_date: '2026-08-31' }),
+      period({ id: 'r2', start_date: '2026-10-01', rate: 4.1, rate_type: 'rörlig' }),
+    ]
+    const s = pendingChargeSeries(part(), periods, CLEAN)
+    expect(s.map(c => c.next_date)).toEqual(['2026-07-27', '2026-08-27'])
+    expect(s.map(c => c.interest)).toEqual([3000, 3100])
   })
 
   it('kvartalsvis cadence yields 4 avier over a 12-month horizon', () => {

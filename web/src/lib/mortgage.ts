@@ -935,6 +935,27 @@ export function effectiveRatePeriod(part: LoanPart, periods: RatePeriod[], asOf?
   return s[s.length - 1]
 }
 
+export type StrictRatePeriodCoverage = 'unconfigured' | 'covered' | 'outside-known-terms'
+
+// Whether a proposed charge date is strictly inside this part's configured
+// rate periods. Unlike effectiveRatePeriod(), this never falls back to the
+// latest or a future period: a gap and a date after the final end_date are
+// outside known terms. No usable part-linked period (non-null rate) remains a
+// separate state so derived-rate forecasts keep their existing behaviour.
+export function strictRatePeriodCoverage(
+  part: LoanPart,
+  periods: RatePeriod[],
+  chargeDate: string,
+): StrictRatePeriodCoverage {
+  const mine = (periods || []).filter(r => r?.loan_part_id === part?.id && r.rate != null)
+  if (!mine.length) return 'unconfigured'
+  return mine.some(r =>
+    (!r.start_date || r.start_date <= chargeDate) &&
+    (r.end_date == null || chargeDate <= r.end_date))
+    ? 'covered'
+    : 'outside-known-terms'
+}
+
 function effectiveRate(part: LoanPart, periods: RatePeriod[], asOf?: string): number | null {
   const p = effectiveRatePeriod(part, periods, asOf); return p ? Number(p.rate) : null
 }
@@ -1626,6 +1647,7 @@ function chargeBasis(intRows: Payment[]): ExpectedCharge['charge_basis'] {
 export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[], opts?: ForecastOpts): ExpectedCharge | null {
   const c = expectedCharge(part, periods, payments, opts)
   if (!c) return null
+  if (strictRatePeriodCoverage(part, periods, c.next_date) === 'outside-known-terms') return null
   // A month only rolls once EVERY expected transaction is covered — the ränta
   // and its companion row: the bank's betalning (kind payment) when the part
   // has one, else the legacy amortering line. Logging just one of the two
@@ -1636,7 +1658,11 @@ export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: P
       ? (x.betalning <= 0 || hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'payment'))
       : (x.amortization <= 0 || hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'amortization')))
   let out = c
-  for (let i = 0; i < 24 && covered(out); i++) out = rollChargeOnce(part, periods, out)
+  for (let i = 0; i < 24 && covered(out); i++) {
+    const next = rollChargeOnce(part, periods, out)
+    if (strictRatePeriodCoverage(part, periods, next.next_date) === 'outside-known-terms') return null
+    out = next
+  }
   return out
 }
 
@@ -1671,9 +1697,9 @@ function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedChar
 // rate held flat and the balance stepping down by the amortering each period.
 // [0] is pendingCharge (loggable); the rest are a read-only preview. Stops
 // early when the loan is paid off — a 0 kr avi is noise, not information —
-// and at the villkorsändringsdag: past a lapsed binding with no successor
-// period the rate is simply unknown, and projecting the old rate a full year
-// ahead is misleading. [0] always stays, whatever its confidence.
+// and at the last strictly covered rate-period date. A successor continues
+// the preview only on dates it covers; gaps and dates after the last known
+// period are never shown.
 export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payments: Payment[], months = 12, opts?: ForecastOpts): ExpectedCharge[] {
   const first = pendingCharge(part, periods, payments, opts)
   if (!first) return []
@@ -1682,8 +1708,7 @@ export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payme
   for (let i = 1; i < n; i++) {
     const next = rollChargeOnce(part, periods, out[out.length - 1])
     if (next.balance <= 0) break
-    const bs = bindingStatus(part, periods, next.next_date)
-    if (bs.bound && bs.expired) break
+    if (strictRatePeriodCoverage(part, periods, next.next_date) === 'outside-known-terms') break
     out.push(next)
   }
   return out

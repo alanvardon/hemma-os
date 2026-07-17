@@ -63,17 +63,17 @@ function renderBolanekoll() {
   return render(<RouterProvider router={router} />)
 }
 
-function seedStore(payments: Payment[], part: LoanPart = PART) {
+function seedStore(payments: Payment[], part: LoanPart = PART, ratePeriods: RatePeriod[] = [PERIOD]) {
   vi.mocked(Store.cachedSnapshot).mockReturnValue({
     version: 1,
     banks: [], mortgages: [],
-    loan_parts: [part], payments, valuations: [], rate_periods: [PERIOD], contributions: [],
+    loan_parts: [part], payments, valuations: [], rate_periods: ratePeriods, contributions: [],
     settings: defaultSettings(),
   })
   vi.mocked(Store.listLoanParts).mockResolvedValue([part])
   vi.mocked(Store.listPayments).mockResolvedValue(payments)
   vi.mocked(Store.listValuations).mockResolvedValue([])
-  vi.mocked(Store.listRatePeriods).mockResolvedValue([PERIOD])
+  vi.mocked(Store.listRatePeriods).mockResolvedValue(ratePeriods)
   vi.mocked(Store.listContributions).mockResolvedValue([])
   vi.mocked(Store.getSettings).mockResolvedValue(defaultSettings())
   vi.mocked(Store.listBanks).mockResolvedValue([])
@@ -341,6 +341,55 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     const filter = screen.getByRole('radiogroup', { name: 'Filter expected charges' })
     await user.click(within(filter).getByRole('radio', { name: 'Lånedel 2' }))
     await waitFor(() => expect(parts()).toEqual(['Lånedel 2']))
+  })
+
+  it('excludes an expired part from transaction rows, totals, count, filters and approval actions', async () => {
+    const part2: LoanPart = { ...PART, id: 'p2', label: 'Lånedel 2' }
+    const part3: LoanPart = { ...PART, id: 'p3', label: 'Lånedel 3' }
+    const p2Rows = HISTORY.map(r => ({
+      ...r, id: r.id + '-p2', loan_part_id: 'p2',
+      amount: r.amount * 2, balance_after: 2_000_000,
+    }))
+    const p3Rows = HISTORY.map(r => ({
+      ...r, id: r.id + '-p3', loan_part_id: 'p3',
+      amount: r.amount * 1.5, balance_after: 1_500_000,
+    }))
+    const allParts = [PART, part2, part3]
+    const allPayments = [...HISTORY, ...p2Rows, ...p3Rows]
+    const ratePeriods = [
+      { ...PERIOD, end_date: '2026-07-26' },
+      { ...PERIOD, id: 'r2', loan_part_id: 'p2' },
+      { ...PERIOD, id: 'r3', loan_part_id: 'p3' },
+    ]
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 1, banks: [], mortgages: [], loan_parts: allParts, payments: allPayments,
+      valuations: [], rate_periods: ratePeriods, contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue(allParts)
+    vi.mocked(Store.listPayments).mockResolvedValue(allPayments)
+    vi.mocked(Store.listValuations).mockResolvedValue([])
+    vi.mocked(Store.listRatePeriods).mockResolvedValue(ratePeriods)
+    vi.mocked(Store.listContributions).mockResolvedValue([])
+    vi.mocked(Store.getSettings).mockResolvedValue(defaultSettings())
+    vi.mocked(Store.listBanks).mockResolvedValue([])
+    vi.mocked(Store.listMortgages).mockResolvedValue([])
+
+    renderBolanekoll()
+
+    const approveButtons = await screen.findAllByRole('button', { name: 'Godkänn rad' })
+    expect(approveButtons).toHaveLength(2)
+    const block = document.querySelector('.prognos-block') as HTMLElement
+    expect(block).not.toBeNull()
+    expect([...block.querySelectorAll('.prognos-row .col-part')].map(n => n.textContent))
+      .toEqual(['Lånedel 2', 'Lånedel 3'])
+    expect(block.querySelector('.count-pill')?.textContent).toBe('2')
+    expect(block.querySelector('.metric-val')?.textContent?.replace(/\s/g, '')).toBe('~10500kr')
+    expect(within(block).getByRole('button', { name: 'Godkänn alla rader' })).toBeEnabled()
+
+    const filter = within(block).getByRole('radiogroup', { name: 'Filter expected charges' })
+    expect(within(filter).queryByRole('radio', { name: 'Lånedel 1' })).not.toBeInTheDocument()
+    expect(within(filter).getByRole('radio', { name: 'Lånedel 2' })).toBeInTheDocument()
+    expect(within(filter).getByRole('radio', { name: 'Lånedel 3' })).toBeInTheDocument()
   })
 
   it('expands a read-only preview of the coming months via Visa kommande månader', async () => {
