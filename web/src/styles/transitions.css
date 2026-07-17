@@ -154,6 +154,13 @@ html[data-vt-dir='back']::view-transition-new(root) {
   100% { opacity: 1; clip-path: inset(0 round 18px); }
 }
 
+/* The Bostadskalkyl dashboard's Radix menu is portalled, but its animation
+   name is global CSS state rather than a route selector. */
+@keyframes kebab-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+
 /* Motion-sensitive users: skip every animation (still navigates instantly). */
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-group(*),

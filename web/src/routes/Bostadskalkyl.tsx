@@ -74,7 +74,7 @@ export default function Bostadskalkyl() {
   const isBound = mode === 'bound' && !!active
 
   return (
-    <>
+    <div className="bostad-root">
       <header className="page-header">
         <div className="header-brand">
           <Link className="hub-link" to="/bostadskalkyl">‹<span className="hide-sm"> Scenarios</span></Link>
@@ -187,6 +187,6 @@ export default function Bostadskalkyl() {
         title="Calculation settings"
         subtitle={isBound ? 'Applies to this scenario' : 'Applies to this draft'}
       />
-    </>
+    </div>
   )
 }

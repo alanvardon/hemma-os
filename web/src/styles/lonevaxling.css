@@ -4,13 +4,15 @@
    components.css / konsultkalkyl.css. Only classes unique to this route live here. */
 
 /* ── Suggest button (accent fill variant of .btn) ────────────── */
-.btn-suggest {
+.lv-root,
+.sl-root {
+  .btn-suggest {
   width: 100%;
   margin-top: 1rem;
   color: var(--accent);
   background: var(--accent-faint);
   border-color: color-mix(in srgb, var(--accent) 28%, transparent);
-}
+  }
 .btn-suggest:hover {
   background: color-mix(in srgb, var(--accent) 14%, var(--accent-faint));
   border-color: var(--accent-light);
@@ -140,4 +142,5 @@
   .lr-rate { grid-template-columns: 1fr auto; }
   .hero-flow { flex-direction: column; }
   .flow-arrow { transform: rotate(90deg); }
+}
 }

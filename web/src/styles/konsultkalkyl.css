@@ -3,7 +3,10 @@
    are in tokens.css / global.css / components.css. */
 
 /* ── Two-column layout (fixed inputs rail + expanding ledger) ── */
-.konsult-layout {
+.kk-root,
+.lv-root,
+.sl-root {
+  .konsult-layout {
   display: grid;
   grid-template-columns: 360px 1fr;
   gap: 0;
@@ -12,7 +15,7 @@
   margin: 0 auto;
   flex: 1;
   min-height: 0;
-}
+  }
 
 /* The inputs-col baseline (overflow / height) comes from global.css;
    override only the padding and right border for this tool. */
@@ -341,4 +344,5 @@
   .lr-en { display: none; }
   .hero-big { font-size: 2.4rem; }
   .ledger { padding: 0.4rem 1rem 1rem; }
+}
 }
