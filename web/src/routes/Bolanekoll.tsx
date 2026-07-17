@@ -11,9 +11,6 @@ import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import Segmented from '../components/Segmented'
 import { usePersonNames } from '../components/usePersonNames'
-import { useSaveFlash } from '../components/useSaveFlash'
-import { useToast } from '../components/useToast'
-import { persistenceErrorMessage } from '../lib/persistence-error'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   parseCsv, parseAmount, autoMapColumns, classifyKind,
@@ -27,9 +24,9 @@ import {
   expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   todayISO,
-  bankForPart, suggestBankProfile, effectiveBankProfile, makeBank,
+  bankForPart, suggestBankProfile, effectiveBankProfile,
 } from '../lib/mortgage'
-import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, ExpectedCharge, Bank, Mortgage, CatalogBank, EffectiveBankProfile } from '../lib/mortgage'
+import type { LoanPart, LoanPartGroup, Payment, CsvResult, ColMapping, Owner, ExpectedCharge, Mortgage, CatalogBank, EffectiveBankProfile } from '../lib/mortgage'
 import {
   fetchPolicyRate, nextDecision, lastDecision, decisionOutcome,
   detectChange, currentPoint, readAcknowledged, acknowledge, readSessionHidden, hideForSession,
@@ -44,20 +41,16 @@ import ValuationDialog from './bolanekoll/ValuationDialog'
 import PaymentDialog from './bolanekoll/PaymentDialog'
 import CopyToPartsDialog from './bolanekoll/CopyToPartsDialog'
 import SettingsDialog from './bolanekoll/SettingsDialog'
-import BankProfileDialog, { type BankProfileSaveInput } from './bolanekoll/BankProfileDialog'
-import AgreementDialog, { type CreateAgreementInput } from './bolanekoll/AgreementDialog'
-import BankChangeWizard, { type BankChangeResult } from './bolanekoll/BankChangeWizard'
+import BankProfileDialog from './bolanekoll/BankProfileDialog'
+import AgreementDialog from './bolanekoll/AgreementDialog'
+import BankChangeWizard from './bolanekoll/BankChangeWizard'
 import AgreementHistoryDialog from './bolanekoll/AgreementHistoryDialog'
-import { type BankSelection } from './bolanekoll/BankPicker'
 import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
+import { useMortgageWorkspace, type PendingChargeKind } from './bolanekoll/useMortgageWorkspace'
 
 // The hero reprice notice appears only inside the final month before the
 // villkorsändring — before that, the date lives in the Lånedelar ledger.
 const REPRICE_NOTICE_DAYS = 31
-
-// The kinds an expected-charge line item can log as: the ränta plus its
-// companion — the bank's betalning (total debit) or a legacy amortering row.
-type PendingKind = 'interest' | 'payment' | 'amortization'
 
 /** "17 jun", or "1 okt 2025" when the date isn't in the current year — a bare
  * day+month for a past year reads as upcoming. Strips the trailing period
@@ -92,34 +85,13 @@ export default function Bolanekoll() {
   const active = useToolPageActive('/bolanekoll')
   useLayoutEffect(() => { document.documentElement.classList.remove('calc-layout') }, [])
 
-  // Seed initial state synchronously from the store's localStorage cache so a
-  // returning user sees their populated dashboard on the FIRST paint instead of
-  // the empty-hero flashing for a frame before the async cloud read lands. The
-  // snapshot is sorted to match what refresh() will return, so nothing reorders.
-  // Cold cache → empty arrays (a genuine first-time user), and the `loaded` flag
-  // below holds back the empty-hero until we actually know it's empty.
-  const [seed] = useState(Store.cachedSnapshot)
-  const [banks, setBanks] = useState<Bank[]>(seed.banks)
-  const [catalogBanks, setCatalogBanks] = useState<CatalogBank[]>([])
-  const [mortgages, setMortgages] = useState<Mortgage[]>(seed.mortgages)
-  const [parts, setParts] = useState<LoanPart[]>(seed.loan_parts)
-  const [payments, setPayments] = useState<Payment[]>(seed.payments)
-  const [valuations, setValuations] = useState<Valuation[]>(seed.valuations)
-  const [periods, setPeriods] = useState<RatePeriod[]>(seed.rate_periods)
-  const [contributions, setContributions] = useState<Contribution[]>(seed.contributions)
-  const [settings, setSettings] = useState<MortgageSettings>(seed.settings)
-  // False until the first cloud refresh resolves — distinguishes "still loading"
-  // from "loaded and genuinely empty" so the empty-hero only shows for the latter.
-  const [loaded, setLoaded] = useState(false)
-
-  const { toast, showToast } = useToast()
-  const { saveVisible: saved, flashSaved } = useSaveFlash()
-  // mortgage-store.ts throws on write errors so the UI can react — every
-  // mutation below must catch and surface it, or a failed save looks
-  // successful (optimistic cache) until the next cloud read silently drops it.
-  function saveErr(err: unknown) {
-    showToast(persistenceErrorMessage(err))
-  }
+  const {
+    state: { banks, catalogBanks, mortgages, parts, payments, valuations, periods, contributions, settings, loaded },
+    selection: { activeMortgage, activeBank },
+    feedback: { toast, saved, showToast, flashSaved, showError: saveErr },
+    actions: workspaceActions,
+  } = useMortgageWorkspace()
+  const { refresh } = workspaceActions
   const [bridgePeriod, setBridgePeriod] = useState<'ytd' | '12m' | 'all'>('ytd')
   const [extraAmort, setExtraAmort] = useState('')
   // Rate what-if: null means "untouched" (field shows the live blended prefill).
@@ -178,21 +150,6 @@ export default function Bolanekoll() {
 
   currencyState.current = settings.currency || 'SEK'
 
-  const refresh = useCallback(async () => {
-    const [ps, pays, vals, pers, contribs, sett, bnks, morts] = await Promise.all([
-      Store.listLoanParts(), Store.listPayments(), Store.listValuations(),
-      Store.listRatePeriods(), Store.listContributions(), Store.getSettings(),
-      Store.listBanks(), Store.listMortgages(),
-    ])
-    setParts(ps); setPayments(pays); setValuations(vals); setPeriods(pers); setContributions(contribs); setSettings(sett)
-    setBanks(bnks); setMortgages(morts)
-    // The shared catalogue is best-effort: a failure returns [] and the profile
-    // modal simply offers no built-in banks rather than blocking the page.
-    Store.listCatalogBanks().then(setCatalogBanks).catch(() => setCatalogBanks([]))
-    setLoaded(true)
-  }, [])
-
-  useEffect(() => { refresh() }, [refresh])
   useEffect(() => { document.title = (settings.property_name || 'Bolånekoll') + ' · Hemma·OS' }, [settings.property_name])
   // Pull the household's shared-cost total from Hushållsbudget once, for the
   // rate what-if's "total per month" chips. Read-only: never writes the budget.
@@ -213,9 +170,6 @@ export default function Bolanekoll() {
   // carry archived=true) still surfaces its parts rather than vanishing — so we
   // keep it rather than the stricter domain activeMortgage(), which returns null
   // when every agreement is archived.
-  const activeMortgage = useMemo<Mortgage | null>(() => mortgages.find(m => m && !m.archived) ?? mortgages[0] ?? null, [mortgages])
-  const activeBank = useMemo<Bank | null>(() => activeMortgage?.bank_id ? (banks.find(b => b.id === activeMortgage.bank_id) ?? null) : null, [activeMortgage, banks])
-
   // Plan 109c — the ACTIVE-agreement view scope. The bank-change RPC archives the
   // AGREEMENT (mortgages.archived + end_date), never the old agreement's loan
   // parts, so filtering by a part's own `archived` flag would keep an old
@@ -453,8 +407,8 @@ export default function Bolanekoll() {
   // ränta on an interest-only part). Ledgers without betalning rows keep the
   // legacy separate amortering line. Each line is individually loggable and
   // individually guarded.
-  const chargeEntries = (r: ExpectedCharge): Array<{ charge: ExpectedCharge; kind: PendingKind; amount: number }> => {
-    const out: Array<{ charge: ExpectedCharge; kind: PendingKind; amount: number }> = []
+  const chargeEntries = (r: ExpectedCharge): Array<{ charge: ExpectedCharge; kind: PendingChargeKind; amount: number }> => {
+    const out: Array<{ charge: ExpectedCharge; kind: PendingChargeKind; amount: number }> = []
     if (r.interest > 0) out.push({ charge: r, kind: 'interest', amount: r.interest })
     if (r.betalning != null) {
       if (r.betalning > 0) out.push({ charge: r, kind: 'payment', amount: r.betalning })
@@ -650,120 +604,30 @@ export default function Bolanekoll() {
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   async function handleSavePart(data: Omit<LoanPart, 'id' | 'created_at'>) {
-    try {
-      // Plan 103 — a new part associates with the active mortgage (edits keep
-      // their existing link). Legacy data with no mortgage leaves it null.
-      if (partDlg.id) await Store.updateLoanPart(partDlg.id, data)
-      else await Store.addLoanPart({ ...data, mortgage_id: activeMortgage?.id ?? null })
-      await refresh(); flashSaved(); setPartDlg({ open: false, id: null }); showToast(partDlg.id ? 'Loan part updated.' : 'Loan part added.')
-    } catch (err) { saveErr(err) }
+    if (await workspaceActions.parts.save(data, partDlg.id)) {
+      setPartDlg({ open: false, id: null })
+    }
   }
+
   async function handleDeletePart(id: string) {
-    try { await Store.removeLoanPart(id); await refresh(); flashSaved(); setPartDlg({ open: false, id: null }); showToast('Loan part deleted.') }
-    catch (err) { saveErr(err) }
-  }
-  // Plan 109c — resolve a bank selection to a household bank id, creating the
-  // bank when a catalogue or custom pick isn't attached yet. Returns null only
-  // when nothing is selected and there's no current bank to fall back to.
-  async function resolveBankSelection(sel: BankSelection, current: Bank | null): Promise<string | null> {
-    if (!sel) return current?.id ?? null
-    if (sel.kind === 'existing') return sel.bankId
-    if (sel.kind === 'catalog') {
-      const existing = banks.find(b => b.catalog_id === sel.catalogId)
-      if (existing) return existing.id
-      const created = await Store.addBank(makeBank({ label: sel.label, catalog_id: sel.catalogId }))
-      return created.id
+    if (await workspaceActions.parts.remove(id)) {
+      setPartDlg({ open: false, id: null })
     }
-    const created = await Store.addBank(makeBank({ label: sel.label.trim() || 'Egen bank' }))
-    return created.id
   }
-  // Plan 109c — commit the bank-profile modal: point the active agreement at the
-  // chosen bank (creating it when needed) and write the household's convention
-  // locks. Throws on failure so the modal stays open and shows the error.
-  async function handleSaveBankProfile(input: BankProfileSaveInput): Promise<void> {
-    const bankId = await resolveBankSelection(input.selection, activeBank)
-    if (activeMortgage && bankId && activeMortgage.bank_id !== bankId) {
-      await Store.updateMortgage(activeMortgage.id, { bank_id: bankId })
+  const handleSaveBankProfile = workspaceActions.agreements.saveBankProfile
+  const handleCreateAgreement = workspaceActions.agreements.create
+  const handleChangeBank = workspaceActions.agreements.changeBank
+  const handleRevertBankChange = workspaceActions.agreements.revertBankChange
+  const handleSavePeriod = workspaceActions.parts.savePeriod
+  const handleDeletePeriod = workspaceActions.parts.removePeriod
+  const handleEnableTracking = workspaceActions.settings.enableContributionTracking
+
+  async function handleSaveVal(data: Parameters<typeof workspaceActions.valuations.save>[0]) {
+    if (await workspaceActions.valuations.save(data, valDlg.id)) {
+      setValDlg({ open: false, id: null })
     }
-    const targetBankId = bankId ?? activeBank?.id ?? null
-    if (targetBankId) {
-      await Store.updateBank(targetBankId, {
-        year_basis: input.year_basis,
-        year_basis_source: input.year_basis == null ? null : 'declared',
-        billing: input.billing,
-        billing_source: input.billing == null ? null : 'declared',
-      })
-    }
-    await refresh(); flashSaved(); showToast('Bankprofil sparad.')
   }
-  // Plan 109c — create the first mortgage agreement (label/start date + a
-  // catalogue or custom bank). Throws on failure so the dialog stays open.
-  async function handleCreateAgreement(input: CreateAgreementInput): Promise<void> {
-    const bankId = await resolveBankSelection(input.selection, null)
-    await Store.addMortgage({
-      bank_id: bankId, label: input.label || 'Bolån',
-      start_date: input.start_date || null, archived: false, end_date: null,
-    })
-    await refresh(); flashSaved(); showToast('Bolåneavtal skapat.')
-  }
-  // Plan 109c — one atomic bank change: resolve the chosen bank (creating a
-  // private profile for a catalogue/custom pick), then archive the active
-  // agreement and open its successor in a single RPC. Surfaces the failure BOTH
-  // as a toast AND by rethrowing, so the wizard stays open with a visible error
-  // and the old agreement stays active (no partial switch).
-  async function handleChangeBank(result: BankChangeResult): Promise<void> {
-    if (!activeMortgage) throw new Error('no active agreement')
-    try {
-      const bankId = await resolveBankSelection(result.selection, null)
-      if (!bankId) throw new Error('no bank selected')
-      await Store.changeMortgageBank({
-        old_mortgage_id: activeMortgage.id, bank_id: bankId, label: result.label,
-        parts: result.parts, effective_date: result.effective_date,
-      })
-      await refresh(); flashSaved(); showToast('Bankbyte genomfört. Lägg till räntevillkor för de nya lånedelarna.')
-    } catch (err) { saveErr(err); throw err }
-  }
-  // Plan 109c — Ångra bankbyte: atomically delete the pristine new agreement and
-  // reactivate the predecessor. Same dual surfacing; the history modal keeps the
-  // inline error and stays open on failure (the RPC guarantees no partial state).
-  async function handleRevertBankChange(): Promise<void> {
-    if (!activeMortgage) throw new Error('no active agreement')
-    try {
-      await Store.revertMortgageBankChange(activeMortgage.id)
-      await refresh(); flashSaved(); showToast('Bankbytet ångrades.')
-    } catch (err) { saveErr(err); throw err }
-  }
-  async function handleSavePeriod(partId: string, data: Omit<RatePeriod, 'id' | 'created_at'>, existingId?: string) {
-    try {
-      if (existingId) await Store.updateRatePeriod(existingId, data); else await Store.addRatePeriod({ ...data, loan_part_id: partId })
-      await refresh(); flashSaved(); showToast(existingId ? 'Rate period updated.' : 'Rate period added.')
-    } catch (err) { saveErr(err) }
-  }
-  async function handleDeletePeriod(id: string) {
-    try { await Store.removeRatePeriod(id); await refresh(); flashSaved() }
-    catch (err) { saveErr(err) }
-  }
-  // Turning tracking on is always an explicit user action; it never rewrites
-  // existing source records or opens a second contribution editor.
-  async function handleEnableTracking() {
-    try {
-      await Store.saveSettings({ track_contributions: true })
-      await refresh(); flashSaved()
-      showToast('Ägarfördelning från insatt kapital är påslagen.')
-    } catch (err) { saveErr(err) }
-  }
-  async function handleSaveVal(data: Omit<Valuation, 'id' | 'created_at'>) {
-    try {
-      let savedId = valDlg.id
-      if (valDlg.id) await Store.updateValuation(valDlg.id, data)
-      else { const v = await Store.addValuation(data); savedId = v.id }
-      // Only one valuation can be the köpeskilling — clear the flag on the rest.
-      if (data.is_purchase && savedId) {
-        for (const v of valuations) if (v.id !== savedId && v.is_purchase) await Store.updateValuation(v.id, { is_purchase: false })
-      }
-      await refresh(); flashSaved(); setValDlg({ open: false, id: null }); showToast(data.is_purchase ? 'Köpeskilling set.' : 'Valuation saved.')
-    } catch (err) { saveErr(err) }
-  }
+
   function toggleExpandPay(id: string) {
     setExpandedPays(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
   }
@@ -774,76 +638,48 @@ export default function Bolanekoll() {
     target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
     target.focus({ preventScroll: true })
   }, [reduceMotion])
+
   async function handleDeleteVal(id: string) {
-    try { await Store.removeValuation(id); await refresh(); flashSaved(); setValDlg({ open: false, id: null }); showToast('Valuation deleted.') }
-    catch (err) { saveErr(err) }
+    if (await workspaceActions.valuations.remove(id)) {
+      setValDlg({ open: false, id: null })
+    }
   }
-  async function handleSavePay(data: Omit<Payment, 'id' | 'created_at'>) {
-    try {
-      if (payDlg.id) await Store.updatePayment(payDlg.id, data); else await Store.addPayment(data)
-      await refresh(); flashSaved(); setPayDlg({ open: false, id: null }); showToast('Payment saved.')
-    } catch (err) { saveErr(err) }
+
+  async function handleSavePay(data: Parameters<typeof workspaceActions.payments.save>[0]) {
+    if (await workspaceActions.payments.save(data, payDlg.id)) {
+      setPayDlg({ open: false, id: null })
+    }
   }
+
   async function handleDeletePay(id: string) {
-    try { await Store.removePayment(id); await refresh(); flashSaved(); setPayDlg({ open: false, id: null }); showToast('Payment deleted.') }
-    catch (err) { saveErr(err) }
+    if (await workspaceActions.payments.remove(id)) {
+      setPayDlg({ open: false, id: null })
+    }
   }
+
   async function handleCopyToParts(source: Payment, targetIds: string[]) {
-    try {
-      await Store.addPayments(targetIds.map(partId => makePayment({ ...source, loan_part_id: partId, balance_after: null })))
-      await refresh(); flashSaved(); setCopyDlg({ open: false, source: null })
-      showToast(`Copied to ${targetIds.length} part${targetIds.length === 1 ? '' : 's'}.`)
-    } catch (err) { saveErr(err) }
-  }
-  async function handleSaveSettings(patch: Partial<MortgageSettings>) {
-    try { await Store.saveSettings(patch); await refresh(); flashSaved(); setSettingsDlg(false); showToast('Settings saved.') }
-    catch (err) { saveErr(err) }
+    if (await workspaceActions.payments.copy(source, targetIds)) {
+      setCopyDlg({ open: false, source: null })
+    }
   }
 
-  // Accept-to-ledger: one click promotes an expected transaction into
-  // Betalningar. The retained source:'predicted' marker supports later drift
-  // checks/import reconciliation; financially the accepted row and its Saldo
-  // are authoritative immediately. Rows only enter on this explicit click.
-  async function handleLogPredicted(entries: Array<{ charge: ExpectedCharge; kind: PendingKind; amount: number }>) {
-    const toLog = entries.filter(e => e.amount > 0 && !hasChargeInMonth(payments, e.charge.loan_part_id, e.charge.next_date, e.kind))
-    if (!toLog.length) return
-    try {
-      await Store.addPayments(toLog.map(e => makePayment({
-        loan_part_id: e.charge.loan_part_id, date: e.charge.next_date, kind: e.kind,
-        description: 'Godkänd prognos', amount: e.amount,
-        // Post-charge saldo: the month's amortering (if any) has landed by statement time.
-        balance_after: e.charge.balance - e.charge.amortization,
-        source: 'predicted',
-      })))
-      await refresh(); flashSaved()
-      showToast(toLog.length === 1
-        ? 'Rad godkänd och tillagd i Betalningar.'
-        : toLog.length + ' rader godkända och tillagda i Betalningar.')
-    } catch (err) { saveErr(err) }
+  async function handleSaveSettings(patch: Parameters<typeof workspaceActions.settings.save>[0]) {
+    if (await workspaceActions.settings.save(patch)) {
+      setSettingsDlg(false)
+    }
   }
 
-  // Rewrite each stale accepted forecast row to the current forecast's amount and
-  // post-charge saldo. Explicit click only — same principle as logging.
+  const handleLogPredicted = workspaceActions.payments.logPredicted
+
   async function handleRefreshPredicted() {
-    if (!staleRows.length) return
-    try {
-      for (const s of staleRows)
-        await Store.updatePayment(s.payment.id, { amount: s.amount, balance_after: s.balance_after })
-      await refresh(); flashSaved()
-      showToast(staleRows.length === 1
-        ? '1 godkänd prognosrad uppdaterad till aktuell prognos.'
-        : staleRows.length + ' godkända prognosrader uppdaterade till aktuell prognos.')
-    } catch (err) { saveErr(err) }
+    await workspaceActions.payments.refreshPredicted(staleRows)
   }
 
   async function clearPayments() {
     const scoped = paymentFilter === 'all' ? activeViewPayments : activeViewPayments.filter(p => p.loan_part_id === paymentFilter)
     if (!scoped.length) return
     if (!confirm('Delete ' + scoped.length + ' payment' + (scoped.length === 1 ? '' : 's') + '? This can’t be undone.')) return
-    try {
-      for (const p of scoped) await Store.removePayment(p.id)
-      await refresh(); flashSaved(); showToast('Payments deleted.')
-    } catch (err) { saveErr(err) }
+    await workspaceActions.payments.clear(scoped)
   }
 
   function handleExportCSV() {
