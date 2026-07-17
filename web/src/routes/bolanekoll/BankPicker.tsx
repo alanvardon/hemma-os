@@ -35,8 +35,10 @@ export default function BankPicker({ banks, catalogBanks, selection, customLabel
   onChange: (sel: BankSelection) => void
   onCustomLabel: (label: string) => void
   // The change-bank wizard passes the current agreement's bank so it can never
-  // be offered as a "change" — its catalogue row is offered again instead, so a
-  // genuine re-selection of the same catalogue bank stays possible if intended.
+  // be offered as a "change" — neither the household row NOR the catalogue entry
+  // it is attached to is offered, so "Byt bank" never lists the bank the
+  // household is already with. A different (archived) agreement's bank stays
+  // offered, so returning to a previously used bank remains possible.
   excludeBankId?: string | null
 }) {
   // Household banks the picker offers — the current bank is dropped when the
@@ -44,12 +46,17 @@ export default function BankPicker({ banks, catalogBanks, selection, customLabel
   const householdBanks = useMemo(
     () => excludeBankId ? banks.filter(b => b.id !== excludeBankId) : banks,
     [banks, excludeBankId])
+  // The catalogue entry the excluded bank is attached to, if any — it must be
+  // dropped too, otherwise the excluded bank reappears via its catalogue row.
+  const excludedCatalogId = useMemo(
+    () => excludeBankId ? (banks.find(b => b.id === excludeBankId)?.catalog_id ?? null) : null,
+    [banks, excludeBankId])
   // Catalogue banks the household hasn't already attached (attached ones show
   // under their household row, so we don't offer a duplicate).
   const attached = useMemo(() => new Set(householdBanks.map(b => b.catalog_id).filter(Boolean)), [householdBanks])
   const unattachedCatalog = useMemo(
-    () => catalogBanks.filter(c => !attached.has(c.id)),
-    [catalogBanks, attached])
+    () => catalogBanks.filter(c => !attached.has(c.id) && c.id !== excludedCatalogId),
+    [catalogBanks, attached, excludedCatalogId])
 
   function handleSelect(value: string) {
     if (value === CUSTOM) { onChange({ kind: 'custom', label: customLabel }); return }
@@ -67,6 +74,9 @@ export default function BankPicker({ banks, catalogBanks, selection, customLabel
     <>
       <FormField label="Bank" wide>
         <select className="select" value={selectionValue(selection)} onChange={e => handleSelect(e.target.value)}>
+          {/* Placeholder so the empty state never renders a real bank as if it
+              were chosen — the submit stays visibly gated until the user picks. */}
+          <option value="" disabled>Välj bank…</option>
           {householdBanks.length > 0 && (
             <optgroup label="Dina banker">
               {householdBanks.map(b => <option key={b.id} value={'existing:' + b.id}>{b.label || 'Namnlös bank'}</option>)}

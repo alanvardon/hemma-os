@@ -133,6 +133,45 @@ describe('Bolanekoll — agreement card (plan 109c Stage 1)', () => {
   })
 })
 
+describe('Bolanekoll — create-agreement bank picker placeholder (plan 109c bug fix)', () => {
+  it('shows a disabled placeholder and keeps Skapa disabled until a bank is actively chosen when only catalogue banks exist', async () => {
+    // No household banks and no agreement — the picker offers only a catalogue
+    // bank (Danske). Regression: the native <select> used to render Danske as if
+    // it were chosen while the state was still empty, so Skapa stayed disabled
+    // with no hint why.
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 6, banks: [], mortgages: [],
+      loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [],
+      settings: defaultSettings(),
+    })
+    vi.mocked(Store.listBanks).mockResolvedValue([])
+    vi.mocked(Store.listMortgages).mockResolvedValue([])
+    vi.mocked(Store.listLoanParts).mockResolvedValue([])
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Skapa bolåneavtal' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Skapa bolåneavtal' })
+
+    // The picker reads as unchosen — the placeholder is the selected option, not
+    // the first catalogue bank (the visual state must not lie).
+    const select = within(dialog).getByRole('combobox') as HTMLSelectElement
+    expect(select.value).toBe('')
+    const placeholder = within(dialog).getByRole('option', { name: 'Välj bank…' }) as HTMLOptionElement
+    expect(placeholder.selected).toBe(true)
+    expect(placeholder.disabled).toBe(true)
+
+    // Every visible field LOOKS filled (name optional, date defaults to today),
+    // yet Skapa stays disabled precisely because no bank is chosen.
+    const skapa = within(dialog).getByRole('button', { name: 'Skapa' })
+    expect(skapa).toBeDisabled()
+
+    // Actively picking the catalogue bank commits it to state and enables Skapa.
+    await user.selectOptions(select, 'catalog:catalog-danske')
+    expect(skapa).toBeEnabled()
+  })
+})
+
 describe('Bolanekoll — bank profile modal save (plan 109c Stage 1)', () => {
   it('keeps the modal open and shows the error when the profile save fails', async () => {
     vi.mocked(Store.updateBank).mockRejectedValueOnce({ message: 'Failed to fetch' })

@@ -114,6 +114,31 @@ describe('Bolanekoll — change-bank wizard (plan 109c Stage 2)', () => {
     expect(within(dialog).getByText(/Räntevillkoren måste läggas in på nytt/)).toBeInTheDocument()
   })
 
+  it('never offers the active agreement’s bank nor its catalogue row, but keeps a different catalogue bank', async () => {
+    // The active agreement's bank is a catalogue-attached Danske. Regression:
+    // excluding the household row alone still left the Danske CATALOGUE entry
+    // listed, so "Byt bank" offered the bank the household is already with.
+    const danske: Bank = { ...b1, catalog_id: 'catalog-danske' }
+    seedStore({ banks: [danske] })
+    vi.mocked(Store.listCatalogBanks).mockResolvedValue([
+      { id: 'catalog-danske', slug: 'danske', label: 'Danske', year_basis: null, billing: null },
+      { id: 'catalog-swedbank', slug: 'swedbank', label: 'Swedbank', year_basis: null, billing: null },
+    ])
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Byt bank' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Byt bank' })
+    const select = within(dialog).getByRole('combobox') as HTMLSelectElement
+
+    // Danske is absent both as a household row and as its catalogue entry.
+    expect(within(select).queryByRole('option', { name: 'Danske' })).not.toBeInTheDocument()
+    // A different catalogue bank the household is NOT with remains offered.
+    expect(within(select).getByRole('option', { name: 'Swedbank' })).toBeInTheDocument()
+    // The picker still starts on the placeholder — nothing is pre-chosen.
+    expect(select.value).toBe('')
+  })
+
   it('requires an explicit acknowledgement when the drafts do not sum to the old closing debt', async () => {
     const user = userEvent.setup()
     renderBolanekoll()
