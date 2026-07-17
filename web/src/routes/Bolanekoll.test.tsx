@@ -46,6 +46,7 @@ function renderBolanekoll() {
 // return undefined by default, which would crash the mount — so give every read a
 // benign empty result. Individual tests override the one write they care about.
 beforeEach(() => {
+  vi.clearAllMocks()
   vi.stubGlobal('confirm', vi.fn(() => true))
   vi.stubGlobal('ResizeObserver', class ResizeObserver {
     observe() {}
@@ -92,6 +93,23 @@ function seedAgreement() {
     loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [],
     settings: defaultSettings(),
   })
+}
+
+function seedScenarioCard(settings = defaultSettings()) {
+  const part = {
+    id: 'scenario-part', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+    start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+  }
+  const period = {
+    id: 'scenario-rate', created_at: '2026-01-01', loan_part_id: 'scenario-part', start_date: '2026-01-01',
+    end_date: null, rate: 2.5, rate_type: 'rörlig' as const,
+  }
+  vi.mocked(Store.cachedSnapshot).mockReturnValue({
+    version: 6, banks: [], mortgages: [], loan_parts: [part], payments: [], valuations: [], rate_periods: [period], contributions: [], settings,
+  })
+  vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+  vi.mocked(Store.listRatePeriods).mockResolvedValue([period])
+  vi.mocked(Store.getSettings).mockResolvedValue(settings)
 }
 
 describe('Bolanekoll — save failures surface to the user (regression for audit H2 / PR #237)', () => {
@@ -148,6 +166,151 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     // The mirror of the failure case: the dialog closes on success.
     expect(dialog.open).toBe(false)
     expect(screen.queryByText(/sparades inte i molnet/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps an untouched scenario rate tied to the asynchronously loaded blended rate without writing', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    const period = {
+      id: 'r1', created_at: '2026-01-01', loan_part_id: 'p1', start_date: '2026-01-01',
+      end_date: null, rate: 2.34, rate_type: 'rörlig' as const,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 6, banks: [], mortgages: [], loan_parts: [], payments: [], valuations: [], rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listRatePeriods).mockResolvedValue([period])
+    renderBolanekoll()
+
+    expect(await screen.findByLabelText('Ränta i scenariot / %')).toHaveValue('2.34')
+    expect(Store.saveSettings).not.toHaveBeenCalled()
+  })
+
+  it('persists comma-decimal scenario rates on blur, Enter, and both steppers', async () => {
+    seedScenarioCard()
+    const user = userEvent.setup()
+    renderBolanekoll()
+    const input = await screen.findByLabelText('Ränta i scenariot / %')
+
+    await user.clear(input)
+    await user.type(input, '3,45')
+    await user.tab()
+    expect(Store.saveSettings).toHaveBeenLastCalledWith({ what_if_rate_pct: 3.45 })
+
+    await user.clear(input)
+    await user.type(input, '3.50')
+    await user.keyboard('{Enter}')
+    expect(Store.saveSettings).toHaveBeenLastCalledWith({ what_if_rate_pct: 3.5 })
+
+    await user.click(screen.getByRole('button', { name: '+0,01 procentenheter' }))
+    expect(Store.saveSettings).toHaveBeenLastCalledWith({ what_if_rate_pct: 3.51 })
+    await user.click(screen.getByRole('button', { name: '−0,01 procentenheter' }))
+    expect(Store.saveSettings).toHaveBeenLastCalledWith({ what_if_rate_pct: 3.5 })
+  })
+
+  it('saves a comma-decimal rate once, confirms it once, and remounts the persisted value', async () => {
+    let savedSettings = defaultSettings()
+    seedScenarioCard(savedSettings)
+    vi.mocked(Store.saveSettings).mockImplementation(async (patch) => {
+      savedSettings = { ...savedSettings, ...patch }
+      vi.mocked(Store.getSettings).mockResolvedValue(savedSettings)
+      return savedSettings
+    })
+    const user = userEvent.setup()
+    const first = renderBolanekoll()
+    const input = await screen.findByLabelText('Ränta i scenariot / %')
+    await user.clear(input)
+    await user.type(input, '3,45')
+    await user.keyboard('{Enter}')
+    await user.click(screen.getByRole('heading', { name: /Prognos/i }))
+
+    expect(Store.saveSettings).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('Settings saved.')).toBeInTheDocument()
+    expect(screen.getAllByText('Settings saved.')).toHaveLength(1)
+
+    first.unmount()
+    seedScenarioCard(savedSettings)
+    renderBolanekoll()
+    expect(await screen.findByLabelText('Ränta i scenariot / %')).toHaveValue('3.45')
+  })
+
+  it('changes only the what-if figures, not observed mortgage, forecast, or ledger displays', async () => {
+    const part = {
+      id: 'p-rate', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    const period = {
+      id: 'r-rate', created_at: '2026-01-01', loan_part_id: 'p-rate', start_date: '2026-01-01',
+      end_date: null, rate: 2.5, rate_type: 'rörlig' as const,
+    }
+    const payment = {
+      id: 'pay-rate', created_at: '2026-06-27', loan_part_id: 'p-rate', date: '2026-06-27',
+      kind: 'payment' as const, description: 'Bevarad betalningsrad', amount: 6_000, balance_after: 994_000,
+      paid_by: 'joint' as const, source: 'manual', is_insats: false,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 6, banks: [], mortgages: [], loan_parts: [part], payments: [payment], valuations: [], rate_periods: [period], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listRatePeriods).mockResolvedValue([period])
+    vi.mocked(Store.listPayments).mockResolvedValue([payment])
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    const input = await screen.findByLabelText('Ränta i scenariot / %')
+    const observedRate = screen.getByText('Nu (2,50 %)')
+    const debt = document.querySelector('[data-current-debt]')!.getAttribute('data-current-debt')
+    const forecast = screen.getByText(/ränta över 12 mån/).textContent
+    const ledgerRow = document.querySelector('.payments-table tbody tr')!
+    const ledger = ledgerRow.textContent
+    const beforeScenario = screen.getByText('Vid 2,50 %').closest('.metric-chip')!.textContent
+
+    await user.clear(input)
+    await user.type(input, '3,45')
+    await user.tab()
+
+    expect(screen.getByText('Vid 3,45 %').closest('.metric-chip')!.textContent).not.toBe(beforeScenario)
+    expect(screen.getByText('Nu (2,50 %)')).toBe(observedRate)
+    expect(document.querySelector('[data-current-debt]')).toHaveAttribute('data-current-debt', debt!)
+    expect(screen.getByText(/ränta över 12 mån/).textContent?.replace(/\s/g, ' ')).toBe(forecast?.replace(/\s/g, ' '))
+    expect(document.querySelector('.payments-table tbody tr')?.textContent?.replace(/\s/g, ' ')).toBe(ledger?.replace(/\s/g, ' '))
+  })
+
+  it('does not turn incomplete scenario-rate text into 0 %', async () => {
+    seedScenarioCard()
+    const user = userEvent.setup()
+    renderBolanekoll()
+    const input = await screen.findByLabelText('Ränta i scenariot / %')
+    await user.clear(input)
+    await user.type(input, '2,')
+    await user.tab()
+
+    expect(Store.saveSettings).not.toHaveBeenCalled()
+    expect(await screen.findByText('Ange en giltig ränta på 0 % eller mer.')).toBeInTheDocument()
+    expect(input).toHaveValue('2,')
+  })
+
+  it('keeps a rejected scenario-rate draft visible, surfaces the failure, and does not show success', async () => {
+    const savedSettings = { ...defaultSettings(), what_if_rate_pct: 2.5 }
+    seedScenarioCard(savedSettings)
+    vi.mocked(Store.saveSettings).mockRejectedValueOnce({ message: 'Failed to fetch' })
+    const user = userEvent.setup()
+    const first = renderBolanekoll()
+    const input = await screen.findByLabelText('Ränta i scenariot / %')
+    await user.clear(input)
+    await user.type(input, '4,25')
+    await user.tab()
+
+    expect(await screen.findByText('Ingen anslutning. Ändringen sparades inte i molnet.')).toBeInTheDocument()
+    expect(await screen.findByText('Kunde inte spara räntan. Försök igen.')).toBeInTheDocument()
+    expect(input).toHaveValue('4,25')
+    expect(screen.queryByText('Settings saved.')).not.toBeInTheDocument()
+
+    first.unmount()
+    renderBolanekoll()
+    expect(await screen.findByLabelText('Ränta i scenariot / %')).toHaveValue('2.50')
   })
 
   it('shows the failure and retains the loan part when atomic deletion rejects', async () => {

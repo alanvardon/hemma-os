@@ -407,6 +407,9 @@ function parseMortgageSettings(raw: unknown): ParseResult<MortgageSettings> {
   const household_income_yearly = raw.household_income_yearly === undefined || raw.household_income_yearly === null
     ? success<number | null>(null) : finite(raw.household_income_yearly, 'household_income_yearly')
   const track_contributions = field(raw, 'track_contributions', defaults.track_contributions, (v) => boolean(v, 'track_contributions'))
+  const what_if_rate_pct = raw.what_if_rate_pct === undefined || raw.what_if_rate_pct === null
+    ? success<number | null>(null)
+    : finite(raw.what_if_rate_pct, 'what_if_rate_pct')
   if (!isRecord(raw.import_presets ?? {})) return failure('settings.import_presets', 'must be an object')
   const import_presets: MortgageSettings['import_presets'] = {}
   const presetIssues: ParseIssue[] = []
@@ -420,9 +423,13 @@ function parseMortgageSettings(raw: unknown): ParseResult<MortgageSettings> {
     }
     import_presets[name] = parsed as unknown as MortgageSettings['import_presets'][string]
   }
-  const issues = [...issueList([property_name, owner_a_name, owner_b_name, my_ownership_pct, i_am, currency, ranteavdrag, household_income_yearly, track_contributions]), ...presetIssues]
+  const scenarioRate = what_if_rate_pct.ok ? what_if_rate_pct.value : null
+  const scenarioRateIssues = scenarioRate !== null && scenarioRate < 0
+    ? [{ path: 'what_if_rate_pct', reason: 'must be non-negative' }]
+    : []
+  const issues = [...issueList([property_name, owner_a_name, owner_b_name, my_ownership_pct, i_am, currency, ranteavdrag, household_income_yearly, track_contributions, what_if_rate_pct]), ...presetIssues, ...scenarioRateIssues]
   if (issues.length) return { ok: false, issues }
-  return success({ property_name: valueOf(property_name), owner_a_name: valueOf(owner_a_name), owner_b_name: valueOf(owner_b_name), my_ownership_pct: valueOf(my_ownership_pct), i_am: valueOf(i_am), currency: valueOf(currency), ranteavdrag: valueOf(ranteavdrag), household_income_yearly: valueOf(household_income_yearly), import_presets, track_contributions: valueOf(track_contributions) })
+  return success({ property_name: valueOf(property_name), owner_a_name: valueOf(owner_a_name), owner_b_name: valueOf(owner_b_name), my_ownership_pct: valueOf(my_ownership_pct), i_am: valueOf(i_am), currency: valueOf(currency), ranteavdrag: valueOf(ranteavdrag), household_income_yearly: valueOf(household_income_yearly), import_presets, track_contributions: valueOf(track_contributions), what_if_rate_pct: valueOf(what_if_rate_pct) })
 }
 
 function parseLoanPart(raw: unknown): ParseResult<PersistedLoanPart> {

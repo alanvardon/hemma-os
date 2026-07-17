@@ -164,6 +164,9 @@ export interface MortgageSettings {
   my_ownership_pct: number; i_am: Owner; currency: string; ranteavdrag: boolean
   household_income_yearly: number | null; import_presets: Record<string, ColNameMapping>
   track_contributions: boolean
+  // A household-wide, explicitly hypothetical interest-rate assumption for the
+  // what-if card. Null means follow the live blended mortgage rate.
+  what_if_rate_pct: number | null
 }
 
 export interface CsvResult { delimiter: string; headers: string[]; rows: string[][] }
@@ -185,6 +188,7 @@ export function defaultSettings(): MortgageSettings {
     property_name: '', owner_a_name: 'Alex', owner_b_name: 'Sam',
     my_ownership_pct: 50, i_am: 'a', currency: 'SEK', ranteavdrag: true,
     household_income_yearly: null, import_presets: {}, track_contributions: false,
+    what_if_rate_pct: null,
   }
 }
 
