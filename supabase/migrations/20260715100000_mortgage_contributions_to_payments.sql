@@ -19,6 +19,19 @@ end;
 $$;
 revoke all on function private.plan107_valid_iso_date(text) from public, anon, authenticated;
 
+-- The insert below fires private.reject_tombstoned_row (the
+-- reject_deleted_mortgage_payments trigger from 20260714100000). That guard's
+-- superuser bypass only matches a bare session_user='postgres' connection; the
+-- role `supabase db push` runs under on a hosted project does NOT match it, so
+-- the guard raises "household write denied" on any row it inserts (a local
+-- `supabase db reset` with zero mortgage_contributions rows never hits it).
+-- This is a legitimate one-time admin backfill: the reserved
+-- 'legacy-contribution:' ids have never existed as payment rows before this
+-- migration, so no tombstone can name them and the reuse check is safe to
+-- skip. Same pattern as 20260714130000; the whole migration is one
+-- transaction, so a failure rolls the disable back too.
+alter table public.mortgage_payments disable trigger reject_deleted_mortgage_payments;
+
 insert into public.mortgage_payments (
   id,
   household_id,
@@ -55,5 +68,7 @@ where contribution.id <> ''
   and contribution.owner in ('a', 'b', 'joint')
   and private.plan107_valid_iso_date(contribution.date)
 on conflict (id) do nothing;
+
+alter table public.mortgage_payments enable trigger reject_deleted_mortgage_payments;
 
 drop function private.plan107_valid_iso_date(text);
