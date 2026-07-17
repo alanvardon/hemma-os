@@ -170,3 +170,96 @@ describe('Bolanekoll — bank profile modal save (plan 109c Stage 1)', () => {
     expect(dialog.open).toBe(false)
   })
 })
+
+// ── Plan 109c — active-agreement scoping after a bank change (decision 6) ─────
+// The bank-change RPC archives the AGREEMENT, never the old agreement's loan
+// parts, so the ACTIVE ledger must scope by the mortgage link — not by a part's
+// own `archived` flag (which stays false on the old parts). This proves the fix
+// for the "2 parts, 580 000 kr merged after a switch" bug: the active view shows
+// ONLY the active agreement's parts/debt, an unlinked legacy part stays visible
+// in a repair state, and the old agreement's down payment still counts for
+// ownership (it is full-history, not scoped down).
+describe('Bolanekoll — active view scopes to the active agreement (plan 109c)', () => {
+  const oldAgreement: Mortgage = {
+    id: 'm0', created_at: '2023-01-01', bank_id: 'b1', label: 'Gammalt bolån',
+    start_date: '2020-01-01', archived: true, end_date: '2024-03-01',
+  }
+  // The old agreement's loan part — NEVER archived at the part level (the RPC
+  // archives only the agreement), linked to the closed agreement m0.
+  const oldPart: LoanPart = {
+    id: 'p0', created_at: '2023-01-01', label: 'Gammal del', loan_number: '1111',
+    start_balance: 300_000, original_balance: 300_000, start_date: '2020-01-01', archived: false,
+    mortgage_id: 'm0',
+  }
+  // A legacy part with no agreement link (possible via old JSON import) — must
+  // stay VISIBLE in the active ledger with a repair indicator, not disappear.
+  const unlinkedPart: LoanPart = {
+    id: 'pX', created_at: '2021-01-01', label: 'Legacy del', loan_number: '9999',
+    start_balance: 100_000, original_balance: 100_000, start_date: '2021-01-01', archived: false,
+    mortgage_id: null,
+  }
+  // The old agreement's kontantinsats — retains its (archived) agreement but
+  // must still show in the ownership view (Kontantinsatser), full history.
+  const oldDownPayment: Payment = {
+    id: 'dp0', created_at: '2020-01-01', loan_part_id: null, date: '2020-01-01',
+    kind: 'down_payment', description: 'Kontantinsats', amount: 200_000, balance_after: null,
+    paid_by: 'joint', source: 'manual', is_insats: false, mortgage_id: 'm0',
+  }
+
+  beforeEach(() => {
+    const allParts = [part, oldPart, unlinkedPart]
+    const allMortgages = [agreement, oldAgreement]
+    const allPayments = [oldDownPayment]
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 6, banks: [bank], mortgages: allMortgages,
+      loan_parts: allParts, payments: allPayments, valuations: [], rate_periods: [], contributions: [],
+      settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue(allParts)
+    vi.mocked(Store.listMortgages).mockResolvedValue(allMortgages)
+    vi.mocked(Store.listPayments).mockResolvedValue(allPayments)
+  })
+
+  it('shows only the active + unlinked parts and their combined debt, not the old agreement', async () => {
+    const { container } = renderBolanekoll()
+    await screen.findByRole('heading', { name: /Bolåneavtal/ })
+
+    // Active debt = active part (1 000 000) + unlinked part (100 000) = 1 100 000.
+    // The old agreement's 300 000 is NOT merged in (the bug would give 1 400 000).
+    expect(container.querySelector('[data-current-debt="1100000"]')).not.toBeNull()
+    expect(container.querySelector('[data-current-debt="1400000"]')).toBeNull()
+
+    // The loan-part ledger lists the active and unlinked parts, never the old one.
+    const ledger = container.querySelector('.lanedelar-table') as HTMLElement
+    expect(within(ledger).getByText('Rörlig del')).toBeInTheDocument()
+    expect(within(ledger).getByText('Legacy del')).toBeInTheDocument()
+    expect(within(ledger).queryByText('Gammal del')).not.toBeInTheDocument()
+
+    // The Bolåneavtal count-pill counts the active-view parts (2), not all 3.
+    const agreementCard = ledger.closest('.card') as HTMLElement
+    expect(within(agreementCard).getByText('2', { selector: '.count-pill' })).toBeInTheDocument()
+  })
+
+  it('keeps the unlinked legacy part visible with an "ej kopplad" repair indicator', async () => {
+    const { container } = renderBolanekoll()
+    await screen.findByRole('heading', { name: /Bolåneavtal/ })
+
+    const ledger = container.querySelector('.lanedelar-table') as HTMLElement
+    const legacyRow = within(ledger).getByText('Legacy del').closest('tr') as HTMLElement
+    expect(within(legacyRow).getByText(/ej kopplad/)).toBeInTheDocument()
+    // The linked active part carries no repair flag.
+    const activeRow = within(ledger).getByText('Rörlig del').closest('tr') as HTMLElement
+    expect(within(activeRow).queryByText(/ej kopplad/)).not.toBeInTheDocument()
+  })
+
+  it('still counts the old agreement’s down payment for ownership (full history, not scoped)', async () => {
+    const { container } = renderBolanekoll()
+    await screen.findByRole('heading', { name: /Bolåneavtal/ })
+
+    // The pre-refinance kontantinsats survives the bank change: it is retained
+    // in the Kontantinsatser (ownership) view even though its agreement closed.
+    const insatsCard = container.querySelector('#kontantinsatser') as HTMLElement
+    expect(insatsCard.querySelector('[data-source-payment-id="dp0"]')).not.toBeNull()
+    expect(within(insatsCard).getByText('1', { selector: '.count-pill' })).toBeInTheDocument()
+  })
+})

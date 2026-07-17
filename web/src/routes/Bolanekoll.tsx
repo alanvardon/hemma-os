@@ -204,12 +204,52 @@ export default function Bolanekoll() {
 
   // ── Derived data ───────────────────────────────────────────────────────────
   const today = todayISO()
-  const balance = useMemo(() => totalBalance(parts, payments), [parts, payments])
+
+  // Plan 103 — the active mortgage the UI surfaces (the model supports many; we
+  // show one). First non-archived, else the first. Legacy data with no mortgage
+  // → null, and the Lånedelar list renders flat, exactly as before. The
+  // `?? mortgages[0]` fallback is deliberate legacy tolerance (plan 103): a
+  // household whose only agreement predates end_date/archived semantics (and may
+  // carry archived=true) still surfaces its parts rather than vanishing — so we
+  // keep it rather than the stricter domain activeMortgage(), which returns null
+  // when every agreement is archived.
+  const activeMortgage = useMemo<Mortgage | null>(() => mortgages.find(m => m && !m.archived) ?? mortgages[0] ?? null, [mortgages])
+  const activeBank = useMemo<Bank | null>(() => activeMortgage?.bank_id ? (banks.find(b => b.id === activeMortgage.bank_id) ?? null) : null, [activeMortgage, banks])
+
+  // Plan 109c — the ACTIVE-agreement view scope. The bank-change RPC archives the
+  // AGREEMENT (mortgages.archived + end_date), never the old agreement's loan
+  // parts, so filtering by a part's own `archived` flag would keep an old
+  // agreement's parts in the ACTIVE ledger and merge both agreements' balances
+  // (plan 109 decision 6; mortgage.ts "Agreement scoping"). Active scoping must
+  // go through the mortgage link. Legacy parts with no agreement link
+  // (mortgage_id null — possible via old JSON import) stay VISIBLE here in a
+  // repair state with an "ej kopplad" indicator, rather than disappearing or
+  // being silently adopted by the active agreement.
+  const activeViewParts = useMemo(
+    () => parts.filter(p => p && (p.mortgage_id == null || p.mortgage_id === (activeMortgage?.id ?? null))),
+    [parts, activeMortgage])
+  const activeViewPartIds = useMemo(() => new Set(activeViewParts.map(p => p.id)), [activeViewParts])
+  // Ledger rows in the active view: part-linked rows via the active-view parts;
+  // partless rows (down payments) via their own agreement provenance, keeping
+  // unlinked legacy rows visible. Old agreement transactions live in the history
+  // modal, not here (plan 109 decision 6/7).
+  const activeViewPayments = useMemo(
+    () => payments.filter(p => p && (p.loan_part_id
+      ? activeViewPartIds.has(p.loan_part_id)
+      : (p.mortgage_id == null || p.mortgage_id === (activeMortgage?.id ?? null)))),
+    [payments, activeViewPartIds, activeMortgage])
+  // The live ledger (non-archived active-view parts) and this agreement's own
+  // settled/restructured parts (its "Avslutade" list) — NOT the old bank's
+  // parts, which are reached through the history modal.
+  const activeParts = useMemo(() => activeViewParts.filter(p => !p.archived), [activeViewParts])
+  const archivedParts = useMemo(() => activeViewParts.filter(p => p.archived), [activeViewParts])
+
+  const balance = useMemo(() => totalBalance(activeViewParts, activeViewPayments), [activeViewParts, activeViewPayments])
   // The balance resolver is also the provenance source for the dashboard: a
   // provisional Betalning must never look like an observed Saldo result.
   const balanceResolutions = useMemo(
-    () => new Map(parts.filter(p => !p.archived).map(p => [p.id, resolvePartBalance(p, payments)])),
-    [parts, payments],
+    () => new Map(activeParts.map(p => [p.id, resolvePartBalance(p, payments)])),
+    [activeParts, payments],
   )
   const estimatedPartIds = useMemo(
     () => new Set([...balanceResolutions.entries()]
@@ -250,20 +290,12 @@ export default function Bolanekoll() {
   )
   const timeline = useMemo(() => equityTimeline(parts, payments, valuations, settings, contributions), [parts, payments, valuations, settings, contributions])
 
-  const loanGroups = useMemo(() => groupLoanParts(parts, periods, payments, today), [parts, periods, payments, today])
+  const loanGroups = useMemo(() => groupLoanParts(activeViewParts, periods, activeViewPayments, today), [activeViewParts, periods, activeViewPayments, today])
   // Next villkorsändring for the hero note: the soonest dated group. loanGroups
   // is already ordered expired-first then by ascending end_date, so the first
   // dated group IS the next (or most-overdue) reprice — and it carries what the
   // bare date can't: how much of the loan moves, and off which rate.
   const nextReprice = useMemo(() => loanGroups.find(g => !g.is_catchall && g.days_left != null) ?? null, [loanGroups])
-  const archivedParts = useMemo(() => parts.filter(p => p.archived), [parts])
-  const activeParts = useMemo(() => parts.filter(p => !p.archived), [parts])
-
-  // Plan 103 — the active mortgage the UI surfaces (the model supports many; we
-  // show one). First non-archived, else the first. Legacy data with no mortgage
-  // → null, and the Lånedelar list renders flat, exactly as before.
-  const activeMortgage = useMemo<Mortgage | null>(() => mortgages.find(m => m && !m.archived) ?? mortgages[0] ?? null, [mortgages])
-  const activeBank = useMemo<Bank | null>(() => activeMortgage?.bank_id ? (banks.find(b => b.id === activeMortgage.bank_id) ?? null) : null, [activeMortgage, banks])
 
   const nextBesked = useMemo(() => nextDecision(today), [today])
   const nextBeskedDays = useMemo(() => nextBesked ? daysUntil(nextBesked, today) : null, [nextBesked, today])
@@ -333,12 +365,12 @@ export default function Bolanekoll() {
   const bridge = useMemo(() => equityBridge(parts, payments, valuations, bridgeFrom, today), [parts, payments, valuations, bridgeFrom, today])
 
   const costRows = useMemo(() => monthlyCost(payments, { ranteavdrag: settings.ranteavdrag }), [payments, settings.ranteavdrag])
-  const blended = useMemo(() => weightedAvgRate(parts, periods, payments), [parts, periods, payments])
-  const krav = useMemo(() => amorteringskravStatus(parts, payments, valuations, settings), [parts, payments, valuations, settings])
+  const blended = useMemo(() => weightedAvgRate(activeViewParts, periods, activeViewPayments), [activeViewParts, periods, activeViewPayments])
+  const krav = useMemo(() => amorteringskravStatus(activeViewParts, activeViewPayments, valuations, settings), [activeViewParts, activeViewPayments, valuations, settings])
 
   const extra = Math.max(0, parseAmount(extraAmort) || 0)
-  const base = useMemo(() => monthlyAmortizationRate(parts, payments), [parts, payments])
-  const ms = useMemo(() => projectMilestones(parts, payments, valuations, settings, { extraMonthly: extra }), [parts, payments, valuations, settings, extra])
+  const base = useMemo(() => monthlyAmortizationRate(activeViewParts, activeViewPayments), [activeViewParts, activeViewPayments])
+  const ms = useMemo(() => projectMilestones(activeViewParts, activeViewPayments, valuations, settings, { extraMonthly: extra }), [activeViewParts, activeViewPayments, valuations, settings, extra])
   // Rate what-if — derive the hypothetical rate rather than seeding via effect, so
   // the prefill tracks the async-loaded blended rate. Takes `base` (observed
   // amortization), NOT `extra`: the rate comparison ignores the extra-amortering
@@ -355,8 +387,8 @@ export default function Bolanekoll() {
   // Plan 104 — thread the bank entities (and the full part list) into the
   // forecast so a declared lock overrides detection AND the year-basis learner
   // can pool evidence across all of a bank's parts (phase 2).
-  const forecastOpts = useMemo(() => ({ banks, mortgages, parts }), [banks, mortgages, parts])
-  const prognos = useMemo(() => expectedCharges(parts, periods, payments, forecastOpts), [parts, periods, payments, forecastOpts])
+  const forecastOpts = useMemo(() => ({ banks, mortgages, parts: activeViewParts }), [banks, mortgages, activeViewParts])
+  const prognos = useMemo(() => expectedCharges(activeViewParts, periods, activeViewPayments, forecastOpts), [activeViewParts, periods, activeViewPayments, forecastOpts])
   // Plan 104 (phase 2) — the parts on the active bank, the learner's suggestion
   // for them, and any drift between a declared lock and the fresh evidence.
   const activeBankParts = useMemo(
@@ -405,15 +437,15 @@ export default function Bolanekoll() {
     const hasPayments = paymentsForMortgage(payments, parts, activeMortgage.id).length > 0
     return !hasPeriods && !hasPayments
   }, [activeMortgage, bankChangePredecessor, activeAgreementParts, periods, payments, parts])
-  const forecast = useMemo(() => forecastInterest(parts, periods, payments), [parts, periods, payments])
+  const forecast = useMemo(() => forecastInterest(activeViewParts, periods, activeViewPayments), [activeViewParts, periods, activeViewPayments])
   // The next UNCOVERED charge per part: once a month is fully logged (or
   // imported), the Nästa avisering block rolls forward to the following month
   // rather than going quiet — there is always a next avisering to look at.
   const pendingSeries = useMemo(
-    () => parts.filter(p => !p.archived)
-      .map(p => pendingChargeSeries(p, periods, payments, 12, forecastOpts))
+    () => activeParts
+      .map(p => pendingChargeSeries(p, periods, activeViewPayments, 12, forecastOpts))
       .filter(s => s.length > 0 && s[0].interest > 0),
-    [parts, periods, payments, forecastOpts])
+    [activeParts, periods, activeViewPayments, forecastOpts])
   const pendingCharges = useMemo(() => pendingSeries.map(s => s[0]), [pendingSeries])
   // Flattened to ONE entry per upcoming transaction, mirroring the bank's avi:
   // per part a Ränta row and — when the ledger has betalning history — the
@@ -447,8 +479,8 @@ export default function Bolanekoll() {
   const [prognosFilter, setPrognosFilter] = useState<string>('all')
   const prognosParts = useMemo(() => {
     const ids = new Set(pendingSeries.map(s => s[0].loan_part_id))
-    return parts.filter(p => ids.has(p.id))
-  }, [pendingSeries, parts])
+    return activeParts.filter(p => ids.has(p.id))
+  }, [pendingSeries, activeParts])
   // A part can drop out once its charge is logged — fall back to All so the
   // toggle never points at a part that has vanished from the options.
   const effPrognosFilter = prognosParts.some(p => p.id === prognosFilter) ? prognosFilter : 'all'
@@ -468,12 +500,12 @@ export default function Bolanekoll() {
   // Förväntade rows logged with an OLDER model keep their logged amounts —
   // nothing rewrites ledger rows on visit. Surface the drift with an explicit
   // one-click refresh instead (each entry carries the corrected values).
-  const staleRows = useMemo(() => stalePredictedRows(parts, periods, payments), [parts, periods, payments])
+  const staleRows = useMemo(() => stalePredictedRows(activeViewParts, periods, activeViewPayments), [activeViewParts, periods, activeViewPayments])
 
-  const reconcile = useMemo(() => reconcileBalance(parts, payments).filter(r => {
+  const reconcile = useMemo(() => reconcileBalance(activeViewParts, activeViewPayments).filter(r => {
     if (r.drift == null || r.start_balance == null) return false
     return Math.abs(r.drift) >= Math.max(r.start_balance * 0.01, 5000)
-  }), [parts, payments])
+  }), [activeViewParts, activeViewPayments])
 
   const insightsReady = parts.length > 0 && valuations.length > 0 && payments.length > 0
 
@@ -495,9 +527,11 @@ export default function Bolanekoll() {
   // ── Import ───────────────────────────────────────────────────────────────
   function buildTriage(parsed: CsvResult, mapping: ColMapping, importPart: string): TriageRow[] {
     const auto = importPart === '__auto__' && mapping.loan_number != null
-    const fallback = auto ? (parts[0]?.id || null) : (importPart || null)
+    const fallback = auto ? (activeParts[0]?.id || null) : (importPart || null)
     const loanNumbers = parsed.rows.map(r => mapping.loan_number == null ? null : (r[mapping.loan_number] ?? ''))
-    const assigns = assignPaymentsToPart(loanNumbers, parts, { selectedPartId: fallback, auto })
+    // Imports land on the ACTIVE agreement's parts only — a bank statement is for
+    // a current loan account, never an archived old-agreement part.
+    const assigns = assignPaymentsToPart(loanNumbers, activeParts, { selectedPartId: fallback, auto })
     const candidates = parsed.rows.map((row, i) => {
       const specText = (mapping.specification != null ? row[mapping.specification] : '')?.trim() || ''
       const date = (mapping.date != null ? row[mapping.date] : '')?.trim() || ''
@@ -542,13 +576,13 @@ export default function Bolanekoll() {
     let mapping = autoMapColumns(parsed.headers)
     const sig = headerSignature(parsed.headers)
     if (settings.import_presets[sig]) mapping = applyPreset(parsed.headers, settings.import_presets[sig])
-    const importPart = mapping.loan_number != null ? '__auto__' : (parts[0]?.id || '')
+    const importPart = mapping.loan_number != null ? '__auto__' : (activeParts[0]?.id || '')
     return { file, parsed, mapping, importPart, triage: buildTriage(parsed, mapping, importPart), queue: [], qIdx: 0 }
   }
   async function handleFiles(files: FileList | File[]) {
     const arr = Array.from(files).filter(f => f.name.endsWith('.csv') || f.type.includes('csv') || f.type.includes('text'))
     if (!arr.length) return
-    if (!parts.length) { showToast('Add a loan part first, then import.'); return }
+    if (!activeParts.length) { showToast('Add a loan part first, then import.'); return }
     const cfg = await loadFile(arr[0])
     setImportCfg({ ...cfg, queue: arr.slice(1), qIdx: 0 })
   }
@@ -803,7 +837,7 @@ export default function Bolanekoll() {
   }
 
   async function clearPayments() {
-    const scoped = paymentFilter === 'all' ? payments : payments.filter(p => p.loan_part_id === paymentFilter)
+    const scoped = paymentFilter === 'all' ? activeViewPayments : activeViewPayments.filter(p => p.loan_part_id === paymentFilter)
     if (!scoped.length) return
     if (!confirm('Delete ' + scoped.length + ' payment' + (scoped.length === 1 ? '' : 's') + '? This can’t be undone.')) return
     try {
@@ -813,7 +847,9 @@ export default function Bolanekoll() {
   }
 
   function handleExportCSV() {
-    const csv = paymentsToCsv(payments, parts)
+    // The CSV mirrors the visible Betalningar ledger (the active agreement's
+    // rows). The full backup — every agreement's history — is the JSON export.
+    const csv = paymentsToCsv(activeViewPayments, activeViewParts)
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'bolanekoll-betalningar.csv'; a.click(); URL.revokeObjectURL(url)
   }
@@ -846,7 +882,7 @@ export default function Bolanekoll() {
   const chronVals = useMemo(() => valuations.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))), [valuations])
   const maxVal = chronVals.reduce((mx, v) => Math.max(mx, Number(v.value) || 0), 0)
 
-  const filteredPayments = paymentFilter === 'all' ? payments : payments.filter(p => p.loan_part_id === paymentFilter)
+  const filteredPayments = paymentFilter === 'all' ? activeViewPayments : activeViewPayments.filter(p => p.loan_part_id === paymentFilter)
   const shownPayments = filteredPayments.slice(0, payVisible)
   const hiddenPayCount = filteredPayments.length - shownPayments.length
   const partNameById = (pid: string | null) => parts.find(p => p.id === pid)?.label || '—'
@@ -1283,7 +1319,7 @@ export default function Bolanekoll() {
                   <label>Which loan part is this file for?</label>
                   <select className="select" value={importCfg.importPart} onChange={e => reTriage({ importPart: e.target.value })}>
                     {importCfg.mapping.loan_number != null && <option value="__auto__">Auto-detect from loan #</option>}
-                    {parts.map(p => <option key={p.id} value={p.id}>{p.label || '(loan part)'}</option>)}
+                    {activeParts.map(p => <option key={p.id} value={p.id}>{p.label || '(loan part)'}</option>)}
                   </select>
                 </div>
               </div>
@@ -1341,7 +1377,7 @@ export default function Bolanekoll() {
         <section className="card">
           <div className="card-head">
             <h2>Bolåneavtal <span className="card-en">· Mortgage agreement</span></h2>
-            <span className="count-pill">{parts.length}</span>
+            <span className="count-pill">{activeViewParts.length}</span>
             <div className="card-actions">
               {(activeMortgage || parts.length > 0) && (
                 <button type="button" className="btn btn-ghost" onClick={() => setPartDlg({ open: true, id: null })}>+ Lägg till lånedel</button>
@@ -1395,7 +1431,7 @@ export default function Bolanekoll() {
               </span>
             </div>
           )}
-          {!parts.length ? (
+          {!activeViewParts.length ? (
             <p className="empty">
               {activeMortgage
                 ? 'Inga lånedelar än. Lägg till en lånedel — en per lånekonto — för att börja.'
@@ -1442,6 +1478,7 @@ export default function Bolanekoll() {
                                     <span className="ld-member-label">
                                       <span className="ld-name">{p.label || '(no name)'}{p.loan_number && <span className="ld-loanno">#{p.loan_number}</span>}</span>
                                       {rateBadge(per?.rate ?? null, per?.rate_type ?? null)}
+                                      {p.mortgage_id == null && <span className="row-flag row-flag-estimated" title="Saknar koppling till bolåneavtal — öppna lånedelen för att koppla">⚠ ej kopplad</span>}
                                     </span>
                                   </CellReveal>
                                 </td>
@@ -1681,7 +1718,7 @@ export default function Bolanekoll() {
             <span className="count-pill">{filteredPayments.length}</span>
             <div className="card-actions">
               <Segmented value={paymentFilter} onChange={setPaymentFilter} ariaLabel="Filter payments"
-                options={[{ v: 'all', label: 'All' }, ...parts.map(p => ({ v: p.id, label: p.label || 'part' }))]} />
+                options={[{ v: 'all', label: 'All' }, ...activeParts.map(p => ({ v: p.id, label: p.label || 'part' }))]} />
               <button type="button" className="btn btn-ghost" onClick={() => setPayDlg({ open: true, id: null })}>+ Lägg till</button>
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger className="icon-btn" aria-label="More payment actions" title="More actions">

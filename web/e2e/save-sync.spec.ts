@@ -512,15 +512,15 @@ test('a bank switch survives reload with clean parts and a missing-rate prompt',
   await expect(page.locator('.missing-rate-prompt')).toBeVisible()
   await expect(page.getByRole('button', { name: '+ Lägg till räntevillkor: Del 1 (ny bank)' })).toBeVisible()
   await expect(page.locator('.ld-name', { hasText: 'Del 1 (ny bank)' })).toBeVisible()
-  // NOTE (found while writing this spec, reported rather than fixed here per
-  // scope): the main ledger table (Bolanekoll.tsx `loanGroups` / `groupLoanParts`)
-  // still filters loan parts by their own `!part.archived` flag, not by agreement
-  // membership. A bank change only archives the AGREEMENT (mortgage.ts's own
-  // "Agreement scoping (plan 109b)" comment documents that this is intentional
-  // and that active scoping must go through the mortgage link instead), so the
-  // OLD agreement's part — never itself archived — still renders in the ACTIVE
-  // ledger alongside the new one after a switch. Left un-asserted here; see the
-  // final report.
+  // The bank change archives the AGREEMENT, not the old parts, so the ACTIVE
+  // ledger scopes by the mortgage link: ONLY the new agreement's part shows and
+  // the remaining debt is the new agreement's alone (500 000) — the old
+  // agreement's 500 000 is NOT merged in. Before the fix the ledger filtered by
+  // the part's own `!archived` flag and rendered both parts / a doubled balance.
+  await expect(page.locator('tr.ld-member')).toHaveCount(1)
+  await expect(page.locator('tr.ld-member .ld-name')).toHaveText(/Del 1 \(ny bank\)/)
+  await expect(page.locator('.metric-chip', { hasText: 'Remaining debt' }))
+    .toHaveAttribute('data-current-debt', '500000')
 
   await page.getByRole('button', { name: 'Tidigare avtal' }).click()
   const history = dialogWithHeading(page, 'Tidigare avtal')
@@ -648,11 +648,13 @@ test('archived rate periods and transactions stay editable and attached to the a
 
   await expect(history.locator('.history-parts')).toContainText('Ursprunglig del (redigerad)')
   await expect(page.locator('.agreement-name')).toHaveText('Bolån hos Andra banken')
-  // NOTE: not asserting the edited part's absence from the main ledger here —
-  // see the equivalent NOTE in the bank-switch test above (a pre-existing
-  // main-ledger scoping gap, reported rather than fixed in this stage). The
-  // mortgage_id link itself is proven unchanged by the history assertions
-  // above/below (the row stays attached to the archived agreement, not moved).
+  // The history edit must not move the archived part into the ACTIVE ledger:
+  // the main loan-part list shows only the new agreement's part, never the
+  // edited old one — active scoping goes through the mortgage link, not the
+  // part's own `archived` flag.
+  await expect(page.locator('tr.ld-member')).toHaveCount(1)
+  await expect(page.locator('tr.ld-member .ld-name')).toHaveText(/Ny del/)
+  await expect(page.locator('.lanedelar-table')).not.toContainText('Ursprunglig del')
 
   await history.getByRole('button', { name: 'Stäng' }).click()
   await page.reload()
