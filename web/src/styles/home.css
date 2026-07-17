@@ -4,6 +4,18 @@
    Global resets / body / html rules come from global.css.
    ════════════════════════════════════════════════════════════════ */
 
+/* Keyframes are global CSS identifiers; keep them outside the nested route
+   selector because Lightning CSS rejects @keyframes inside a style rule. */
+@keyframes drift-a { to { transform: translate(-8vmax, 6vmax) scale(1.12); } }
+@keyframes drift-b { to { transform: translate(6vmax, -5vmax) scale(0.92); } }
+@keyframes drift-c { to { transform: translate(-10vmax, -8vmax) scale(1.18); } }
+@keyframes cue-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(6px); } }
+@keyframes rise-in-hub { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
+@keyframes h1-line-in { from { clip-path: inset(0 0 100% 0); transform: translateY(14px); } to { clip-path: inset(0 0 0 0); transform: none; } }
+@keyframes h1-underline-draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes icon-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes pulse-dot { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-light) 45%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+
 /* ── Ambient background orbs ────────────────────────────────── */
 /* This lives inside .hub-pan (Home.tsx), so the hub-pan camera move (a
    `transform`) makes it that element's containing block despite `fixed` —
@@ -13,12 +25,13 @@
    giving a hard edge once a pan (e.g. toward a bottom-row card) revealed the
    area past the box's original bounds — see plan 26. body's own
    `overflow-x: hidden` still guards against a horizontal scrollbar. */
-.orbs {
+.hub-root {
+  .orbs {
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
-}
+  }
 
 .orb {
   position: absolute;
@@ -48,12 +61,8 @@
   animation: drift-c 38s ease-in-out infinite alternate;
 }
 
-@keyframes drift-a { to { transform: translate(-8vmax, 6vmax) scale(1.12); } }
-@keyframes drift-b { to { transform: translate(6vmax, -5vmax) scale(0.92); } }
-@keyframes drift-c { to { transform: translate(-10vmax, -8vmax) scale(1.18); } }
-
 /* Film grain */
-body::after {
+  &::after {
   content: '';
   position: fixed;
   inset: 0;
@@ -345,11 +354,6 @@ body::after {
   animation: cue-bob 2.2s ease-in-out infinite;
 }
 
-@keyframes cue-bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(6px); }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .hero-cue-chevron { animation: none; }
 }
@@ -382,21 +386,6 @@ body::after {
     animation: h1-underline-draw 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
     animation-delay: 1.02s;
   }
-}
-
-@keyframes rise-in-hub {
-  from { opacity: 0; transform: translateY(22px); }
-  to   { opacity: 1; transform: none; }
-}
-
-@keyframes h1-line-in {
-  from { clip-path: inset(0 0 100% 0); transform: translateY(14px); }
-  to   { clip-path: inset(0 0 0 0); transform: none; }
-}
-
-@keyframes h1-underline-draw {
-  from { transform: scaleX(0); }
-  to   { transform: scaleX(1); }
 }
 
 /* ── App grid ───────────────────────────────────────────────── */
@@ -573,11 +562,6 @@ a.app-card:hover::after { transform: translateX(110%); }
   a.app-card:hover .app-icon :nth-child(4) { animation-delay: 270ms; }
 }
 
-@keyframes icon-draw {
-  from { stroke-dashoffset: 1; }
-  to   { stroke-dashoffset: 0; }
-}
-
 .app-card-head {
   display: flex;
   align-items: flex-start;
@@ -722,12 +706,6 @@ a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
   animation: pulse-dot 2.6s infinite;
 }
 
-@keyframes pulse-dot {
-  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-light) 45%, transparent); }
-  70%  { box-shadow: 0 0 0 7px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 600px) {
   .app-grid { grid-template-columns: 1fr; }
@@ -749,4 +727,5 @@ a.app-card:hover .app-cta .arrow { transform: translateX(4px); }
     padding-top: 3rem;
     padding-bottom: 3rem;
   }
+}
 }

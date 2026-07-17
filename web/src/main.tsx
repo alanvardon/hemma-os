@@ -16,10 +16,7 @@ import './styles/modals.css'
 import './styles/dashboard.css'
 import './styles/charts.css'
 import './styles/transitions.css'
-// Imported last: scoped under .hb-root, it overrides the shared generic-name
-// rules (field / sum-card / mobile-bar / chart-overlay) on the budget route.
 import './styles/hushallsbudget.css'
-// Imported last so the touch-only minimum overrides route-specific field sizes.
 import './styles/touch-inputs.css'
 import App from './App.tsx'
 

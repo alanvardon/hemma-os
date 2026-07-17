@@ -6,24 +6,25 @@
    Green/copper palette + tokens only. */
 
 /* ── Shell primitives (mirror components.css, scoped to .hk-root) ──────────── */
-.hk-root .wrap {
+.hk-root {
+  .wrap {
   max-width: 940px; width: 100%;
   margin: 0 auto; padding: 2rem 2.5rem 5rem;
   display: flex; flex-direction: column; gap: 1.5rem;
-}
-.hk-root .card {
+  }
+.card {
   background: var(--paper-card);
   border: 1px solid var(--rule);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-sm);
   padding: 1.5rem 1.6rem;
 }
-.hk-root .link-btn {
+.link-btn {
   background: none; border: none; padding: 0; cursor: pointer;
   color: var(--accent); font: inherit; font-weight: 550; text-decoration: underline;
   text-underline-offset: 2px;
 }
-.hk-root .link-btn:hover { color: var(--accent-light); }
+.link-btn:hover { color: var(--accent-light); }
 
 /* ── Attention strip (pinned above the timeline) ──────────────────────────── */
 .hk-attention {
@@ -123,7 +124,7 @@
 
 .hk-actions { grid-column: 3; display: flex; gap: 0.1rem; align-items: center; }
 /* .icon-btn base + :hover are in the shared tool shell (components.css). */
-.hk-root .icon-btn[data-del]:hover { color: var(--warn); }
+.icon-btn[data-del]:hover { color: var(--warn); }
 
 /* Past milestones: muted/ink, they're history. */
 .hk-node.is-past .hk-title { color: var(--ink-mid); }
@@ -174,7 +175,7 @@
 
 /* ── Mobile (≤600px) ──────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
-  .hk-root .wrap { padding: 1.4rem 1.1rem 4rem; }
+  .wrap { padding: 1.4rem 1.1rem 4rem; }
   .hk-timeline::before { left: 17px; }
   .hk-node { grid-template-columns: 36px 1fr auto; gap: 0.45rem; }
   .hk-dot { width: 28px; height: 28px; margin-left: 3px; }
@@ -237,3 +238,4 @@ dialog.hk-dialog {
 }
 .hk-dialog .form-hint { font-size: 12.5px; color: var(--ink-soft); margin-top: 0.9rem; line-height: 1.5; }
 .hk-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.3rem; }
+}

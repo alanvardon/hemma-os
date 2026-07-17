@@ -5,7 +5,10 @@
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="hidden"]),
   select,
   textarea {
-    font-size: 16px;
+    /* Some route inputs intentionally use denser desktop typography. This
+       accessibility floor must still win on touch devices, independent of
+       the route stylesheet order. */
+    font-size: 16px !important;
   }
 
   /* The affordability field was sized for 12px digits. Leave enough room for

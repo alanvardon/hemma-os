@@ -545,7 +545,7 @@ export default function Home() {
   }
 
   return (
-    <>
+    <div className="hub-root">
     {/* The header sits OUTSIDE .hub-pan: the camera pan transforms .hub-pan, and a
         transform on a sticky element's ancestor changes its containing block,
         dragging the pinned header into the scene (most visible when scrolled to
@@ -621,6 +621,6 @@ export default function Home() {
         <span>Hemma·OS · built by the Vardon family{BUILD_SHA && <span className="footer-build" title="Deployad commit"> · v. {BUILD_SHA.slice(0, 7)}</span>}</span>
       </footer>
     </div>
-    </>
+    </div>
   )
 }

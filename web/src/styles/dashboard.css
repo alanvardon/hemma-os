@@ -6,11 +6,12 @@
    header rename reuses .scenario-title-input (still in components.css).
    ════════════════════════════════════════════════════════════════ */
 
-.dashboard {
+.bk-page-root {
+  .dashboard {
   max-width: min(1200px, 94vw);
   margin: 0 auto;
   padding: 1.5rem 1.5rem 4rem;
-}
+  }
 
 /* ── Toolbar: search · sort · count ─────────────────────────────── */
 .dashboard-toolbar {
@@ -222,10 +223,6 @@
 @media (prefers-reduced-motion: no-preference) {
   .kebab-menu[data-state="open"] { animation: kebab-in 0.14s cubic-bezier(0.22, 1, 0.36, 1); transform-origin: var(--radix-dropdown-menu-content-transform-origin); }
 }
-@keyframes kebab-in {
-  from { opacity: 0; transform: scale(0.96) translateY(-2px); }
-  to { opacity: 1; transform: none; }
-}
 
 /* ── Draft footer (Continue / Discard) ──────────────────────────── */
 .row-footer { display: flex; gap: 6px; flex-shrink: 0; }
@@ -244,4 +241,5 @@
   .row-stat-price, .row-stat-monthly, .row-stat-cash, .row-stat-ltv, .row-stat-salary { min-width: 0; }
   .scenario-kebab { position: absolute; top: 0.7rem; right: 0.7rem; opacity: 1; }
   .row-footer .btn { flex: 1; }
+}
 }

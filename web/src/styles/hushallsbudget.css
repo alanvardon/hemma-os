@@ -8,8 +8,8 @@
    palette (--cat-*) — budget-only — is defined here. The page-header, buttons
    and base resets come from global.css, matching the other React routes.
 
-   Imported LAST in main.tsx so the few generic-name collisions with the
-   shared sheets (field / sum-card / mobile-bar / chart-overlay) resolve here. */
+   Route-local nesting keeps its generic names from colliding with shared
+   sheets, regardless of stylesheet import order. */
 
 .hb-root {
   /* Category palette (--cat-1…8) is now the shared data-viz ramp in

@@ -575,7 +575,8 @@
 
 /* ── Dialogs (rendered in the top layer; the <dialog> is a DOM descendant of
    .bk-root, so scoped rules still match) ─────────────────────────────────── */
-.bk-root .dialog,
+.bk-root {
+  .dialog,
 dialog.bk-dialog {
   border: 1px solid var(--rule); border-radius: var(--r-lg);
   background: var(--paper-card); color: var(--ink);
@@ -808,6 +809,8 @@ dialog.bk-wizard, dialog.bk-history { width: min(680px, calc(100vw - 2rem)); }
 /* ── Mobile cards (plan 73) ─────────────────────────────────────────────────
    ≤760px every Bolånekoll data row is a card (shared plumbing in
    components.css) — nothing scrolls horizontally. */
+}
+
 @media (max-width: 760px) {
   /* micro-labels standing in for the hidden column headers */
   .bk-root .table-cards .col-balance::before, .bk-root .triage-table .col-bal::before {
@@ -971,7 +974,7 @@ dialog.bk-wizard, dialog.bk-history { width: min(680px, calc(100vw - 2rem)); }
   .bk-root .wrap { padding: 1.4rem 1rem 3rem; }
   .bk-root .card { padding: 1.2rem 1rem; }
   .bk-root .config-grid { grid-template-columns: 1fr; }
-  .bk-dialog .form-grid { grid-template-columns: 1fr; }
+  .bk-root .bk-dialog .form-grid { grid-template-columns: 1fr; }
   .bk-root .card-actions { width: 100%; }
   .bk-root .dash-headline { font-size: 2.3rem; }
   .bk-root .dashboard-card .metric-row { grid-template-columns: repeat(2, 1fr); }
