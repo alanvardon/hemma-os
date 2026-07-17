@@ -26,9 +26,9 @@ import {
   expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   todayISO,
-  bankForPart, suggestBankProfile, bankProfileDrift,
+  bankForPart, suggestBankProfile, effectiveBankProfile, makeBank,
 } from '../lib/mortgage'
-import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, ExpectedCharge, Bank, Mortgage } from '../lib/mortgage'
+import type { LoanPart, LoanPartGroup, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, CsvResult, ColMapping, Owner, ExpectedCharge, Bank, Mortgage, CatalogBank, EffectiveBankProfile } from '../lib/mortgage'
 import {
   fetchPolicyRate, nextDecision, lastDecision, decisionOutcome,
   detectChange, currentPoint, readAcknowledged, acknowledge, readSessionHidden, hideForSession,
@@ -43,6 +43,9 @@ import ValuationDialog from './bolanekoll/ValuationDialog'
 import PaymentDialog from './bolanekoll/PaymentDialog'
 import CopyToPartsDialog from './bolanekoll/CopyToPartsDialog'
 import SettingsDialog from './bolanekoll/SettingsDialog'
+import BankProfileDialog, { type BankProfileSaveInput } from './bolanekoll/BankProfileDialog'
+import AgreementDialog, { type CreateAgreementInput } from './bolanekoll/AgreementDialog'
+import { type BankSelection } from './bolanekoll/BankPicker'
 import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
 
 // The hero reprice notice appears only inside the final month before the
@@ -94,6 +97,7 @@ export default function Bolanekoll() {
   // below holds back the empty-hero until we actually know it's empty.
   const [seed] = useState(Store.cachedSnapshot)
   const [banks, setBanks] = useState<Bank[]>(seed.banks)
+  const [catalogBanks, setCatalogBanks] = useState<CatalogBank[]>([])
   const [mortgages, setMortgages] = useState<Mortgage[]>(seed.mortgages)
   const [parts, setParts] = useState<LoanPart[]>(seed.loan_parts)
   const [payments, setPayments] = useState<Payment[]>(seed.payments)
@@ -136,6 +140,8 @@ export default function Bolanekoll() {
   const [avslutadeOpen, setAvslutadeOpen] = useState(false)
   const reduceMotion = useReducedMotion()
   const [settingsDlg, setSettingsDlg] = useState(false)
+  const [profileDlg, setProfileDlg] = useState(false)
+  const [createDlg, setCreateDlg] = useState(false)
 
   // ── Riksbank policy-rate watcher (plan 70) ──────────────────────────────
   // Best-effort only: the fetch never blocks the calculator, and a failure
@@ -175,6 +181,9 @@ export default function Bolanekoll() {
     ])
     setParts(ps); setPayments(pays); setValuations(vals); setPeriods(pers); setContributions(contribs); setSettings(sett)
     setBanks(bnks); setMortgages(morts)
+    // The shared catalogue is best-effort: a failure returns [] and the profile
+    // modal simply offers no built-in banks rather than blocking the page.
+    Store.listCatalogBanks().then(setCatalogBanks).catch(() => setCatalogBanks([]))
     setLoaded(true)
   }, [])
 
@@ -243,6 +252,7 @@ export default function Bolanekoll() {
   // bare date can't: how much of the loan moves, and off which rate.
   const nextReprice = useMemo(() => loanGroups.find(g => !g.is_catchall && g.days_left != null) ?? null, [loanGroups])
   const archivedParts = useMemo(() => parts.filter(p => p.archived), [parts])
+  const activeParts = useMemo(() => parts.filter(p => !p.archived), [parts])
 
   // Plan 103 — the active mortgage the UI surfaces (the model supports many; we
   // show one). First non-archived, else the first. Legacy data with no mortgage
@@ -350,9 +360,21 @@ export default function Bolanekoll() {
   const bankSuggestion = useMemo(
     () => activeBank ? suggestBankProfile(activeBankParts, periods, payments) : null,
     [activeBank, activeBankParts, periods, payments])
-  const bankDrift = useMemo(
-    () => bankProfileDrift(activeBank, activeBankParts, periods, payments),
-    [activeBank, activeBankParts, periods, payments])
+  // Plan 109b/c — the catalogue row backing the active bank, and the resolved
+  // effective profile (declared lock > confident detection > catalogue > default)
+  // with any convention drift. Drift drives the card badge; the full explanation
+  // lives in the bank-profile modal.
+  const activeCatalog = useMemo<CatalogBank | null>(
+    () => activeBank?.catalog_id ? (catalogBanks.find(c => c.id === activeBank.catalog_id) ?? null) : null,
+    [activeBank, catalogBanks])
+  const effectiveProfile = useMemo<EffectiveBankProfile | null>(
+    () => activeBank ? effectiveBankProfile(activeBank, activeCatalog, activeBankParts, periods, payments) : null,
+    [activeBank, activeCatalog, activeBankParts, periods, payments])
+  // How many agreements point at the active bank profile — so the modal can make
+  // its household-wide reuse clear when a lock would affect several avtal.
+  const agreementCount = useMemo(
+    () => activeBank ? mortgages.filter(m => m && m.bank_id === activeBank.id).length : 0,
+    [activeBank, mortgages])
   const forecast = useMemo(() => forecastInterest(parts, periods, payments), [parts, periods, payments])
   // The next UNCOVERED charge per part: once a month is fully logged (or
   // imported), the Nästa avisering block rolls forward to the following month
@@ -576,29 +598,49 @@ export default function Bolanekoll() {
     try { await Store.removeLoanPart(id); await refresh(); flashSaved(); setPartDlg({ open: false, id: null }); showToast('Loan part deleted.') }
     catch (err) { saveErr(err) }
   }
-  // Plan 104 — lock (or clear) the active bank's day-count year. A declared lock
-  // (source 'declared') makes that basis authoritative for the bunden forecast;
-  // clearing it (basis null, source null) hands the decision back to detection.
-  async function handleSetBankYearBasis(basis: 360 | 365 | null) {
-    if (!activeBank) return
-    try {
-      await Store.updateBank(activeBank.id, {
-        year_basis: basis,
-        year_basis_source: basis == null ? null : 'declared',
-      })
-      await refresh(); flashSaved()
-      showToast(basis == null ? 'Bankår återställt till auto.' : `Bankår låst till faktisk/${basis}.`)
-    } catch (err) { saveErr(err) }
+  // Plan 109c — resolve a bank selection to a household bank id, creating the
+  // bank when a catalogue or custom pick isn't attached yet. Returns null only
+  // when nothing is selected and there's no current bank to fall back to.
+  async function resolveBankSelection(sel: BankSelection, current: Bank | null): Promise<string | null> {
+    if (!sel) return current?.id ?? null
+    if (sel.kind === 'existing') return sel.bankId
+    if (sel.kind === 'catalog') {
+      const existing = banks.find(b => b.catalog_id === sel.catalogId)
+      if (existing) return existing.id
+      const created = await Store.addBank(makeBank({ label: sel.label, catalog_id: sel.catalogId }))
+      return created.id
+    }
+    const created = await Store.addBank(makeBank({ label: sel.label.trim() || 'Egen bank' }))
+    return created.id
   }
-  // Plan 104 (phase 2) — pin (or clear) the active bank's billing cadence.
-  async function handleSetBankBilling(billing: 'month-end' | 'fixed' | null) {
-    if (!activeBank) return
-    try {
-      await Store.updateBank(activeBank.id, { billing, billing_source: billing == null ? null : 'declared' })
-      await refresh(); flashSaved()
-      showToast(billing == null ? 'Aviseringsdag återställd till auto.'
-        : billing === 'month-end' ? 'Aviseringsdag låst till månadsslut.' : 'Aviseringsdag låst till fast dag.')
-    } catch (err) { saveErr(err) }
+  // Plan 109c — commit the bank-profile modal: point the active agreement at the
+  // chosen bank (creating it when needed) and write the household's convention
+  // locks. Throws on failure so the modal stays open and shows the error.
+  async function handleSaveBankProfile(input: BankProfileSaveInput): Promise<void> {
+    const bankId = await resolveBankSelection(input.selection, activeBank)
+    if (activeMortgage && bankId && activeMortgage.bank_id !== bankId) {
+      await Store.updateMortgage(activeMortgage.id, { bank_id: bankId })
+    }
+    const targetBankId = bankId ?? activeBank?.id ?? null
+    if (targetBankId) {
+      await Store.updateBank(targetBankId, {
+        year_basis: input.year_basis,
+        year_basis_source: input.year_basis == null ? null : 'declared',
+        billing: input.billing,
+        billing_source: input.billing == null ? null : 'declared',
+      })
+    }
+    await refresh(); flashSaved(); showToast('Bankprofil sparad.')
+  }
+  // Plan 109c — create the first mortgage agreement (label/start date + a
+  // catalogue or custom bank). Throws on failure so the dialog stays open.
+  async function handleCreateAgreement(input: CreateAgreementInput): Promise<void> {
+    const bankId = await resolveBankSelection(input.selection, null)
+    await Store.addMortgage({
+      bank_id: bankId, label: input.label || 'Bolån',
+      start_date: input.start_date || null, archived: false, end_date: null,
+    })
+    await refresh(); flashSaved(); showToast('Bolåneavtal skapat.')
   }
   async function handleSavePeriod(partId: string, data: Omit<RatePeriod, 'id' | 'created_at'>, existingId?: string) {
     try {
@@ -777,10 +819,25 @@ export default function Bolanekoll() {
           <div className="empty-hero">
             <p className="empty-hero-eyebrow">Bolånekoll</p>
             <h2 className="empty-hero-title">See how much of your home you own</h2>
-            <p className="empty-hero-text">Track your mortgage part by part — remaining debt, equity, loan-to-value and the road to payoff. Add your first loan part to begin; you can import statements as a CSV once it exists.</p>
-            <div className="empty-hero-actions">
-              <button type="button" className="btn btn-primary" onClick={() => setPartDlg({ open: true, id: null })}>+ Add loan part</button>
-            </div>
+            {/* Plan 109c — a mortgage agreement is the parent of the loan parts,
+                so the first action creates the agreement (with its bank); loan
+                parts can only be added once it exists. An agreement that exists
+                but has no parts yet prompts for the first lånedel instead. */}
+            {activeMortgage ? (
+              <>
+                <p className="empty-hero-text">Bolåneavtalet är skapat. Lägg till din första lånedel — en per lånekonto — för att börja; du kan importera kontoutdrag som CSV när den finns.</p>
+                <div className="empty-hero-actions">
+                  <button type="button" className="btn btn-primary" onClick={() => setPartDlg({ open: true, id: null })}>+ Lägg till lånedel</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="empty-hero-text">Skapa ditt bolåneavtal — välj bank och startdatum — så följer du lånet del för del: kvarvarande skuld, eget kapital, belåningsgrad och vägen till att bli skuldfri.</p>
+                <div className="empty-hero-actions">
+                  <button type="button" className="btn btn-primary" onClick={() => setCreateDlg(true)}>Skapa bolåneavtal</button>
+                </div>
+              </>
+            )}
           </div>
         </section>
         )
@@ -1223,83 +1280,53 @@ export default function Bolanekoll() {
           )}
         </section>
 
-        {/* ── Loan parts ── */}
+        {/* ── Mortgage agreement (loan parts nested beneath) ── */}
         <section className="card">
           <div className="card-head">
-            <h2>Lånedelar <span className="card-en">· Loan parts</span></h2>
+            <h2>Bolåneavtal <span className="card-en">· Mortgage agreement</span></h2>
             <span className="count-pill">{parts.length}</span>
-            <div className="card-actions"><button type="button" className="btn btn-ghost" onClick={() => setPartDlg({ open: true, id: null })}>+ Add loan part</button></div>
-          </div>
-          {!parts.length ? <p className="empty">No loan parts yet. Add your lånedelar — one per loan account — to begin.</p> : (
-            <div className="table-wrap">
-              {/* Plan 103 — the parts sit under the active mortgage (bank → lån).
-                  Only shown once the household has one; legacy data stays flat. */}
-              {activeMortgage && (
-                <div className="ld-mortgage-head">
-                  <span className="ld-bank">{activeBank?.label || 'Okänd bank'}</span>
-                  <span className="ld-mortgage-sep">·</span>
-                  <span className="ld-mortgage-name">{activeMortgage.label || 'Bolån'}</span>
-                  {/* Plan 104 — Bankvillkor: the bank's day-count year and billing
-                      cadence, each Auto (detected) or locked. A confident learner
-                      offers a lock (suggest → confirm); a lock that no longer matches
-                      the ledger surfaces a drift warning. */}
-                  {activeBank && (() => {
-                    const ybLocked = activeBank.year_basis_source === 'declared'
-                      && (activeBank.year_basis === 360 || activeBank.year_basis === 365)
-                    const billLocked = activeBank.billing_source === 'declared'
-                      && (activeBank.billing === 'month-end' || activeBank.billing === 'fixed')
-                    const ybSug = bankSuggestion?.year_basis
-                    return (
-                      <span className="ld-bankvillkor">
-                        <span className="ld-bankvillkor-row">
-                          <span className="ld-bankvillkor-label">Bankår</span>
-                          <span className={'ld-bankvillkor-state' + (ybLocked ? ' is-locked' : '')}>
-                            {ybLocked ? `Låst faktisk/${activeBank.year_basis}` : 'Auto (upptäck)'}
-                          </span>
-                          <button type="button" className="btn btn-ghost btn-xs"
-                            aria-pressed={ybLocked && activeBank.year_basis === 360}
-                            onClick={() => handleSetBankYearBasis(360)}>Lås faktisk/360</button>
-                          <button type="button" className="btn btn-ghost btn-xs"
-                            aria-pressed={ybLocked && activeBank.year_basis === 365}
-                            onClick={() => handleSetBankYearBasis(365)}>Lås 365</button>
-                          {ybLocked && (
-                            <button type="button" className="btn btn-ghost btn-xs"
-                              onClick={() => handleSetBankYearBasis(null)}>Auto</button>
-                          )}
-                        </span>
-                        {!ybLocked && ybSug?.confident && ybSug.value === 360 && (
-                          <span className="ld-bankvillkor-suggest">
-                            Historiken tyder på faktisk/360.
-                            <button type="button" className="btn btn-ghost btn-xs"
-                              onClick={() => handleSetBankYearBasis(360)}>Lås detta</button>
-                          </span>
-                        )}
-                        {bankDrift && (
-                          <span className="ld-bankvillkor-drift" role="status">
-                            ⚠ Låst faktisk/{bankDrift.declared}, men färsk data tyder på faktisk/{bankDrift.learned}. Kontrollera villkoret.
-                          </span>
-                        )}
-                        <span className="ld-bankvillkor-row">
-                          <span className="ld-bankvillkor-label">Avisering</span>
-                          <span className={'ld-bankvillkor-state' + (billLocked ? ' is-locked' : '')}>
-                            {billLocked ? (activeBank.billing === 'month-end' ? 'Låst månadsslut' : 'Låst fast dag') : 'Auto (upptäck)'}
-                          </span>
-                          <button type="button" className="btn btn-ghost btn-xs"
-                            aria-pressed={billLocked && activeBank.billing === 'month-end'}
-                            onClick={() => handleSetBankBilling('month-end')}>Månadsslut</button>
-                          <button type="button" className="btn btn-ghost btn-xs"
-                            aria-pressed={billLocked && activeBank.billing === 'fixed'}
-                            onClick={() => handleSetBankBilling('fixed')}>Fast dag</button>
-                          {billLocked && (
-                            <button type="button" className="btn btn-ghost btn-xs"
-                              onClick={() => handleSetBankBilling(null)}>Auto</button>
-                          )}
-                        </span>
-                      </span>
-                    )
-                  })()}
-                </div>
+            <div className="card-actions">
+              {(activeMortgage || parts.length > 0) && (
+                <button type="button" className="btn btn-ghost" onClick={() => setPartDlg({ open: true, id: null })}>+ Lägg till lånedel</button>
               )}
+            </div>
+          </div>
+          {/* Plan 109c — the agreement is the visible parent: name, bank, and the
+              relationship start ("hos banken sedan …", never binding-flavoured),
+              with the bank profile, bank change and history actions. The convention
+              controls moved into the Bankprofil modal; a compact drift badge is the
+              only convention signal left on the page and opens that modal. */}
+          {activeMortgage && (
+            <div className="agreement-head">
+              <div className="agreement-summary">
+                <span className="agreement-name">{activeMortgage.label || 'Bolån'}</span>
+                <span className="agreement-sep">·</span>
+                <span className="agreement-bank">{activeBank?.label || 'Okänd bank'}</span>
+                {activeMortgage.start_date && (
+                  <span className="agreement-since">hos banken sedan {activeMortgage.start_date}</span>
+                )}
+                <span className="agreement-status">Aktivt</span>
+                <span className="agreement-parts-count">{activeParts.length} lånedel{activeParts.length === 1 ? '' : 'ar'}</span>
+                {effectiveProfile && effectiveProfile.drift.length > 0 && (
+                  <button type="button" className="agreement-drift-badge" onClick={() => setProfileDlg(true)}
+                    title="Villkoren avviker från historiken — öppna Bankprofil">⚠ Villkor avviker</button>
+                )}
+              </div>
+              <div className="agreement-actions">
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setProfileDlg(true)}>Bankprofil</button>
+                <button type="button" className="btn btn-ghost btn-sm" disabled title="Kommer i nästa steg">Byt bank</button>
+                <button type="button" className="btn btn-ghost btn-sm" disabled title="Kommer i nästa steg">Tidigare avtal</button>
+              </div>
+            </div>
+          )}
+          {!parts.length ? (
+            <p className="empty">
+              {activeMortgage
+                ? 'Inga lånedelar än. Lägg till en lånedel — en per lånekonto — för att börja.'
+                : 'Inget bolåneavtal än. Skapa ett för att komma igång.'}
+            </p>
+          ) : (
+            <div className="table-wrap">
               <table className="data-table table-cards lanedelar-table">
                 <thead><tr><th>Lånedel <span className="th-en">· part</span></th><th className="num">Balance</th><th className="num">Share</th><th className="col-act"></th></tr></thead>
                 <tbody>
@@ -1752,6 +1779,13 @@ export default function Bolanekoll() {
       <CopyToPartsDialog open={copyDlg.open} source={copyDlg.source} parts={parts} onConfirm={ids => copyDlg.source && handleCopyToParts(copyDlg.source, ids)} onClose={() => setCopyDlg({ open: false, source: null })} />
       <SettingsDialog open={settingsDlg} settings={settings} onSave={handleSaveSettings} onClose={() => setSettingsDlg(false)}
         onExportJSON={handleExportJSON} onExportCSV={handleExportCSV} onImportJSON={handleImportJSON} />
+
+      <BankProfileDialog open={profileDlg} bank={activeBank} banks={banks} catalogBanks={catalogBanks}
+        effective={effectiveProfile} suggestion={bankSuggestion} agreementCount={agreementCount}
+        onSave={handleSaveBankProfile} onClose={() => setProfileDlg(false)} />
+
+      <AgreementDialog open={createDlg} banks={banks} catalogBanks={catalogBanks}
+        onSave={handleCreateAgreement} onClose={() => setCreateDlg(false)} />
 
       {/* ── Toast ── */}
       <div className={'bk-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
