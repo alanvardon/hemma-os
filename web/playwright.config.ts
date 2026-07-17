@@ -25,6 +25,11 @@ export default defineConfig({
   },
   use: {
     baseURL: 'http://localhost:5175',
+    // CI runners animate slowly enough that Motion-driven dialog content never
+    // reads as "stable" to Playwright's actionability check (30s click timeout
+    // on Ångra bankbyte). All house animation is gated on prefers-reduced-motion,
+    // so emulating it removes the flake without forcing clicks.
+    contextOptions: { reducedMotion: 'reduce' },
     // Headless Chrome needs software WebGL for the hero canvas — see
     // project_web_landmines.md; NOT --disable-gpu, that breaks the GL path.
     launchOptions: { args: ['--enable-unsafe-swiftshader', '--use-angle=swiftshader'] },
