@@ -30,6 +30,10 @@ jobs:
         with:
           branch: chore/riksbank-calendar-refresh
           add-paths: web/src/lib/riksbank-decisions.json
+          # Request review + assign so the PR pings the owner directly (inbox +
+          # email) rather than depending on repo-watch settings.
+          reviewers: alanvardon
+          assignees: alanvardon
           title: 'chore: refresh Riksbank decision calendar'
           commit-message: 'chore: refresh Riksbank decision calendar'
           body: |
