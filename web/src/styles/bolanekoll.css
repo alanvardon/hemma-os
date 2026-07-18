@@ -241,7 +241,7 @@
      Bolånekoll-specific table rows / delete-hover variants stay below. */
 
   /* ── Tables ─────────────────────────────────────────────────── */
-  .table-more { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 0.85rem; }
+  .table-more { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.75rem 1rem; margin-top: 0.85rem; }
   .table-more .more-count {
     margin-left: 0.5rem; font-size: 11px; font-weight: 600; color: var(--ink-soft);
     background: var(--paper-warm); border: 1px solid var(--rule); border-radius: 999px; padding: 1px 8px;

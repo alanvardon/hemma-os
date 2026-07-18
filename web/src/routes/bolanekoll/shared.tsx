@@ -2,6 +2,7 @@ import { type ReactNode } from 'react'
 import { motion } from 'motion/react'
 import { Money, Percent } from '../../components/AnimatedNumber'
 import { CURRENCY_SUFFIX } from '../../lib/format'
+import { monthKey, monthLabel } from '../../lib/mortgage'
 import type { Payment, CsvResult, ColMapping } from '../../lib/mortgage'
 
 // A <tr> can't animate its own height, so revealed rows animate it inside each
@@ -29,8 +30,37 @@ export function CellReveal({ reduce, children }: { reduce: boolean | null; child
 // insatser), so it keeps the label 'Amortering'.
 const KIND_LABELS: Record<string, string> = { interest: 'Ränta', amortization: 'Amortering', payment: 'Betalning', down_payment: 'Kontantinsats', loan: 'Lån', fee: 'Avgift', other: 'Övrigt' }
 export function kindLabel(k: string): string { return KIND_LABELS[k] || k || '—' }
-// Payments ledger paginates: show the most recent PAY_PAGE, reveal more on click.
-export const PAY_PAGE = 20
+
+// Payments ledger discloses by calendar month rather than a fixed row page
+// (plan 115): one bucket per YYYY-MM, newest first. A legacy row with no
+// usable date lands in one shared fallback bucket instead of vanishing.
+export interface PayBucket { key: string; label: string; rows: Payment[] }
+
+// Groups the ledger into month buckets WITHOUT re-sorting the rows themselves:
+// each bucket keeps its rows in the order they arrived, so the store's
+// newest-first date order and created_at tie-break survive within a month. The
+// dated buckets are then ordered newest month first by their YYYY-MM key —
+// chronological because the keys are zero-padded — so the newest populated
+// month leads regardless of the caller's row order (the store already delivers
+// newest-first; deriving it here keeps the disclosure correct even if it
+// doesn't). A calendar month with zero matching rows never produces an empty
+// bucket, so "one more month" always reveals real data. Undated rows form one
+// shared fallback bucket appended last, after every dated month, instead of
+// vanishing.
+export function buildPayBuckets(rows: Payment[]): PayBucket[] {
+  const byKey = new Map<string, PayBucket>()
+  const undated: Payment[] = []
+  for (const p of rows) {
+    const mk = monthKey(p.date)
+    if (!mk) { undated.push(p); continue }
+    let bucket = byKey.get(mk)
+    if (!bucket) { bucket = { key: mk, label: monthLabel(mk), rows: [] }; byKey.set(mk, bucket) }
+    bucket.rows.push(p)
+  }
+  const buckets = [...byKey.values()].sort((a, b) => b.key.localeCompare(a.key))
+  if (undated.length) buckets.push({ key: '', label: monthLabel(''), rows: undated })
+  return buckets
+}
 
 export function periodFrom(period: string): string | null {
   const d = new Date(), p = (n: number) => (n < 10 ? '0' : '') + n

@@ -45,7 +45,7 @@ import BankProfileDialog from './bolanekoll/BankProfileDialog'
 import AgreementDialog from './bolanekoll/AgreementDialog'
 import BankChangeWizard from './bolanekoll/BankChangeWizard'
 import AgreementHistoryDialog from './bolanekoll/AgreementHistoryDialog'
-import { CellReveal, kindLabel, PAY_PAGE, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
+import { CellReveal, kindLabel, buildPayBuckets, periodFrom, monthsToWhen, fmtMoney, fmtPct, M, P, currencyState, type TriageRow, type ImportCfg } from './bolanekoll/shared'
 import { useMortgageWorkspace, type PendingChargeKind } from './bolanekoll/useMortgageWorkspace'
 
 // The hero reprice notice appears only inside the final month before the
@@ -112,7 +112,9 @@ export default function Bolanekoll() {
   // for the rate what-if's "total per month" chips. null until loaded / no budget.
   const [householdCosts, setHouseholdCosts] = useState<number | null>(null)
   const [paymentFilter, setPaymentFilter] = useState('all')
-  const [payVisible, setPayVisible] = useState(PAY_PAGE)
+  // Betalningar discloses one calendar month at a time (plan 115): 1 = only
+  // the newest populated month, 'all' = every bucket, N = the N newest buckets.
+  const [payMonthsShown, setPayMonthsShown] = useState<number | 'all'>(1)
   const [isDragging, setIsDragging] = useState(false)
   const [importCfg, setImportCfg] = useState<ImportCfg | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -170,8 +172,8 @@ export default function Bolanekoll() {
   // Pull the household's shared-cost total from Hushållsbudget once, for the
   // rate what-if's "total per month" chips. Read-only: never writes the budget.
   useEffect(() => { let live = true; loadBudget().then(b => { if (live && b) setHouseholdCosts(computeBudget(b).costsJoint) }); return () => { live = false } }, [])
-  // Collapse the ledger back to the first page whenever the part filter changes.
-  useEffect(() => { setPayVisible(PAY_PAGE) }, [paymentFilter])
+  // Collapse the ledger back to just the newest month whenever the part filter changes.
+  useEffect(() => { setPayMonthsShown(1) }, [paymentFilter])
 
   const { nameOf } = usePersonNames(settings.owner_a_name, settings.owner_b_name)
 
@@ -779,8 +781,15 @@ export default function Bolanekoll() {
   const maxVal = chronVals.reduce((mx, v) => Math.max(mx, Number(v.value) || 0), 0)
 
   const filteredPayments = paymentFilter === 'all' ? activeViewPayments : activeViewPayments.filter(p => p.loan_part_id === paymentFilter)
-  const shownPayments = filteredPayments.slice(0, payVisible)
-  const hiddenPayCount = filteredPayments.length - shownPayments.length
+  // Month buckets over the already-ordered (newest-first) filtered ledger —
+  // see buildPayBuckets in shared.tsx for the grouping contract.
+  const payBuckets = useMemo(() => buildPayBuckets(filteredPayments), [filteredPayments])
+  const visiblePayBucketCount = payMonthsShown === 'all' ? payBuckets.length : Math.min(payMonthsShown, payBuckets.length)
+  const shownPayments = useMemo(
+    () => payBuckets.slice(0, visiblePayBucketCount).flatMap(b => b.rows),
+    [payBuckets, visiblePayBucketCount])
+  const hiddenPayBucketCount = payBuckets.length - visiblePayBucketCount
+  const nextPayBucket = payBuckets[visiblePayBucketCount] ?? null
   const partNameById = (pid: string | null) => parts.find(p => p.id === pid)?.label || '—'
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -1717,16 +1726,22 @@ export default function Bolanekoll() {
               </div>
             )}
           </motion.div>
-          {(hiddenPayCount > 0 || payVisible > PAY_PAGE) && (
+          {/* Month disclosure (plan 115): reveal one populated month at a time,
+              or all at once. Hidden entirely for a single-bucket ledger; the
+              collapse action survives once more than the newest month shows. */}
+          {payBuckets.length > 1 && (
             <div className="table-more">
-              {hiddenPayCount > 0 && (
-                <button type="button" className="btn btn-ghost" onClick={() => setPayVisible(v => v + PAY_PAGE)}>
-                  Visa fler <span className="card-en">· Show {Math.min(PAY_PAGE, hiddenPayCount)} more</span>
-                  <span className="more-count">{hiddenPayCount} left</span>
-                </button>
+              {hiddenPayBucketCount > 0 && nextPayBucket && (
+                <>
+                  <button type="button" className="btn btn-ghost" onClick={() => setPayMonthsShown(n => (n === 'all' ? n : n + 1))}>
+                    Visa en månad till
+                    <span className="more-count">{nextPayBucket.label} · {hiddenPayBucketCount} kvar</span>
+                  </button>
+                  <button type="button" className="link-btn" onClick={() => setPayMonthsShown('all')}>Visa alla månader</button>
+                </>
               )}
-              {payVisible > PAY_PAGE && (
-                <button type="button" className="link-btn" onClick={() => setPayVisible(PAY_PAGE)}>Show less</button>
+              {visiblePayBucketCount > 1 && (
+                <button type="button" className="link-btn" onClick={() => setPayMonthsShown(1)}>Visa senaste månaden</button>
               )}
             </div>
           )}

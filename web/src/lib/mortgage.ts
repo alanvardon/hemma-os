@@ -677,7 +677,7 @@ export function monthKey(d: string | null | undefined): string {
   return m ? m[3] + '-' + m[2] : ''
 }
 
-function monthLabel(mk: string): string {
+export function monthLabel(mk: string): string {
   if (!mk) return 'Utan datum'
   const m = /^(\d{4})-(\d{2})$/.exec(mk)
   if (!m) return mk
