@@ -95,8 +95,8 @@ describe('Månadsavslut item read states', () => {
       degraded: true,
       rejectedRowCount: 2,
       diagnostics: [
-        { fieldPath: 'items[0]', code: 'invalid_date' },
-        { fieldPath: 'items[1]', code: 'invalid_number' },
+        { fieldPath: 'items[0].date_purchased', code: 'invalid_date', shape: 'NN/NN/NN' },
+        { fieldPath: 'items[1].created_at', code: 'invalid_datetime' },
       ],
       allCloudRowsRejected: true,
     })
@@ -104,7 +104,7 @@ describe('Månadsavslut item read states', () => {
     renderRoute()
 
     expect(await screen.findByText('Sparade poster finns i molnet men kunde inte läsas säkert.')).toBeInTheDocument()
-    expect(screen.getByText(/Diagnos: 2 poster avvisades · ogiltigt datum, ogiltigt tal/)).toBeInTheDocument()
+    expect(screen.getByText(/Diagnos: 2 poster avvisades · ogiltigt köpdatum \(NN\/NN\/NN\), ogiltig skapad tid/)).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: /Importera kontoutdrag/ })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Försök igen' })).toBeInTheDocument()
   })
@@ -219,7 +219,7 @@ describe('Månadsavslut item date write boundaries', () => {
     const { container } = renderRoute()
 
     await screen.findByRole('heading', { name: /Importera kontoutdrag/ })
-    const csv = 'Date,Description,Amount\n2026/02/01,Fiktivt ogiltigt köp,-100\n'
+    const csv = 'Date,Description,Amount\n01/02/26,Fiktivt ogiltigt köp,-100\n'
     const file = new File([csv], 'unsupported-date.csv', { type: 'text/csv' })
     Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) })
     fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } })

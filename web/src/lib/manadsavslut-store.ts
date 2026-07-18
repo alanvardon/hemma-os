@@ -319,6 +319,7 @@ export type MonthEndItemReadReasonCode =
   | 'invalid_array'
   | 'invalid_boolean'
   | 'invalid_date'
+  | 'invalid_datetime'
   | 'invalid_number'
   | 'invalid_object'
   | 'invalid_reference'
@@ -330,6 +331,8 @@ export interface MonthEndItemReadDiagnostic {
   /** Structural row path only. Never contains ids or row values. */
   fieldPath: string
   code: MonthEndItemReadReasonCode
+  /** Masked shape of the rejected value (digits→N, letters→A). Never the value itself. */
+  shape?: string
 }
 
 export interface MonthEndItemReadResult {
@@ -342,8 +345,9 @@ export interface MonthEndItemReadResult {
   allCloudRowsRejected: boolean
 }
 
-function itemReadReasonCode(reason: string): MonthEndItemReadReasonCode {
+function itemReadReasonCode(reason: string, path?: string): MonthEndItemReadReasonCode {
   if (reason.includes('finite number')) return 'invalid_number'
+  if (path?.endsWith('.created_at') || reason.includes('date-time')) return 'invalid_datetime'
   if (reason.includes('ISO date') || reason.includes('calendar date')) return 'invalid_date'
   if (reason.includes('boolean')) return 'invalid_boolean'
   if (reason.includes('array')) return 'invalid_array'
@@ -359,7 +363,8 @@ function itemReadDiagnostics(rejected: RejectedRecord[]): MonthEndItemReadDiagno
     const match = /^items (\d+)$/.exec(entry.record)
     return {
       fieldPath: entry.path ?? (match ? `items[${Number(match[1]) - 1}]` : 'items'),
-      code: itemReadReasonCode(entry.reason),
+      code: itemReadReasonCode(entry.reason, entry.path),
+      ...(entry.shape !== undefined ? { shape: entry.shape } : {}),
     }
   })
 }
@@ -446,7 +451,7 @@ export async function listItems(): Promise<Item[]> {
 
 function canonicalItemDate(value: unknown): string {
   const parsed = normalizeMonthEndItemDate(value)
-  if (!parsed.ok) throw new Error('Invalid item date. Use YYYY-MM-DD or DD/MM/YYYY.')
+  if (!parsed.ok) throw new Error('Invalid item date. Use YYYY-MM-DD or a day-first D/M/YYYY date.')
   return parsed.value
 }
 

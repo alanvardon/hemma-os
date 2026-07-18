@@ -19,6 +19,7 @@ import {
   salvageMortgageEnvelope,
   salvageBostadScenarios,
   salvageMonthEndRows,
+  maskedValueShape,
 } from './persistence-schema'
 
 const scenario = {
@@ -119,16 +120,29 @@ const monthEndItem = {
 }
 
 describe('Mortgage and month-end persistence schemas', () => {
-  it('normalizes only exact zero-padded day-first month-end item dates', () => {
+  it('normalizes unambiguous day-first and year-first month-end item dates', () => {
     expect(normalizeMonthEndItemDate('2026-02-01')).toMatchObject({ ok: true, value: '2026-02-01' })
     expect(normalizeMonthEndItemDate('')).toMatchObject({ ok: true, value: '' })
+    // Day-first slashes, padded and non-padded (owner-confirmed day-first).
     expect(normalizeMonthEndItemDate('01/02/2026')).toMatchObject({ ok: true, value: '2026-02-01' })
     expect(normalizeMonthEndItemDate('29/02/2024')).toMatchObject({ ok: true, value: '2024-02-29' })
+    expect(normalizeMonthEndItemDate('1/2/2026')).toMatchObject({ ok: true, value: '2026-02-01' })
+    expect(normalizeMonthEndItemDate('01/7/2026')).toMatchObject({ ok: true, value: '2026-07-01' })
+    expect(normalizeMonthEndItemDate('13/6/2026')).toMatchObject({ ok: true, value: '2026-06-13' })
+    // Day-first dots.
+    expect(normalizeMonthEndItemDate('13.06.2026')).toMatchObject({ ok: true, value: '2026-06-13' })
+    expect(normalizeMonthEndItemDate('1.2.2026')).toMatchObject({ ok: true, value: '2026-02-01' })
+    // Year-first with slash or non-padded parts.
+    expect(normalizeMonthEndItemDate('2026/02/01')).toMatchObject({ ok: true, value: '2026-02-01' })
+    expect(normalizeMonthEndItemDate('2026-6-1')).toMatchObject({ ok: true, value: '2026-06-01' })
+    expect(normalizeMonthEndItemDate('2026/6/13')).toMatchObject({ ok: true, value: '2026-06-13' })
 
-    for (const unsupported of ['1/2/2026', '2026/02/01', '02-01-2026', '01.02.2026', ' 01/02/2026 ']) {
+    // Two-digit years, day-first dashes, mixed separators and unpadded
+    // whitespace remain ambiguous or unsupported.
+    for (const unsupported of ['01/02/26', '13/6/26', '02-01-2026', '1/2.2026', ' 01/02/2026 ', '20260201']) {
       expect(normalizeMonthEndItemDate(unsupported).ok).toBe(false)
     }
-    for (const impossible of ['29/02/2026', '31/04/2026', '2026-02-29']) {
+    for (const impossible of ['29/02/2026', '31/04/2026', '31.04.2026', '06/18/2026', '2026-02-29']) {
       expect(normalizeMonthEndItemDate(impossible).ok).toBe(false)
     }
   })
@@ -173,6 +187,30 @@ describe('Mortgage and month-end persistence schemas', () => {
       path: 'items[1].amount',
       reason: 'must be a finite number',
     })])
+  })
+
+  it('attaches only a masked value shape to rejected rows, never the value', () => {
+    const result = salvageMonthEndRows([
+      { ...monthEndItem, date_purchased: '18.07.26' },
+      { ...monthEndItem, id: 'item-2', note: null },
+    ], 'items')
+    expect(result.value).toEqual([])
+    expect(result.rejected).toEqual([
+      expect.objectContaining({ path: 'items[0].date_purchased', shape: 'NN.NN.NN' }),
+      expect.objectContaining({ path: 'items[1].note', shape: 'null' }),
+    ])
+    expect(JSON.stringify(result.rejected)).not.toContain('18.07.26')
+  })
+
+  it('masks digits and letters in value shapes and truncates long values', () => {
+    expect(maskedValueShape('01/02/2026')).toBe('NN/NN/NNNN')
+    expect(maskedValueShape('2026-07-18T10:00:00Z')).toBe('NNNN-NN-NNANN:NN:NNA')
+    expect(maskedValueShape('Ökänd händelse 12')).toBe('AAAAA AAAAAAAA NN')
+    expect(maskedValueShape('')).toBe('tom text')
+    expect(maskedValueShape(null)).toBe('null')
+    expect(maskedValueShape(42)).toBe('number')
+    expect(maskedValueShape(undefined)).toBeUndefined()
+    expect(maskedValueShape('x'.repeat(40))).toHaveLength(25)
   })
 
   it('keeps persistence brands non-interchangeable at the boundary', () => {

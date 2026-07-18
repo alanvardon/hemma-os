@@ -159,10 +159,29 @@ describe('read path', () => {
     expect((cache().items as { id: string }[]).map((row) => row.id)).toEqual(['valid'])
   })
 
+  it('distinguishes an invalid creation timestamp from an invalid purchase date', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.monthend_items = [
+      itemRow('bad-created', { created_at: 'not-a-timestamp' }),
+      itemRow('bad-purchased', { date_purchased: '01/02/26' }),
+    ]
+
+    await expect(store.listItemsDetailed()).resolves.toMatchObject({
+      source: 'unavailable',
+      degraded: true,
+      rejectedRowCount: 2,
+      diagnostics: [
+        { fieldPath: 'items[0].created_at', code: 'invalid_datetime', shape: 'AAA-A-AAAAAAAAA' },
+        { fieldPath: 'items[1].date_purchased', code: 'invalid_date', shape: 'NN/NN/NN' },
+      ],
+      allCloudRowsRejected: true,
+    })
+  })
+
   it('all-rejected cloud rows preserve and return a populated last-known-good cache', async () => {
     mem.set(IMPORT_FLAG, '1')
     mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [itemRow('cached')], payments: [], settings: {} }))
-    mock().tables.monthend_items = [itemRow('invalid', { date_purchased: '2026/02/01' })]
+    mock().tables.monthend_items = [itemRow('invalid', { date_purchased: '01/02/26' })]
 
     const result = await store.listItemsDetailed()
 
@@ -175,7 +194,7 @@ describe('read path', () => {
     })
     expect(result.rows.map((row) => row.id)).toEqual(['cached'])
     expect((cache().items as { id: string }[]).map((row) => row.id)).toEqual(['cached'])
-    expect(mock().tables.monthend_items).toEqual([itemRow('invalid', { date_purchased: '2026/02/01' })])
+    expect(mock().tables.monthend_items).toEqual([itemRow('invalid', { date_purchased: '01/02/26' })])
   })
 
   it('all-rejected cloud rows with a cold cache return the safe unavailable state', async () => {
@@ -335,7 +354,7 @@ describe('write path', () => {
     expect((cache().items as { date_purchased: string }[]).map((row) => row.date_purchased)).toEqual(['2026-02-01', '2024-02-29'])
   })
 
-  it.each(['1/2/2026', '2026/02/01', '02-01-2026', '31/04/2026'])(
+  it.each(['01/02/26', '13/6/26', '02-01-2026', '31/04/2026'])(
     'rejects unsupported or impossible future item date %s before cloud/cache mutation',
     async (date_purchased) => {
       await expect(store.addItem(itemDraft({ date_purchased }) as never)).rejects.toThrow('Invalid item date')
@@ -349,7 +368,7 @@ describe('write path', () => {
   it('rejects an addItems batch atomically when one future date is unsupported', async () => {
     await expect(store.addItems([
       itemDraft({ date_purchased: '01/02/2026' }),
-      itemDraft({ date_purchased: '2026/02/01' }),
+      itemDraft({ date_purchased: '01/02/26' }),
     ] as never)).rejects.toThrow('Invalid item date')
 
     expect(mock().tables.monthend_items || []).toHaveLength(0)
