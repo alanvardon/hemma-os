@@ -435,10 +435,12 @@ test('a failed save survives reload and replays after connectivity returns', asy
   await expect(page.locator('.ld-name', { hasText: 'Spöklån' })).toBeVisible()
   await expect(page.locator('.persistence-notice')).toContainText('Väntar på anslutning')
 
-  // `online` is a retry hint; only the now-successful request produces Sparat.
+  // `online` is a retry hint; only the now-successful request confirms the
+  // recovery. A queue that passed through waiting/failed keeps a truthful
+  // completion message (routine saves stay silent — plan 113).
   backend.failInserts = false
   await page.evaluate(() => window.dispatchEvent(new Event('online')))
-  await expect(page.locator('.persistence-notice')).toContainText('Sparat')
+  await expect(page.locator('.persistence-notice')).toContainText('Väntande ändringar sparade')
   await page.reload()
   await expect(page.locator('.ld-name', { hasText: 'Spöklån' })).toBeVisible()
 
