@@ -331,6 +331,8 @@ export interface MonthEndItemReadDiagnostic {
   /** Structural row path only. Never contains ids or row values. */
   fieldPath: string
   code: MonthEndItemReadReasonCode
+  /** Masked shape of the rejected value (digits→N, letters→A). Never the value itself. */
+  shape?: string
 }
 
 export interface MonthEndItemReadResult {
@@ -362,6 +364,7 @@ function itemReadDiagnostics(rejected: RejectedRecord[]): MonthEndItemReadDiagno
     return {
       fieldPath: entry.path ?? (match ? `items[${Number(match[1]) - 1}]` : 'items'),
       code: itemReadReasonCode(entry.reason, entry.path),
+      ...(entry.shape !== undefined ? { shape: entry.shape } : {}),
     }
   })
 }
@@ -448,7 +451,7 @@ export async function listItems(): Promise<Item[]> {
 
 function canonicalItemDate(value: unknown): string {
   const parsed = normalizeMonthEndItemDate(value)
-  if (!parsed.ok) throw new Error('Invalid item date. Use YYYY-MM-DD or DD/MM/YYYY.')
+  if (!parsed.ok) throw new Error('Invalid item date. Use YYYY-MM-DD or a day-first D/M/YYYY date.')
   return parsed.value
 }
 

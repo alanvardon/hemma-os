@@ -207,11 +207,12 @@ export default function Manadsavslut() {
       duplicate_id: 'dubblett',
       invalid_value: 'ogiltigt värde',
     }
-    const reasons = [...new Set(itemRead.diagnostics.map((diagnostic) =>
-      diagnostic.code === 'invalid_date' && diagnostic.fieldPath.endsWith('.date_purchased')
+    const reasons = [...new Set(itemRead.diagnostics.map((diagnostic) => {
+      const label = diagnostic.code === 'invalid_date' && diagnostic.fieldPath.endsWith('.date_purchased')
         ? 'ogiltigt köpdatum'
-        : reasonLabels[diagnostic.code],
-    ))]
+        : reasonLabels[diagnostic.code]
+      return diagnostic.shape ? `${label} (${diagnostic.shape})` : label
+    }))]
     return itemRead.rejectedRowCount + ' ' + (itemRead.rejectedRowCount === 1 ? 'post' : 'poster') + ' avvisades' + (reasons.length ? ' · ' + reasons.join(', ') : '')
   }, [itemRead])
   const authoritativeEmpty = itemRead?.source === 'cloud' && !itemRead.degraded && itemRead.rows.length === 0

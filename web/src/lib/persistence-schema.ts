@@ -23,6 +23,20 @@ export interface RejectedRecord {
   reason: string
   /** Optional structural path to the rejected field. Never contains record values. */
   path?: string
+  /** Masked shape of the rejected value (digits→N, letters→A, separators kept). Never the value itself. */
+  shape?: string
+}
+
+/** Privacy-safe shape of a rejected value: digits→N, letters→A, other characters kept. */
+export function maskedValueShape(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    if (value === null) return 'null'
+    if (value === undefined) return undefined
+    return typeof value
+  }
+  if (!value) return 'tom text'
+  const shape = value.replace(/[a-zA-ZåäöÅÄÖ]/g, 'A').replace(/\d/g, 'N')
+  return shape.length > 24 ? `${shape.slice(0, 24)}…` : shape
 }
 
 export interface PersistedScenario {
@@ -153,18 +167,23 @@ export function parseISODate(raw: unknown): ParseResult<ISODate> {
 
 /**
  * Compatibility boundary for Månadsavslut item dates only.
- * The historical CSV writer persisted exact zero-padded DD/MM/YYYY strings.
- * The owner confirmed these are day-first, so 01/02/2026 means 2026-02-01.
- * No other locale order, separator or padding is accepted.
+ * The historical CSV writer persisted the raw statement cell. The owner
+ * confirmed (2026-07-18) these are day-first, and approved the unambiguous
+ * variants: D/M/YYYY and D.M.YYYY (padded or not, one separator throughout)
+ * plus year-first YYYY-M-D / YYYY/M/D. 01/02/2026 therefore means 2026-02-01.
+ * Two-digit years and month-first orders remain rejected as ambiguous.
  */
 export function normalizeMonthEndItemDate(raw: unknown): ParseResult<ISODate | ''> {
   if (raw === '') return success('')
   const canonical = parseISODate(raw)
   if (canonical.ok) return canonical
   if (typeof raw !== 'string') return canonical
-  const legacy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw)
-  if (!legacy) return failure('date', 'must be an ISO date or zero-padded DD/MM/YYYY')
-  return parseISODate(`${legacy[3]}-${legacy[2]}-${legacy[1]}`)
+  const pad = (part: string) => part.padStart(2, '0')
+  const yearFirst = /^(\d{4})([-/])(\d{1,2})\2(\d{1,2})$/.exec(raw)
+  if (yearFirst) return parseISODate(`${yearFirst[1]}-${pad(yearFirst[3])}-${pad(yearFirst[4])}`)
+  const dayFirst = /^(\d{1,2})([./])(\d{1,2})\2(\d{4})$/.exec(raw)
+  if (dayFirst) return parseISODate(`${dayFirst[4]}-${pad(dayFirst[3])}-${pad(dayFirst[1])}`)
+  return failure('date', 'must be an ISO date or a day-first D/M/YYYY date')
 }
 
 export function parseISODateTime(raw: unknown): ParseResult<ISODateTime> {
@@ -750,10 +769,13 @@ export function salvageMonthEndRows(raw: unknown, kind: 'items' | 'payments'): {
     if (!parsed.ok) {
       const issue = parsed.issues[0]
       const suffix = issue.path === 'item' || issue.path === 'payment' ? '' : `.${issue.path}`
+      const fieldValue = isRecord(row) && Object.prototype.hasOwnProperty.call(row, issue.path)
+        ? row[issue.path] : undefined
       rejected.push({
         record: `${kind} ${index + 1}`,
         reason: issue.reason,
         path: `${kind}[${index}]${suffix}`,
+        shape: maskedValueShape(fieldValue),
       })
     } else if (ids.has(valueOf(parsed).id)) {
       rejected.push({
