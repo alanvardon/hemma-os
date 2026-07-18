@@ -53,27 +53,257 @@ const itemRow = (id: string, over: Partial<Record<string, unknown>> = {}) => ({ 
 const paymentRow = (id: string, over: Partial<Record<string, unknown>> = {}) => ({ id, created_at: CREATED, item_ids: [], from_person: null, to_person: null, amount: 0, period_label: '', note: '', ...over })
 
 describe('read path', () => {
+  it('distinguishes an authoritative empty cloud result from unavailable data', async () => {
+    mem.set(IMPORT_FLAG, '1')
+
+    await expect(store.listItemsDetailed()).resolves.toEqual({
+      rows: [],
+      source: 'cloud',
+      degraded: false,
+      rejectedRowCount: 0,
+      diagnostics: [],
+      allCloudRowsRejected: false,
+    })
+  })
+
   it('cloud ok: listItems writes through to the cache', async () => {
     mem.set(IMPORT_FLAG, '1')
     mock().tables.monthend_items = [itemRow('i1')]
-    const rows = await store.listItems()
-    expect(rows).toHaveLength(1)
+    const result = await store.listItemsDetailed()
+    expect(result).toMatchObject({
+      source: 'cloud',
+      degraded: false,
+      rejectedRowCount: 0,
+      allCloudRowsRejected: false,
+    })
+    expect(result.rows).toHaveLength(1)
     expect((cache().items as unknown[])).toHaveLength(1)
   })
 
-  it('cloud error: listItems falls back to the cache', async () => {
+  it('normalizes an exact day-first legacy cloud date without passively mutating cloud', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    const cloudRow = itemRow('legacy-date', { date_purchased: '01/02/2026' })
+    mock().tables.monthend_items = [cloudRow]
+
+    const result = await store.listItemsDetailed()
+
+    expect(result).toMatchObject({
+      source: 'cloud',
+      degraded: false,
+      rejectedRowCount: 0,
+      allCloudRowsRejected: false,
+      rows: [expect.objectContaining({ id: 'legacy-date', date_purchased: '2026-02-01' })],
+    })
+    expect((cache().items as { date_purchased: string }[])[0].date_purchased).toBe('2026-02-01')
+    expect(mock().tables.monthend_items).toEqual([cloudRow])
+  })
+
+  it('cloud error with a populated cache returns explicitly degraded cached rows', async () => {
     mem.set(IMPORT_FLAG, '1')
     mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [itemRow('cached', { description: 'X' })], payments: [], settings: {} }))
     mock().control.failing.add('monthend_items')
-    const rows = await store.listItems()
-    expect(rows.map((r) => r.id)).toEqual(['cached'])
+    const result = await store.listItemsDetailed()
+    expect(result).toMatchObject({
+      source: 'cache',
+      degraded: true,
+      rejectedRowCount: 0,
+      allCloudRowsRejected: false,
+    })
+    expect(result.rows.map((r) => r.id)).toEqual(['cached'])
   })
 
-  it('cloud read salvages a valid item and excludes its malformed sibling', async () => {
+  it('normalizes an exact day-first legacy cache date while cloud is unavailable', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 1,
+      items: [itemRow('cached-legacy', { date_purchased: '01/02/2026' })],
+      payments: [],
+      settings: {},
+    }))
+    mock().control.failing.add('monthend_items')
+
+    await expect(store.listItemsDetailed()).resolves.toMatchObject({
+      source: 'cache',
+      degraded: true,
+      rejectedRowCount: 0,
+      rows: [expect.objectContaining({ id: 'cached-legacy', date_purchased: '2026-02-01' })],
+    })
+  })
+
+  it('cloud error with a cold cache is unavailable rather than authoritative empty', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().control.failing.add('monthend_items')
+
+    await expect(store.listItemsDetailed()).resolves.toMatchObject({
+      rows: [],
+      source: 'unavailable',
+      degraded: true,
+      rejectedRowCount: 0,
+      allCloudRowsRejected: false,
+    })
+  })
+
+  it('partial cloud salvage keeps the valid sibling and reports structural diagnostics', async () => {
     mem.set(IMPORT_FLAG, '1')
     mock().tables.monthend_items = [itemRow('valid'), itemRow('bad', { enter_amount: 'not-a-number' })]
-    expect((await store.listItems()).map((row) => row.id)).toEqual(['valid'])
+    const result = await store.listItemsDetailed()
+
+    expect(result).toMatchObject({
+      source: 'cloud',
+      degraded: true,
+      rejectedRowCount: 1,
+      diagnostics: [{ fieldPath: 'items[1].enter_amount', code: 'invalid_number' }],
+      allCloudRowsRejected: false,
+    })
+    expect(result.rows.map((row) => row.id)).toEqual(['valid'])
     expect((cache().items as { id: string }[]).map((row) => row.id)).toEqual(['valid'])
+  })
+
+  it('all-rejected cloud rows preserve and return a populated last-known-good cache', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [itemRow('cached')], payments: [], settings: {} }))
+    mock().tables.monthend_items = [itemRow('invalid', { date_purchased: '2026/02/01' })]
+
+    const result = await store.listItemsDetailed()
+
+    expect(result).toMatchObject({
+      source: 'cache',
+      degraded: true,
+      rejectedRowCount: 1,
+      diagnostics: [{ fieldPath: 'items[0].date_purchased', code: 'invalid_date' }],
+      allCloudRowsRejected: true,
+    })
+    expect(result.rows.map((row) => row.id)).toEqual(['cached'])
+    expect((cache().items as { id: string }[]).map((row) => row.id)).toEqual(['cached'])
+    expect(mock().tables.monthend_items).toEqual([itemRow('invalid', { date_purchased: '2026/02/01' })])
+  })
+
+  it('all-rejected cloud rows with a cold cache return the safe unavailable state', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.monthend_items = [itemRow('invalid', { enter_amount: '100' })]
+
+    await expect(store.listItemsDetailed()).resolves.toMatchObject({
+      rows: [],
+      source: 'unavailable',
+      degraded: true,
+      rejectedRowCount: 1,
+      diagnostics: [{ fieldPath: 'items[0].enter_amount', code: 'invalid_number' }],
+      allCloudRowsRejected: true,
+    })
+    expect(mem.has(CACHE_KEY)).toBe(false)
+  })
+
+  it('cloud error with an all-invalid cache is unavailable and reports cache field paths', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 1,
+      items: [itemRow('private-cache-id', { date_purchased: 'private-date-value' })],
+      payments: [],
+      settings: {},
+    }))
+    mock().control.failing.add('monthend_items')
+
+    const result = await store.listItemsDetailed()
+
+    expect(result).toMatchObject({
+      rows: [],
+      source: 'unavailable',
+      degraded: true,
+      rejectedRowCount: 1,
+      diagnostics: [{ fieldPath: 'items[0].date_purchased', code: 'invalid_date' }],
+      allCloudRowsRejected: false,
+    })
+    expect(JSON.stringify(result.diagnostics)).not.toContain('private-cache-id')
+    expect(JSON.stringify(result.diagnostics)).not.toContain('private-date-value')
+  })
+
+  it('cloud error with only a missing-payment cache item is unavailable with a structural diagnostic', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 1,
+      items: [itemRow('private-item-id', { payment_id: 'private-missing-payment-id' })],
+      payments: [],
+      settings: {},
+    }))
+    mock().control.failing.add('monthend_items')
+
+    const result = await store.listItemsDetailed()
+
+    expect(result).toMatchObject({
+      rows: [],
+      source: 'unavailable',
+      degraded: true,
+      rejectedRowCount: 1,
+      diagnostics: [{ fieldPath: 'items[0].payment_id', code: 'invalid_reference' }],
+      allCloudRowsRejected: false,
+    })
+    expect(JSON.stringify(result.diagnostics)).not.toContain('private-item-id')
+    expect(JSON.stringify(result.diagnostics)).not.toContain('private-missing-payment-id')
+  })
+
+  it('cloud error with a partially readable cache keeps valid items and diagnoses rejected references', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 1,
+      items: [
+        itemRow('valid-cache-item'),
+        itemRow('rejected-cache-item', { payment_id: 'missing-payment' }),
+      ],
+      payments: [],
+      settings: {},
+    }))
+    mock().control.failing.add('monthend_items')
+
+    await expect(store.listItemsDetailed()).resolves.toMatchObject({
+      rows: [expect.objectContaining({ id: 'valid-cache-item' })],
+      source: 'cache',
+      degraded: true,
+      rejectedRowCount: 1,
+      diagnostics: [{ fieldPath: 'items[1].payment_id', code: 'invalid_reference' }],
+      allCloudRowsRejected: false,
+    })
+  })
+
+  it('does not surface unrelated cache payment or settings rejections as item diagnostics', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 1,
+      items: [itemRow('valid-cache-item')],
+      payments: [paymentRow('invalid-payment', { amount: 'invalid' })],
+      settings: { person_a_name: 123 },
+    }))
+    mock().control.failing.add('monthend_items')
+
+    await expect(store.listItemsDetailed()).resolves.toMatchObject({
+      rows: [expect.objectContaining({ id: 'valid-cache-item' })],
+      source: 'cache',
+      degraded: true,
+      rejectedRowCount: 0,
+      diagnostics: [],
+      allCloudRowsRejected: false,
+    })
+  })
+
+  it('cloud error with a valid empty cache remains a degraded cache result', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [], payments: [], settings: {} }))
+    mock().control.failing.add('monthend_items')
+
+    await expect(store.listItemsDetailed()).resolves.toMatchObject({
+      rows: [],
+      source: 'cache',
+      degraded: true,
+      rejectedRowCount: 0,
+      diagnostics: [],
+      allCloudRowsRejected: false,
+    })
+  })
+
+  it('retains listItems as a rows-only compatibility wrapper', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.monthend_items = [itemRow('visible')]
+
+    expect((await store.listItems()).map((row) => row.id)).toEqual(['visible'])
   })
 })
 
@@ -84,6 +314,46 @@ describe('write path', () => {
     const saved = await store.addItem(itemDraft() as never)
     expect(mock().tables.monthend_items).toHaveLength(1)
     expect((cache().items as { id: string }[])[0].id).toBe(saved.id)
+  })
+
+  it('addItem canonicalizes an exact day-first date in the saved row, cloud and cache', async () => {
+    const saved = await store.addItem(itemDraft({ date_purchased: '01/02/2026' }) as never)
+
+    expect(saved.date_purchased).toBe('2026-02-01')
+    expect(mock().tables.monthend_items[0].date_purchased).toBe('2026-02-01')
+    expect((cache().items as { date_purchased: string }[])[0].date_purchased).toBe('2026-02-01')
+  })
+
+  it('addItems canonicalizes CSV-style day-first dates atomically', async () => {
+    const saved = await store.addItems([
+      itemDraft({ description: 'First', date_purchased: '01/02/2026' }),
+      itemDraft({ description: 'Second', date_purchased: '29/02/2024' }),
+    ] as never)
+
+    expect(saved.map((row) => row.date_purchased)).toEqual(['2026-02-01', '2024-02-29'])
+    expect(mock().tables.monthend_items.map((row) => row.date_purchased)).toEqual(['2026-02-01', '2024-02-29'])
+    expect((cache().items as { date_purchased: string }[]).map((row) => row.date_purchased)).toEqual(['2026-02-01', '2024-02-29'])
+  })
+
+  it.each(['1/2/2026', '2026/02/01', '02-01-2026', '31/04/2026'])(
+    'rejects unsupported or impossible future item date %s before cloud/cache mutation',
+    async (date_purchased) => {
+      await expect(store.addItem(itemDraft({ date_purchased }) as never)).rejects.toThrow('Invalid item date')
+      expect(mock().tables.monthend_items || []).toHaveLength(0)
+      expect((cache().items as unknown[] | undefined) || []).toHaveLength(0)
+      const { syncCoordinator } = await import('./sync')
+      expect(syncCoordinator.isDirty('monthend_items')).toBe(false)
+    },
+  )
+
+  it('rejects an addItems batch atomically when one future date is unsupported', async () => {
+    await expect(store.addItems([
+      itemDraft({ date_purchased: '01/02/2026' }),
+      itemDraft({ date_purchased: '2026/02/01' }),
+    ] as never)).rejects.toThrow('Invalid item date')
+
+    expect(mock().tables.monthend_items || []).toHaveLength(0)
+    expect((cache().items as unknown[] | undefined) || []).toHaveLength(0)
   })
 
   it('addItem: cloud error throws', async () => {

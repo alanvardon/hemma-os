@@ -23,10 +23,16 @@ import { usePersonNames } from '../components/usePersonNames'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
 import { persistenceErrorMessage } from '../lib/persistence-error'
+import { normalizeMonthEndItemDate } from '../lib/persistence-schema'
 import ItemDialog from './manadsavslut/ItemDialog'
 import SettleDialog from './manadsavslut/SettleDialog'
 import SettingsDialog from './manadsavslut/SettingsDialog'
 import { fmtMoney, M, clean, cellAt, deriveTriage, currencyState, type TriageRow, type ImportCfg } from './manadsavslut/shared'
+
+function canonicalImportDate(row: string[], mapping: ColMapping): string | null {
+  const parsed = normalizeMonthEndItemDate(clean(cellAt(row, mapping.date_purchased)))
+  return parsed.ok ? parsed.value : null
+}
 
 // ── Main component ─────────────────────────────────────────────────────────
 
@@ -35,9 +41,11 @@ export default function Manadsavslut() {
   const reduceMotion = useReducedMotion()
   useLayoutEffect(() => { document.documentElement.classList.remove('calc-layout') }, [])
 
-  const [items, setItems] = useState<Item[]>([])
+  const [items, setItems] = useState<Item[]>(() => Store.cachedSnapshot().items)
   const [payments, setPayments] = useState<Payment[]>([])
   const [settings, setSettings] = useState<MonthEndSettings>(defaultSettings())
+  const [itemRead, setItemRead] = useState<Store.MonthEndItemReadResult | null>(null)
+  const [itemsLoading, setItemsLoading] = useState(true)
 
   const { toast, showToast } = useToast()
   const { saveVisible: saved, flashSaved } = useSaveFlash()
@@ -67,8 +75,13 @@ export default function Manadsavslut() {
 
 
   const refresh = useCallback(async () => {
-    const [its, pays, sett] = await Promise.all([Store.listItems(), Store.listPayments(), Store.getSettings()])
-    setItems(its); setPayments(pays); setSettings(sett); setDefaultClass(sett.default_split ? 'split' : 'full')
+    setItemsLoading(true)
+    try {
+      const [read, pays, sett] = await Promise.all([Store.listItemsDetailed(), Store.listPayments(), Store.getSettings()])
+      setItemRead(read); setItems(read.rows); setPayments(pays); setSettings(sett); setDefaultClass(sett.default_split ? 'split' : 'full')
+    } finally {
+      setItemsLoading(false)
+    }
   }, [])
   useEffect(() => { refresh() }, [refresh])
   useEffect(() => { document.title = 'Månadsavslut — Hemma·OS' }, [])
@@ -99,9 +112,10 @@ export default function Manadsavslut() {
 
   const triageSummary = useMemo(() => {
     if (!importCfg) return ''
-    let add = 0, excl = 0, refundIncl = 0, invalid = 0, dup = 0, pend = 0
-    importCfg.triage.forEach(t => {
-      if (t.kind === 'noamount') { invalid++; return }
+    let add = 0, excl = 0, refundIncl = 0, invalidAmount = 0, invalidDate = 0, dup = 0, pend = 0
+    importCfg.triage.forEach((t, index) => {
+      if (canonicalImportDate(importCfg.parsed.rows[index], importCfg.mapping) === null) { invalidDate++; return }
+      if (t.kind === 'noamount') { invalidAmount++; return }
       if (t.classification === 'exclude') { excl++; return }
       add++; if (t.classification === 'pending') pend++; if (t.kind === 'refund') refundIncl++; if (t.duplicate) dup++
     })
@@ -110,10 +124,15 @@ export default function Manadsavslut() {
     if (pend) parts.push(pend + ' to ask later')
     if (dup) parts.push(dup + ' possible duplicate' + (dup === 1 ? '' : 's'))
     if (excl) parts.push(excl + ' excluded')
-    if (invalid) parts.push(invalid + ' without an amount')
+    if (invalidAmount) parts.push(invalidAmount + ' without an amount')
+    if (invalidDate) parts.push(invalidDate + ' with an invalid date')
     return parts.join(' · ')
   }, [importCfg])
-  const addCount = importCfg ? importCfg.triage.filter(t => (t.kind === 'charge' || t.kind === 'refund') && t.classification !== 'exclude').length : 0
+  const addCount = importCfg ? importCfg.triage.filter((t, index) =>
+    (t.kind === 'charge' || t.kind === 'refund')
+    && t.classification !== 'exclude'
+    && canonicalImportDate(importCfg.parsed.rows[index], importCfg.mapping) !== null,
+  ).length : 0
 
   async function confirmImport() {
     if (!importCfg) return
@@ -124,8 +143,10 @@ export default function Manadsavslut() {
       if (t.kind !== 'charge' && t.kind !== 'refund') return
       const fields = classifyToItemFields(t.classification, importCfg.frontedBy)
       if (!fields) return
+      const date = canonicalImportDate(row, importCfg.mapping)
+      if (date === null) return
       drafts.push(makeItem({
-        date_purchased: clean(cellAt(row, importCfg.mapping.date_purchased)),
+        date_purchased: date,
         description: clean(cellAt(row, importCfg.mapping.description)) || '(no description)',
         enter_amount: t.charge, split: fields.split, pending: fields.pending, fronted_by: importCfg.frontedBy, owed_by: fields.owed_by, source: 'import:' + importCfg.file.name,
       }))
@@ -172,6 +193,24 @@ export default function Manadsavslut() {
   const groc = cats.find(c => c.key === 'groceries')
   const grocPct = catTotal > 0 && groc ? Math.round(groc.total / catTotal * 100) : 0
   const byMonth = useMemo(() => fillMonthGaps(grocerySpendByMonth(periodItems)), [periodItems])
+  const readDiagnostic = useMemo(() => {
+    if (!itemRead?.rejectedRowCount) return ''
+    const reasonLabels: Record<Store.MonthEndItemReadReasonCode, string> = {
+      invalid_array: 'ogiltig lista',
+      invalid_boolean: 'ogiltigt ja/nej-värde',
+      invalid_date: 'ogiltigt datum',
+      invalid_number: 'ogiltigt tal',
+      invalid_object: 'ogiltig post',
+      invalid_reference: 'ogiltig koppling',
+      invalid_string: 'ogiltig text',
+      duplicate_id: 'dubblett',
+      invalid_value: 'ogiltigt värde',
+    }
+    const reasons = [...new Set(itemRead.diagnostics.map((diagnostic) => reasonLabels[diagnostic.code]))]
+    return itemRead.rejectedRowCount + ' ' + (itemRead.rejectedRowCount === 1 ? 'post' : 'poster') + ' avvisades' + (reasons.length ? ' · ' + reasons.join(', ') : '')
+  }, [itemRead])
+  const authoritativeEmpty = itemRead?.source === 'cloud' && !itemRead.degraded && itemRead.rows.length === 0
+  const showImport = items.length > 0 || authoritativeEmpty
 
   // ── Handlers ───────────────────────────────────────────────────────────────
   // A failed cloud write now throws (the pre-Supabase store never did); report it
@@ -247,6 +286,45 @@ export default function Manadsavslut() {
 
       <main className="wrap">
 
+        {!itemRead && (
+          <section className="card" role="status" aria-live="polite">
+            <p className="empty">
+              {items.length
+                ? 'Visar den senast sparade kopian medan posterna kontrolleras mot molnet…'
+                : 'Läser in sparade poster…'}
+            </p>
+          </section>
+        )}
+
+        {itemRead?.degraded && (
+          <section className="card" role="alert">
+            <div className="card-head"><h2>Poster behöver kontrolleras</h2></div>
+            {itemRead.allCloudRowsRejected ? (
+              <>
+                <p>Sparade poster finns i molnet men kunde inte läsas säkert.</p>
+                <p className="empty">
+                  {itemRead.source === 'cache' && items.length
+                    ? 'Den senast läsbara kopian visas tills molnposterna kan läsas igen.'
+                    : 'Inga poster visas förrän de kan läsas utan att osäkra värden släpps igenom.'}
+                </p>
+              </>
+            ) : itemRead.source === 'cache' ? (
+              <>
+                <p>Molnet kunde inte nås. Poster från den senast sparade kopian visas och är inte bekräftade som aktuella.</p>
+                {!items.length && <p className="empty">Den lokala kopian är tom, men molnläget kunde inte bekräftas.</p>}
+              </>
+            ) : itemRead.source === 'unavailable' ? (
+              <p>Kunde inte hämta sparade poster. Försök igen för att avgöra vilka poster som finns.</p>
+            ) : (
+              <p>{itemRead.rejectedRowCount === 1 ? 'En sparad post' : itemRead.rejectedRowCount + ' sparade poster'} kunde inte läsas säkert. Övriga poster visas.</p>
+            )}
+            {readDiagnostic && <p className="empty">Diagnos: {readDiagnostic}.</p>}
+            <button type="button" className="btn btn-primary" onClick={() => void refresh()} disabled={itemsLoading}>
+              {itemsLoading ? 'Försöker…' : 'Försök igen'}
+            </button>
+          </section>
+        )}
+
         {/* ── Outstanding balance + settle ── */}
         {items.length > 0 && (
         <section className="card balance-card">
@@ -260,6 +338,7 @@ export default function Manadsavslut() {
         )}
 
         {/* ── Import a card statement ── */}
+        {showImport && (
         <section className="card import-card">
           <div className="card-head"><h2>Importera kontoutdrag <span className="card-en">· Import a statement</span></h2></div>
           {!importCfg ? (
@@ -315,17 +394,18 @@ export default function Manadsavslut() {
                   <tbody>
                     {importCfg.triage.map((t, i) => {
                       const row = importCfg.parsed.rows[i]
+                      const date = canonicalImportDate(row, importCfg.mapping)
                       const isAmt = t.kind === 'charge' || t.kind === 'refund'
-                      const rowClass = !isAmt ? 'is-excluded' : t.duplicate ? 'is-dup' : t.classification === 'exclude' ? 'is-excluded' : t.classification === 'pending' ? 'is-pending' : ''
+                      const rowClass = date === null || !isAmt ? 'is-excluded' : t.duplicate ? 'is-dup' : t.classification === 'exclude' ? 'is-excluded' : t.classification === 'pending' ? 'is-pending' : ''
                       return (
                         <tr key={i} className={rowClass}>
                           <td className="col-treat">
-                            {isAmt ? (
+                            {date === null ? <span className="treat-na">invalid date</span> : isAmt ? (
                               <Segmented small responsive value={t.classification} onChange={v => setImportCfg(cfg => cfg ? { ...cfg, triage: cfg.triage.map((r, j) => j === i ? { ...r, classification: v } : r) } : cfg)}
                                 options={[{ v: 'split' as Treatment, label: 'Split' }, { v: 'full' as Treatment, label: 'All' }, { v: 'pending' as Treatment, label: 'Ask later' }, { v: 'exclude' as Treatment, label: 'Skip' }]} />
                             ) : <span className="treat-na">no amount</span>}
                           </td>
-                          <td className="col-date">{cellAt(row, importCfg.mapping.date_purchased)}</td>
+                          <td className="col-date">{date ?? 'Ogiltigt datum'}</td>
                           <td className="col-desc">
                             {cellAt(row, importCfg.mapping.description)}
                             {t.kind === 'refund' && <span className="row-flag row-flag-refund">refund</span>}
@@ -346,6 +426,7 @@ export default function Manadsavslut() {
             </div>
           )}
         </section>
+        )}
 
         {items.length > 0 && (<>
         {/* ── Items ── */}

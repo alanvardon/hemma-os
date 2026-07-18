@@ -21,7 +21,8 @@ import { makeImportOnce, materializeImport, stamp } from './store-helpers'
 import { syncCoordinator } from './sync'
 import { cachedTombstoneIds, loadTombstoneIds, queueTableDelete, queueTableUpsert, registerTableSync, withoutTombstones } from './sync-table'
 import { legacyImportAssignedToActive } from './legacy-data'
-import { parseFiniteJson, parseMonthEndEnvelope, salvageMonthEndEnvelope, salvageMonthEndRows } from './persistence-schema'
+import { normalizeMonthEndItemDate, parseFiniteJson, parseMonthEndEnvelope, salvageMonthEndEnvelope, salvageMonthEndRows } from './persistence-schema'
+import type { RejectedRecord } from './persistence-schema'
 import { reportPersistenceWarning } from './persistence-error'
 import {
   receiptRpc, rejectLegacyToolOperation, rememberRowRevisions, rememberToolRevision,
@@ -312,10 +313,106 @@ syncCoordinator.register(SETTLEMENT_RESOURCE, async (operation) => {
 })
 
 // ── Items ──────────────────────────────────────────────────────────────────
-export async function listItems(): Promise<Item[]> {
+export type MonthEndItemReadSource = 'cloud' | 'cache' | 'unavailable'
+
+export type MonthEndItemReadReasonCode =
+  | 'invalid_array'
+  | 'invalid_boolean'
+  | 'invalid_date'
+  | 'invalid_number'
+  | 'invalid_object'
+  | 'invalid_reference'
+  | 'invalid_string'
+  | 'duplicate_id'
+  | 'invalid_value'
+
+export interface MonthEndItemReadDiagnostic {
+  /** Structural row path only. Never contains ids or row values. */
+  fieldPath: string
+  code: MonthEndItemReadReasonCode
+}
+
+export interface MonthEndItemReadResult {
+  rows: Item[]
+  source: MonthEndItemReadSource
+  degraded: boolean
+  rejectedRowCount: number
+  diagnostics: MonthEndItemReadDiagnostic[]
+  /** The cloud returned rows, but every row failed strict validation. */
+  allCloudRowsRejected: boolean
+}
+
+function itemReadReasonCode(reason: string): MonthEndItemReadReasonCode {
+  if (reason.includes('finite number')) return 'invalid_number'
+  if (reason.includes('ISO date') || reason.includes('calendar date')) return 'invalid_date'
+  if (reason.includes('boolean')) return 'invalid_boolean'
+  if (reason.includes('array')) return 'invalid_array'
+  if (reason.includes('object')) return 'invalid_object'
+  if (reason.includes('non-empty string') || reason.includes('string')) return 'invalid_string'
+  if (reason.includes('duplicate')) return 'duplicate_id'
+  if (reason.includes('references')) return 'invalid_reference'
+  return 'invalid_value'
+}
+
+function itemReadDiagnostics(rejected: RejectedRecord[]): MonthEndItemReadDiagnostic[] {
+  return rejected.map((entry) => {
+    const match = /^items (\d+)$/.exec(entry.record)
+    return {
+      fieldPath: entry.path ?? (match ? `items[${Number(match[1]) - 1}]` : 'items'),
+      code: itemReadReasonCode(entry.reason),
+    }
+  })
+}
+
+function inspectItemCache(scope: ReturnType<typeof syncCoordinator.captureScope>): {
+  source: Extract<MonthEndItemReadSource, 'cache' | 'unavailable'>
+  rejected: RejectedRecord[]
+} {
+  try {
+    const raw = scope.read(CACHE_KEY)
+    if (!raw) return { source: 'unavailable', rejected: [] }
+    const value = JSON.parse(raw) as unknown
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { source: 'unavailable', rejected: [] }
+    }
+    const rawItems = (value as Record<string, unknown>).items
+    const parsedRows = salvageMonthEndRows(rawItems, 'items')
+    const parsedEnvelope = salvageMonthEndEnvelope(value)
+    const itemReferenceRejections = parsedEnvelope.rejected.filter((entry) =>
+      entry.path === 'items' || entry.path?.startsWith('items['),
+    )
+    const rejected = [...parsedRows.rejected, ...itemReferenceRejections]
+    const readable = parseFiniteJson(value).ok
+      && Array.isArray(rawItems)
+      && (rawItems.length === 0 || parsedEnvelope.value.items.length > 0)
+    return {
+      source: readable ? 'cache' : 'unavailable',
+      rejected,
+    }
+  } catch {
+    return { source: 'unavailable', rejected: [] }
+  }
+}
+
+export async function listItemsDetailed(): Promise<MonthEndItemReadResult> {
   const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
-  const fallback = () => sortedDesc(withoutTombstones(_readCacheFrom(scope).items, cachedTombstoneIds(scope, ITEMS_RESOURCE)))
+  const fallback = (
+    rejected: RejectedRecord[] = [],
+    allCloudRowsRejected = false,
+  ): MonthEndItemReadResult => {
+    const cache = inspectItemCache(scope)
+    const diagnostics = rejected.length ? rejected : cache.rejected
+    const rows = sortedDesc(withoutTombstones(_readCacheFrom(scope).items, cachedTombstoneIds(scope, ITEMS_RESOURCE)))
+    return {
+      rows,
+      source: cache.source,
+      degraded: true,
+      rejectedRowCount: diagnostics.length,
+      diagnostics: itemReadDiagnostics(diagnostics),
+      allCloudRowsRejected,
+    }
+  }
   if (!scope.isActive() || syncCoordinator.isDirty(ITEMS_RESOURCE) || syncCoordinator.isDirty(SETTLEMENT_RESOURCE)) return fallback()
   const [result, tombstones] = await Promise.all([
     supabase.from(ITEMS).select('*').order('created_at', { ascending: false }),
@@ -327,14 +424,38 @@ export async function listItems(): Promise<Item[]> {
   const parsed = salvageMonthEndRows(result.data, 'items')
   if (parsed.rejected.length) warning('molnet')
   const rows = withoutTombstones((parsed.value as unknown as Item[]).map(normalizeItem), tombstones)
+  const allCloudRowsRejected = result.data.length > 0 && parsed.value.length === 0 && parsed.rejected.length > 0
+  if (allCloudRowsRejected) return fallback(parsed.rejected, true)
   if (scope.isActive()) {
     const cache = _readCacheFrom(scope); cache.items = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   }
-  return rows
+  return {
+    rows,
+    source: 'cloud',
+    degraded: parsed.rejected.length > 0,
+    rejectedRowCount: parsed.rejected.length,
+    diagnostics: itemReadDiagnostics(parsed.rejected),
+    allCloudRowsRejected: false,
+  }
+}
+
+/** Compatibility wrapper for background consumers that only need safe rows. */
+export async function listItems(): Promise<Item[]> {
+  return (await listItemsDetailed()).rows
+}
+
+function canonicalItemDate(value: unknown): string {
+  const parsed = normalizeMonthEndItemDate(value)
+  if (!parsed.ok) throw new Error('Invalid item date. Use YYYY-MM-DD or DD/MM/YYYY.')
+  return parsed.value
+}
+
+function canonicalItemDraft(record: Omit<Item, 'id' | 'created_at'>): Omit<Item, 'id' | 'created_at'> {
+  return { ...record, date_purchased: canonicalItemDate(record.date_purchased) }
 }
 
 export async function addItem(record: Omit<Item, 'id' | 'created_at'>): Promise<Item> {
-  const saved = normalizeItem(stamp(record, 'item') as Item)
+  const saved = normalizeItem(stamp(canonicalItemDraft(record), 'item') as Item)
   await queueTableUpsert(ITEMS_RESOURCE, [_itemRow(saved)], [saved.id], () => {
     _patchCache((e) => { e.items = [saved, ...e.items.filter((i) => i.id !== saved.id)] })
   })
@@ -342,7 +463,7 @@ export async function addItem(record: Omit<Item, 'id' | 'created_at'>): Promise<
 }
 
 export async function addItems(records: Omit<Item, 'id' | 'created_at'>[]): Promise<Item[]> {
-  const saved = (records || []).map((r) => normalizeItem(stamp(r, 'item') as Item))
+  const saved = (records || []).map((r) => normalizeItem(stamp(canonicalItemDraft(r), 'item') as Item))
   if (!saved.length) return []
   await queueTableUpsert(ITEMS_RESOURCE, saved.map(_itemRow), saved.map((item) => item.id), () => {
     _patchCache((e) => {
@@ -356,7 +477,10 @@ export async function addItems(records: Omit<Item, 'id' | 'created_at'>[]): Prom
 export async function updateItem(id: string, patch: Partial<Item>): Promise<Item | null> {
   const current = _readCache().items.find((item) => item.id === id)
   if (!current) return null
-  const saved = normalizeItem({ ...current, ..._itemPatch(patch), id } as Item)
+  const canonicalPatch = 'date_purchased' in patch
+    ? { ...patch, date_purchased: canonicalItemDate(patch.date_purchased) }
+    : patch
+  const saved = normalizeItem({ ...current, ..._itemPatch(canonicalPatch), id } as Item)
   await queueTableUpsert(ITEMS_RESOURCE, [_itemRow(saved)], [id], () => {
     _patchCache((e) => { e.items = e.items.map((i) => (i.id === id ? saved : i)) })
   })
