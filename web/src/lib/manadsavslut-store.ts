@@ -128,7 +128,13 @@ function _readCacheFrom(scope: ReturnType<typeof syncCoordinator.captureScope>):
     if (!d || typeof d !== 'object') { warning('cachen'); return empty }
     if (!parseFiniteJson(d).ok) { warning('cachen'); return empty }
     const parsed = salvageMonthEndEnvelope(d)
-    if (parsed.rejected.length) warning('cachen')
+    // A cross-reference gap — a settlement whose item_ids point at an item that
+    // isn't present, or an item whose payment_id has no matching settlement — is
+    // inherited verbatim from the cloud (the settle/read paths validate rows in
+    // isolation, only this envelope read cross-checks). The cache itself is not
+    // corrupt in that case, so it must not raise a "cache read failed" warning on
+    // every single load. Warn only for genuine per-row/JSON corruption.
+    if (parsed.rejected.some((entry) => !entry.reason.includes('references an unknown'))) warning('cachen')
     return { ...parsed.value, version: VERSION, items: parsed.value.items.map(normalizeItem) }
   } catch { warning('cachen'); return empty }
 }

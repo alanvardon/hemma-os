@@ -10,6 +10,13 @@ vi.mock('./supabase', () => {
 })
 const mock = () => holder.current
 
+const warnHolder = vi.hoisted(() => ({ spy: vi.fn() }))
+vi.mock('./persistence-error', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./persistence-error')>()
+  return { ...actual, reportPersistenceWarning: (message: string) => warnHolder.spy(message) }
+})
+const warnSpy = () => warnHolder.spy
+
 const PREFIX = 'hemma-sync-v1:test-user:test-house:'
 const scoped = (key: string) => PREFIX + key
 const CACHE_KEY = scoped('bostadskalkyl_monthend_cache_v1')
@@ -27,6 +34,7 @@ beforeEach(async () => {
     clear: () => mem.clear(),
     key: (index: number) => [...mem.keys()][index] ?? null,
   })
+  warnSpy().mockClear()
   vi.resetModules()
   store = await import('./manadsavslut-store')
   const { activateSyncIdentity } = await import('./sync')
@@ -562,5 +570,35 @@ describe('import validation boundary', () => {
   it('rejects a malformed backup before mutating Supabase', async () => {
     await expect(store.importJSON(JSON.stringify({ version: 1, items: [{ id: 'bad', created_at: CREATED, date_purchased: '', description: '', enter_amount: '100' }], payments: [] }))).rejects.toThrow()
     expect(mock().tables.monthend_items || []).toHaveLength(0)
+  })
+})
+
+describe('cache cross-reference warning', () => {
+  const CACHE_MSG = 'Några sparade månadsavslut kunde inte läsas från cachen. Övriga sparade uppgifter finns kvar.'
+
+  it('does not warn when the cache mirrors a cloud cross-reference gap (settlement points at an absent item)', () => {
+    // Faithful mirror of the real incident: one item survives, a settlement still
+    // references items that are no longer present. The cache is not corrupt — it
+    // reflects the cloud verbatim — so no per-load "cache read failed" warning.
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 1,
+      items: [itemRow('i1')],
+      payments: [paymentRow('p1', { item_ids: ['gone-1', 'gone-2'] })],
+      settings: {},
+    }))
+    const snap = store.cachedSnapshot()
+    expect(snap.items).toHaveLength(1)
+    expect(warnSpy()).not.toHaveBeenCalledWith(CACHE_MSG)
+  })
+
+  it('still warns when the cache holds a genuinely malformed row', () => {
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 1,
+      items: [itemRow('i1'), { id: 'bad', created_at: 'not-a-datetime' }],
+      payments: [],
+      settings: {},
+    }))
+    store.cachedSnapshot()
+    expect(warnSpy()).toHaveBeenCalledWith(CACHE_MSG)
   })
 })
