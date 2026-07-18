@@ -6,7 +6,9 @@ import type { SyncOperation } from '../lib/sync-coordinator'
 
 const LABELS: Record<Exclude<SyncSaveState, 'idle'>, string> = {
   saving: 'Sparar',
-  saved: 'Sparat',
+  // Routine saves render no global completion (routes own their own success
+  // toasts); `saved` is only kept visible after a waiting/failed recovery.
+  saved: 'Väntande ändringar sparade',
   waiting: 'Väntar på anslutning',
   failed: 'Kunde inte spara',
 }
@@ -21,6 +23,10 @@ export default function PersistenceNotice() {
   const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [conflict, setConflict] = useState<SyncOperation | null>(() => syncCoordinator.getConflicts()[0] ?? null)
   const [resolvingConflict, setResolvingConflict] = useState(false)
+  // True while the current sync sequence has passed through waiting/failed;
+  // an intervening `saving` must not erase it. Seeded from the mount-time
+  // outbox inspection above (waiting/failed initial state is a recovery too).
+  const recoveryContext = useRef(syncStatus.state === 'waiting' || syncStatus.state === 'failed')
   const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const conflictDialog = useRef<HTMLDialogElement>(null)
@@ -36,10 +42,22 @@ export default function PersistenceNotice() {
     const onSync = (event: Event) => {
       const detail = (event as CustomEvent<SyncStatus>).detail
       if (!detail?.state) return
-      setSyncStatus(detail)
       setConflict(syncCoordinator.getConflicts()[0] ?? null)
       if (syncTimer.current) clearTimeout(syncTimer.current)
-      if (detail.state === 'saved') syncTimer.current = setTimeout(() => setSyncStatus({ state: 'idle', pending: 0 }), 1600)
+      if (detail.state === 'waiting' || detail.state === 'failed') recoveryContext.current = true
+      if (detail.state === 'saved') {
+        if (recoveryContext.current) {
+          // A previously waiting/failed queue reached the cloud: confirm it.
+          recoveryContext.current = false
+          setSyncStatus(detail)
+          syncTimer.current = setTimeout(() => setSyncStatus({ state: 'idle', pending: 0 }), 1600)
+        } else {
+          // Routine save: the route's own toast owns the confirmation.
+          setSyncStatus({ state: 'idle', pending: 0 })
+        }
+      } else {
+        setSyncStatus(detail)
+      }
     }
     window.addEventListener(PERSISTENCE_ERROR_EVENT, onError)
     window.addEventListener(SYNC_STATUS_EVENT, onSync)
