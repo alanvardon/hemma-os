@@ -139,15 +139,45 @@ function _readCacheFrom(scope: ReturnType<typeof syncCoordinator.captureScope>):
   } catch { warning('cachen'); return empty }
 }
 
+// Parse the cache envelope WITHOUT cross-reference salvage. Write-base ONLY.
+// The items/payments/settings slices are refreshed by three independent readers
+// (listItemsDetailed / listPayments / getSettings), so between two slice writes
+// the envelope is legitimately inconsistent — e.g. items already refreshed while
+// the payments slice is still empty. Rebasing a slice write on the SALVAGED
+// envelope treated that transient state as corruption: salvage dropped every
+// settled item (payment_id pointing at a not-yet-written payment), and the next
+// write persisted the amputation. The stuck state {1 item + dangling settlements}
+// then re-derived itself on every load. Slice writers must preserve sibling
+// slices verbatim; validation stays on the read path (_readCacheFrom).
+function _readCacheRaw(scope: ReturnType<typeof syncCoordinator.captureScope>): Envelope {
+  const empty: Envelope = { version: VERSION, items: [], payments: [], settings: defaultSettings() }
+  try {
+    const raw = scope.read(CACHE_KEY)
+    if (!raw) return empty
+    const d = JSON.parse(raw) as unknown as Record<string, unknown>
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return empty
+    return {
+      version: VERSION,
+      items: Array.isArray(d.items) ? (d.items as Item[]) : [],
+      payments: Array.isArray(d.payments) ? (d.payments as Payment[]) : [],
+      settings: d.settings && typeof d.settings === 'object' && !Array.isArray(d.settings)
+        ? { ...defaultSettings(), ...(d.settings as Partial<MonthEndSettings>) }
+        : defaultSettings(),
+    }
+  } catch { return empty }
+}
+
 function _writeCache(env: Envelope): void {
   try {
     syncCoordinator.writeScoped(CACHE_KEY, JSON.stringify({ version: VERSION, items: env.items, payments: env.payments, settings: env.settings }))
   } catch { /* private mode / quota — cache is best-effort */ }
 }
 
-// Read-modify-write one slice of the cache envelope.
+// Read-modify-write one slice of the cache envelope. Raw base — a mutation must
+// never drop sibling rows that only look invalid because of a transient
+// cross-slice inconsistency (see _readCacheRaw).
 function _patchCache(fn: (env: Envelope) => void): void {
-  const env = _readCache(); fn(env); _writeCache(env)
+  const env = _readCacheRaw(syncCoordinator.captureScope()); fn(env); _writeCache(env)
 }
 
 // Synchronous snapshot of the write-through cache, sorted to MATCH the async
@@ -438,7 +468,7 @@ export async function listItemsDetailed(): Promise<MonthEndItemReadResult> {
   const allCloudRowsRejected = result.data.length > 0 && parsed.value.length === 0 && parsed.rejected.length > 0
   if (allCloudRowsRejected) return fallback(parsed.rejected, true)
   if (scope.isActive()) {
-    const cache = _readCacheFrom(scope); cache.items = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
+    const cache = _readCacheRaw(scope); cache.items = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   }
   return {
     rows,
@@ -536,7 +566,7 @@ export async function listPayments(): Promise<Payment[]> {
   const parsed = salvageMonthEndRows(result.data, 'payments')
   if (parsed.rejected.length) warning('molnet')
   const rows = withoutTombstones(parsed.value as unknown as Payment[], tombstones)
-  const cache = _readCacheFrom(scope); cache.payments = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
+  const cache = _readCacheRaw(scope); cache.payments = rows; scope.write(CACHE_KEY, JSON.stringify(cache))
   return rows
 }
 
@@ -594,7 +624,7 @@ export async function getSettings(): Promise<MonthEndSettings> {
   if (error) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
   rememberToolRevision(SETTINGS_TOOL, data)
   const settings = { ...defaultSettings(), ...((data?.data as Partial<MonthEndSettings>) || {}) }
-  const cache = _readCacheFrom(scope); cache.settings = settings; scope.write(CACHE_KEY, JSON.stringify(cache))
+  const cache = _readCacheRaw(scope); cache.settings = settings; scope.write(CACHE_KEY, JSON.stringify(cache))
   return settings
 }
 

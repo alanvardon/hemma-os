@@ -602,3 +602,59 @@ describe('cache cross-reference warning', () => {
     expect(warnSpy()).toHaveBeenCalledWith(CACHE_MSG)
   })
 })
+
+describe('cache slice writes preserve sibling slices', () => {
+  // Regression: the three cloud readers each rewrite one slice of the shared
+  // cache envelope. Rebasing those writes on the SALVAGED envelope amputated
+  // settled items whenever the payments slice was transiently absent (the
+  // salvage drops any item whose payment_id has no matching payment), and the
+  // amputated envelope then re-derived itself on every subsequent load.
+  const settled = () => itemRow('s1', { paid: true, payment_id: 'p1' })
+  const payment = () => paymentRow('p1', { item_ids: ['s1'], amount: 100 })
+
+  it('an items-then-payments refresh keeps settled items in the cache', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.monthend_items = [settled(), itemRow('o1')]
+    mock().tables.monthend_payments = [payment()]
+
+    await store.listItemsDetailed() // writes items while payments slice is still empty
+    await store.listPayments()      // must NOT rebase on a salvaged (amputated) envelope
+
+    const c = cache()
+    expect((c.items as { id: string }[]).map((r) => r.id).sort()).toEqual(['o1', 's1'])
+    expect((c.payments as { id: string }[]).map((r) => r.id)).toEqual(['p1'])
+  })
+
+  it('heals a stuck cache (open item + dangling settlement) on a full refresh', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    // The observed production state: only the open item survived locally while
+    // the settlement kept referencing the amputated settled item.
+    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [itemRow('o1')], payments: [payment()], settings: {} }))
+    mock().tables.monthend_items = [settled(), itemRow('o1')]
+    mock().tables.monthend_payments = [payment()]
+
+    await store.listItemsDetailed()
+    await store.listPayments()
+
+    const c = cache()
+    expect((c.items as { id: string }[]).map((r) => r.id).sort()).toEqual(['o1', 's1'])
+    expect((c.payments as { id: string }[]).map((r) => r.id)).toEqual(['p1'])
+    // Healed envelope is internally consistent, so the snapshot serves it whole.
+    const snap = store.cachedSnapshot()
+    expect(snap.items.map((r) => r.id).sort()).toEqual(['o1', 's1'])
+    expect(snap.payments.map((r) => r.id)).toEqual(['p1'])
+  })
+
+  it('a mutation patch does not drop settled items while the payments slice is empty', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    // Envelope mid-refresh: items written, payments not yet.
+    mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [settled(), itemRow('o1')], payments: [], settings: {} }))
+
+    await store.addItem(itemDraft({ description: 'Ny' }) as never)
+
+    const ids = (cache().items as { id: string }[]).map((r) => r.id)
+    expect(ids).toContain('s1')
+    expect(ids).toContain('o1')
+    expect(ids).toHaveLength(3)
+  })
+})
