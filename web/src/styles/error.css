@@ -93,6 +93,16 @@
   padding: 8px 16px;
 }
 
+/* The banner is fixed, so reserve its height (set live by OfflineBanner) and
+   push the sticky page headers below it — otherwise it overlays the header
+   and intercepts taps on its actions. */
+html.has-offline-banner body {
+  padding-top: var(--offline-banner-h, 0);
+}
+html.has-offline-banner .page-header {
+  top: var(--offline-banner-h, 0);
+}
+
 /* ── Hushållsbudget save/delete failure toast (Layer 3) ───────────────────
    Copied from .ma-toast (manadsavslut.css) so every route reports write
    failures the same way. */

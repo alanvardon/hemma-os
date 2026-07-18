@@ -28,4 +28,19 @@ describe('OfflineBanner', () => {
       'Offline — ändringar sparas lokalt och synkas när du är online igen.',
     )
   })
+
+  it('reserves layout space while offline and releases it on reconnect', () => {
+    render(<OfflineBanner />)
+    const root = document.documentElement
+
+    Object.defineProperty(window.navigator, 'onLine', { configurable: true, value: false })
+    act(() => { window.dispatchEvent(new Event('offline')) })
+    expect(root.classList.contains('has-offline-banner')).toBe(true)
+    expect(root.style.getPropertyValue('--offline-banner-h')).not.toBe('')
+
+    Object.defineProperty(window.navigator, 'onLine', { configurable: true, value: true })
+    act(() => { window.dispatchEvent(new Event('online')) })
+    expect(root.classList.contains('has-offline-banner')).toBe(false)
+    expect(root.style.getPropertyValue('--offline-banner-h')).toBe('')
+  })
 })
