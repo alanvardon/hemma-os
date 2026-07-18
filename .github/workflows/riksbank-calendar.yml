@@ -1,0 +1,41 @@
+name: Riksbank calendar refresh
+
+# Monthly (and on-demand) scrape of riksbank.se to accumulate the policy-rate
+# decision calendar into web/src/lib/riksbank-decisions.json. The scraper
+# exits non-zero on a sanity-gate failure (empty scrape, HTTP error, or a
+# scrape that would regress upcoming coverage), turning the job red so a human
+# looks — it never silently ships a truncated calendar. A green run with a
+# changed file opens a review PR; it never auto-merges.
+
+on:
+  schedule:
+    - cron: '0 6 1 * *' # 06:00 UTC, 1st of each month
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Scrape and accumulate the decision calendar
+        run: node scripts/scrape-riksbank-calendar.mjs # exits non-zero on gate failure
+
+      - name: Open PR if the calendar changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/riksbank-calendar-refresh
+          add-paths: web/src/lib/riksbank-decisions.json
+          title: 'chore: refresh Riksbank decision calendar'
+          commit-message: 'chore: refresh Riksbank decision calendar'
+          body: |
+            Automated scrape of riksbank.se by
+            `scripts/scrape-riksbank-calendar.mjs`.
+
+            Review the date diff in `web/src/lib/riksbank-decisions.json` before
+            merging — these are the policy-rate announcement dates the app keys
+            on. Dates are only ever added (merge-union), never removed.

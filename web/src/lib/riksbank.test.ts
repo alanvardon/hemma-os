@@ -1,8 +1,28 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   collapseChanges, nextDecision, lastDecision, decisionOutcome,
-  detectChange, currentPoint, type RatePoint, type PolicyRateData,
+  detectChange, currentPoint, RIKSBANK_DECISIONS, type RatePoint, type PolicyRateData,
 } from './riksbank'
+
+describe('RIKSBANK_DECISIONS', () => {
+  it('is non-empty and sorted ascending', () => {
+    expect(RIKSBANK_DECISIONS.length).toBeGreaterThan(0)
+    const sorted = [...RIKSBANK_DECISIONS].sort()
+    expect(RIKSBANK_DECISIONS).toEqual(sorted)
+  })
+})
+
+describe('RIKSBANK_DECISIONS fallback', () => {
+  it('falls back to FALLBACK_DECISIONS (not []) when the JSON decisions array is empty', async () => {
+    vi.resetModules()
+    vi.doMock('./riksbank-decisions.json', () => ({ default: { decisions: [] } }))
+    const { RIKSBANK_DECISIONS: fallbackApplied } = await import('./riksbank')
+    expect(fallbackApplied).toEqual(['2026-08-19', '2026-09-23', '2026-11-03', '2026-12-15'])
+    expect(fallbackApplied.length).toBeGreaterThan(0)
+    vi.doUnmock('./riksbank-decisions.json')
+    vi.resetModules()
+  })
+})
 
 describe('collapseChanges', () => {
   it('keeps only rows where the value differs from the previous kept row', () => {

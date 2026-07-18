@@ -7,6 +7,7 @@
 // can't import from web/src, so keep the two in sync by hand if it changes.
 import { supabase } from './supabase'
 import { daysUntil } from './date'
+import decisionsData from './riksbank-decisions.json'
 
 export interface RatePoint { date: string; value: number }
 
@@ -17,19 +18,14 @@ export interface PolicyRateData {
 
 export interface Acknowledged { date: string; value: number }
 
-// Announcement (publication) dates — the 09:30 day the decision is published,
-// not the meeting day. Confirmed through August; September–December are not
-// yet published on riksbank.se (a JS-rendered calendar) at time of writing.
-// Maintained by hand — refresh each December from riksbank.se → Calendar. Once
-// `today` is past the last entry, `nextDecision` returns null and the UI falls
-// back to "Nästa besked: se riksbank.se" rather than guessing.
-export const RIKSBANK_DECISIONS_2026: string[] = [
-  '2026-01-29',
-  '2026-03-19',
-  '2026-05-07',
-  '2026-06-17',
-  '2026-08-19',
-]
+// Announcement (09:30 publication) dates, generated from riksbank.se by
+// scripts/scrape-riksbank-calendar.mjs (see .github/workflows/riksbank-calendar.yml).
+// This array is DATA, not hand-authored — edit the scraper, not the list.
+// The literal fallback is the last resort if the JSON is ever empty, so the
+// card degrades to "se riksbank.se" rather than throwing.
+const FALLBACK_DECISIONS = ['2026-08-19', '2026-09-23', '2026-11-03', '2026-12-15']
+export const RIKSBANK_DECISIONS: string[] =
+  (decisionsData.decisions?.length ? decisionsData.decisions : FALLBACK_DECISIONS)
 
 /**
  * Collapse a per-banking-day observation series into change points — keep
@@ -57,12 +53,12 @@ export function currentPoint(data: PolicyRateData): RatePoint {
 }
 
 /** Next upcoming announcement date on/after `today` (YYYY-MM-DD), or null once the calendar is exhausted. */
-export function nextDecision(today: string, calendar: string[] = RIKSBANK_DECISIONS_2026): string | null {
+export function nextDecision(today: string, calendar: string[] = RIKSBANK_DECISIONS): string | null {
   return (calendar || []).find((d) => d >= today) ?? null
 }
 
 /** Most recent announcement date before `today`, or null before the calendar's first entry. */
-export function lastDecision(today: string, calendar: string[] = RIKSBANK_DECISIONS_2026): string | null {
+export function lastDecision(today: string, calendar: string[] = RIKSBANK_DECISIONS): string | null {
   const past = (calendar || []).filter((d) => d < today)
   return past[past.length - 1] ?? null
 }
