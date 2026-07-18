@@ -11,6 +11,7 @@ import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import Segmented from '../components/Segmented'
 import { usePersonNames } from '../components/usePersonNames'
+import { useConfirm } from '../components/useConfirm'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
   parseCsv, parseAmount, autoMapColumns, classifyKind,
@@ -102,6 +103,7 @@ export default function Bolanekoll() {
     actions: workspaceActions,
   } = useMortgageWorkspace()
   const { refresh, settings: settingsActions } = workspaceActions
+  const confirm = useConfirm()
   const [bridgePeriod, setBridgePeriod] = useState<'ytd' | '12m' | 'all'>('ytd')
   const [extraAmort, setExtraAmort] = useState('')
   // Rate what-if: null means no local draft. The display then follows the saved
@@ -321,7 +323,7 @@ export default function Bolanekoll() {
   const partActs = (p: LoanPart) => (
     <>
       <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPartDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button>
-      <button type="button" className="icon-btn" data-del-part title="Ta bort" aria-label="Ta bort" onClick={() => { if (confirm('Ta bort lånedelen och alla dess betalningar och ränteperioder? Det går inte att ångra.')) handleDeletePart(p.id) }}><Icon icon={X} /></button>
+      <button type="button" className="icon-btn" data-del-part title="Ta bort" aria-label="Ta bort" onClick={async () => { if (await confirm({ title: 'Ta bort lånedelen?', message: 'Alla dess betalningar och ränteperioder tas bort. Det går inte att ångra.' })) handleDeletePart(p.id) }}><Icon icon={X} /></button>
     </>
   )
 
@@ -628,7 +630,12 @@ export default function Bolanekoll() {
     if (drifted.length) {
       const lines = drifted.map(m =>
         (partNameById(m.predicted.loan_part_id) + ': förväntad ' + fmtMoney(m.recon.expected) + ' → faktisk ' + fmtMoney(m.recon.actual) + ' (drift ' + fmtMoney(Math.abs(m.recon.drift)) + ')'))
-      if (!confirm('Räntan avviker från prognosen — ränteändring, avgift eller extra amortering?\n\n' + lines.join('\n') + '\n\nErsätt de godkända prognosraderna med de importerade beloppen?')) return
+      if (!(await confirm({
+        title: 'Räntan avviker från prognosen',
+        message: 'Ränteändring, avgift eller extra amortering? Ersätt de godkända prognosraderna med de importerade beloppen?',
+        lines,
+        confirmLabel: 'Ersätt', cancelLabel: 'Behåll', danger: false,
+      }))) return
     }
     const predictedIds = [...new Set(matches.map(m => m.predicted.id))]
     try {
@@ -740,7 +747,7 @@ export default function Bolanekoll() {
   async function clearPayments() {
     const scoped = paymentFilter === 'all' ? activeViewPayments : activeViewPayments.filter(p => p.loan_part_id === paymentFilter)
     if (!scoped.length) return
-    if (!confirm('Delete ' + scoped.length + ' payment' + (scoped.length === 1 ? '' : 's') + '? This can’t be undone.')) return
+    if (!(await confirm({ title: 'Delete ' + scoped.length + ' payment' + (scoped.length === 1 ? '' : 's') + '?', message: 'This can’t be undone.' }))) return
     await workspaceActions.payments.clear(scoped)
   }
 
@@ -1472,7 +1479,7 @@ export default function Bolanekoll() {
                         <td className="col-note">{v.note || ''}{v.is_purchase && <span className="row-flag row-flag-kop">köpeskilling</span>}</td>
                         <td className="col-act">
                           <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setValDlg({ open: true, id: v.id })}><Icon icon={Pencil} /></button>
-                          <button type="button" className="icon-btn" data-del-val title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this valuation?')) handleDeleteVal(v.id) }}><Icon icon={X} /></button>
+                          <button type="button" className="icon-btn" data-del-val title="Delete" aria-label="Delete" onClick={async () => { if (await confirm({ title: 'Delete this valuation?' })) handleDeleteVal(v.id) }}><Icon icon={X} /></button>
                         </td>
                       </tr>
                     ))}
@@ -1691,7 +1698,7 @@ export default function Bolanekoll() {
                             {parts.length > 1 && (
                               <button type="button" className="icon-btn" title="Copy to parts" aria-label="Copy to parts" onClick={() => setCopyDlg({ open: true, source: p })}><Icon icon={Copy} /></button>
                             )}
-                            <button type="button" className="icon-btn" data-del-pay title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this payment?')) handleDeletePay(p.id) }}><Icon icon={X} /></button>
+                            <button type="button" className="icon-btn" data-del-pay title="Delete" aria-label="Delete" onClick={async () => { if (await confirm({ title: 'Delete this payment?' })) handleDeletePay(p.id) }}><Icon icon={X} /></button>
                           </td>
                         </tr>
                         <AnimatePresence initial={false}>
@@ -1765,7 +1772,7 @@ export default function Bolanekoll() {
                     <td className="col-owner">{p.paid_split ? `${nameOf('a')} ${fmtMoney(p.paid_split.a)} · ${nameOf('b')} ${fmtMoney(p.paid_split.b)}` : p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
                     <td className="col-part">{p.mortgage_id ? '—' : <span className="row-flag row-flag-estimated" title="Saknar koppling till bolåneavtal — öppna för att koppla">⚠ ej kopplad</span>}</td>
                     <td className="num col-amt">{fmtMoney(p.amount)}</td>
-                    <td className="col-act"><button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button><button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={() => { if (confirm('Ta bort betalningen?')) handleDeletePay(p.id) }}><Icon icon={X} /></button></td>
+                    <td className="col-act"><button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button><button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={async () => { if (await confirm({ title: 'Ta bort betalningen?' })) handleDeletePay(p.id) }}><Icon icon={X} /></button></td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -1790,7 +1797,7 @@ export default function Bolanekoll() {
                     <td className="col-owner">{p.paid_split ? `${nameOf('a')} ${fmtMoney(p.paid_split.a)} · ${nameOf('b')} ${fmtMoney(p.paid_split.b)}` : p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
                     <td className="col-part">{partNameById(p.loan_part_id)}</td>
                     <td className="num col-amt">{fmtMoney(p.amount)}</td>
-                    <td className="col-act"><button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button><button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={() => { if (confirm('Ta bort betalningen?')) handleDeletePay(p.id) }}><Icon icon={X} /></button></td>
+                    <td className="col-act"><button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button><button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={async () => { if (await confirm({ title: 'Ta bort betalningen?' })) handleDeletePay(p.id) }}><Icon icon={X} /></button></td>
                   </tr>
                 ))}</tbody>
               </table>

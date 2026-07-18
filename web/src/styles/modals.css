@@ -378,3 +378,20 @@
 .const-reset {
   margin-top: 0.4rem;
 }
+
+/* ── Confirm dialog (themed replacement for native confirm()) ────── */
+.confirm-dialog { border: none; padding: 0; background: transparent; max-width: min(28rem, 92vw); }
+.confirm-body {
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  padding: 20px 22px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  color: var(--ink);
+}
+.confirm-title { font-size: 1.05rem; margin: 0 0 0.5rem; }
+.confirm-message { font-size: 0.9rem; color: var(--ink-soft); margin: 0 0 0.5rem; line-height: 1.5; }
+.confirm-lines { font-size: 0.85rem; color: var(--ink-soft); margin: 0 0 0.75rem 1rem; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }
+.confirm-danger { background: var(--warn); border-color: var(--warn); }
+.confirm-danger:hover:not(:disabled) { background: var(--warn-light); border-color: var(--warn-light); }

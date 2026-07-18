@@ -3,6 +3,7 @@ import { Pencil, X } from 'lucide-react'
 import DialogShell from '../../components/DialogShell'
 import FormField from '../../components/FormField'
 import Icon from '../../components/Icon'
+import { useConfirm } from '../../components/useConfirm'
 import { makeLoanPart, parseAmount, todayISO, derivedRate } from '../../lib/mortgage'
 import type { LoanPart, RatePeriod, Payment } from '../../lib/mortgage'
 import { fmtPct } from './shared'
@@ -16,6 +17,7 @@ interface PartDlgProps {
   onDeletePeriod: (id: string) => void
 }
 export default function PartDialog({ open, id, parts, periods, payments, onSave, onDelete, onClose, onSavePeriod, onDeletePeriod }: PartDlgProps) {
+  const confirm = useConfirm()
   const rec = id ? parts.find(p => p.id === id) : null
   const [form, setForm] = useState({ label: '', loan_number: '', start_balance: '', start_date: '', planned_amortization: '', planned_amortization_start: '' })
   const [periodDlg, setPeriodDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
@@ -73,7 +75,7 @@ export default function PartDialog({ open, id, parts, periods, payments, onSave,
                         <span className={'rate-type' + (bunden ? ' is-bunden' : '')}>{bunden ? 'Bunden' : 'Rörlig'}</span>
                         <span className="rate-acts">
                           <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPeriodDlg({ open: true, id: r.id })}><Icon icon={Pencil} /></button>
-                          <button type="button" className="icon-btn" title="Delete" aria-label="Delete" onClick={() => { if (confirm('Delete this rate period?')) onDeletePeriod(r.id) }}><Icon icon={X} /></button>
+                          <button type="button" className="icon-btn" title="Delete" aria-label="Delete" onClick={async () => { if (await confirm({ title: 'Delete this rate period?' })) onDeletePeriod(r.id) }}><Icon icon={X} /></button>
                         </span>
                       </li>
                     )
@@ -84,7 +86,7 @@ export default function PartDialog({ open, id, parts, periods, payments, onSave,
             </div>
           )}
           <div className="dialog-actions">
-            {id && <button type="button" className="btn btn-ghost btn-danger" onClick={() => { if (confirm('Delete this loan part and all its payments? This can’t be undone.')) onDelete(id) }}>Delete</button>}
+            {id && <button type="button" className="btn btn-ghost btn-danger" onClick={async () => { if (await confirm({ title: 'Delete this loan part?', message: 'All its payments and rate periods are deleted too. This can’t be undone.' })) onDelete(id) }}>Delete</button>}
             <span style={{ flex: 1 }} />
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
             <button type="submit" className="btn btn-primary">Save</button>

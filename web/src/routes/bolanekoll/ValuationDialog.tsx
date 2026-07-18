@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import DialogShell from '../../components/DialogShell'
 import FormField from '../../components/FormField'
+import { useConfirm } from '../../components/useConfirm'
 import { parseAmount, todayISO } from '../../lib/mortgage'
 import type { Valuation } from '../../lib/mortgage'
 
@@ -10,6 +11,7 @@ interface ValDlgProps {
   onDelete: (id: string) => void; onClose: () => void
 }
 export default function ValuationDialog({ open, id, valuations, onSave, onDelete, onClose }: ValDlgProps) {
+  const confirm = useConfirm()
   const rec = id ? valuations.find(v => v.id === id) : null
   const [form, setForm] = useState({ date: todayISO(), value: '', note: '', is_purchase: false })
   useEffect(() => { if (open) setForm({ date: rec?.date || todayISO(), value: rec?.value ? String(rec.value) : '', note: rec?.note || '', is_purchase: !!rec?.is_purchase }) }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -30,7 +32,7 @@ export default function ValuationDialog({ open, id, valuations, onSave, onDelete
         </div>
         <p className="form-hint">Equity is this value minus the outstanding debt. Add a new one whenever you re-value. Flag the purchase date’s value as the köpeskilling to power the cost-basis hero.</p>
         <div className="dialog-actions">
-          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={() => { if (confirm('Delete this valuation?')) onDelete(id) }}>Delete</button>}
+          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={async () => { if (await confirm({ title: 'Delete this valuation?' })) onDelete(id) }}>Delete</button>}
           <span style={{ flex: 1 }} />
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn btn-primary">Save</button>

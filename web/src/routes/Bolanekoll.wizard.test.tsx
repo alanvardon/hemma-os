@@ -15,6 +15,7 @@ import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Bolanekoll from './Bolanekoll'
+import { ConfirmProvider } from '../components/useConfirm'
 import * as Store from '../lib/mortgage-store'
 import { defaultSettings } from '../lib/mortgage'
 import type { Bank, LoanPart, Mortgage, Payment, RatePeriod } from '../lib/mortgage'
@@ -29,7 +30,7 @@ vi.mock('../lib/riksbank', async (importOriginal) => ({
 
 function renderBolanekoll() {
   const router = createMemoryRouter([{ path: '/', element: <Bolanekoll /> }], { initialEntries: ['/'] })
-  return render(<RouterProvider router={router} />)
+  return render(<ConfirmProvider><RouterProvider router={router} /></ConfirmProvider>)
 }
 
 const b1: Bank = { id: 'b1', created_at: '2026-01-01', label: 'Danske', year_basis: null, year_basis_source: null, billing: null, billing_source: null, catalog_id: null }
@@ -43,7 +44,6 @@ const part: LoanPart = {
 const covering: RatePeriod = { id: 'r1', created_at: '2026-01-01', loan_part_id: 'p1', start_date: '2024-03-01', end_date: null, rate: 3.5, rate_type: 'rörlig' }
 
 function stubEnv() {
-  vi.stubGlobal('confirm', vi.fn(() => true))
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
   // jsdom's <dialog> has no showModal/close — polyfill enough for the tests.
@@ -242,6 +242,11 @@ describe('Bolanekoll — Tidigare avtal + Ångra bankbyte (plan 109c Stage 2)', 
     await user.click(await screen.findByRole('button', { name: 'Tidigare avtal' }))
     const dialog = await screen.findByRole('dialog', { name: 'Tidigare avtal' }) as HTMLDialogElement
     await user.click(within(dialog).getByRole('button', { name: 'Ångra bankbyte' }))
+
+    // The revert guard is now a themed ConfirmDialog (plan 91); confirm it to
+    // fire the RPC.
+    const confirmDialog = await screen.findByRole('dialog', { name: 'Ångra bankbytet?' })
+    await user.click(within(confirmDialog).getByRole('button', { name: 'Ångra bankbyte' }))
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Ingen anslutning. Ändringen sparades inte i molnet.')
     expect(dialog.open).toBe(true)
