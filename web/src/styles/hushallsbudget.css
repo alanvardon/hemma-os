@@ -315,6 +315,21 @@
     color: var(--ink-soft);
   }
   .bolan-src a { color: var(--accent); text-underline-offset: 2px; }
+  /* Anchor the card total on the same label/amount/action grid as the rows below
+     so the header figure lines up with its two component amounts. The empty
+     third track mirrors the rows' remove column without rendering a control. */
+  .bolan-card .cat-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 92px 26px;
+    align-items: center;
+    gap: 6px; /* match .b-row so the total's column-2 track lines up with the rows' */
+  }
+  .bolan-card .cat-head .cat-name-static { grid-column: 1; padding-right: 0.5rem; }
+  .bolan-card .cat-head .cat-sub {
+    grid-column: 2;
+    padding: 0 9px;
+    text-align: right;
+  }
   /* Mirror editable rows' amount + remove columns. The empty third track keeps
      read-only amounts aligned without rendering a misleading remove control. */
   .bolan-row { grid-template-columns: minmax(0, 1fr) 92px 26px; }
@@ -1152,7 +1167,8 @@ html:has(dialog.hb-modal[open]) { overflow: hidden; }
     text-overflow: clip;
     overflow-wrap: anywhere;
   }
-  .hb-root .bolan-row { grid-template-columns: minmax(0, 1fr) 72px 26px; }
+  .hb-root .bolan-row,
+  .hb-root .bolan-card .cat-head { grid-template-columns: minmax(0, 1fr) 72px 26px; }
 
   /* Income + individual columns go full-width; their rows return to a
      single wide line (label | amount | remove). */
