@@ -13,11 +13,14 @@ import Hushallsbudget from './routes/Hushallsbudget'
 import Huskalendern from './routes/Huskalendern'
 import PersistenceNotice from './components/PersistenceNotice'
 import UpdateNotice from './components/UpdateNotice'
+import ErrorBoundary from './components/ErrorBoundary'
+import OfflineBanner from './components/OfflineBanner'
 
 function Layout() {
   return (
     <>
       <ScrollRestoration getKey={(location) => location.pathname} />
+      <OfflineBanner />
       <Outlet />
     </>
   )
@@ -44,6 +47,7 @@ function getInitialTheme(): Theme {
 const router = createHashRouter([
   {
     element: <Layout />,
+    errorElement: <ErrorBoundary />,
     children: [
       { path: '/', element: <Home /> },
       { path: '/bostadskalkyl', element: <ScenariosDashboard /> },

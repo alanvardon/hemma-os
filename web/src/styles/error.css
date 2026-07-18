@@ -1,0 +1,106 @@
+/* ════════════════════════════════════════════════════════════════
+   App-level error & offline surfaces (plan 90) — the router's
+   errorElement, the always-mounted offline banner, and the Hushållsbudget
+   toast. This sheet is app-global, NOT a route sheet — it is not part of
+   route-css-scoping.test.ts's routeSheets list.
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── ErrorBoundary (router errorElement) ──────────────────────────────── */
+.errpage {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.errpage-card {
+  max-width: 440px;
+  width: 100%;
+  background: var(--paper-card);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 2.2rem 2rem;
+  text-align: center;
+}
+
+.errpage-kicker {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin: 0 0 0.6rem;
+}
+
+.errpage-title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  margin: 0 0 0.8rem;
+  color: var(--ink);
+}
+
+.errpage-lead {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-mid);
+  margin: 0 0 1.6rem;
+}
+
+.errpage-actions {
+  display: flex;
+  gap: 0.7rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.errpage-detail {
+  margin-top: 1.4rem;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+.errpage-detail summary {
+  cursor: pointer;
+  font-weight: 550;
+}
+
+.errpage-detail pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--paper-warm);
+  border-radius: var(--r-sm);
+  padding: 0.7rem;
+  margin-top: 0.5rem;
+}
+
+/* ── Offline banner (Layer 2) ─────────────────────────────────────────── */
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: var(--warn);
+  color: var(--on-accent);
+  text-align: center;
+  font-size: 13px;
+  font-weight: 550;
+  padding: 8px 16px;
+}
+
+/* ── Hushållsbudget save/delete failure toast (Layer 3) ───────────────────
+   Copied from .ma-toast (manadsavslut.css) so every route reports write
+   failures the same way. */
+.hb-toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 12px);
+  background: var(--ink); color: var(--paper);
+  font-size: 13.5px; font-weight: 550;
+  padding: 10px 18px; border-radius: 999px; box-shadow: var(--shadow-md);
+  opacity: 0; pointer-events: none; transition: opacity 0.22s, transform 0.22s; z-index: 100;
+}
+.hb-toast.show { opacity: 1; transform: translate(-50%, 0); }
