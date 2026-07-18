@@ -18,6 +18,7 @@ import Icon from '../components/Icon'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { useSaveFlash } from '../components/useSaveFlash'
+import { useToast } from '../components/useToast'
 
 // ── Module helpers (faithful to budget.js) ───────────────────────────────────
 
@@ -161,6 +162,7 @@ function SalaryModal({ open, onClose, people, incomes, flashSaved, onHistoryChan
   const [note, setNote] = useState('')
   const [itemsA, setItemsA] = useState<SalaryItem[]>([])
   const [itemsB, setItemsB] = useState<SalaryItem[]>([])
+  const { toast, showToast } = useToast()
   const uid = useRef(0)
   const firstAmountRef = useRef<HTMLInputElement>(null)
 
@@ -218,8 +220,8 @@ function SalaryModal({ open, onClose, people, incomes, flashSaved, onHistoryChan
     if (dupe && !confirm('You’ve already logged ' + monthLabel(record.month) + '. Add another entry for it?')) return
     try {
       await salaryStore.add(record)
-    } catch (err) {
-      alert('Couldn’t save — you may be offline. ' + (err instanceof Error ? err.message : ''))
+    } catch {
+      showToast('Kunde inte spara — du kanske är offline.')
       return
     }
     onClose(); flashSaved(); onHistoryChanged()
@@ -290,6 +292,7 @@ function SalaryModal({ open, onClose, people, incomes, flashSaved, onHistoryChan
         <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
         <button type="button" className="btn btn-primary" disabled={incomeA + incomeB <= 0} onClick={submit}>Confirm &amp; save</button>
       </div>
+      <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
     </Modal>
   )
 }
@@ -318,6 +321,7 @@ function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const importInputRef = useRef<HTMLInputElement>(null)
+  const { toast, showToast } = useToast()
 
   const year = rows.length ? String(rows[0].month || currentMonth()).slice(0, 4) : ''
   const yr = rows.filter((r) => String(r.month || '').slice(0, 4) === year)
@@ -328,8 +332,8 @@ function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
   async function del(id: string | undefined) {
     if (!id) return
     if (!confirm('Delete this submission? This can’t be undone.')) return
-    try { await salaryStore.remove(id) } catch (err) {
-      alert('Couldn’t delete — you may be offline. ' + (err instanceof Error ? err.message : '')); return
+    try { await salaryStore.remove(id) } catch {
+      showToast('Kunde inte ta bort — du kanske är offline.'); return
     }
     onReload()
   }
@@ -434,6 +438,7 @@ function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
         <input ref={importInputRef} type="file" accept="application/json,.json" hidden
           onChange={(e) => { onImportFile(e.target.files?.[0]); e.target.value = '' }} />
       </div>
+      <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
     </Modal>
   )
 }

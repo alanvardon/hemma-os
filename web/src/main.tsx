@@ -18,6 +18,7 @@ import './styles/charts.css'
 import './styles/transitions.css'
 import './styles/hushallsbudget.css'
 import './styles/touch-inputs.css'
+import './styles/error.css'
 import App from './App.tsx'
 
 createRoot(document.getElementById('root')!).render(
