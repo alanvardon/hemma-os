@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Bolanekoll from './Bolanekoll'
+import { ConfirmProvider } from '../components/useConfirm'
 import * as Store from '../lib/mortgage-store'
 import { defaultSettings } from '../lib/mortgage'
 import type { LoanPart, Payment, RatePeriod } from '../lib/mortgage'
@@ -60,7 +61,7 @@ const PREDICTED: Payment = {
 
 function renderBolanekoll() {
   const router = createMemoryRouter([{ path: '/', element: <Bolanekoll /> }], { initialEntries: ['/'] })
-  return render(<RouterProvider router={router} />)
+  return render(<ConfirmProvider><RouterProvider router={router} /></ConfirmProvider>)
 }
 
 function seedStore(payments: Payment[], part: LoanPart = PART, ratePeriods: RatePeriod[] = [PERIOD]) {
@@ -447,7 +448,6 @@ describe('Bolånekoll forecast — import supersede (plan 23 phase C)', () => {
 
   it('blocks the import on drift outside tolerance until the user confirms', async () => {
     seedStore([...HISTORY, PREDICTED])
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const user = userEvent.setup()
     renderBolanekoll()
     await screen.findAllByText('godkänd prognos') // page settled: accepted prediction visible in the ledger
@@ -456,12 +456,14 @@ describe('Bolånekoll forecast — import supersede (plan 23 phase C)', () => {
     expect(await screen.findByText(/drift 175 kr/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Add 1 row/ }))
 
+    // The drift guard is now a themed ConfirmDialog (plan 91), not native
+    // confirm(): it surfaces the drift and blocks until the user decides.
+    const dialog = await screen.findByRole('dialog', { name: 'Räntan avviker från prognosen' })
+    await user.click(within(dialog).getByRole('button', { name: 'Behåll' }))
+
     // Declined → nothing written, prediction untouched.
-    expect(confirmSpy).toHaveBeenCalledTimes(1)
-    expect(confirmSpy.mock.calls[0][0]).toMatch(/avviker från prognosen/)
     expect(Store.removePayments).not.toHaveBeenCalled()
     expect(Store.addPayments).not.toHaveBeenCalled()
-    confirmSpy.mockRestore()
   })
 
   it('shows the read-only reconcile badge when nothing was pre-logged', async () => {

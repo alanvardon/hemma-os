@@ -562,8 +562,12 @@ test('Ångra bankbyte reverts a pristine switch, survives reload, and disappears
   const history = dialogWithHeading(page, 'Tidigare avtal')
   await expect(history.getByRole('group', { name: 'Ångra bankbyte' })).toBeVisible()
 
-  page.once('dialog', (d) => d.accept())
   await history.getByRole('button', { name: 'Ångra bankbyte' }).click()
+
+  // The revert guard is now a themed ConfirmDialog (plan 91), not a native
+  // confirm(): confirm it to fire the RPC.
+  const revertConfirm = page.getByRole('dialog', { name: 'Ångra bankbytet?' })
+  await revertConfirm.getByRole('button', { name: 'Ångra bankbyte' }).click()
 
   await expect(page.locator('.bk-toast.show')).toHaveText('Bankbytet ångrades.')
   await expect(history).not.toBeVisible()

@@ -10,11 +10,12 @@
 // The mock boundary is mortgage-store, not supabase — this proves the
 // component *reacts* to what the store throws (plan 49 owns the store↔network
 // layer below). defaultSettings comes from the real, unmocked ../lib/mortgage.
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Bolanekoll from './Bolanekoll'
+import { ConfirmProvider } from '../components/useConfirm'
 import * as Store from '../lib/mortgage-store'
 import { defaultSettings } from '../lib/mortgage'
 
@@ -38,7 +39,7 @@ function renderBolanekoll() {
   const router = createMemoryRouter([{ path: '/', element: <Bolanekoll /> }], {
     initialEntries: ['/'],
   })
-  return render(<RouterProvider router={router} />)
+  return render(<ConfirmProvider><RouterProvider router={router} /></ConfirmProvider>)
 }
 
 // The component seeds initial state from cachedSnapshot() (sync) and then hydrates
@@ -47,7 +48,6 @@ function renderBolanekoll() {
 // benign empty result. Individual tests override the one write they care about.
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.stubGlobal('confirm', vi.fn(() => true))
   vi.stubGlobal('ResizeObserver', class ResizeObserver {
     observe() {}
     unobserve() {}
@@ -329,9 +329,11 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
 
     await user.click(await screen.findByRole('button', { name: 'Ta bort' }))
 
-    expect(confirm).toHaveBeenCalledWith(
-      'Ta bort lånedelen och alla dess betalningar och ränteperioder? Det går inte att ångra.',
-    )
+    // The delete guard is now a themed ConfirmDialog (plan 91), not native
+    // confirm(): the dialog appears, and confirming drives the store delete.
+    const dialog = await screen.findByRole('dialog', { name: 'Ta bort lånedelen?' })
+    await user.click(within(dialog).getByRole('button', { name: 'Ta bort' }))
+
     expect(Store.removeLoanPart).toHaveBeenCalledWith('p1')
     expect(await screen.findByText('Ingen anslutning. Ändringen sparades inte i molnet.')).toBeInTheDocument()
     expect(screen.getAllByText('Lånedel 1').length).toBeGreaterThan(0)

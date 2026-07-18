@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import DialogShell from '../../components/DialogShell'
 import FormField from '../../components/FormField'
 import { usePersonNames } from '../../components/usePersonNames'
+import { useConfirm } from '../../components/useConfirm'
 import { makePayment, parseAmount, todayISO } from '../../lib/mortgage'
 import type { LoanPart, Payment, MortgageSettings, PaidBy, Mortgage, Bank } from '../../lib/mortgage'
 
@@ -32,6 +33,7 @@ function paymentKind(type: EntryType): Payment['kind'] {
 }
 
 export default function PaymentDialog({ open, id, payments, parts, settings, mortgages, banks, activeMortgageId, onSave, onDelete, onClose }: PayDlgProps) {
+  const confirm = useConfirm()
   const rec = id ? payments.find(p => p.id === id) : null
   const [form, setForm] = useState({ date: todayISO(), loan_part_id: '', entryType: 'payment' as EntryType, amount: '', balance_after: '', paid_by: 'joint' as PaidBy, split_a: '', split_b: '', mortgage_id: '' })
   useEffect(() => {
@@ -188,7 +190,7 @@ export default function PaymentDialog({ open, id, payments, parts, settings, mor
           )}
         </div>
         <div className="dialog-actions">
-          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={() => { if (confirm('Ta bort betalningen?')) onDelete(id) }}>Ta bort</button>}
+          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={async () => { if (await confirm({ title: 'Ta bort betalningen?' })) onDelete(id) }}>Ta bort</button>}
           <span style={{ flex: 1 }} />
           <button type="button" className="btn btn-ghost" onClick={onClose}>Avbryt</button>
           <button type="submit" className="btn btn-primary" disabled={!splitIsValid}>Spara</button>

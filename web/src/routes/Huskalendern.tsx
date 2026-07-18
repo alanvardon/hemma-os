@@ -12,6 +12,7 @@ import Icon from '../components/Icon'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { useToast } from '../components/useToast'
+import { useConfirm } from '../components/useConfirm'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { persistenceErrorMessage } from '../lib/persistence-error'
 import ItemDialog, { type ItemDraft } from './huskalendern/ItemDialog'
@@ -63,6 +64,7 @@ export default function Huskalendern() {
   const [items, setItems] = useState<HouseItem[]>([])
   const [dlg, setDlg] = useState<{ open: boolean; item: HouseItem | null }>({ open: false, item: null })
   const { toast, showToast } = useToast()
+  const confirm = useConfirm()
   const { saveVisible: saved, flashSaved } = useSaveFlash()
 
   const today = todayISO()
@@ -97,7 +99,7 @@ export default function Huskalendern() {
     } catch (err) { saveErr(err) }
   }
   async function handleDelete(item: HouseItem) {
-    if (!confirm(`Ta bort "${item.title}"? Det går inte att ångra.`)) return
+    if (!(await confirm({ title: `Ta bort "${item.title}"?`, message: 'Det går inte att ångra.' }))) return
     try { await Store.removeItem(item.id); await refresh(); flashSaved(); showToast('Borttagen.') }
     catch (err) { saveErr(err) }
   }

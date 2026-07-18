@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Pencil } from 'lucide-react'
 import DialogShell from '../../components/DialogShell'
 import Icon from '../../components/Icon'
+import { useConfirm } from '../../components/useConfirm'
 import { persistenceErrorMessage } from '../../lib/persistence-error'
 import { partBalance, partsForMortgage, paymentsForMortgage, effectiveRatePeriod } from '../../lib/mortgage'
 import type { Bank, LoanPart, Mortgage, Payment, RatePeriod } from '../../lib/mortgage'
@@ -34,6 +35,7 @@ export default function AgreementHistoryDialog({
   onEditPayment: (id: string) => void
   onClose: () => void
 }) {
+  const confirm = useConfirm()
   const archived = mortgages
     .filter(m => m && m.archived)
     .sort((a, b) => String(b.end_date ?? '').localeCompare(String(a.end_date ?? '')))
@@ -59,10 +61,13 @@ export default function AgreementHistoryDialog({
   const detailPayments = selected ? paymentsForMortgage(payments, parts, selected.id) : []
 
   async function handleRevert() {
-    if (!window.confirm(
-      'Ångra bankbytet?\n\n' +
-      'Detta RADERAR det nya avtalet (' + revertTargetLabel + ') och dess lånedelar, och ÅTERAKTIVERAR det tidigare avtalet. ' +
-      'Det går bara så länge inga transaktioner har registrerats på det nya avtalet. Åtgärden kan inte göras ogjord.')) return
+    if (!(await confirm({
+      title: 'Ångra bankbytet?',
+      message:
+        'Detta RADERAR det nya avtalet (' + revertTargetLabel + ') och dess lånedelar, och ÅTERAKTIVERAR det tidigare avtalet. ' +
+        'Det går bara så länge inga transaktioner har registrerats på det nya avtalet. Åtgärden kan inte göras ogjord.',
+      confirmLabel: 'Ångra bankbyte',
+    }))) return
     setReverting(true)
     setError(null)
     try {

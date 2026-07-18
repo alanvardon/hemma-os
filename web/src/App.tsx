@@ -15,6 +15,7 @@ import PersistenceNotice from './components/PersistenceNotice'
 import UpdateNotice from './components/UpdateNotice'
 import ErrorBoundary from './components/ErrorBoundary'
 import OfflineBanner from './components/OfflineBanner'
+import { ConfirmProvider } from './components/useConfirm'
 
 function Layout() {
   return (
@@ -81,8 +82,10 @@ export default function App() {
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
       <AuthGate>
-        <RouterProvider router={router} />
-        <PersistenceNotice />
+        <ConfirmProvider>
+          <RouterProvider router={router} />
+          <PersistenceNotice />
+        </ConfirmProvider>
       </AuthGate>
       {/* Outside AuthGate: a stale bundle should offer a reload even from the
           login screen (plan 100). */}

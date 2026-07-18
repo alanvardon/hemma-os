@@ -49,7 +49,6 @@ const part: LoanPart = {
 }
 
 beforeEach(() => {
-  vi.stubGlobal('confirm', vi.fn(() => true))
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
 

@@ -19,6 +19,7 @@ import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
+import { useConfirm } from '../components/useConfirm'
 
 // ── Module helpers (faithful to budget.js) ───────────────────────────────────
 
@@ -163,6 +164,7 @@ function SalaryModal({ open, onClose, people, incomes, flashSaved, onHistoryChan
   const [itemsA, setItemsA] = useState<SalaryItem[]>([])
   const [itemsB, setItemsB] = useState<SalaryItem[]>([])
   const { toast, showToast } = useToast()
+  const confirm = useConfirm()
   const uid = useRef(0)
   const firstAmountRef = useRef<HTMLInputElement>(null)
 
@@ -217,7 +219,7 @@ function SalaryModal({ open, onClose, people, incomes, flashSaved, onHistoryChan
     })
     const rows = await salaryStore.list()
     const dupe = rows.some((r) => r.month === record.month)
-    if (dupe && !confirm('You’ve already logged ' + monthLabel(record.month) + '. Add another entry for it?')) return
+    if (dupe && !(await confirm({ title: 'Already logged ' + monthLabel(record.month) + '.', message: 'Add another entry for it?', confirmLabel: 'Lägg till ändå', danger: false }))) return
     try {
       await salaryStore.add(record)
     } catch {
@@ -322,6 +324,7 @@ function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const importInputRef = useRef<HTMLInputElement>(null)
   const { toast, showToast } = useToast()
+  const confirm = useConfirm()
 
   const year = rows.length ? String(rows[0].month || currentMonth()).slice(0, 4) : ''
   const yr = rows.filter((r) => String(r.month || '').slice(0, 4) === year)
@@ -331,7 +334,7 @@ function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
 
   async function del(id: string | undefined) {
     if (!id) return
-    if (!confirm('Delete this submission? This can’t be undone.')) return
+    if (!(await confirm({ title: 'Delete this submission?', message: 'This can’t be undone.' }))) return
     try { await salaryStore.remove(id) } catch {
       showToast('Kunde inte ta bort — du kanske är offline.'); return
     }
@@ -351,10 +354,10 @@ function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
     reader.onload = () => {
       salaryStore.importJSON(String(reader.result)).then((added) => {
         onReload(); flashSaved()
-        alert(added > 0
+        showToast(added > 0
           ? 'Imported ' + added + ' submission' + (added === 1 ? '' : 's') + '.'
           : 'Nothing new to import — those entries are already saved.')
-      }).catch((err) => alert('Import failed: ' + (err && err.message ? err.message : 'unknown error')))
+      }).catch((err) => showToast('Import failed: ' + (err && err.message ? err.message : 'unknown error')))
     }
     reader.readAsText(file)
   }
@@ -480,6 +483,8 @@ export default function Hushallsbudget() {
   useLayoutEffect(() => { document.documentElement.classList.remove('calc-layout') }, [])
 
   const [state, setState] = useState<BudgetState>(defaultState)
+  const { toast, showToast } = useToast()
+  const confirm = useConfirm()
   const { saveVisible, flashSaved } = useSaveFlash()
   const [justAddedId, setJustAddedId] = useState<string | null>(null)
   const [justAddedCatId, setJustAddedCatId] = useState<string | null>(null)
@@ -589,14 +594,14 @@ export default function Hushallsbudget() {
   function setCategoryName(catId: string, name: string) {
     mutate((s) => { const c = s.categories.find((x) => x.id === catId); if (c) c.name = name })
   }
-  function removeCategory(catId: string) {
+  async function removeCategory(catId: string) {
     const cats = state.categories || []
-    if (cats.length <= 1) { alert('Keep at least one category.'); return }
+    if (cats.length <= 1) { showToast('Keep at least one category.'); return }
     const idx = cats.findIndex((c) => c.id === catId)
     if (idx < 0) return
     const fallback = cats[idx === 0 ? 1 : 0]
     const count = state.costs.filter((rw) => rw.owner === 'joint' && rw.category === catId).length
-    if (count > 0 && !confirm('Remove "' + (cats[idx].name || 'this category') + '"? Its ' + count + ' row(s) move to "' + (fallback.name || 'another category') + '".')) return
+    if (count > 0 && !(await confirm({ title: 'Remove "' + (cats[idx].name || 'this category') + '"?', message: 'Its ' + count + ' row(s) move to "' + (fallback.name || 'another category') + '".', confirmLabel: 'Ta bort' }))) return
     mutate((s) => {
       s.costs.forEach((rw) => { if (rw.owner === 'joint' && rw.category === catId) rw.category = fallback.id })
       const i = s.categories.findIndex((c) => c.id === catId)
@@ -643,8 +648,8 @@ export default function Hushallsbudget() {
   }
 
   // ── Reset ──────────────────────────────────────────────────────────────────
-  function reset() {
-    if (!confirm('Reset the budget to the example data? Your current rows will be replaced.')) return
+  async function reset() {
+    if (!(await confirm({ title: 'Reset the budget to the example data?', message: 'Your current rows will be replaced.', confirmLabel: 'Reset' }))) return
     setState(defaultState())
   }
 
@@ -1016,6 +1021,7 @@ export default function Hushallsbudget() {
         flashSaved={flashSaved} onHistoryChanged={() => { if (historyOpen) reloadHistory() }} />
       <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} rows={historyRows} onReload={reloadHistory} flashSaved={flashSaved} />
       <ChartOverlay open={chartOpen} onClose={() => setChartOpen(false)} segments={donutSegments} totalIncome={r.totalIncome} />
+      <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
     </div>
   )
 }

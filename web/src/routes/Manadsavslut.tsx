@@ -22,6 +22,7 @@ import ThemeToggle from '../components/ThemeToggle'
 import { usePersonNames } from '../components/usePersonNames'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
+import { useConfirm } from '../components/useConfirm'
 import { persistenceErrorMessage } from '../lib/persistence-error'
 import { normalizeMonthEndItemDate } from '../lib/persistence-schema'
 import ItemDialog from './manadsavslut/ItemDialog'
@@ -48,6 +49,7 @@ export default function Manadsavslut() {
   const [itemsLoading, setItemsLoading] = useState(true)
 
   const { toast, showToast } = useToast()
+  const confirm = useConfirm()
   const { saveVisible: saved, flashSaved } = useSaveFlash()
 
   const [defaultClass, setDefaultClass] = useState<Treatment>('split')
@@ -231,7 +233,7 @@ export default function Manadsavslut() {
       await refresh(); flashSaved(); setItemDlg({ open: false, id: null }); showToast(itemDlg.id ? 'Item updated.' : 'Item added.')
     } catch (err) { saveErr(err) }
   }
-  async function deleteItem(id: string) { if (!confirm('Delete this item?')) return; try { await Store.removeItem(id); await refresh(); flashSaved(); showToast('Item deleted.') } catch (err) { saveErr(err) } }
+  async function deleteItem(id: string) { if (!(await confirm({ title: 'Delete this item?' }))) return; try { await Store.removeItem(id); await refresh(); flashSaved(); showToast('Item deleted.') } catch (err) { saveErr(err) } }
   // Picking a side both sets the type AND resolves any pending flag in one write.
   async function toggleType(it: Item, split: boolean) { try { await Store.updateItem(it.id, { split, amount: computeOwed(it.enter_amount, split, it.fronted_by, it.personal_a, it.personal_b), pending: false }); await refresh(); flashSaved() } catch (err) { saveErr(err) } }
   // Park a decided item as "ask later" (the existing-item flag path).
@@ -242,7 +244,10 @@ export default function Manadsavslut() {
     if (!openIds.length) { showToast('No open items to delete.'); return }
     const pend = openItems.filter(it => it.pending).length
     const pendNote = pend ? ' (including ' + pend + ' “ask later” item' + (pend === 1 ? '' : 's') + ')' : ''
-    if (!confirm('Delete all ' + openIds.length + ' open item' + (openIds.length === 1 ? '' : 's') + pendNote + '? Settled items are kept. This can’t be undone.')) return
+    if (!(await confirm({
+      title: 'Delete all ' + openIds.length + ' open item' + (openIds.length === 1 ? '' : 's') + '?',
+      message: 'Settled items are kept.' + pendNote + ' This can’t be undone.',
+    }))) return
     try { const n = await Store.removeItems(openIds); await refresh(); flashSaved(); showToast('Deleted ' + n + ' open item' + (n === 1 ? '' : 's') + '.') } catch (err) { saveErr(err) }
   }
   async function confirmSettle(draft: Omit<Payment, 'id' | 'created_at'>) {
@@ -251,7 +256,7 @@ export default function Manadsavslut() {
       showToast(p.amount > 0 ? 'Settled — ' + fmtMoney(p.amount) + ' closed.' : 'Items closed.')
     } catch (err) { saveErr(err) }
   }
-  async function reopen(id: string) { if (!confirm('Reopen this settlement? Its items become open again.')) return; try { await Store.removePayment(id); await refresh(); flashSaved(); showToast('Settlement reopened.') } catch (err) { saveErr(err) } }
+  async function reopen(id: string) { if (!(await confirm({ title: 'Reopen this settlement?', message: 'Its items become open again.', confirmLabel: 'Öppna igen', danger: false }))) return; try { await Store.removePayment(id); await refresh(); flashSaved(); showToast('Settlement reopened.') } catch (err) { saveErr(err) } }
   async function handleSaveSettings(patch: Partial<MonthEndSettings>) { try { await Store.saveSettings(patch); await refresh(); flashSaved(); setSettingsDlg(false); showToast('Settings saved.') } catch (err) { saveErr(err) } }
 
   async function handleExport() {

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import DialogShell from '../../components/DialogShell'
 import FormField from '../../components/FormField'
 import Segmented from '../../components/Segmented'
+import { useConfirm } from '../../components/useConfirm'
 import { makeRatePeriod, parseAmount, todayISO } from '../../lib/mortgage'
 import type { RatePeriod } from '../../lib/mortgage'
 
@@ -11,6 +12,7 @@ interface PeriodDlgProps {
   onDelete: (id: string) => void; onClose: () => void
 }
 export default function PeriodDialog({ open, partId, id, periods, onSave, onDelete, onClose }: PeriodDlgProps) {
+  const confirm = useConfirm()
   const rec = id ? periods.find(p => p.id === id) : null
   const [form, setForm] = useState({ start_date: '', end_date: '', rate: '', rate_type: 'rörlig' as 'rörlig' | 'bunden' })
   useEffect(() => {
@@ -37,7 +39,7 @@ export default function PeriodDialog({ open, partId, id, periods, onSave, onDele
         </div>
         <p className="form-hint">Nästa ränteändring — bankens datum. Rörlig is a rolling 3-month binding, so it has one too; leave blank for an ongoing rate with no known date.</p>
         <div className="dialog-actions">
-          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={() => { if (confirm('Delete this rate period?')) onDelete(id) }}>Delete</button>}
+          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={async () => { if (await confirm({ title: 'Delete this rate period?' })) onDelete(id) }}>Delete</button>}
           <span style={{ flex: 1 }} />
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn btn-primary">Save</button>
