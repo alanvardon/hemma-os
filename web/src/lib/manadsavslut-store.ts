@@ -319,6 +319,7 @@ export type MonthEndItemReadReasonCode =
   | 'invalid_array'
   | 'invalid_boolean'
   | 'invalid_date'
+  | 'invalid_datetime'
   | 'invalid_number'
   | 'invalid_object'
   | 'invalid_reference'
@@ -342,8 +343,9 @@ export interface MonthEndItemReadResult {
   allCloudRowsRejected: boolean
 }
 
-function itemReadReasonCode(reason: string): MonthEndItemReadReasonCode {
+function itemReadReasonCode(reason: string, path?: string): MonthEndItemReadReasonCode {
   if (reason.includes('finite number')) return 'invalid_number'
+  if (path?.endsWith('.created_at') || reason.includes('date-time')) return 'invalid_datetime'
   if (reason.includes('ISO date') || reason.includes('calendar date')) return 'invalid_date'
   if (reason.includes('boolean')) return 'invalid_boolean'
   if (reason.includes('array')) return 'invalid_array'
@@ -359,7 +361,7 @@ function itemReadDiagnostics(rejected: RejectedRecord[]): MonthEndItemReadDiagno
     const match = /^items (\d+)$/.exec(entry.record)
     return {
       fieldPath: entry.path ?? (match ? `items[${Number(match[1]) - 1}]` : 'items'),
-      code: itemReadReasonCode(entry.reason),
+      code: itemReadReasonCode(entry.reason, entry.path),
     }
   })
 }

@@ -199,6 +199,7 @@ export default function Manadsavslut() {
       invalid_array: 'ogiltig lista',
       invalid_boolean: 'ogiltigt ja/nej-värde',
       invalid_date: 'ogiltigt datum',
+      invalid_datetime: 'ogiltig skapad tid',
       invalid_number: 'ogiltigt tal',
       invalid_object: 'ogiltig post',
       invalid_reference: 'ogiltig koppling',
@@ -206,7 +207,11 @@ export default function Manadsavslut() {
       duplicate_id: 'dubblett',
       invalid_value: 'ogiltigt värde',
     }
-    const reasons = [...new Set(itemRead.diagnostics.map((diagnostic) => reasonLabels[diagnostic.code]))]
+    const reasons = [...new Set(itemRead.diagnostics.map((diagnostic) =>
+      diagnostic.code === 'invalid_date' && diagnostic.fieldPath.endsWith('.date_purchased')
+        ? 'ogiltigt köpdatum'
+        : reasonLabels[diagnostic.code],
+    ))]
     return itemRead.rejectedRowCount + ' ' + (itemRead.rejectedRowCount === 1 ? 'post' : 'poster') + ' avvisades' + (reasons.length ? ' · ' + reasons.join(', ') : '')
   }, [itemRead])
   const authoritativeEmpty = itemRead?.source === 'cloud' && !itemRead.degraded && itemRead.rows.length === 0

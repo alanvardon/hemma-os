@@ -159,6 +159,25 @@ describe('read path', () => {
     expect((cache().items as { id: string }[]).map((row) => row.id)).toEqual(['valid'])
   })
 
+  it('distinguishes an invalid creation timestamp from an invalid purchase date', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.monthend_items = [
+      itemRow('bad-created', { created_at: 'not-a-timestamp' }),
+      itemRow('bad-purchased', { date_purchased: '2026/02/01' }),
+    ]
+
+    await expect(store.listItemsDetailed()).resolves.toMatchObject({
+      source: 'unavailable',
+      degraded: true,
+      rejectedRowCount: 2,
+      diagnostics: [
+        { fieldPath: 'items[0].created_at', code: 'invalid_datetime' },
+        { fieldPath: 'items[1].date_purchased', code: 'invalid_date' },
+      ],
+      allCloudRowsRejected: true,
+    })
+  })
+
   it('all-rejected cloud rows preserve and return a populated last-known-good cache', async () => {
     mem.set(IMPORT_FLAG, '1')
     mem.set(CACHE_KEY, JSON.stringify({ version: 1, items: [itemRow('cached')], payments: [], settings: {} }))

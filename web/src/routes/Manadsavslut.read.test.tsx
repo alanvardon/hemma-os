@@ -95,8 +95,8 @@ describe('Månadsavslut item read states', () => {
       degraded: true,
       rejectedRowCount: 2,
       diagnostics: [
-        { fieldPath: 'items[0]', code: 'invalid_date' },
-        { fieldPath: 'items[1]', code: 'invalid_number' },
+        { fieldPath: 'items[0].date_purchased', code: 'invalid_date' },
+        { fieldPath: 'items[1].created_at', code: 'invalid_datetime' },
       ],
       allCloudRowsRejected: true,
     })
@@ -104,7 +104,7 @@ describe('Månadsavslut item read states', () => {
     renderRoute()
 
     expect(await screen.findByText('Sparade poster finns i molnet men kunde inte läsas säkert.')).toBeInTheDocument()
-    expect(screen.getByText(/Diagnos: 2 poster avvisades · ogiltigt datum, ogiltigt tal/)).toBeInTheDocument()
+    expect(screen.getByText(/Diagnos: 2 poster avvisades · ogiltigt köpdatum, ogiltig skapad tid/)).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: /Importera kontoutdrag/ })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Försök igen' })).toBeInTheDocument()
   })
