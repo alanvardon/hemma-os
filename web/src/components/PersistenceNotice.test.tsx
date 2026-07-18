@@ -28,13 +28,63 @@ describe('PersistenceNotice', () => {
 
   it.each([
     ['saving', 'Sparar'],
-    ['saved', 'Sparat'],
     ['waiting', 'Väntar på anslutning'],
     ['failed', 'Kunde inte spara'],
   ] as const)('shows the truthful %s sync state', async (state, label) => {
     render(<PersistenceNotice />)
-    window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state, pending: state === 'saved' ? 0 : 1 } }))
+    window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state, pending: 1 } }))
     expect(await screen.findByText(label)).toBeInTheDocument()
+  })
+
+  it('renders no global completion message for a routine saving → saved sequence', async () => {
+    render(<PersistenceNotice />)
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state: 'saving', pending: 1 } }))
+    })
+    expect(screen.getByText('Sparar')).toBeInTheDocument()
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state: 'saved', pending: 0 } }))
+    })
+    expect(screen.queryByText('Sparat')).not.toBeInTheDocument()
+    expect(screen.queryByText('Väntande ändringar sparade')).not.toBeInTheDocument()
+    expect(screen.queryByText('Sparar')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['waiting'],
+    ['failed'],
+  ] as const)('confirms recovery once when a %s queue reaches saved via saving', (recoveryState) => {
+    render(<PersistenceNotice />)
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state: recoveryState, pending: 1 } }))
+      window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state: 'saving', pending: 1 } }))
+      window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state: 'saved', pending: 0 } }))
+    })
+    expect(screen.getAllByText('Väntande ändringar sparade')).toHaveLength(1)
+    expect(screen.queryByText('Sparat')).not.toBeInTheDocument()
+  })
+
+  it('does not carry recovery context into a later ordinary write', () => {
+    vi.useFakeTimers()
+    try {
+      render(<PersistenceNotice />)
+      act(() => {
+        window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state: 'waiting', pending: 1 } }))
+        window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state: 'saved', pending: 0 } }))
+      })
+      expect(screen.getByText('Väntande ändringar sparade')).toBeInTheDocument()
+      act(() => { vi.advanceTimersByTime(1601) })
+      expect(screen.queryByText('Väntande ändringar sparade')).not.toBeInTheDocument()
+
+      act(() => {
+        window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state: 'saving', pending: 1 } }))
+        window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state: 'saved', pending: 0 } }))
+      })
+      expect(screen.queryByText('Väntande ändringar sparade')).not.toBeInTheDocument()
+      expect(screen.queryByText('Sparat')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows a queued operation that existed before the notice mounted', async () => {
@@ -47,6 +97,23 @@ describe('PersistenceNotice', () => {
 
     render(<PersistenceNotice />)
     expect(screen.getByText('Väntar på anslutning')).toBeInTheDocument()
+    syncCoordinator.removeNamespace(identity)
+  })
+
+  it('treats saved as a recovery when the notice mounted with a pending outbox', async () => {
+    const identity = { userId: 'notice-recovery-user', householdId: 'notice-recovery-house' }
+    activateSyncIdentity(identity)
+    syncCoordinator.register('notice-recovery', async () => { throw new TypeError('Failed to fetch') })
+    await expect(syncCoordinator.mutate({
+      resource: 'notice-recovery', operation: 'upsert', payload: { id: 'y' }, entityIds: ['y'],
+    })).rejects.toBeTruthy()
+
+    render(<PersistenceNotice />)
+    expect(screen.getByText('Väntar på anslutning')).toBeInTheDocument()
+    act(() => {
+      window.dispatchEvent(new CustomEvent(SYNC_STATUS_EVENT, { detail: { state: 'saved', pending: 0 } }))
+    })
+    expect(screen.getByText('Väntande ändringar sparade')).toBeInTheDocument()
     syncCoordinator.removeNamespace(identity)
   })
 
