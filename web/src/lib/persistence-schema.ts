@@ -18,7 +18,12 @@ export type ItemId = Brand<string, 'ItemId'>
 
 export interface ParseIssue { path: string; reason: string }
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; issues: ParseIssue[] }
-export interface RejectedRecord { record: string; reason: string }
+export interface RejectedRecord {
+  record: string
+  reason: string
+  /** Optional structural path to the rejected field. Never contains record values. */
+  path?: string
+}
 
 export interface PersistedScenario {
   id: ScenarioId
@@ -144,6 +149,22 @@ export function parseISODate(raw: unknown): ParseResult<ISODate> {
     return failure('date', 'must be a real calendar date')
   }
   return success(raw as ISODate)
+}
+
+/**
+ * Compatibility boundary for Månadsavslut item dates only.
+ * The historical CSV writer persisted exact zero-padded DD/MM/YYYY strings.
+ * The owner confirmed these are day-first, so 01/02/2026 means 2026-02-01.
+ * No other locale order, separator or padding is accepted.
+ */
+export function normalizeMonthEndItemDate(raw: unknown): ParseResult<ISODate | ''> {
+  if (raw === '') return success('')
+  const canonical = parseISODate(raw)
+  if (canonical.ok) return canonical
+  if (typeof raw !== 'string') return canonical
+  const legacy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw)
+  if (!legacy) return failure('date', 'must be an ISO date or zero-padded DD/MM/YYYY')
+  return parseISODate(`${legacy[3]}-${legacy[2]}-${legacy[1]}`)
 }
 
 export function parseISODateTime(raw: unknown): ParseResult<ISODateTime> {
@@ -382,6 +403,7 @@ const text = (value: unknown, path: string) => parseString(value, path)
 const finite = (value: unknown, path: string) => parseFiniteNumber(value, path)
 const boolean = (value: unknown, path: string) => parseBoolean(value, path)
 const dateOrBlank = (value: unknown, path: string): ParseResult<ISODate | ''> => value === '' ? success('') : withPath(parseISODate(value), path)
+const monthEndItemDate = (value: unknown, path: string): ParseResult<ISODate | ''> => withPath(normalizeMonthEndItemDate(value), path)
 const datetime = (value: unknown, path: string): ParseResult<ISODateTime> => withPath(parseISODateTime(value), path)
 const withPath = <T>(result: ParseResult<T>, path: string): ParseResult<T> => result.ok ? result : { ok: false, issues: result.issues.map((issue) => ({ ...issue, path })) }
 const id = <T extends string>(value: unknown, path: string, parser: (value: unknown) => ParseResult<T>) => withPath(parser(value), path)
@@ -633,7 +655,7 @@ function parsePersonalEntries(raw: unknown): ParseResult<PersonalEntry[]> {
 
 function parseMonthEndItem(raw: unknown): ParseResult<PersistedMonthEndItem> {
   if (!isRecord(raw)) return failure('item', 'must be an object')
-  const fields = [id(raw.id, 'id', parseItemId), datetime(raw.created_at, 'created_at'), field(raw, 'date_purchased', '', (v) => dateOrBlank(v, 'date_purchased')), field(raw, 'description', '', (v) => text(v, 'description')), field(raw, 'enter_amount', 0, (v) => finite(v, 'enter_amount')), field(raw, 'split', true, (v) => boolean(v, 'split')), field(raw, 'amount', 0, (v) => finite(v, 'amount')), field(raw, 'fronted_by', 'a' as const, (v) => parseEnum(v, owners, 'fronted_by')), field(raw, 'owed_by', 'a' as const, (v) => parseEnum(v, owners, 'owed_by')), field(raw, 'paid', false, (v) => boolean(v, 'paid')), field(raw, 'pending', false, (v) => boolean(v, 'pending')), field(raw, 'note', '', (v) => text(v, 'note')), field(raw, 'source', 'manual', (v) => text(v, 'source')), field(raw, 'personal_a', 0, (v) => finite(v, 'personal_a')), field(raw, 'personal_b', 0, (v) => finite(v, 'personal_b'))]
+  const fields = [id(raw.id, 'id', parseItemId), datetime(raw.created_at, 'created_at'), field(raw, 'date_purchased', '', (v) => monthEndItemDate(v, 'date_purchased')), field(raw, 'description', '', (v) => text(v, 'description')), field(raw, 'enter_amount', 0, (v) => finite(v, 'enter_amount')), field(raw, 'split', true, (v) => boolean(v, 'split')), field(raw, 'amount', 0, (v) => finite(v, 'amount')), field(raw, 'fronted_by', 'a' as const, (v) => parseEnum(v, owners, 'fronted_by')), field(raw, 'owed_by', 'a' as const, (v) => parseEnum(v, owners, 'owed_by')), field(raw, 'paid', false, (v) => boolean(v, 'paid')), field(raw, 'pending', false, (v) => boolean(v, 'pending')), field(raw, 'note', '', (v) => text(v, 'note')), field(raw, 'source', 'manual', (v) => text(v, 'source')), field(raw, 'personal_a', 0, (v) => finite(v, 'personal_a')), field(raw, 'personal_b', 0, (v) => finite(v, 'personal_b'))]
   const payment_id = nullable(raw.payment_id, (v) => id(v, 'payment_id', parsePaymentId))
   const personal_items = field(raw, 'personal_items', [] as PersonalEntry[], parsePersonalEntries)
   const all = [...fields, payment_id, personal_items]
@@ -680,12 +702,40 @@ export function salvageMonthEndEnvelope(raw: unknown): { value: MonthEndEnvelope
   }
   const items = salvage(raw.items ?? [], 'item', parseMonthEndItem)
   const itemIds = new Set(items.map((item) => item.id))
+  const itemIndexes = new Map<string, number>()
+  if (Array.isArray(raw.items)) {
+    raw.items.forEach((item, index) => {
+      if (isRecord(item) && typeof item.id === 'string' && !itemIndexes.has(item.id)) itemIndexes.set(item.id, index)
+    })
+  }
+  const paymentIndexes = new Map<string, number>()
+  if (Array.isArray(raw.payments)) {
+    raw.payments.forEach((payment, index) => {
+      if (isRecord(payment) && typeof payment.id === 'string' && !paymentIndexes.has(payment.id)) paymentIndexes.set(payment.id, index)
+    })
+  }
   const payments = salvage(raw.payments ?? [], 'payment', parseMonthEndPayment).filter((payment) => {
     if (payment.item_ids.every((itemId) => itemIds.has(itemId))) return true
-    rejected.push({ record: `payment ${payment.id}`, reason: 'references an unknown item' }); return false
+    const index = paymentIndexes.get(payment.id)
+    const itemIndex = payment.item_ids.findIndex((itemId) => !itemIds.has(itemId))
+    rejected.push({
+      record: index === undefined ? 'payment' : `payment ${index + 1}`,
+      reason: 'references an unknown item',
+      path: index === undefined ? 'payments' : `payments[${index}].item_ids[${itemIndex}]`,
+    })
+    return false
   })
   const paymentIds = new Set(payments.map((payment) => payment.id))
-  const keptItems = items.filter((item) => { if (!item.payment_id || paymentIds.has(item.payment_id)) return true; rejected.push({ record: `item ${item.id}`, reason: 'references an unknown payment' }); return false })
+  const keptItems = items.filter((item) => {
+    if (!item.payment_id || paymentIds.has(item.payment_id)) return true
+    const index = itemIndexes.get(item.id)
+    rejected.push({
+      record: index === undefined ? 'item' : `item ${index + 1}`,
+      reason: 'references an unknown payment',
+      path: index === undefined ? 'items' : `items[${index}].payment_id`,
+    })
+    return false
+  })
   const settings = parseMonthEndSettings(raw.settings ?? {})
   if (!settings.ok) rejected.push({ record: 'month-end settings', reason: settings.issues[0].reason })
   return { value: { version: typeof raw.version === 'number' && Number.isFinite(raw.version) ? raw.version : 1, items: keptItems, payments, settings: settings.ok ? valueOf(settings) : defaultMonthEndSettings() }, rejected }
@@ -693,12 +743,25 @@ export function salvageMonthEndEnvelope(raw: unknown): { value: MonthEndEnvelope
 
 export function salvageMonthEndRows(raw: unknown, kind: 'items' | 'payments'): { value: unknown[]; rejected: RejectedRecord[] } {
   const parser: (row: unknown) => ParseResult<{ id: string }> = kind === 'items' ? parseMonthEndItem : parseMonthEndPayment
-  if (!Array.isArray(raw)) return { value: [], rejected: [{ record: kind, reason: 'must be an array' }] }
+  if (!Array.isArray(raw)) return { value: [], rejected: [{ record: kind, reason: 'must be an array', path: kind }] }
   const value: unknown[] = []; const rejected: RejectedRecord[] = []; const ids = new Set<string>()
   raw.forEach((row, index) => {
     const parsed = parser(row)
-    if (!parsed.ok) rejected.push({ record: `${kind} ${index + 1}`, reason: parsed.issues[0].reason })
-    else if (ids.has(valueOf(parsed).id)) rejected.push({ record: `${kind} ${index + 1}`, reason: 'duplicates an earlier id' })
+    if (!parsed.ok) {
+      const issue = parsed.issues[0]
+      const suffix = issue.path === 'item' || issue.path === 'payment' ? '' : `.${issue.path}`
+      rejected.push({
+        record: `${kind} ${index + 1}`,
+        reason: issue.reason,
+        path: `${kind}[${index}]${suffix}`,
+      })
+    } else if (ids.has(valueOf(parsed).id)) {
+      rejected.push({
+        record: `${kind} ${index + 1}`,
+        reason: 'duplicates an earlier id',
+        path: `${kind}[${index}].id`,
+      })
+    }
     else { ids.add(valueOf(parsed).id); value.push(valueOf(parsed)) }
   })
   return { value, rejected }

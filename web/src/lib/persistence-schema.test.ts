@@ -10,6 +10,7 @@ import {
   parseMortgageEnvelope,
   parseMonthEndEnvelope,
   parseYearMonth,
+  normalizeMonthEndItemDate,
   isoDate,
   isoDateTime,
   itemId,
@@ -17,6 +18,7 @@ import {
   paymentId,
   salvageMortgageEnvelope,
   salvageBostadScenarios,
+  salvageMonthEndRows,
 } from './persistence-schema'
 
 const scenario = {
@@ -96,7 +98,83 @@ const mortgageBackup = {
   valuations: [], rate_periods: [], contributions: [], settings: {},
 }
 
+const monthEndItem = {
+  id: 'item-1',
+  created_at: '2026-07-15T10:00:00.000Z',
+  date_purchased: '2026-02-01',
+  description: 'Fictional purchase',
+  enter_amount: 100,
+  split: true,
+  amount: 50,
+  fronted_by: 'a',
+  owed_by: 'b',
+  paid: false,
+  pending: false,
+  payment_id: null,
+  note: '',
+  personal_items: [],
+  personal_a: 0,
+  personal_b: 0,
+  source: 'manual',
+}
+
 describe('Mortgage and month-end persistence schemas', () => {
+  it('normalizes only exact zero-padded day-first month-end item dates', () => {
+    expect(normalizeMonthEndItemDate('2026-02-01')).toMatchObject({ ok: true, value: '2026-02-01' })
+    expect(normalizeMonthEndItemDate('')).toMatchObject({ ok: true, value: '' })
+    expect(normalizeMonthEndItemDate('01/02/2026')).toMatchObject({ ok: true, value: '2026-02-01' })
+    expect(normalizeMonthEndItemDate('29/02/2024')).toMatchObject({ ok: true, value: '2024-02-29' })
+
+    for (const unsupported of ['1/2/2026', '2026/02/01', '02-01-2026', '01.02.2026', ' 01/02/2026 ']) {
+      expect(normalizeMonthEndItemDate(unsupported).ok).toBe(false)
+    }
+    for (const impossible of ['29/02/2026', '31/04/2026', '2026-02-29']) {
+      expect(normalizeMonthEndItemDate(impossible).ok).toBe(false)
+    }
+  })
+
+  it('normalizes legacy dates without weakening strict month-end row validation', () => {
+    const legacy = parseMonthEndEnvelope({
+      version: 1,
+      settings: {},
+      items: [{ ...monthEndItem, date_purchased: '01/02/2026' }],
+      payments: [],
+    })
+    expect(legacy).toMatchObject({ ok: true })
+    if (legacy.ok) expect(legacy.value.items[0].date_purchased).toBe('2026-02-01')
+
+    expect(parseMonthEndEnvelope({
+      version: 1,
+      settings: {},
+      items: [{ ...monthEndItem, date_purchased: '01/02/2026', enter_amount: '100' }],
+      payments: [],
+    }).ok).toBe(false)
+    expect(parseMonthEndEnvelope({
+      version: 1,
+      settings: {},
+      items: [{ ...monthEndItem, date_purchased: '01/02/2026', fronted_by: 'household' }],
+      payments: [],
+    }).ok).toBe(false)
+    expect(parseMonthEndEnvelope({
+      version: 1,
+      settings: {},
+      items: [{ ...monthEndItem, date_purchased: '01/02/2026', payment_id: 'missing' }],
+      payments: [],
+    }).ok).toBe(false)
+  })
+
+  it('salvages a legacy-date row while still rejecting malformed financial siblings', () => {
+    const result = salvageMonthEndRows([
+      { ...monthEndItem, date_purchased: '01/02/2026' },
+      { ...monthEndItem, id: 'item-2', date_purchased: '01/02/2026', amount: '50' },
+    ], 'items')
+    expect(result.value).toEqual([expect.objectContaining({ id: 'item-1', date_purchased: '2026-02-01' })])
+    expect(result.rejected).toEqual([expect.objectContaining({
+      path: 'items[1].amount',
+      reason: 'must be a finite number',
+    })])
+  })
+
   it('keeps persistence brands non-interchangeable at the boundary', () => {
     const loan = loanPartId('loan-1')
     const payment = paymentId('payment-1')
