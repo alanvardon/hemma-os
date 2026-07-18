@@ -626,3 +626,251 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     expect(document.activeElement).toBe(document.getElementById('betalningar'))
   })
 })
+
+// Plan 115 — Betalningar discloses one populated calendar month at a time
+// instead of a fixed 20-row page. These regressions pin the visibility
+// contract: the store already delivers payments newest-first (date desc, then
+// created_at desc), and the component only GROUPS them into month buckets — it
+// must never re-sort, split a month by row count, or drop an undated row.
+describe('Bolanekoll — Betalningar month disclosure (plan 115)', () => {
+  const part1 = { id: 'p1', created_at: '2026-01-01', label: 'Del A', loan_number: '', start_balance: 1_000_000, start_date: '2026-01-01', archived: false }
+  const part2 = { id: 'p2', created_at: '2026-01-01', label: 'Del B', loan_number: '', start_balance: 500_000, start_date: '2026-01-01', archived: false }
+
+  // A ledger row. `date: ''` models a legacy undated row. Callers pass rows
+  // already newest-first, exactly as the store's byDateDesc would deliver them.
+  function pay(id: string, date: string, amount: number, opts: {
+    loan_part_id?: string | null; created_at?: string; is_insats?: boolean
+    source?: string; kind?: 'payment' | 'amortization'; paid_by?: 'a' | 'b' | 'joint'
+  } = {}) {
+    return {
+      id, created_at: opts.created_at ?? (date || '2000') + 'T09:00:00',
+      loan_part_id: opts.loan_part_id === undefined ? 'p1' : opts.loan_part_id, date,
+      kind: opts.kind ?? ('payment' as const), description: '',
+      amount, balance_after: null, paid_by: opts.paid_by ?? ('a' as const),
+      source: opts.source ?? 'manual', is_insats: opts.is_insats ?? false,
+    }
+  }
+
+  function seed(payments: ReturnType<typeof pay>[], parts = [part1]) {
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 6, banks: [], mortgages: [], loan_parts: parts, payments,
+      valuations: [], rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue(parts)
+    vi.mocked(Store.listPayments).mockResolvedValue(payments)
+  }
+
+  async function renderLedger() {
+    renderBolanekoll()
+    await screen.findByRole('heading', { name: /Betalningar/ })
+  }
+
+  function ledgerRows() {
+    return [...document.querySelectorAll('.payments-table tbody tr')]
+  }
+  const rowsText = () => ledgerRows().map(r => r.textContent || '')
+
+  it('shows every row of the newest month initially — including more than 20 — and no older row', async () => {
+    // 22 rows in June (over the old PAY_PAGE), then one in May.
+    const june = Array.from({ length: 22 }, (_, i) =>
+      pay('jun-' + i, `2026-06-${String(22 - i).padStart(2, '0')}`, 6000 + i))
+    seed([...june, pay('may-1', '2026-05-15', 5999)])
+    await renderLedger()
+
+    const rows = ledgerRows()
+    expect(rows).toHaveLength(22)
+    expect(rows.some(r => /5\s*999/.test(r.textContent || ''))).toBe(false)
+    // The count pill still reports the full ledger, not the visible slice.
+    expect(document.querySelector('#betalningar .count-pill')?.textContent).toBe('23')
+    expect(screen.getByRole('button', { name: /Visa en månad till/ })).toBeInTheDocument()
+  })
+
+  it('reveals exactly the next populated month per click and skips empty-month gaps', async () => {
+    // June + March populated; April and May are empty calendar gaps.
+    seed([
+      pay('jun-1', '2026-06-10', 6001),
+      pay('mar-1', '2026-03-10', 3001),
+      pay('mar-2', '2026-03-05', 3002),
+    ])
+    const user = userEvent.setup()
+    await renderLedger()
+    expect(ledgerRows()).toHaveLength(1)
+
+    // One click jumps straight to March — the empty April/May never cost a click.
+    await user.click(screen.getByRole('button', { name: /Visa en månad till/ }))
+    const texts = rowsText()
+    expect(texts).toHaveLength(3)
+    expect(texts.some(t => /3\s*001/.test(t))).toBe(true)
+    expect(texts.some(t => /3\s*002/.test(t))).toBe(true)
+    // No more months left → the expansion controls disappear, collapse remains.
+    expect(screen.queryByRole('button', { name: /Visa en månad till/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Visa alla månader' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Visa senaste månaden' })).toBeInTheDocument()
+  })
+
+  it('reveals the full ledger through repeated one-month expansion', async () => {
+    seed([
+      pay('jun-1', '2026-06-10', 6001),
+      pay('may-1', '2026-05-10', 5001),
+      pay('apr-1', '2026-04-10', 4001),
+    ])
+    const user = userEvent.setup()
+    await renderLedger()
+    expect(ledgerRows()).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: /Visa en månad till/ }))
+    expect(ledgerRows()).toHaveLength(2)
+    await user.click(screen.getByRole('button', { name: /Visa en månad till/ }))
+    expect(ledgerRows()).toHaveLength(3)
+    expect(screen.queryByRole('button', { name: /Visa en månad till/ })).not.toBeInTheDocument()
+  })
+
+  it('reveals every remaining row at once with Visa alla månader', async () => {
+    seed([
+      pay('jun-1', '2026-06-10', 6001),
+      pay('may-1', '2026-05-10', 5001),
+      pay('mar-1', '2026-03-10', 3001),
+    ])
+    const user = userEvent.setup()
+    await renderLedger()
+
+    await user.click(screen.getByRole('button', { name: 'Visa alla månader' }))
+    expect(ledgerRows()).toHaveLength(3)
+    expect(screen.queryByRole('button', { name: /Visa en månad till/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Visa senaste månaden' })).toBeInTheDocument()
+  })
+
+  it('collapses back to the newest month from both incremental and full expansion', async () => {
+    seed([
+      pay('jun-1', '2026-06-10', 6001),
+      pay('may-1', '2026-05-10', 5001),
+      pay('mar-1', '2026-03-10', 3001),
+    ])
+    const user = userEvent.setup()
+    await renderLedger()
+
+    await user.click(screen.getByRole('button', { name: 'Visa alla månader' }))
+    expect(ledgerRows()).toHaveLength(3)
+    await user.click(screen.getByRole('button', { name: 'Visa senaste månaden' }))
+    expect(ledgerRows()).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Visa senaste månaden' })).not.toBeInTheDocument()
+
+    // Same collapse after a single incremental reveal.
+    await user.click(screen.getByRole('button', { name: /Visa en månad till/ }))
+    expect(ledgerRows()).toHaveLength(2)
+    await user.click(screen.getByRole('button', { name: 'Visa senaste månaden' }))
+    expect(ledgerRows()).toHaveLength(1)
+  })
+
+  it('renders no disclosure controls for a single-month ledger', async () => {
+    seed([pay('jun-1', '2026-06-10', 6001), pay('jun-2', '2026-06-05', 6002)])
+    await renderLedger()
+
+    expect(ledgerRows()).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: /Visa en månad till/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Visa alla månader' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Visa senaste månaden' })).not.toBeInTheDocument()
+  })
+
+  it('keeps independent month buckets per loan part and resets depth when the filter changes', async () => {
+    // p1: June + May (two buckets). p2: June only (one bucket).
+    seed([
+      pay('jun-a', '2026-06-10', 6001, { loan_part_id: 'p1' }),
+      pay('jun-b', '2026-06-09', 6002, { loan_part_id: 'p2' }),
+      pay('may-a', '2026-05-10', 5001, { loan_part_id: 'p1' }),
+    ], [part1, part2])
+    const user = userEvent.setup()
+    await renderLedger()
+
+    // 'All' filter: two buckets. Expand to reveal May.
+    await user.click(screen.getByRole('button', { name: /Visa en månad till/ }))
+    expect(ledgerRows()).toHaveLength(3)
+
+    // Filtering to Del B (June only) resets depth to one month AND that part's
+    // ledger has a single bucket, so no disclosure controls remain.
+    await user.click(screen.getByRole('radio', { name: 'Del B' }))
+    expect(ledgerRows().map(r => r.textContent || '').some(t => /6\s*002/.test(t))).toBe(true)
+    expect(ledgerRows()).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /Visa en månad till/ })).not.toBeInTheDocument()
+
+    // Back to Del A: depth is reset to one month (only June), May hidden again.
+    await user.click(screen.getByRole('radio', { name: 'Del A' }))
+    expect(ledgerRows()).toHaveLength(1)
+    expect(ledgerRows()[0].textContent).toMatch(/6\s*001/)
+    expect(screen.getByRole('button', { name: /Visa en månad till/ })).toBeInTheDocument()
+  })
+
+  it('leads with the newest month even when rows arrive oldest-first', async () => {
+    // Defensive: the store delivers newest-first, but the disclosure must not
+    // depend on it — feed ascending order and the newest month still leads.
+    seed([
+      pay('mar-1', '2026-03-10', 3001),
+      pay('may-1', '2026-05-10', 5001),
+      pay('jul-1', '2026-07-10', 7001),
+    ])
+    await renderLedger()
+    const texts = rowsText()
+    expect(texts).toHaveLength(1)
+    expect(texts[0]).toMatch(/7\s*001/)
+  })
+
+  it('preserves the deterministic order of same-date rows within a bucket', async () => {
+    // Two June-10 rows delivered newest created_at first — the store's tie-break.
+    seed([
+      pay('late', '2026-06-10', 6001, { created_at: '2026-06-10T12:00:00' }),
+      pay('early', '2026-06-10', 6002, { created_at: '2026-06-10T08:00:00' }),
+    ])
+    await renderLedger()
+    const texts = rowsText()
+    expect(texts.findIndex(t => /6\s*001/.test(t))).toBeLessThan(texts.findIndex(t => /6\s*002/.test(t)))
+  })
+
+  it('keeps an undated legacy row reachable, and shows it initially when it is the only bucket', async () => {
+    // Undated-only ledger: one fallback bucket, visible immediately, no controls.
+    seed([pay('u1', '', 4200, { created_at: '2026-01-02' }), pay('u2', '', 4300, { created_at: '2026-01-01' })])
+    await renderLedger()
+    expect(rowsText().some(t => /4\s*200/.test(t))).toBe(true)
+    expect(screen.queryByRole('button', { name: /Visa en månad till/ })).not.toBeInTheDocument()
+  })
+
+  it('buckets undated rows after every dated month, reachable through the same controls', async () => {
+    seed([
+      pay('jun-1', '2026-06-10', 6001),
+      pay('u1', '', 4200, { created_at: '2026-01-01' }),
+    ])
+    const user = userEvent.setup()
+    await renderLedger()
+    // June shows first; the undated bucket is hidden until revealed.
+    expect(rowsText().some(t => /4\s*200/.test(t))).toBe(false)
+    await user.click(screen.getByRole('button', { name: /Visa en månad till/ }))
+    expect(rowsText().some(t => /4\s*200/.test(t))).toBe(true)
+  })
+
+  it('shows a newest-month predicted row with its godkänd prognos marker', async () => {
+    seed([
+      pay('pred', '2026-06-20', 6001, { source: 'predicted' }),
+      pay('may-1', '2026-05-10', 5001),
+    ])
+    await renderLedger()
+    expect(ledgerRows()).toHaveLength(1)
+    expect(screen.getByText('godkänd prognos')).toBeInTheDocument()
+  })
+
+  it('keeps allocation disclosure and row actions working after an older month is revealed', async () => {
+    seed([
+      pay('jun-1', '2026-06-10', 6001),
+      // Older insats row with a split — its allocation expands on demand.
+      pay('may-insats', '2026-05-10', 5001, { kind: 'amortization', is_insats: true }),
+    ])
+    const user = userEvent.setup()
+    await renderLedger()
+
+    await user.click(screen.getByRole('button', { name: /Visa en månad till/ }))
+    const insatsRow = ledgerRows().find(r => /5\s*001/.test(r.textContent || ''))!
+    // Edit action is present on the revealed row.
+    expect(insatsRow.querySelector('button[aria-label="Edit"]')).toBeInTheDocument()
+    // Allocation chevron toggles the detail row open.
+    await user.click(insatsRow.querySelector('button.expand-btn')!)
+    expect(document.querySelector('.pay-detail')).toBeInTheDocument()
+  })
+})
