@@ -139,6 +139,11 @@
     color: var(--ink-soft);
   }
   .who-amp { font-family: var(--font-display); font-size: 1.3rem; color: var(--ink-faint); padding-bottom: 6px; }
+  /* Bound: canonical names + a link to the household dialog (plan 111). */
+  .who-row-bound { align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .who-bound-people { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+  .who-bound-name { font-family: var(--font-display); font-size: 1.05rem; color: var(--ink); }
+  .who-manage { flex-shrink: 0; }
 
   /* ── Income columns ─────────────────────────────────────────── */
   .income-cols {
@@ -660,6 +665,8 @@
     text-overflow: ellipsis;
     padding-bottom: 7px;
   }
+  .compare-head .person-label { justify-content: flex-end; }
+  .compare-head.is-self { border-bottom: 2px solid var(--accent); }
   .compare-label {
     font-size: 12px;
     color: var(--ink-soft);

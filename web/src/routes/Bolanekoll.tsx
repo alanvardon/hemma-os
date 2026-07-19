@@ -12,6 +12,8 @@ import ThemeToggle from '../components/ThemeToggle'
 import Segmented from '../components/Segmented'
 import { usePersonNames } from '../components/usePersonNames'
 import { usePersonIdentity } from '../components/usePersonIdentity'
+import { PersonLabel } from '../components/PersonBadge'
+import { openHouseholdDialog } from '../components/HouseholdMenu'
 import { useConfirm } from '../components/useConfirm'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
@@ -538,6 +540,26 @@ export default function Bolanekoll() {
   const identityView = usePersonIdentity()
   const me: Owner = identityView.myToolSlot('bolanekoll') ?? (settings.i_am === 'b' ? 'b' : 'a')
   const other: Owner = me === 'a' ? 'b' : 'a'
+  // The plan-111 "Du" treatment renders ONLY when the account is actually mapped
+  // to a Bolånekoll slot — `mappedSlot` is null for an unmapped/unbound account,
+  // so an existing household keeps today's display and no incorrect Du marker.
+  const mappedSlot = identityView.myToolSlot('bolanekoll')
+  const isSelf = (o: Owner) => mappedSlot === o
+  const isOther = (o: Owner) => mappedSlot != null && mappedSlot !== o
+  // Once bound, canonical names are the live display names; else fall back to the
+  // legacy owner_a_name/owner_b_name via usePersonNames.
+  const ownerName = (o: 'a' | 'b' | null | undefined) =>
+    ((o === 'a' || o === 'b') ? identityView.personFor('bolanekoll', o)?.display_name : undefined) ?? nameOf(o)
+  const ownerSplitName = (o: Owner, pct: number) => (
+    <PersonLabel
+      className="split-name"
+      name={ownerName(o)}
+      self={isSelf(o)}
+      other={isOther(o)}
+      avatar={mappedSlot != null}
+      suffix={<span className="split-pct"> · {fmtPct(pct)}</span>}
+    />
+  )
   const chartData = useMemo<EquityPoint[]>(
     () => timeline.map(r => ({
       label: r.label,
@@ -890,12 +912,12 @@ export default function Bolanekoll() {
               </div>
               <div className="split-row">
                 <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
-                  <span className="split-name">{nameOf('a')} · {fmtPct(marketSplit.a_pct)}</span>
+                  {ownerSplitName('a', marketSplit.a_pct)}
                   <span className="split-val" data-owner-market-capital="a">{M(marketSplit.a, false, true)}</span>
                   <span className="split-sub">equity share</span>
                 </div>
                 <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
-                  <span className="split-name">{nameOf('b')} · {fmtPct(marketSplit.b_pct)}</span>
+                  {ownerSplitName('b', marketSplit.b_pct)}
                   <span className="split-val" data-owner-market-capital="b">{M(marketSplit.b, false, true)}</span>
                   <span className="split-sub">equity share</span>
                 </div>
@@ -928,12 +950,12 @@ export default function Bolanekoll() {
                 {settings.track_contributions && (
                   <div className="split-row">
                     <div className={'split-card' + (me === 'a' ? ' is-accent' : '')}>
-                      <span className="split-name">{nameOf('a')} · {fmtPct(cbSplit.a_pct)}</span>
+                      {ownerSplitName('a', cbSplit.a_pct)}
                       <span className="split-val" data-owner-cost-capital="a">{M(cbSplit.a, false, true)}</span>
                       <span className="split-sub">paid in · insatt</span>
                     </div>
                     <div className={'split-card' + (me === 'b' ? ' is-accent' : '')}>
-                      <span className="split-name">{nameOf('b')} · {fmtPct(cbSplit.b_pct)}</span>
+                      {ownerSplitName('b', cbSplit.b_pct)}
                       <span className="split-val" data-owner-cost-capital="b">{M(cbSplit.b, false, true)}</span>
                       <span className="split-sub">paid in · insatt</span>
                     </div>
@@ -986,7 +1008,7 @@ export default function Bolanekoll() {
             <div className="chart-wrap">
               {timeline.length >= 2
                 ? <EquityStackChart data={chartData}
-                    mineLabel={nameOf(me) + '’s equity'} partnerLabel={nameOf(other) + '’s equity'}
+                    mineLabel={ownerName(me) + '’s equity' + (mappedSlot ? ' · Du' : '')} partnerLabel={ownerName(other) + '’s equity'}
                     bankLabel="Banken · Bank" formatMoney={fmtMoney} />
                 : <p className="chart-empty">Import a few months of payments to see the trend.</p>}
             </div>
@@ -1720,14 +1742,14 @@ export default function Bolanekoll() {
                                           independent facts — one payer must not stand in for
                                           a two-person allocation. */}
                                       <span className="pay-detail-label">Betald av</span>
-                                      <span className="alloc-chip">{p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</span>
+                                      <span className="alloc-chip">{p.paid_by === 'joint' ? 'Gemensamt' : ownerName(p.paid_by)}</span>
                                       <span className="pay-detail-label">Fördelning</span>
                                       {(() => {
                                         const alloc = extraAmorteringAllocation(p, settings)
                                         return (
                                           <>
-                                            <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(alloc.a)}</span>
-                                            <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(alloc.b)}</span>
+                                            <span className="alloc-chip"><b>{ownerName('a')}</b> {fmtMoney(alloc.a)}</span>
+                                            <span className="alloc-chip"><b>{ownerName('b')}</b> {fmtMoney(alloc.b)}</span>
                                             {alloc.provenance === 'derived' && (
                                               <span className="row-flag row-flag-estimated" title="Beräknad från ägarfördelningen — granska och spara för att göra den definitiv">beräknad</span>
                                             )}
@@ -1740,13 +1762,13 @@ export default function Bolanekoll() {
                                       <span className="pay-detail-label">Betalad av</span>
                                       {p.paid_split ? (
                                         <>
-                                          <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(p.paid_split.a)}</span>
-                                          <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(p.paid_split.b)}</span>
+                                          <span className="alloc-chip"><b>{ownerName('a')}</b> {fmtMoney(p.paid_split.a)}</span>
+                                          <span className="alloc-chip"><b>{ownerName('b')}</b> {fmtMoney(p.paid_split.b)}</span>
                                         </>
                                       ) : (
                                         <span className="alloc-chip">{p.paid_by === 'joint'
                                           ? 'Gemensamt · enligt ägarfördelning'
-                                          : <><b>{nameOf(p.paid_by === 'b' ? 'b' : 'a')}</b> {fmtMoney(p.amount)}</>}</span>
+                                          : <><b>{ownerName(p.paid_by === 'b' ? 'b' : 'a')}</b> {fmtMoney(p.amount)}</>}</span>
                                       )}
                                     </>
                                   )}
@@ -1801,7 +1823,7 @@ export default function Bolanekoll() {
                 <tbody>{downPayments.map(p => (
                   <tr key={p.id} data-source-payment-id={p.id}>
                     <td className="col-date">{p.date || '—'}</td>
-                    <td className="col-owner">{p.paid_split ? `${nameOf('a')} ${fmtMoney(p.paid_split.a)} · ${nameOf('b')} ${fmtMoney(p.paid_split.b)}` : p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
+                    <td className="col-owner">{p.paid_split ? `${ownerName('a')} ${fmtMoney(p.paid_split.a)} · ${ownerName('b')} ${fmtMoney(p.paid_split.b)}` : p.paid_by === 'joint' ? 'Gemensamt' : ownerName(p.paid_by)}</td>
                     <td className="num col-amt">{fmtMoney(p.amount)}</td>
                     <td className="col-act">
                       {/* A kontantinsats belongs to a mortgage agreement, not a
@@ -1840,10 +1862,10 @@ export default function Bolanekoll() {
                   return (
                   <tr key={p.id} data-source-payment-id={p.id}>
                     <td className="col-date">{p.date || '—'}</td>
-                    <td className="col-owner">{p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
+                    <td className="col-owner">{p.paid_by === 'joint' ? 'Gemensamt' : ownerName(p.paid_by)}</td>
                     <td className="col-alloc">
-                      <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(alloc.a)}</span>
-                      <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(alloc.b)}</span>
+                      <span className="alloc-chip"><b>{ownerName('a')}</b> {fmtMoney(alloc.a)}</span>
+                      <span className="alloc-chip"><b>{ownerName('b')}</b> {fmtMoney(alloc.b)}</span>
                       {alloc.provenance === 'derived' && (
                         <span className="row-flag row-flag-estimated" title="Beräknad från ägarfördelningen — granska och spara för att göra den definitiv">beräknad</span>
                       )}
@@ -1870,9 +1892,15 @@ export default function Bolanekoll() {
       <ValuationDialog open={valDlg.open} id={valDlg.id} valuations={valuations} onSave={handleSaveVal} onDelete={handleDeleteVal} onClose={() => setValDlg({ open: false, id: null })} />
       <PaymentDialog open={payDlg.open} id={payDlg.id} payments={payments} parts={parts} settings={settings}
         mortgages={mortgages} banks={banks} activeMortgageId={activeMortgage?.id ?? null}
+        displayNames={{ a: ownerName('a'), b: ownerName('b') }} selfSlot={mappedSlot}
         onSave={handleSavePay} onDelete={handleDeletePay} onClose={() => setPayDlg({ open: false, id: null })} />
       <CopyToPartsDialog open={copyDlg.open} source={copyDlg.source} parts={parts} onConfirm={ids => copyDlg.source && handleCopyToParts(copyDlg.source, ids)} onClose={() => setCopyDlg({ open: false, source: null })} />
-      <SettingsDialog open={settingsDlg} settings={settings} onSave={handleSaveSettings} onClose={() => setSettingsDlg(false)}
+      <SettingsDialog open={settingsDlg} settings={settings}
+        bound={mappedSlot != null || (identityView.personFor('bolanekoll', 'a') != null && identityView.personFor('bolanekoll', 'b') != null)}
+        mapped={mappedSlot != null}
+        boundNames={{ a: ownerName('a'), b: ownerName('b') }}
+        onManagePeople={openHouseholdDialog}
+        onSave={handleSaveSettings} onClose={() => setSettingsDlg(false)}
         onExportJSON={handleExportJSON} onExportCSV={handleExportCSV} onImportJSON={handleImportJSON} />
 
       <BankProfileDialog open={profileDlg} bank={activeBank} banks={banks} catalogBanks={catalogBanks}

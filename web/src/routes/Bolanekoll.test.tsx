@@ -1100,8 +1100,13 @@ describe('Bolanekoll — view perspective from the person binding', () => {
 
   async function marketCards() {
     // 5,000,000 value − 3,500,000 debt = 1,500,000 equity at the 70/30 target.
-    const a = (await screen.findByText(/^Alex ·/)).closest('.split-card') as HTMLElement
-    const b = (await screen.findByText(/^Sam ·/)).closest('.split-card') as HTMLElement
+    // The owner name + share now render as a PersonLabel (name span + a
+    // ".split-pct" suffix), so locate each card by its stable market-capital
+    // data hook rather than a single combined text node.
+    const aVal = await screen.findByText((_c, el) => el?.getAttribute('data-owner-market-capital') === 'a')
+    const bVal = await screen.findByText((_c, el) => el?.getAttribute('data-owner-market-capital') === 'b')
+    const a = aVal.closest('.split-card') as HTMLElement
+    const b = bVal.closest('.split-card') as HTMLElement
     return { a, b }
   }
 
@@ -1118,12 +1123,19 @@ describe('Bolanekoll — view perspective from the person binding', () => {
   })
 
   it('a mapped account follows its binding, not i_am, without moving or changing the cards', async () => {
+    // The financial values (share % + equity kronor) are person-independent, so
+    // read just those from a card — the mapped view legitimately ADDS a "Du"
+    // chip + avatar, which must not count as a changed value.
+    const financials = (card: HTMLElement) => ({
+      pct: card.querySelector('.split-pct')?.textContent,
+      val: card.querySelector('.split-val')?.textContent,
+    })
     // Same persisted household data as above (i_am still says B)…
     seedSplit(settings70('b'))
     vi.mocked(usePersonIdentity).mockReturnValue(identityView(null))
     const first = renderBolanekoll()
     const before = await marketCards()
-    const beforeValues = [before.a.textContent, before.b.textContent]
+    const beforeValues = [financials(before.a), financials(before.b)]
     first.unmount()
 
     // …but THIS account is bound to person/slot A → accent moves to A.
@@ -1132,9 +1144,9 @@ describe('Bolanekoll — view perspective from the person binding', () => {
     const { a, b } = await marketCards()
     expect(a.className).toContain('is-accent')
     expect(b.className).not.toContain('is-accent')
-    // A stays first in DOM order and every value is byte-for-byte identical.
+    // A stays first in DOM order and every financial value is identical.
     expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect([a.textContent, b.textContent]).toEqual(beforeValues)
+    expect([financials(a), financials(b)]).toEqual(beforeValues)
   })
 
   it('an invited partner mapped to the OTHER person sees themselves as B', async () => {

@@ -41,7 +41,13 @@ export function mortgageStat(
 
 // ── Månadsavslut ─────────────────────────────────────────────────────────────
 
-export interface SettleStat { from: string; to: string; amount: number }
+export interface SettleStat {
+  from: string; to: string; amount: number
+  /** The legacy A/B slots behind the transfer, so the hub can resolve canonical
+      names + the "Du" marker through the person-identity binding (plan 111)
+      without changing this household-wide figure. */
+  fromSlot: 'a' | 'b'; toSlot: 'a' | 'b'
+}
 
 export interface MonthEndStat {
   /** Days until the last day of the current month (0 = today is month-end). */
@@ -69,7 +75,7 @@ export function latestSettle(
   if (!p || !p.from_person || !p.to_person || !(Number(p.amount) > 0)) return null
   const name = (person: 'a' | 'b') =>
     person === 'a' ? settings.person_a_name : settings.person_b_name
-  return { from: name(p.from_person), to: name(p.to_person), amount: Number(p.amount) }
+  return { from: name(p.from_person), to: name(p.to_person), amount: Number(p.amount), fromSlot: p.from_person, toSlot: p.to_person }
 }
 
 export function monthEndStat(

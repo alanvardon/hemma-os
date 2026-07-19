@@ -20,6 +20,10 @@ import ThemeToggle from '../components/ThemeToggle'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
 import { useConfirm } from '../components/useConfirm'
+import { usePersonIdentity } from '../components/usePersonIdentity'
+import { PersonLabel } from '../components/PersonBadge'
+import { openHouseholdDialog } from '../components/HouseholdMenu'
+import type { CanonicalSlot } from '../lib/person-identity'
 
 // ── Module helpers (faithful to budget.js) ───────────────────────────────────
 
@@ -155,9 +159,9 @@ function Modal({ open, onClose, ariaLabel, children }: {
 // ── Submit this month's salaries ─────────────────────────────────────────────
 interface SalaryItem { uid: number; label: string; amount: number }
 
-function SalaryModal({ open, onClose, people, incomes, flashSaved, onHistoryChanged }: {
+function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onHistoryChanged }: {
   open: boolean; onClose: () => void; people: string[]; incomes: Row[]
-  flashSaved: () => void; onHistoryChanged: () => void
+  selfSlot?: CanonicalSlot | null; flashSaved: () => void; onHistoryChanged: () => void
 }) {
   const [month, setMonth] = useState(currentMonth())
   const [note, setNote] = useState('')
@@ -233,7 +237,9 @@ function SalaryModal({ open, onClose, people, incomes, flashSaved, onHistoryChan
   const itemColumn = (owner: 'a' | 'b', items: SalaryItem[]) => (
     <div className="income-col">
       <div className="income-col-head">
-        <span className="income-col-name">{owner === 'a' ? nameA : nameB}</span>
+        <span className="income-col-name">
+          <PersonLabel name={owner === 'a' ? nameA : nameB} self={selfSlot === owner} other={selfSlot != null && selfSlot !== owner} />
+        </span>
         <span className="income-col-sub">{fmt(owner === 'a' ? incomeA : incomeB)}</span>
       </div>
       <div className="sal-list">
@@ -318,9 +324,14 @@ function AmountInputRef({ value, onChange, className, ariaLabel, inputRef }: {
 }
 
 // ── Submitted salary history ─────────────────────────────────────────────────
-function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
-  open: boolean; onClose: () => void; rows: SalarySubmission[]; onReload: () => void; flashSaved: () => void
+function HistoryModal({ open, onClose, rows, selfSlot, onReload, flashSaved }: {
+  open: boolean; onClose: () => void; rows: SalarySubmission[]; selfSlot?: CanonicalSlot | null
+  onReload: () => void; flashSaved: () => void
 }) {
+  // Stored submission names are immutable history snapshots (plan 111). We only
+  // append "(du)" when the row's A/B slot resolves through the current tool
+  // binding to the signed-in account — we never rewrite the saved name itself.
+  const withDu = (slot: 'a' | 'b', name: string) => (selfSlot === slot ? `${name} (du)` : name)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const importInputRef = useRef<HTMLInputElement>(null)
   const { toast, showToast } = useToast()
@@ -379,8 +390,8 @@ function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
               <span className="year-summary-title">{year} so far</span>
               <span className="year-summary-count">{yr.length + (yr.length === 1 ? ' month' : ' months')}</span>
             </div>
-            {detailRow(nameA + ' income', fmt(totalA))}
-            {detailRow(nameB + ' income', fmt(totalB))}
+            {detailRow(withDu('a', nameA) + ' income', fmt(totalA))}
+            {detailRow(withDu('b', nameB) + ' income', fmt(totalB))}
             {detailRow('Net settle-up', netText(net, nameA, nameB))}
           </div>
         )}
@@ -404,8 +415,8 @@ function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
                 <div className="history-detail">
                   <div className="history-detail-inner">
                     {detailRow('Submitted', submittedLabel(row.created_at))}
-                    {detailRow((row.person_a_name || 'A') + ' total', fmt(row.income_a || 0))}
-                    {detailRow((row.person_b_name || 'B') + ' total', fmt(row.income_b || 0))}
+                    {detailRow(withDu('a', row.person_a_name || 'A') + ' total', fmt(row.income_a || 0))}
+                    {detailRow(withDu('b', row.person_b_name || 'B') + ' total', fmt(row.income_b || 0))}
                     {detailRow('Each takes home', fmt(row.equal_share || 0))}
                     {detailRow('Transfer', transferText(row))}
                     {(['a', 'b'] as const).map((owner) => {
@@ -413,7 +424,7 @@ function HistoryModal({ open, onClose, rows, onReload, flashSaved }: {
                       if (!its.length) return null
                       return (
                         <div key={owner}>
-                          <div className="detail-subhead">{(owner === 'b' ? (row.person_b_name || 'B') : (row.person_a_name || 'A')) + ' income'}</div>
+                          <div className="detail-subhead">{withDu(owner, owner === 'b' ? (row.person_b_name || 'B') : (row.person_a_name || 'A')) + ' income'}</div>
                           {its.map((it, i) => detailRowKeyed(i, it.label || 'Income', fmt(it.amount || 0)))}
                         </div>
                       )
@@ -536,8 +547,23 @@ export default function Hushallsbudget() {
   useEffect(() => { document.title = 'Hushållsbudget — Hemma·OS' }, [])
 
   const r = useMemo(() => computeBudget(state), [state])
-  const nameA = state.people[0] || 'A', nameB = state.people[1] || 'B'
+  // Plan 111: once the household binds Hushållsbudget's A/B slots to its canonical
+  // people, those names become the live display names and the signed-in slot is
+  // marked "Du". An unmapped/unbound household keeps its legacy people[] names and
+  // shows no Du. Column ORDER (A then B) never changes.
+  const identityView = usePersonIdentity()
+  const boundA = identityView.personFor('hushallsbudget', 'a')
+  const boundB = identityView.personFor('hushallsbudget', 'b')
+  const toolBound = !!boundA && !!boundB
+  const mySlot = identityView.myToolSlot('hushallsbudget')
+  const isSelf = (o: 'a' | 'b') => mySlot === o
+  const isOther = (o: 'a' | 'b') => mySlot != null && mySlot !== o
+  const nameA = toolBound ? boundA.display_name : (state.people[0] || 'A')
+  const nameB = toolBound ? boundB.display_name : (state.people[1] || 'B')
   const personName = (owner: Owner) => owner === 'a' ? nameA : owner === 'b' ? nameB : 'Together'
+  const personHead = (owner: 'a' | 'b', avatar = true) => (
+    <PersonLabel name={owner === 'a' ? nameA : nameB} self={isSelf(owner)} other={isOther(owner)} avatar={avatar} />
+  )
 
   // ── Immutable state mutation helper ────────────────────────────────────────
   const mutate = useCallback((fn: (draft: BudgetState) => void) => {
@@ -704,27 +730,40 @@ export default function Hushallsbudget() {
               own costs come off your own share.
             </p>
 
-            <div className="who-row">
-              <div className="who-field">
-                <label htmlFor="personAName">Person 1</label>
-                <input type="text" id="personAName" value={state.people[0]} maxLength={20} autoComplete="off"
-                  onChange={(e) => mutate((s) => { s.people[0] = e.target.value })}
-                  onBlur={(e) => { if (!e.target.value.trim()) mutate((s) => { s.people[0] = 'A' }) }} />
+            {toolBound ? (
+              <div className="who-row who-row-bound">
+                <div className="who-bound-people">
+                  <span className="who-bound-name">{personHead('a')}</span>
+                  <span className="who-amp">&amp;</span>
+                  <span className="who-bound-name">{personHead('b')}</span>
+                </div>
+                <button type="button" className="link-btn who-manage" onClick={openHouseholdDialog}>
+                  Hantera personer i Hushåll →
+                </button>
               </div>
-              <span className="who-amp">&amp;</span>
-              <div className="who-field">
-                <label htmlFor="personBName">Person 2</label>
-                <input type="text" id="personBName" value={state.people[1]} maxLength={20} autoComplete="off"
-                  onChange={(e) => mutate((s) => { s.people[1] = e.target.value })}
-                  onBlur={(e) => { if (!e.target.value.trim()) mutate((s) => { s.people[1] = 'B' }) }} />
+            ) : (
+              <div className="who-row">
+                <div className="who-field">
+                  <label htmlFor="personAName">Person 1</label>
+                  <input type="text" id="personAName" value={state.people[0]} maxLength={20} autoComplete="off"
+                    onChange={(e) => mutate((s) => { s.people[0] = e.target.value })}
+                    onBlur={(e) => { if (!e.target.value.trim()) mutate((s) => { s.people[0] = 'A' }) }} />
+                </div>
+                <span className="who-amp">&amp;</span>
+                <div className="who-field">
+                  <label htmlFor="personBName">Person 2</label>
+                  <input type="text" id="personBName" value={state.people[1]} maxLength={20} autoComplete="off"
+                    onChange={(e) => mutate((s) => { s.people[1] = e.target.value })}
+                    onBlur={(e) => { if (!e.target.value.trim()) mutate((s) => { s.people[1] = 'B' }) }} />
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="income-cols">
               {(['a', 'b'] as const).map((owner) => (
                 <div className="income-col" key={owner}>
                   <div className="income-col-head">
-                    <span className="income-col-name">{personName(owner)}</span>
+                    <span className="income-col-name">{personHead(owner)}</span>
                     <span className="income-col-sub">{fmt(owner === 'a' ? r.incomeA : r.incomeB)}</span>
                   </div>
                   <div className="income-list">
@@ -856,7 +895,7 @@ export default function Hushallsbudget() {
               {(['a', 'b'] as const).map((owner) => (
                 <div className="owner-col" key={owner}>
                   <div className="owner-block-head">
-                    <span className="owner-block-title">{personName(owner)}</span>
+                    <span className="owner-block-title">{personHead(owner)}</span>
                     <span className="owner-block-sub">{fmt(owner === 'a' ? r.costsA : r.costsB)}</span>
                   </div>
                   <div className="b-list">
@@ -889,7 +928,7 @@ export default function Hushallsbudget() {
               {(['a', 'b'] as const).map((owner) => (
                 <div className="owner-col" key={owner}>
                   <div className="owner-block-head">
-                    <span className="owner-block-title">{personName(owner)}</span>
+                    <span className="owner-block-title">{personHead(owner)}</span>
                     <span className="owner-block-sub">{fmt(owner === 'a' ? r.savingsA : r.savingsB)}</span>
                   </div>
                   <div className="b-list">
@@ -939,8 +978,8 @@ export default function Hushallsbudget() {
             <div className="sum-card-title">Each of you, after the split</div>
             <div className="compare-grid">
               <span className="compare-corner" aria-hidden="true" />
-              <span className="compare-head">{nameA}</span>
-              <span className="compare-head">{nameB}</span>
+              <span className={'compare-head' + (isSelf('a') ? ' is-self' : '')}>{personHead('a')}</span>
+              <span className={'compare-head' + (isSelf('b') ? ' is-self' : '')}>{personHead('b')}</span>
 
               <span className="compare-label">Take-home</span>
               <span className="compare-val">{M(r.personA.ownIncome + r.personA.potNet)}</span>
@@ -975,8 +1014,8 @@ export default function Hushallsbudget() {
             <div className="sum-big">{M(r.equalShare)}</div>
             <div className="sum-card-subtitle">take-home each, after the split</div>
             <div className="sum-rows">
-              <div className="sum-row"><span className="sum-row-label">{nameA}</span><span className="sum-row-val">{M(r.incomeA)}</span></div>
-              <div className="sum-row"><span className="sum-row-label">{nameB}</span><span className="sum-row-val">{M(r.incomeB)}</span></div>
+              <div className="sum-row"><span className="sum-row-label">{personHead("a", false)}</span><span className="sum-row-val">{M(r.incomeA)}</span></div>
+              <div className="sum-row"><span className="sum-row-label">{personHead("b", false)}</span><span className="sum-row-val">{M(r.incomeB)}</span></div>
             </div>
           </div>
 
@@ -995,8 +1034,8 @@ export default function Hushallsbudget() {
             <div className="sum-big positive">{Pct1(r.savingsRate * 100)}</div>
             <div className="sum-card-subtitle">of total household income</div>
             <div className="sum-rows">
-              <div className="sum-row"><span className="sum-row-label">{nameA}</span><span className="sum-row-val">{M(r.savingsA)}</span></div>
-              <div className="sum-row"><span className="sum-row-label">{nameB}</span><span className="sum-row-val">{M(r.savingsB)}</span></div>
+              <div className="sum-row"><span className="sum-row-label">{personHead("a", false)}</span><span className="sum-row-val">{M(r.savingsA)}</span></div>
+              <div className="sum-row"><span className="sum-row-label">{personHead("b", false)}</span><span className="sum-row-val">{M(r.savingsB)}</span></div>
             </div>
           </div>
 
@@ -1017,9 +1056,9 @@ export default function Hushallsbudget() {
         </div>
       </div>
 
-      <SalaryModal open={salaryOpen} onClose={() => setSalaryOpen(false)} people={state.people} incomes={state.incomes}
-        flashSaved={flashSaved} onHistoryChanged={() => { if (historyOpen) reloadHistory() }} />
-      <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} rows={historyRows} onReload={reloadHistory} flashSaved={flashSaved} />
+      <SalaryModal open={salaryOpen} onClose={() => setSalaryOpen(false)} people={toolBound ? [nameA, nameB] : state.people} incomes={state.incomes}
+        selfSlot={mySlot} flashSaved={flashSaved} onHistoryChanged={() => { if (historyOpen) reloadHistory() }} />
+      <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} rows={historyRows} selfSlot={mySlot} onReload={reloadHistory} flashSaved={flashSaved} />
       <ChartOverlay open={chartOpen} onClose={() => setChartOpen(false)} segments={donutSegments} totalIncome={r.totalIncome} />
       <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
     </div>

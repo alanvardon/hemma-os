@@ -10,10 +10,12 @@ import { currencyState, clean, defaultPeriodLabel } from './shared'
 
 interface SettleDlgProps {
   open: boolean; openItems: Item[]; pendingCount: number; settings: MonthEndSettings
+  displayNames?: { a: string; b: string }; selfSlot?: 'a' | 'b' | null
   onConfirm: (draft: Omit<Payment, 'id' | 'created_at'>) => void; onClose: () => void
 }
-export default function SettleDialog({ open, openItems, pendingCount, settings, onConfirm, onClose }: SettleDlgProps) {
-  const { nameOf } = usePersonNames(settings.person_a_name, settings.person_b_name)
+export default function SettleDialog({ open, openItems, pendingCount, settings, displayNames, selfSlot, onConfirm, onClose }: SettleDlgProps) {
+  const { nameOf } = usePersonNames(displayNames?.a ?? settings.person_a_name, displayNames?.b ?? settings.person_b_name)
+  const duName = (p: 'a' | 'b' | null | undefined) => (selfSlot && p === selfSlot ? `${nameOf(p)} (du)` : nameOf(p))
   const months = useMemo(() => monthsWithOpenItems(openItems), [openItems])
   const [month, setMonth] = useState<string>('')
   const [period, setPeriod] = useState('')
@@ -32,7 +34,7 @@ export default function SettleDialog({ open, openItems, pendingCount, settings, 
     onConfirm({ ...pending, period_label: clean(period), note: clean(note) })
   }
   const transfer = pending.from_person && pending.amount > 0
-    ? <>{nameOf(pending.from_person)} → {nameOf(pending.to_person)} · <strong><Money value={pending.amount} currencySuffix={CURRENCY_SUFFIX[currencyState.current] || 'kr'} maxDecimals={2} rollIn /></strong></>
+    ? <>{duName(pending.from_person)} → {duName(pending.to_person)} · <strong><Money value={pending.amount} currencySuffix={CURRENCY_SUFFIX[currencyState.current] || 'kr'} maxDecimals={2} rollIn /></strong></>
     : <>Even — no transfer</>
   return (
     <DialogShell open={open} onClose={onClose} className="ma-dialog">

@@ -17,6 +17,10 @@ import { test, expect, type Page } from '@playwright/test'
 const SUPABASE = 'http://localhost:54321'
 // supabase-js derives its storage key from the URL hostname: sb-<host>-auth-token.
 const AUTH_STORAGE_KEY = 'sb-localhost-auth-token'
+// household_identity() returns a real uuid household_id; the client's defensive
+// parser rejects a non-uuid envelope as unconfigured (the sync-scope claim id is
+// separate and unvalidated).
+const HH_UUID = '00000000-aaaa-4aaa-8aaa-000000000001'
 
 // A structurally valid (unverified — the client never checks the signature)
 // JWT + session envelope that supabase-js accepts from storage. expires_at in
@@ -48,11 +52,22 @@ function fakeSession(): string {
   })
 }
 
+// A minimal stand-in for the plan-111 household_identity jsonb view, mutated by
+// the three identity RPCs so a real setup → reload round trip can be verified.
+interface IdentityView {
+  household_id: string | null
+  my_person_id: string | null
+  people: { id: string; slot: 'a' | 'b'; display_name: string }[]
+  bindings: Record<string, { a: string; b: string }>
+}
+
 interface Backend {
   /** When true, revisioned mortgage writes die at the network layer. */
   failInserts: boolean
   /** Simulate a second device changing an already loaded loan part. */
   remoteUpdatePart(currentLabel: string, nextLabel: string): void
+  /** The current household identity view the RPCs read/write (plan 111). */
+  identity: IdentityView
 }
 
 // Seed the auth session and mock the whole Supabase origin. Inserted loan
@@ -82,6 +97,8 @@ async function mockBackend(page: Page): Promise<Backend> {
     mortgage_rate_periods: periods,
   }
   const receipts = new Map<string, unknown>()
+  const PERSON_A = '11111111-1111-4111-8111-111111111111'
+  const PERSON_B = '22222222-2222-4222-8222-222222222222'
   const backend: Backend = {
     failInserts: false,
     remoteUpdatePart(currentLabel, nextLabel) {
@@ -90,6 +107,9 @@ async function mockBackend(page: Page): Promise<Backend> {
       part.label = nextLabel
       part.revision = Number(part.revision) + 1
     },
+    // Starts as a provisioned-but-unconfigured household (people: []), which is
+    // what household_identity() returns before "Personer i hushållet" is saved.
+    identity: { household_id: HH_UUID, my_person_id: null, people: [], bindings: {} },
   }
 
   await page.addInitScript(
@@ -236,6 +256,37 @@ async function mockBackend(page: Page): Promise<Backend> {
       const response = { status: 'applied', mortgage: previous, revisions }
       receipts.set(body.p_operation_id, response)
       return route.fulfill({ json: response })
+    }
+    // ── Plan 111 identity RPCs (stateful, keyed to the seeded household) ──
+    if (path === '/rest/v1/rpc/household_identity' && req.method() === 'POST') {
+      // SQL NULL (no household) reads as an unusable envelope on the client; a
+      // configured household returns its full view.
+      return route.fulfill({ json: backend.identity.household_id ? backend.identity : null })
+    }
+    if (path === '/rest/v1/rpc/configure_household_people' && req.method() === 'POST') {
+      const b = req.postDataJSON() as Record<string, string | null>
+      backend.identity.household_id = HH_UUID
+      backend.identity.people = [
+        { id: PERSON_A, slot: 'a', display_name: String(b.p_person_a_name) },
+        { id: PERSON_B, slot: 'b', display_name: String(b.p_person_b_name) },
+      ]
+      if (b.p_tool) {
+        const idOf = (slot: string | null) => (slot === 'a' ? PERSON_A : PERSON_B)
+        backend.identity.bindings[b.p_tool] = { a: idOf(b.p_tool_slot_a_person), b: idOf(b.p_tool_slot_b_person) }
+      }
+      return route.fulfill({ json: backend.identity })
+    }
+    if (path === '/rest/v1/rpc/set_my_household_person' && req.method() === 'POST') {
+      const b = req.postDataJSON() as { p_person_id: string | null }
+      backend.identity.my_person_id = b.p_person_id
+      return route.fulfill({ json: null })
+    }
+    if (path === '/rest/v1/rpc/household_roster' && req.method() === 'POST') {
+      const me = backend.identity.people.find((p) => p.id === backend.identity.my_person_id)
+      return route.fulfill({ json: [{
+        user_id: 'user-e2e', role: 'owner', email: 'e2e@local.test',
+        person_id: backend.identity.my_person_id, person_display_name: me?.display_name ?? null,
+      }] })
     }
     if (resources[path.slice('/rest/v1/'.length)] && req.method() === 'GET') {
       return route.fulfill({ json: resources[path.slice('/rest/v1/'.length)] })
@@ -599,6 +650,81 @@ test('Ångra bankbyte reverts a pristine switch, survives reload, and disappears
   await page.getByRole('button', { name: 'Tidigare avtal' }).click()
   const historyAfterTransaction = dialogWithHeading(page, 'Tidigare avtal')
   await expect(historyAfterTransaction.getByRole('group', { name: 'Ångra bankbyte' })).toHaveCount(0)
+
+  expect(errors).toEqual([])
+})
+
+// ── Plan 111 — signed-in household person identity ───────────────────────────
+
+test('identity setup marks the signed-in person "Du", persists across reload, and clears on household transition', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  const backend = await mockBackend(page)
+  await page.goto('/#/')
+
+  // The homepage trigger is the anonymous two-person icon until a mapping exists.
+  await page.getByRole('button', { name: 'Hushåll' }).click()
+  await expect(page.locator('.household-btn-avatar')).toHaveCount(0)
+
+  // Personer i hushållet → run first-time setup with the prefilled defaults.
+  await page.getByRole('button', { name: 'Kom igång' }).click()
+  await expect(page.getByRole('button', { name: 'Spara personer' })).toBeVisible()
+  await page.getByLabel('Person A').fill('Alex')
+  await page.getByLabel('Person B').fill('Sam')
+  // Bind every tool's A/B slots (A→a, B→b) so no tool is left incomplete.
+  const selects = page.locator('select.hh-people-select')
+  const count = await selects.count()
+  for (let i = 0; i < count; i++) await selects.nth(i).selectOption(i % 2 === 0 ? 'a' : 'b')
+  // "Vem är du?" → Alex (slot A), then confirm the review gate and save.
+  await page.getByRole('radio', { name: 'Alex' }).check()
+  await page.getByRole('checkbox', { name: /kontrollerat namnen/ }).check()
+  await page.getByRole('button', { name: 'Spara personer' }).click()
+
+  // The Du marker renders only from the server-confirmed view.
+  await expect(page.getByText('(du)')).toBeVisible()
+  await page.getByRole('button', { name: 'Stäng' }).click()
+
+  // Mapped → the trigger becomes the current person's initial avatar (still
+  // labelled "Hushåll"), and it survives a real reload from the server view.
+  await expect(page.locator('.household-btn-avatar')).toHaveText('AL')
+  await expect(page.getByRole('button', { name: 'Hushåll' })).toBeVisible()
+  await page.reload()
+  await expect(page.locator('.household-btn-avatar')).toHaveText('AL')
+
+  // A household transition (server now reports no household) must not leave a
+  // stale identity avatar behind — it reverts to the anonymous icon.
+  backend.identity = { household_id: null, my_person_id: null, people: [], bindings: {} }
+  await page.reload()
+  await expect(page.locator('.household-btn-avatar')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Hushåll' })).toBeVisible()
+
+  expect(errors).toEqual([])
+})
+
+test('a second account mapped to the other person sees ITS OWN perspective as Du', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  const backend = await mockBackend(page)
+  // The invited partner is canonical person B and is mapped to B — their view
+  // must mark Sam (not the household creator, Alex) as "Du".
+  backend.identity = {
+    household_id: HH_UUID,
+    my_person_id: '22222222-2222-4222-8222-222222222222',
+    people: [
+      { id: '11111111-1111-4111-8111-111111111111', slot: 'a', display_name: 'Alex' },
+      { id: '22222222-2222-4222-8222-222222222222', slot: 'b', display_name: 'Sam' },
+    ],
+    bindings: { bolanekoll: { a: '11111111-1111-4111-8111-111111111111', b: '22222222-2222-4222-8222-222222222222' } },
+  }
+  await page.goto('/#/')
+
+  // Partner's initial avatar (Sam → SA), not the creator's.
+  await expect(page.locator('.household-btn-avatar')).toHaveText('SA')
+  await page.getByRole('button', { name: 'Hushåll' }).click()
+
+  // In the people list, Sam is (du) and Alex is not.
+  const samRow = page.locator('.hh-list-row', { hasText: 'Sam' })
+  await expect(samRow).toContainText('(du)')
+  const alexRow = page.locator('.hh-list-row', { hasText: 'Alex' })
+  await expect(alexRow).not.toContainText('(du)')
 
   expect(errors).toEqual([])
 })

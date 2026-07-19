@@ -34,11 +34,31 @@ import {
 } from '../lib/sync'
 import { hasLegacyQuarantine, removeLegacyQuarantine } from '../lib/legacy-data'
 import HouseholdPeopleSection from './HouseholdPeopleSetup'
+import { usePersonIdentity } from './usePersonIdentity'
+import { PersonAvatar, PersonLabel, personInitials } from './PersonBadge'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+// The tool routes (Hushållsbudget, Månadsavslut, Bolånekoll) link to identity
+// management once bound. They don't own the household dialog, so they ask for it
+// via this event; the always-mounted HouseholdMenu opens itself in response.
+const OPEN_EVENT = 'hemma:open-household'
+export function openHouseholdDialog() {
+  window.dispatchEvent(new CustomEvent(OPEN_EVENT))
+}
+
 export default function HouseholdMenu() {
   const [open, setOpen] = useState(false)
+  // When the signed-in account is mapped to a household person, the trigger
+  // becomes that person's initial avatar (plan 111); it keeps the same
+  // accessible label and still opens the household dialog.
+  const { myPerson } = usePersonIdentity()
+
+  useEffect(() => {
+    const openIt = () => setOpen(true)
+    window.addEventListener(OPEN_EVENT, openIt)
+    return () => window.removeEventListener(OPEN_EVENT, openIt)
+  }, [])
 
   return (
     <>
@@ -49,12 +69,16 @@ export default function HouseholdMenu() {
         aria-label="Hushåll"
         onClick={() => setOpen(true)}
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <circle cx="9" cy="8" r="3" />
-          <path d="M15.5 11a2.6 2.6 0 1 0-2.3-3.8" />
-          <path d="M3.5 19v-1a4 4 0 0 1 4-4h3a4 4 0 0 1 4 4v1" />
-          <path d="M16.5 14.2A4 4 0 0 1 20.5 18v1" />
-        </svg>
+        {myPerson ? (
+          <span className="household-btn-avatar" aria-hidden="true">{personInitials(myPerson.display_name)}</span>
+        ) : (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="9" cy="8" r="3" />
+            <path d="M15.5 11a2.6 2.6 0 1 0-2.3-3.8" />
+            <path d="M3.5 19v-1a4 4 0 0 1 4-4h3a4 4 0 0 1 4 4v1" />
+            <path d="M16.5 14.2A4 4 0 0 1 20.5 18v1" />
+          </svg>
+        )}
       </button>
       <AnimatedDialog open={open} onOpenChange={setOpen} contentClassName="modal modal-narrow">
         <HouseholdPanel open={open} onClose={() => setOpen(false)} />
@@ -68,6 +92,7 @@ function roleLabel(role: string): string {
 }
 
 function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { myPerson } = usePersonIdentity()
   const [email, setEmail] = useState<string | null>(null)
   const [members, setMembers] = useState<Member[]>([])
   const [invites, setInvites] = useState<Invite[]>([])
@@ -239,7 +264,15 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
         <section className="hh-section">
           <p className="const-group-title">Inloggad</p>
           <div className="hh-account-row">
-            <span className="hh-email">{email ?? '…'}</span>
+            {myPerson && (
+              <PersonAvatar name={myPerson.display_name} self size="md" decorative={false} />
+            )}
+            <div className="hh-account-identity">
+              {myPerson && (
+                <PersonLabel name={myPerson.display_name} self className="hh-account-name" />
+              )}
+              <span className="hh-email">{email ?? '…'}</span>
+            </div>
             <button type="button" className="btn btn-ghost hh-signout" onClick={() => setSignOutChoice('choose')}>Logga ut</button>
           </div>
           {signOutChoice !== 'closed' && (
@@ -287,10 +320,16 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
                 return (
                   <li key={m.user_id} className="hh-list-row">
                     <span className="hh-role-dot" data-role={m.role} aria-hidden="true" />
+                    {m.person_display_name && (
+                      <PersonAvatar name={m.person_display_name} self={isYou} other={!isYou} size="sm" />
+                    )}
                     <span className="hh-member-email">
-                      {m.person_display_name ? `${m.person_display_name} · ` : ''}
-                      {m.email ?? 'Okänd medlem'}
-                      {isYou && <span className="hh-you"> (du)</span>}
+                      {m.person_display_name ? (
+                        <PersonLabel name={m.person_display_name} self={isYou} variant="audit" className="hh-member-person" />
+                      ) : (
+                        isYou && <span className="hh-you">(du) </span>
+                      )}
+                      <span className="hh-member-addr">{m.email ?? 'Okänd medlem'}</span>
                     </span>
                     <span className="hh-role">{roleLabel(m.role)}</span>
                   </li>
