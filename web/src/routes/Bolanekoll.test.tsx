@@ -458,6 +458,147 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     }))
   })
 
+  it('prefills a new extra amortering split 50/50 from ownership and freezes it once edited (plan 116)', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [], valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: '+ Lägg till' }))
+    await user.selectOptions(screen.getByLabelText('Typ'), 'extra_amortization')
+    await user.type(screen.getByLabelText('Belopp'), '10000')
+
+    expect(await screen.findByLabelText('Alex · fördelning')).toHaveValue('5000')
+    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+
+    // The owner reviews and edits Alex's share directly — from this point the
+    // pair is "touched" and must not be silently recomputed.
+    await user.clear(screen.getByLabelText('Alex · fördelning'))
+    await user.type(screen.getByLabelText('Alex · fördelning'), '6000')
+    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+
+    // A later amount edit must not overwrite the reviewed values.
+    await user.clear(screen.getByLabelText('Belopp'))
+    await user.type(screen.getByLabelText('Belopp'), '12000')
+    expect(screen.getByLabelText('Alex · fördelning')).toHaveValue('6000')
+    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+  })
+
+  it('blocks Save for a missing, negative, or total-mismatched extra-amortering allocation (plan 116)', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [], valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: '+ Lägg till' }))
+    await user.selectOptions(screen.getByLabelText('Typ'), 'extra_amortization')
+    await user.type(screen.getByLabelText('Belopp'), '10000')
+    const saveBtn = await screen.findByRole('button', { name: 'Spara' })
+    // A freshly prefilled, valid 50/50 split leaves Save enabled.
+    expect(saveBtn).toBeEnabled()
+
+    // Negative allocation.
+    await user.clear(screen.getByLabelText('Alex · fördelning'))
+    await user.type(screen.getByLabelText('Alex · fördelning'), '-500')
+    expect(saveBtn).toBeDisabled()
+
+    // Total mismatch (8 000 vs the 10 000 amount).
+    await user.clear(screen.getByLabelText('Alex · fördelning'))
+    await user.type(screen.getByLabelText('Alex · fördelning'), '4000')
+    await user.clear(screen.getByLabelText('Sam · fördelning'))
+    await user.type(screen.getByLabelText('Sam · fördelning'), '4000')
+    expect(saveBtn).toBeDisabled()
+
+    // Missing allocation.
+    await user.clear(screen.getByLabelText('Sam · fördelning'))
+    expect(saveBtn).toBeDisabled()
+
+    await user.click(saveBtn)
+    expect(Store.addPayment).not.toHaveBeenCalled()
+  })
+
+  it('keeps a reviewed two-person allocation intact when a single payer is selected (plan 116)', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [], valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: '+ Lägg till' }))
+    await user.selectOptions(screen.getByLabelText('Typ'), 'extra_amortization')
+    await user.type(screen.getByLabelText('Belopp'), '10000')
+    await screen.findByLabelText('Alex · fördelning')
+    await user.clear(screen.getByLabelText('Alex · fördelning'))
+    await user.type(screen.getByLabelText('Alex · fördelning'), '6000')
+    await user.clear(screen.getByLabelText('Sam · fördelning'))
+    await user.type(screen.getByLabelText('Sam · fördelning'), '4000')
+    // Alex made the bank transfer, but the reviewed 6 000/4 000 allocation
+    // must survive untouched — selecting a single payer must not collapse it
+    // to paid_by: 'joint' or rewrite the split to match the payer alone.
+    await user.selectOptions(screen.getByLabelText('Betalad av'), 'a')
+    await user.click(screen.getByRole('button', { name: 'Spara' }))
+
+    expect(await screen.findByText('Payment saved.')).toBeInTheDocument()
+    expect(Store.addPayment).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'amortization', is_insats: true, paid_by: 'a', paid_split: { a: 6000, b: 4000 },
+    }))
+  })
+
+  it('opens a legacy unsplit extra amortering with a derived split and a beräknad notice (plan 116)', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    const legacy = {
+      id: 'legacy1', created_at: '2026-02-01', loan_part_id: 'p1', date: '2026-02-01',
+      kind: 'amortization' as const, description: '', amount: 10_000, balance_after: null,
+      paid_by: 'a' as const, paid_split: null, source: 'import', is_insats: true,
+    }
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments: [legacy], valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listPayments).mockResolvedValue([legacy])
+    vi.mocked(Store.updatePayment).mockResolvedValue(legacy)
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Redigera i Betalningar' }))
+    // Default ownership is 50/50, so the legacy row derives an even split.
+    expect(screen.getByLabelText('Alex · fördelning')).toHaveValue('5000')
+    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+    expect(screen.getByText('Beräknad från ägarfördelningen — granska innan du sparar.')).toBeInTheDocument()
+    // Hydration never writes on its own.
+    expect(Store.updatePayment).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Spara' }))
+    expect(await screen.findByText('Payment saved.')).toBeInTheDocument()
+    expect(Store.updatePayment).toHaveBeenCalledWith('legacy1', expect.objectContaining({
+      paid_by: 'a', paid_split: { a: 5000, b: 5000 },
+    }))
+  })
+
   it('normalizes edited Betalning and Ränta to joint records without a split', async () => {
     const part = {
       id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
@@ -531,7 +672,37 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     expect(document.querySelector('#betalningar')!.parentElement).toHaveTextContent(/5\s*000 kr/)
   })
 
-  it('adds a personal extra amortering to debt, total equity, and only that owner capital account', async () => {
+  it('drops the Lånedel column from Kontantinsatser and keeps the unlinked-agreement warning on the row (plan 116)', async () => {
+    const part = {
+      id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
+      start_balance: 1_000_000, start_date: '2026-01-01', archived: false,
+    }
+    const base = { created_at: '2026-02-01', date: '2026-02-02', description: '', balance_after: null, paid_by: 'joint' as const, source: 'manual', loan_part_id: null, kind: 'down_payment' as const, is_insats: true }
+    const linked = { ...base, id: 'linked', amount: 100_000, mortgage_id: 'm1' }
+    const unlinked = { ...base, id: 'unlinked', amount: 50_000, mortgage_id: null }
+    const payments = [linked, unlinked]
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 4, banks: [], mortgages: [], loan_parts: [part], payments, valuations: [],
+      rate_periods: [], contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue([part])
+    vi.mocked(Store.listPayments).mockResolvedValue(payments)
+    renderBolanekoll()
+
+    await screen.findByText('Kontantinsatser')
+    const table = document.querySelector('.kontantinsats-table') as HTMLElement
+    expect(table).toBeInTheDocument()
+    expect(within(table).queryByText('Lånedel')).not.toBeInTheDocument()
+
+    const linkedRow = table.querySelector('[data-source-payment-id="linked"]') as HTMLElement
+    const unlinkedRow = table.querySelector('[data-source-payment-id="unlinked"]') as HTMLElement
+    expect(within(linkedRow).queryByText('⚠ ej kopplad')).not.toBeInTheDocument()
+    expect(within(unlinkedRow).getByText('⚠ ej kopplad')).toBeInTheDocument()
+    // The row stays editable via the Betalningar dialog despite losing its own column.
+    expect(within(unlinkedRow).getByRole('button', { name: 'Redigera i Betalningar' })).toBeInTheDocument()
+  })
+
+  it('adds an unsplit legacy extra amortering to debt and total equity, splitting it by the ownership share (plan 116)', async () => {
     const part = {
       id: 'p1', created_at: '2026-01-01', label: 'Rörlig del', loan_number: '',
       start_balance: 958_000, original_balance: 958_000, start_date: '2026-01-01', archived: false,
@@ -561,10 +732,12 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     await screen.findByText('Eget kapital · Marknadsvärde minus skuld')
     expect(document.querySelector('[data-current-debt]')).toHaveAttribute('data-current-debt', '950000')
     expect(document.querySelector('[data-market-equity]')).toHaveAttribute('data-market-equity', '1050000')
-    expect(document.querySelector('[data-owner-market-capital="a"]')).toHaveTextContent('529000')
-    expect(document.querySelector('[data-owner-market-capital="b"]')).toHaveTextContent('521000')
-    expect(document.querySelector('[data-owner-cost-capital="a"]')).toHaveTextContent('529000')
-    expect(document.querySelector('[data-owner-cost-capital="b"]')).toHaveTextContent('521000')
+    // Legacy row has no paid_split: the 8 000 extra amortering is now split 50/50
+    // by the ownership share (plan 116), not credited in full to its payer A.
+    expect(document.querySelector('[data-owner-market-capital="a"]')).toHaveTextContent('525000')
+    expect(document.querySelector('[data-owner-market-capital="b"]')).toHaveTextContent('525000')
+    expect(document.querySelector('[data-owner-cost-capital="a"]')).toHaveTextContent('525000')
+    expect(document.querySelector('[data-owner-cost-capital="b"]')).toHaveTextContent('525000')
   })
 
   it('updates every debt-derived hero value from predicted principal plus an extra amortering and opens Betalningar', async () => {

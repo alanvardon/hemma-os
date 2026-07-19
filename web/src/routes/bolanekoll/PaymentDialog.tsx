@@ -3,8 +3,15 @@ import DialogShell from '../../components/DialogShell'
 import FormField from '../../components/FormField'
 import { usePersonNames } from '../../components/usePersonNames'
 import { useConfirm } from '../../components/useConfirm'
-import { makePayment, parseAmount, todayISO } from '../../lib/mortgage'
+import { makePayment, parseAmount, todayISO, extraAmorteringAllocation } from '../../lib/mortgage'
 import type { LoanPart, Payment, MortgageSettings, PaidBy, Mortgage, Bank } from '../../lib/mortgage'
+import { fmtMoney } from './shared'
+
+// Local rounding to öre — mirrors mortgage.ts's internal r2 (not exported) so
+// the dialog's live validation matches extraAmorteringAllocation's rule
+// exactly: both amounts finite/non-negative and their öre-rounded sum equal
+// to the öre-rounded payment amount.
+function round2(n: number): number { return Math.round((Number(n) || 0) * 100) / 100 }
 
 type EntryType = 'down_payment' | 'payment' | 'interest' | 'amortization' | 'extra_amortization' | 'loan' | 'fee' | 'other'
 
@@ -36,10 +43,34 @@ export default function PaymentDialog({ open, id, payments, parts, settings, mor
   const confirm = useConfirm()
   const rec = id ? payments.find(p => p.id === id) : null
   const [form, setForm] = useState({ date: todayISO(), loan_part_id: '', entryType: 'payment' as EntryType, amount: '', balance_after: '', paid_by: 'joint' as PaidBy, split_a: '', split_b: '', mortgage_id: '' })
+  // Extra amortering only: once the owner edits either allocation input
+  // directly, stop auto-deriving it from the amount/ownership split so a
+  // later amount or payer change never silently overwrites reviewed values.
+  // An existing row loaded with a VALID stored split counts as already
+  // reviewed (touched) so an amount edit can't quietly recompute it either;
+  // a legacy row loaded with a derived split stays untouched until the owner
+  // edits it, matching the "beräknad — granska innan du sparar" notice below.
+  const [splitTouched, setSplitTouched] = useState(false)
+  // Whether the split currently shown for an existing extra amortering was
+  // loaded as a derived (legacy) fallback rather than the row's own stored
+  // split — drives the "beräknad" review notice until the row is saved.
+  const [legacyDerived, setLegacyDerived] = useState(false)
   useEffect(() => {
     if (!open) return
     const entryType = entryTypeFor(rec)
     const joint = entryType === 'payment' || entryType === 'interest'
+    const isExtra = entryType === 'extra_amortization'
+    let splitA = '', splitB = '', touched = false, derived = false
+    if (isExtra && rec) {
+      const alloc = extraAmorteringAllocation(rec, settings)
+      splitA = String(alloc.a)
+      splitB = String(alloc.b)
+      touched = alloc.provenance === 'explicit'
+      derived = alloc.provenance === 'derived'
+    } else if (!joint && rec?.paid_split) {
+      splitA = String(rec.paid_split.a)
+      splitB = String(rec.paid_split.b)
+    }
     setForm({
       date: rec?.date || todayISO(),
       loan_part_id: rec?.loan_part_id || (parts[0]?.id || ''),
@@ -49,22 +80,70 @@ export default function PaymentDialog({ open, id, payments, parts, settings, mor
       // Legacy individual attribution on Betalning/Ränta is deliberately
       // discarded on the next save; those rows are household-joint.
       paid_by: joint ? 'joint' : (rec?.paid_by || 'joint'),
-      split_a: !joint && rec?.paid_split ? String(rec.paid_split.a) : '',
-      split_b: !joint && rec?.paid_split ? String(rec.paid_split.b) : '',
+      split_a: splitA,
+      split_b: splitB,
       // A new down payment defaults to the active agreement; editing keeps the
       // row's own link. A legacy row with no link defaults to blank so the owner
       // makes an explicit repair choice rather than the UI guessing.
       mortgage_id: rec?.mortgage_id ?? (id ? '' : (activeMortgageId ?? '')),
     })
+    setSplitTouched(touched)
+    setLegacyDerived(derived)
   }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Extra amortering only: prefill the allocation from the configured
+  // ownership split once an amount is entered, for a brand-new row or a row
+  // whose type was just switched to Extra amortering. Skipped once the owner
+  // has touched a split field, or once an existing row's own (explicit or
+  // derived) split has already been loaded above.
+  useEffect(() => {
+    if (form.entryType !== 'extra_amortization' || splitTouched) return
+    const amt = parseAmount(form.amount) || 0
+    if (amt <= 0) return
+    const alloc = extraAmorteringAllocation({ amount: amt, paid_split: null } as unknown as Payment, settings)
+    setForm(current => (current.entryType === 'extra_amortization'
+      ? { ...current, split_a: String(alloc.a), split_b: String(alloc.b) }
+      : current))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.entryType, form.amount, splitTouched, settings])
+
   const set = <K extends keyof typeof form>(key: K, value: typeof form[K]) => setForm(current => ({ ...current, [key]: value }))
+  const setSplit = <K extends 'split_a' | 'split_b'>(key: K, value: string) => {
+    setForm(current => ({ ...current, [key]: value }))
+    setSplitTouched(true)
+  }
   const jointRecord = form.entryType === 'payment' || form.entryType === 'interest'
+  const isExtra = form.entryType === 'extra_amortization'
   const needsLoanPart = form.entryType !== 'down_payment'
   const acceptsSaldo = form.entryType === 'payment' || form.entryType === 'amortization' || form.entryType === 'extra_amortization'
-  const hasSplit = !jointRecord && (form.split_a.trim() !== '' || form.split_b.trim() !== '')
+  const hasSplit = !jointRecord && !isExtra && (form.split_a.trim() !== '' || form.split_b.trim() !== '')
   const split = hasSplit ? { a: parseAmount(form.split_a) || 0, b: parseAmount(form.split_b) || 0 } : null
   const splitIsValid = !split || split.a + split.b === (parseAmount(form.amount) || 0)
+
+  // Extra amortering: the allocation is mandatory and independent of the
+  // payer. Valid = both amounts finite, non-negative, and their öre-rounded
+  // sum equal to the öre-rounded payment amount (mirrors
+  // extraAmorteringAllocation's own explicit-split validity rule).
+  const extraAmount = parseAmount(form.amount)
+  const extraA = parseAmount(form.split_a)
+  const extraB = parseAmount(form.split_b)
+  const extraSplitValid = !isExtra || (
+    Number.isFinite(extraAmount) && extraAmount > 0 &&
+    Number.isFinite(extraA) && Number.isFinite(extraB) &&
+    extraA >= 0 && extraB >= 0 &&
+    round2(round2(extraA) + round2(extraB)) === round2(extraAmount)
+  )
+  const extraSplitMessage = !isExtra ? '' : (
+    !Number.isFinite(extraAmount) || extraAmount <= 0
+      ? 'Ange ett belopp innan fördelningen kan sparas.'
+      : !Number.isFinite(extraA) || !Number.isFinite(extraB)
+        ? 'Ange båda fördelningsbeloppen.'
+        : extraA < 0 || extraB < 0
+          ? 'Fördelningen kan inte vara negativ.'
+          : extraSplitValid
+            ? `Fördelning: ${fmtMoney(round2(extraA))} + ${fmtMoney(round2(extraB))} = ${fmtMoney(round2(round2(extraA) + round2(extraB)))}.`
+            : `Fördelning: ${fmtMoney(round2(extraA))} + ${fmtMoney(round2(extraB))} = ${fmtMoney(round2(round2(extraA) + round2(extraB)))} — måste bli samma som beloppet (${fmtMoney(round2(extraAmount))}).`
+  )
   const missingInterest = useMemo(() => {
     if (form.entryType !== 'payment' || !form.loan_part_id || !form.date) return false
     const month = form.date.slice(0, 7)
@@ -89,10 +168,20 @@ export default function PaymentDialog({ open, id, payments, parts, settings, mor
   function submit(e: React.FormEvent) {
     e.preventDefault()
     const kind = paymentKind(form.entryType)
-    if (!splitIsValid) return
+    if (isExtra) {
+      if (!extraSplitValid) return
+    } else if (!splitIsValid) {
+      return
+    }
+    // Extra amortering: paid_by comes straight from the payer selector and
+    // paid_split straight from the reviewed allocation inputs — the two
+    // facts stay independent. One person paying the bank must not collapse
+    // or silently rewrite a two-person allocation.
     const paid_by: PaidBy = jointRecord ? 'joint'
-      : split ? split.a > 0 && split.b > 0 ? 'joint' : split.a > 0 ? 'a' : split.b > 0 ? 'b' : form.paid_by
-        : form.paid_by
+      : isExtra ? form.paid_by
+        : split ? split.a > 0 && split.b > 0 ? 'joint' : split.a > 0 ? 'a' : split.b > 0 ? 'b' : form.paid_by
+          : form.paid_by
+    const paid_split = jointRecord ? null : isExtra ? { a: round2(extraA), b: round2(extraB) } : split
     onSave({
       ...makePayment({
         date: form.date,
@@ -109,7 +198,7 @@ export default function PaymentDialog({ open, id, payments, parts, settings, mor
         balance_after: acceptsSaldo && form.balance_after ? parseAmount(form.balance_after) : null,
         paid_by,
         is_insats: form.entryType === 'down_payment' || form.entryType === 'extra_amortization',
-        paid_split: jointRecord ? null : split,
+        paid_split,
       }),
       // Only a Kontantinsats carries an explicit agreement id (part-linked rows
       // derive it in the database). makePayment drops mortgage_id, so re-attach
@@ -174,7 +263,21 @@ export default function PaymentDialog({ open, id, payments, parts, settings, mor
               </select>
             </FormField>
           )}
-          {!jointRecord && (
+          {isExtra && (
+            <p className="form-hint form-wide">Betald av visar vem som gjorde banköverföringen till banken. Fördelningen nedan styr hur mycket av det insatta kapitalet som tillhör vardera person — oberoende av vem som betalade.</p>
+          )}
+          {isExtra && legacyDerived && (
+            <p className="form-hint form-wide payment-estimate-warning" role="alert">
+              Beräknad från ägarfördelningen — granska innan du sparar.
+            </p>
+          )}
+          {isExtra ? (
+            <>
+              <FormField label={`${aName} · fördelning`}><input type="text" required inputMode="decimal" placeholder="0" value={form.split_a} onChange={e => setSplit('split_a', e.target.value)} /></FormField>
+              <FormField label={`${bName} · fördelning`}><input type="text" required inputMode="decimal" placeholder="0" value={form.split_b} onChange={e => setSplit('split_b', e.target.value)} /></FormField>
+              <p className={'form-hint form-wide' + (extraSplitValid ? '' : ' is-warn')} role={extraSplitValid ? undefined : 'alert'}>{extraSplitMessage}</p>
+            </>
+          ) : !jointRecord && (
             <>
               <FormField label={`${aName} · fördelning`}><input type="text" inputMode="decimal" placeholder="valfritt" value={form.split_a} onChange={e => set('split_a', e.target.value)} /></FormField>
               <FormField label={`${bName} · fördelning`}><input type="text" inputMode="decimal" placeholder="valfritt" value={form.split_b} onChange={e => set('split_b', e.target.value)} /></FormField>
@@ -193,7 +296,7 @@ export default function PaymentDialog({ open, id, payments, parts, settings, mor
           {id && <button type="button" className="btn btn-ghost btn-danger" onClick={async () => { if (await confirm({ title: 'Ta bort betalningen?' })) onDelete(id) }}>Ta bort</button>}
           <span style={{ flex: 1 }} />
           <button type="button" className="btn btn-ghost" onClick={onClose}>Avbryt</button>
-          <button type="submit" className="btn btn-primary" disabled={!splitIsValid}>Spara</button>
+          <button type="submit" className="btn btn-primary" disabled={isExtra ? !extraSplitValid : !splitIsValid}>Spara</button>
         </div>
       </form>
     </DialogShell>

@@ -327,7 +327,9 @@ describe('agreement scoping and cross-agreement ownership', () => {
   const ledger = (): Payment[] => [
     downPayment('dp-a', 'a', 600_000),
     downPayment('dp-b', 'b', 400_000),
-    amortRow('p1', '2023-06-01', 300_000, { paid_by: 'a', is_insats: true }),
+    // A fully-personal extra amortering now carries an explicit 100/0 split;
+    // that is what attributes all 300 000 to a under the new contract.
+    amortRow('p1', '2023-06-01', 300_000, { paid_by: 'a', is_insats: true, paid_split: { a: 300_000, b: 0 } }),
     saldoRow('p1', '2025-12-31', 3_700_000),
     amortRow('p2', '2026-03-27', 100_000, { paid_by: 'b', balance_after: 3_600_000 }),
   ]
