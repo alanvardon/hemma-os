@@ -26,6 +26,7 @@ import {
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   todayISO,
   bankForPart, suggestBankProfile, effectiveBankProfile,
+  isExtraAmortering, extraAmorteringAllocation,
 } from '../lib/mortgage'
 import type { LoanPart, LoanPartGroup, Payment, CsvResult, ColMapping, Owner, ExpectedCharge, Mortgage, CatalogBank, EffectiveBankProfile } from '../lib/mortgage'
 import {
@@ -1707,16 +1708,42 @@ export default function Bolanekoll() {
                               <td colSpan={6}>
                                 <CellReveal reduce={reduceMotion}>
                                 <div className="pay-detail-inner">
-                                  <span className="pay-detail-label">Betalad av</span>
-                                  {p.paid_split ? (
+                                  {isExtraAmortering(p) ? (
                                     <>
-                                      <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(p.paid_split.a)}</span>
-                                      <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(p.paid_split.b)}</span>
+                                      {/* Extra amortering: Betald av (the bank transfer) and
+                                          Fördelning (each person's paid-in capital) are two
+                                          independent facts — one payer must not stand in for
+                                          a two-person allocation. */}
+                                      <span className="pay-detail-label">Betald av</span>
+                                      <span className="alloc-chip">{p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</span>
+                                      <span className="pay-detail-label">Fördelning</span>
+                                      {(() => {
+                                        const alloc = extraAmorteringAllocation(p, settings)
+                                        return (
+                                          <>
+                                            <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(alloc.a)}</span>
+                                            <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(alloc.b)}</span>
+                                            {alloc.provenance === 'derived' && (
+                                              <span className="row-flag row-flag-estimated" title="Beräknad från ägarfördelningen — granska och spara för att göra den definitiv">beräknad</span>
+                                            )}
+                                          </>
+                                        )
+                                      })()}
                                     </>
                                   ) : (
-                                    <span className="alloc-chip">{p.paid_by === 'joint'
-                                      ? 'Gemensamt · enligt ägarfördelning'
-                                      : <><b>{nameOf(p.paid_by === 'b' ? 'b' : 'a')}</b> {fmtMoney(p.amount)}</>}</span>
+                                    <>
+                                      <span className="pay-detail-label">Betalad av</span>
+                                      {p.paid_split ? (
+                                        <>
+                                          <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(p.paid_split.a)}</span>
+                                          <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(p.paid_split.b)}</span>
+                                        </>
+                                      ) : (
+                                        <span className="alloc-chip">{p.paid_by === 'joint'
+                                          ? 'Gemensamt · enligt ägarfördelning'
+                                          : <><b>{nameOf(p.paid_by === 'b' ? 'b' : 'a')}</b> {fmtMoney(p.amount)}</>}</span>
+                                      )}
+                                    </>
                                   )}
                                   {p.description && <span className="pay-detail-note">{p.description}</span>}
                                 </div>
@@ -1764,15 +1791,22 @@ export default function Bolanekoll() {
           <p className="contrib-note">Källposter av typen Kontantinsats. Redigera eller ta bort dem i samma Betalningar-liggare.</p>
           {!downPayments.length ? <p className="empty">Inga kontantinsatser ännu.</p> : (
             <div className="table-wrap">
-              <table className="data-table table-cards insats-table">
-                <thead><tr><th className="col-date">Datum</th><th>Betalad av</th><th>Lånedel</th><th className="num">Belopp</th><th className="col-act" /></tr></thead>
+              <table className="data-table table-cards insats-table kontantinsats-table">
+                <thead><tr><th className="col-date">Datum</th><th>Betalad av</th><th className="num">Belopp</th><th className="col-act" /></tr></thead>
                 <tbody>{downPayments.map(p => (
                   <tr key={p.id} data-source-payment-id={p.id}>
                     <td className="col-date">{p.date || '—'}</td>
                     <td className="col-owner">{p.paid_split ? `${nameOf('a')} ${fmtMoney(p.paid_split.a)} · ${nameOf('b')} ${fmtMoney(p.paid_split.b)}` : p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
-                    <td className="col-part">{p.mortgage_id ? '—' : <span className="row-flag row-flag-estimated" title="Saknar koppling till bolåneavtal — öppna för att koppla">⚠ ej kopplad</span>}</td>
                     <td className="num col-amt">{fmtMoney(p.amount)}</td>
-                    <td className="col-act"><button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button><button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={async () => { if (await confirm({ title: 'Ta bort betalningen?' })) handleDeletePay(p.id) }}><Icon icon={X} /></button></td>
+                    <td className="col-act">
+                      {/* A kontantinsats belongs to a mortgage agreement, not a
+                          loan part — the Lånedel column was misleading and is
+                          gone; the unlinked-agreement warning it used to carry
+                          moves here next to the row's own edit action. */}
+                      {!p.mortgage_id && <span className="row-flag row-flag-estimated" title="Saknar koppling till bolåneavtal — öppna för att koppla">⚠ ej kopplad</span>}
+                      <button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button>
+                      <button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={async () => { if (await confirm({ title: 'Ta bort betalningen?' })) handleDeletePay(p.id) }}><Icon icon={X} /></button>
+                    </td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -1789,17 +1823,32 @@ export default function Bolanekoll() {
           <p className="contrib-note">Källposter av typen Extra amortering. Vanliga amorteringar visas bara i Betalningar.</p>
           {!extraAmortizationPayments.length ? <p className="empty">Inga extra amorteringar ännu.</p> : (
             <div className="table-wrap">
-              <table className="data-table table-cards insats-table">
-                <thead><tr><th className="col-date">Datum</th><th>Betalad av</th><th>Lånedel</th><th className="num">Belopp</th><th className="col-act" /></tr></thead>
-                <tbody>{extraAmortizationPayments.map(p => (
+              <table className="data-table table-cards insats-table extra-amort-table">
+                <thead><tr><th className="col-date">Datum</th><th>Betald av</th><th>Fördelning</th><th>Lånedel</th><th className="num">Belopp</th><th className="col-act" /></tr></thead>
+                <tbody>{extraAmortizationPayments.map(p => {
+                  // Betald av is who sent the money to the bank; Fördelning is
+                  // the person-level capital allocation. One payer must never
+                  // stand in for a two-person split — always resolve and show
+                  // both named shares (explicit when reviewed, derived from
+                  // the configured ownership split for a legacy unsplit row).
+                  const alloc = extraAmorteringAllocation(p, settings)
+                  return (
                   <tr key={p.id} data-source-payment-id={p.id}>
                     <td className="col-date">{p.date || '—'}</td>
-                    <td className="col-owner">{p.paid_split ? `${nameOf('a')} ${fmtMoney(p.paid_split.a)} · ${nameOf('b')} ${fmtMoney(p.paid_split.b)}` : p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
+                    <td className="col-owner">{p.paid_by === 'joint' ? 'Gemensamt' : nameOf(p.paid_by)}</td>
+                    <td className="col-alloc">
+                      <span className="alloc-chip"><b>{nameOf('a')}</b> {fmtMoney(alloc.a)}</span>
+                      <span className="alloc-chip"><b>{nameOf('b')}</b> {fmtMoney(alloc.b)}</span>
+                      {alloc.provenance === 'derived' && (
+                        <span className="row-flag row-flag-estimated" title="Beräknad från ägarfördelningen — granska och spara för att göra den definitiv">beräknad</span>
+                      )}
+                    </td>
                     <td className="col-part">{partNameById(p.loan_part_id)}</td>
                     <td className="num col-amt">{fmtMoney(p.amount)}</td>
                     <td className="col-act"><button type="button" className="icon-btn" title="Redigera i Betalningar" aria-label="Redigera i Betalningar" onClick={() => setPayDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button><button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={async () => { if (await confirm({ title: 'Ta bort betalningen?' })) handleDeletePay(p.id) }}><Icon icon={X} /></button></td>
                   </tr>
-                ))}</tbody>
+                  )
+                })}</tbody>
               </table>
             </div>
           )}

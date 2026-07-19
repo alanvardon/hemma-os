@@ -946,21 +946,44 @@ dialog.bk-wizard, dialog.bk-history { width: min(680px, calc(100vw - 2rem)); }
   .bk-root .contrib-table .col-note { grid-area: note; font-size: 12.5px; color: var(--ink-soft); }
   .bk-root .contrib-table .col-act { grid-area: act; justify-self: end; }
 
-  /* Extra amorteringar flagged in the ledger — "date · part    amount" with
-     a labelled paid-by line underneath */
-  .bk-root .insats-table tr {
+  /* Kontantinsatser (plan 116) — the misleading Lånedel column is gone (a
+     kontantinsats belongs to a mortgage agreement, not a loan part); "date
+     amount" leads with a labelled paid-by line underneath, and the unlinked-
+     agreement flag now rides in the action row next to the row's own edit
+     button rather than owning its own column. */
+  .bk-root .kontantinsats-table tr {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      'date owner amt'
+      'act  act   act';
+  }
+  .bk-root .kontantinsats-table .col-amt { grid-area: amt; color: var(--ink); font-weight: 600; }
+  .bk-root .kontantinsats-table .col-owner { grid-area: owner; font-size: 12.5px; color: var(--ink-soft); justify-self: end; }
+  .bk-root .kontantinsats-table .col-act { grid-area: act; justify-self: start; }
+  .bk-root .kontantinsats-table .col-act .row-flag { margin-right: 0.4rem; }
+
+  /* Extra amorteringar flagged in the ledger (plan 116) — "date · part
+     amount" with a labelled paid-by line and a fördelning line (both named
+     capital shares, flagged "beräknad" when derived from ownership rather
+     than an explicit reviewed split) underneath. */
+  .bk-root .extra-amort-table tr {
     grid-template-columns: auto 1fr auto;
     grid-template-areas:
       'date  part  amt'
-      'owner owner owner';
+      'owner owner owner'
+      'alloc alloc alloc';
   }
-  .bk-root .insats-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); }
-  .bk-root .insats-table .col-part::before { content: '· '; color: var(--ink-faint); }
-  .bk-root .insats-table .col-amt { grid-area: amt; color: var(--ink); font-weight: 600; }
-  .bk-root .insats-table .col-owner { grid-area: owner; font-size: 12.5px; color: var(--ink-soft); }
-  .bk-root .insats-table .col-owner::before {
-    content: 'paid by '; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  .bk-root .extra-amort-table .col-part { grid-area: part; font-size: 12.5px; color: var(--ink-soft); }
+  .bk-root .extra-amort-table .col-part::before { content: '· '; color: var(--ink-faint); }
+  .bk-root .extra-amort-table .col-amt { grid-area: amt; color: var(--ink); font-weight: 600; }
+  .bk-root .extra-amort-table .col-owner { grid-area: owner; font-size: 12.5px; color: var(--ink-soft); }
+  .bk-root .extra-amort-table .col-owner::before {
+    content: 'betald av '; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
     text-transform: uppercase;
+  }
+  .bk-root .extra-amort-table .col-alloc {
+    grid-area: alloc; display: flex; flex-wrap: wrap; align-items: center;
+    gap: 0.3rem 0.4rem; font-size: 12.5px; color: var(--ink-soft);
   }
 }
 @media (max-width: 480px) {

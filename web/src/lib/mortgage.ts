@@ -2068,6 +2068,52 @@ export function copyPartsPreview(parts: LoanPart[], payments: Payment[], effecti
 
 // ── Contributions ──────────────────────────────────────────────────────────
 
+// An extra amortering is an `amortization` row flagged as an insats. A
+// down_payment is also is_insats but is NOT an extra amortering and keeps its
+// own attribution behavior.
+export function isExtraAmortering(p: Payment | null | undefined): boolean {
+  return !!p && p.kind === 'amortization' && p.is_insats === true
+}
+
+export interface ExtraAmorteringAllocation {
+  a: number
+  b: number
+  // `explicit` when the row carries a valid two-person split; `derived` when a
+  // legacy row has no valid split and the allocation is computed from the
+  // configured ownership percentages (a computed marker for the UI to surface).
+  provenance: 'explicit' | 'derived'
+}
+
+// Resolve the person-level capital allocation for one extra amortering
+// (`kind:'amortization' && is_insats`), independent of who actually paid the
+// bank (`paid_by`).
+//
+// - `explicit`: the row carries a VALID `paid_split` — both keys finite,
+//   non-negative, and their öre-rounded sum equals the payment amount. A valid
+//   100/0 split keeps both keys and permits one zero.
+// - `derived`: no valid split → allocate by the configured ownership
+//   percentages, giving the rounding remainder to the second person so
+//   `a + b === amount` at öre precision.
+//
+// A malformed explicit split (non-finite, negative, or not summing to the
+// amount) is treated as absent → falls back to `derived`. Guarding against
+// persisting such a split lives in makePayment/the dialog; here, an invalid
+// explicit split simply means "no explicit allocation → derive it".
+export function extraAmorteringAllocation(payment: Payment, s: Partial<MortgageSettings>): ExtraAmorteringAllocation {
+  const amount = r2(Number(payment?.amount) || 0)
+  const split = payment?.paid_split
+  if (split) {
+    const a = Number(split.a), b = Number(split.b)
+    if (isFinite(a) && isFinite(b) && a >= 0 && b >= 0 && r2(r2(a) + r2(b)) === amount) {
+      return { a: r2(a), b: r2(b), provenance: 'explicit' }
+    }
+  }
+  const pct = ownerPercents(s)
+  const a = r2(amount * (pct.a || 0) / 100)
+  const b = r2(amount - a)
+  return { a, b, provenance: 'derived' }
+}
+
 export function contributionSplit(payments: Payment[], contributions: Contribution[], s: Partial<MortgageSettings>) {
   const tot = { a: 0, b: 0, joint: 0 }
   const canonicalLegacyIds = new Set((payments || []).map(p => p?.id).filter(Boolean))
@@ -2078,6 +2124,16 @@ export function contributionSplit(payments: Payment[], contributions: Contributi
   for (const p of payments || []) {
     if (p?.source === 'predicted') continue
     if (p?.kind !== 'amortization' && p?.kind !== 'down_payment') continue
+    // An extra amortering always splits between the two people, independent of
+    // who paid the bank: an explicit reviewed split when present, otherwise a
+    // deterministic split by the configured ownership percentages (a legacy
+    // unsplit row is NO longer credited in full to its payer).
+    if (isExtraAmortering(p)) {
+      const alloc = extraAmorteringAllocation(p, s)
+      tot.a += alloc.a
+      tot.b += alloc.b
+      continue
+    }
     // An explicit per-payment allocation (a co-funded insats) wins over paid_by.
     if (p.paid_split && ((Number(p.paid_split.a) || 0) || (Number(p.paid_split.b) || 0))) {
       tot.a += Number(p.paid_split.a) || 0
