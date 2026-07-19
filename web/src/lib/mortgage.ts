@@ -1971,6 +1971,38 @@ export function paymentsForMortgage(payments: Payment[], parts: LoanPart[], mort
     (p.loan_part_id ? ids.has(p.loan_part_id) : p.mortgage_id === mortgageId))
 }
 
+// ── Active-agreement view scope (plan 118) ───────────────────────────────────
+// These encode the Bolånekoll ROUTE's legacy-tolerant active-agreement view
+// scope (Bolanekoll.tsx / useMortgageWorkspace.ts), so the Bostadskalkyl "pull
+// current balance" cross-tool read and Bolånekoll's own hero cannot drift in
+// scope or arithmetic. They intentionally mirror the route's inline filters
+// rather than the stricter domain activeMortgage()/partsForMortgage() pair.
+
+// Legacy-tolerant active agreement, matching the Bolånekoll route's selection
+// (first non-archived, else first). Differs from the stricter activeMortgage()
+// only when every agreement is archived (pure legacy fallback).
+export function activeAgreementMortgage(mortgages: Mortgage[]): Mortgage | null {
+  return (mortgages || []).find(m => m && !m.archived) ?? (mortgages || [])[0] ?? null
+}
+// Active-view parts: this agreement's parts plus unscoped legacy parts.
+export function activeAgreementParts(parts: LoanPart[], activeMortgageId: string | null | undefined): LoanPart[] {
+  return (parts || []).filter(p => p && (p.mortgage_id == null || p.mortgage_id === (activeMortgageId ?? null)))
+}
+// Active-view payments: part-linked rows via active parts; partless rows via own provenance.
+export function activeAgreementPayments(payments: Payment[], activeParts: LoanPart[], activeMortgageId: string | null | undefined): Payment[] {
+  const ids = new Set((activeParts || []).map(p => p.id))
+  return (payments || []).filter(p => p && (p.loan_part_id
+    ? ids.has(p.loan_part_id)
+    : (p.mortgage_id == null || p.mortgage_id === (activeMortgageId ?? null))))
+}
+// The single authoritative current debt Bolånekoll's hero shows. Same scope + arithmetic.
+export function activeAgreementBalance(mortgages: Mortgage[], parts: LoanPart[], payments: Payment[]): number {
+  const m = activeAgreementMortgage(mortgages)
+  const ap = activeAgreementParts(parts, m?.id ?? null)
+  const pp = activeAgreementPayments(payments, ap, m?.id ?? null)
+  return totalBalance(ap, pp)
+}
+
 // Lifetime amortised principal across the FULL agreement history: every part
 // (archived and old-agreement parts included) contributes its own
 // origination-to-resolved-balance reduction exactly once. Debt transfers

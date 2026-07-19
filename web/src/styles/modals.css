@@ -318,6 +318,24 @@
 }
 .field-breakdown-btn:hover { color: var(--accent-light); transform: translateX(2px); }
 
+/* Plan 118 — pull-current-balance control beside the mortgage field. Wraps at
+   narrow widths so it never forces page-level horizontal overflow. */
+.mortgage-pull-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-top: 2px;
+}
+.mortgage-pull-note {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+}
+.mortgage-pull-error { color: var(--warn); }
+.mortgage-pull-dismiss { color: var(--ink-soft); }
+
 /* ── Constants / settings modal ─────────────────────────────────── */
 .modal-subtitle {
   font-size: 12px;

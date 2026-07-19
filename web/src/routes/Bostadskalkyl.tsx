@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Moon, Settings2, Sun } from 'lucide-react'
 import { derive } from '../lib/calc'
@@ -12,6 +12,10 @@ import DriftModal from '../components/DriftModal'
 import SavingsModal from '../components/SavingsModal'
 import ConstantsModal from '../components/ConstantsModal'
 import { Money } from '../components/AnimatedNumber'
+import { loadMortgageBalanceSnapshot } from '../lib/mortgage-store'
+import { activeAgreementBalance, activeAgreementMortgage } from '../lib/mortgage'
+
+export type PullStatus = 'idle' | 'loading' | 'error' | 'empty'
 
 export default function Bostadskalkyl() {
   const { theme, toggleTheme } = useTheme()
@@ -72,6 +76,52 @@ export default function Bostadskalkyl() {
 
   const active = scenarios.find((s) => s.id === activeScenarioId)
   const isBound = mode === 'bound' && !!active
+
+  // Plan 118 — explicit pull of Bolånekoll's current mortgage balance into this
+  // scenario/draft. The store read guards household scope internally; the
+  // request id below discards a stale result from a rapid re-click or a
+  // household switch so it can never apply an outdated amount.
+  const [pullStatus, setPullStatus] = useState<PullStatus>('idle')
+  const [pullPreview, setPullPreview] = useState<number | null>(null)
+  const pullReqRef = useRef(0)
+
+  const handlePullMortgage = async () => {
+    const reqId = ++pullReqRef.current
+    setPullStatus('loading')
+    setPullPreview(null)
+    let snap: Awaited<ReturnType<typeof loadMortgageBalanceSnapshot>>
+    try {
+      snap = await loadMortgageBalanceSnapshot()
+    } catch {
+      snap = null
+    }
+    if (reqId !== pullReqRef.current) return // superseded — discard stale result
+    if (!snap) { setPullStatus('error'); return }
+    // Distinguish a genuine "no debt to pull" (no active agreement or no scoped
+    // parts) from a positive balance. Never write 0 into the field.
+    const hasAgreement = activeAgreementMortgage(snap.mortgages) != null
+    const amount = activeAgreementBalance(snap.mortgages, snap.parts, snap.payments)
+    if (!hasAgreement || snap.parts.length === 0 || amount <= 0) {
+      setPullStatus('empty')
+      setPullPreview(null)
+      return
+    }
+    setPullStatus('idle')
+    setPullPreview(amount)
+  }
+
+  const handleApplyPull = () => {
+    if (pullPreview == null) return
+    setField('currentMortgage', pullPreview)
+    setPullPreview(null)
+    setPullStatus('idle')
+  }
+
+  const handleDismissPull = () => {
+    pullReqRef.current++ // cancel any in-flight read
+    setPullPreview(null)
+    setPullStatus('idle')
+  }
 
   return (
     <div className="bostad-root">
@@ -135,7 +185,18 @@ export default function Bostadskalkyl() {
       </header>
 
       <main className="layout">
-        <InputsColumn inputs={inputs} setField={setField} figures={figures} constants={constants} onOpenDrift={() => setDriftOpen(true)} />
+        <InputsColumn
+          inputs={inputs}
+          setField={setField}
+          figures={figures}
+          constants={constants}
+          onOpenDrift={() => setDriftOpen(true)}
+          onPullMortgage={handlePullMortgage}
+          pullStatus={pullStatus}
+          pullPreview={pullPreview}
+          onApplyPull={handleApplyPull}
+          onDismissPull={handleDismissPull}
+        />
         <SummaryColumn
           inputs={inputs}
           setField={setField}
