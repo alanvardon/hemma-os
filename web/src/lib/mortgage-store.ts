@@ -623,6 +623,74 @@ export async function loadMortgageSyncSnapshot(): Promise<MortgageSyncSnapshot |
   return snapshot
 }
 
+// ── Active-agreement balance snapshot (plan 118) ─────────────────────────────
+// Purpose-built all-or-nothing read for Bostadskalkyl's "pull current balance"
+// action. Loads mortgages + loan parts + payments under one captured household
+// scope and returns RAW scoped rows only — the caller computes the balance via
+// activeAgreementBalance(). Periods are not needed for the balance.
+//
+// Like loadMortgageSyncSnapshot, `null` is reserved for an unavailable live
+// source (query error / missing data); an inactive-or-dirty scope returns the
+// tombstone-filtered cache, which is authoritative-from-cache exactly as the
+// sibling list reads treat it. The pull must never mistake a failed cloud read
+// for an authoritative 0 kr balance.
+export interface ActiveMortgageBalanceSnapshot {
+  mortgages: Mortgage[]
+  parts: LoanPart[]
+  payments: Payment[]
+}
+
+const BALANCE_RESOURCES = [RESOURCES.mortgages, RESOURCES.parts, RESOURCES.payments, CASCADE_RESOURCE, ...AGREEMENT_RESOURCES]
+
+export async function loadMortgageBalanceSnapshot(): Promise<ActiveMortgageBalanceSnapshot | null> {
+  const scope = syncCoordinator.captureScope()
+  const fallback = (): ActiveMortgageBalanceSnapshot => {
+    const cache = _readCacheFrom(scope)
+    return {
+      mortgages: withoutTombstones(cache.mortgages, cachedTombstoneIds(scope, RESOURCES.mortgages)),
+      parts: withoutTombstones(cache.loan_parts, cachedTombstoneIds(scope, RESOURCES.parts)),
+      payments: withoutTombstones(cache.payments, cachedTombstoneIds(scope, RESOURCES.payments)),
+    }
+  }
+  await _importLocalOnce()
+  if (!scope.isActive() || BALANCE_RESOURCES.some((resource) => syncCoordinator.isDirty(resource))) {
+    return fallback()
+  }
+  const [mortgagesResult, partsResult, paymentsResult, mortgageTombstones, partTombstones, paymentTombstones] = await Promise.all([
+    supabase.from(T.mortgages).select('*').order('created_at', { ascending: true }),
+    supabase.from(T.parts).select('*').order('created_at', { ascending: true }),
+    supabase.from(T.payments).select('*'),
+    loadTombstoneIds(scope, RESOURCES.mortgages),
+    loadTombstoneIds(scope, RESOURCES.parts),
+    loadTombstoneIds(scope, RESOURCES.payments),
+  ])
+  if (!scope.isActive() || BALANCE_RESOURCES.some((resource) => syncCoordinator.isDirty(resource))) {
+    return fallback()
+  }
+  if (mortgagesResult.error || partsResult.error || paymentsResult.error ||
+      !mortgagesResult.data || !partsResult.data || !paymentsResult.data) return null
+  rememberRowRevisions(RESOURCES.mortgages, mortgagesResult.data as unknown as Record<string, unknown>[])
+  rememberRowRevisions(RESOURCES.parts, partsResult.data as unknown as Record<string, unknown>[])
+  rememberRowRevisions(RESOURCES.payments, paymentsResult.data as unknown as Record<string, unknown>[])
+  const parsedMortgages = salvageMortgageRows(mortgagesResult.data, 'mortgages')
+  const parsedParts = salvageMortgageRows(partsResult.data, 'loan_parts')
+  const parsedPayments = salvageMortgageRows(paymentsResult.data, 'payments')
+  if (parsedMortgages.rejected.length || parsedParts.rejected.length || parsedPayments.rejected.length) warning('molnet')
+  const snapshot: ActiveMortgageBalanceSnapshot = {
+    mortgages: withoutTombstones(parsedMortgages.value as Mortgage[], mortgageTombstones),
+    parts: withoutTombstones(parsedParts.value as LoanPart[], partTombstones),
+    payments: withoutTombstones(parsedPayments.value as Payment[], paymentTombstones).map(canonicalPayment),
+  }
+  const cache = _readCacheFrom(scope)
+  {
+    cache.mortgages = snapshot.mortgages
+    cache.loan_parts = snapshot.parts
+    cache.payments = snapshot.payments
+  }
+  scope.write(CACHE_KEY, JSON.stringify(cache))
+  return snapshot
+}
+
 export async function listLoanParts(): Promise<LoanPart[]> {
   const scope = syncCoordinator.captureScope()
   await _importLocalOnce()

@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   effectiveBankProfile, copyPartsPreview,
   activeMortgage, partsForMortgage, paymentsForMortgage,
+  activeAgreementMortgage, activeAgreementParts, activeAgreementPayments, activeAgreementBalance,
   lifetimeAmortized, partsMissingRateTerms,
   learnYearBasis, expectedCharge, expectedCharges, totalBalance, totalAmortized,
   contributionSplit, costBasisSplit, costBasisEquity, defaultSettings, groupLoanParts,
@@ -413,6 +414,109 @@ describe('agreement scoping and cross-agreement ownership', () => {
     const wrongWorld = [...ledger(), amortRow('p1', '2026-01-01', 3_700_000, { id: 'payoff' })]
     expect(contributionSplit(wrongWorld, [], settings).total).toBe(5_100_000)
     expect(lifetimeAmortized([oldPart(), newPart()], wrongWorld)).toBe(4_100_000)
+  })
+})
+
+// ── Plan 118 — active-agreement balance selectors (Bostadskalkyl pull) ───────
+// These encode the Bolånekoll ROUTE's legacy-tolerant active-agreement view
+// scope so the cross-tool "pull current balance" and Bolånekoll's hero cannot
+// drift. Every golden is hand-computed; the arithmetic is in the comment.
+describe('plan 118 — active-agreement balance selectors', () => {
+  it('GOLDEN: one active agreement, several parts — equals the hero scope + arithmetic', () => {
+    // Active agreement m1. P1: Saldo 1 000 000 − 8 000 amortering = 992 000.
+    // P2: Saldo 500 000, no later rows = 500 000. Total = 1 492 000.
+    const ms = [mortgage({ id: 'm1' })]
+    const p1 = part({ id: 'p1', mortgage_id: 'm1' })
+    const p2 = part({ id: 'p2', mortgage_id: 'm1' })
+    const parts = [p1, p2]
+    const payments = [
+      saldoRow('p1', '2026-05-31', 1_000_000),
+      amortRow('p1', '2026-06-27', 8000),
+      saldoRow('p2', '2026-05-31', 500_000),
+    ]
+    // Reconstruct exactly what Bolånekoll's hero computes and assert equality.
+    const m = activeAgreementMortgage(ms)
+    const ap = activeAgreementParts(parts, m?.id ?? null)
+    const pp = activeAgreementPayments(payments, ap, m?.id ?? null)
+    expect(activeAgreementBalance(ms, parts, payments)).toBe(totalBalance(ap, pp))
+    expect(activeAgreementBalance(ms, parts, payments)).toBe(1_492_000)
+  })
+
+  it('GOLDEN: plan-107 payment semantics preserved across mechanisms', () => {
+    // One active agreement m1 with four parts, each exercising one mechanism:
+    //   pA explicit Saldo:            800 000                       = 800 000
+    //   pB Betalning − Ränta:  600 000 − (12 000 − 2 000 = 10 000)  = 590 000
+    //   pC extra amortering:   400 000 − 50 000                     = 350 000
+    //   pD accepted predicted: 300 000 − 20 000 (source:predicted)  = 280 000
+    // Total = 2 020 000.
+    const ms = [mortgage({ id: 'm1' })]
+    const pA = part({ id: 'pA', mortgage_id: 'm1' })
+    const pB = part({ id: 'pB', mortgage_id: 'm1', original_balance: 600_000, original_date: '2024-01-01' })
+    const pC = part({ id: 'pC', mortgage_id: 'm1', original_balance: 400_000, original_date: '2024-01-01' })
+    const pD = part({ id: 'pD', mortgage_id: 'm1', original_balance: 300_000, original_date: '2024-01-01' })
+    const parts = [pA, pB, pC, pD]
+    const payments: Payment[] = [
+      saldoRow('pA', '2026-05-31', 800_000),
+      { id: 'betB', created_at: '', loan_part_id: 'pB', date: '2026-06-27', kind: 'payment', description: 'Betalning', amount: 12_000, balance_after: null, paid_by: 'joint', source: 'import' },
+      interestRow('2026-06-27', 2000, { id: 'rB', loan_part_id: 'pB' }),
+      amortRow('pC', '2026-03-27', 50_000, { is_insats: true }),
+      amortRow('pD', '2026-04-27', 20_000, { id: 'predD', source: 'predicted' }),
+    ]
+    expect(activeAgreementBalance(ms, parts, payments)).toBe(2_020_000)
+  })
+
+  it('GOLDEN: an archived predecessor agreement is excluded after a bank change (no double count)', () => {
+    // m1 archived (Bank X), m2 active (Bank Y). Old part frozen at 3 700 000;
+    // new part 3 700 000 − 100 000 amortering = 3 600 000. Only m2 counts.
+    const ms = [mortgage({ id: 'm1', bank_id: 'bX', archived: true, end_date: '2026-01-01' }), mortgage({ id: 'm2', bank_id: 'bY', start_date: '2026-01-01' })]
+    const oldPart = part({ id: 'p1', mortgage_id: 'm1' })
+    const newPart = part({ id: 'p2', mortgage_id: 'm2', original_balance: 3_700_000, original_date: '2026-01-01' })
+    const parts = [oldPart, newPart]
+    const payments = [
+      saldoRow('p1', '2025-12-31', 3_700_000),
+      amortRow('p2', '2026-03-27', 100_000, { balance_after: 3_600_000 }),
+    ]
+    expect(activeAgreementMortgage(ms)?.id).toBe('m2')
+    expect(activeAgreementBalance(ms, parts, payments)).toBe(3_600_000)
+    // The naive sum of both agreements' parts (7 300 000) is what scoping avoids.
+    expect(activeAgreementBalance(ms, parts, payments)).not.toBe(7_300_000)
+  })
+
+  it('legacy unscoped parts (mortgage_id null) are included exactly once with an active agreement', () => {
+    // Active m1 part 1 000 000 + a legacy unlinked part 250 000 (repair state,
+    // still visible in the hero) = 1 250 000, each counted once.
+    const ms = [mortgage({ id: 'm1' })]
+    const scoped = part({ id: 'p1', mortgage_id: 'm1' })
+    const legacy = part({ id: 'pLegacy', mortgage_id: null })
+    const parts = [scoped, legacy]
+    const payments = [
+      saldoRow('p1', '2026-05-31', 1_000_000),
+      saldoRow('pLegacy', '2026-05-31', 250_000),
+    ]
+    const ap = activeAgreementParts(parts, 'm1')
+    expect(ap.map(p => p.id)).toEqual(['p1', 'pLegacy'])
+    expect(activeAgreementBalance(ms, parts, payments)).toBe(1_250_000)
+  })
+
+  it('legacy-tolerant fallback: only-archived agreements still surface (matches the hero), empty scopes out', () => {
+    // Documenting the deliberate legacy tolerance that differs from the stricter
+    // activeMortgage(). When EVERY agreement is archived, the route (and this
+    // selector) still surface the first one rather than making its debt vanish —
+    // so its non-archived parts ARE counted, exactly as Bolånekoll's hero shows.
+    const onlyArchived = [mortgage({ id: 'm1', archived: true })]
+    const p1 = part({ id: 'p1', mortgage_id: 'm1' })
+    const payments = [saldoRow('p1', '2026-05-31', 900_000)]
+    expect(activeMortgage(onlyArchived)).toBeNull()                 // strict domain: none
+    expect(activeAgreementMortgage(onlyArchived)?.id).toBe('m1')     // legacy-tolerant: the archived one
+    expect(activeAgreementBalance(onlyArchived, [p1], payments)).toBe(900_000)
+    // With NO agreements at all, agreement-scoped parts have nothing to attach
+    // to and are excluded; only genuinely unscoped legacy parts remain.
+    expect(activeAgreementMortgage([])).toBeNull()
+    const legacy = part({ id: 'pL', mortgage_id: null })
+    const mixed = [p1, legacy]
+    const scopedOut = activeAgreementParts(mixed, null)
+    expect(scopedOut.map(p => p.id)).toEqual(['pL'])                 // p1 (scoped to m1) excluded
+    expect(activeAgreementBalance([], mixed, [saldoRow('pL', '2026-05-31', 120_000), saldoRow('p1', '2026-05-31', 900_000)])).toBe(120_000)
   })
 })
 

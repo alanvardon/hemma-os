@@ -107,6 +107,57 @@ describe('read path', () => {
   })
 })
 
+// Plan 118 — the purpose-built all-or-nothing read behind Bostadskalkyl's
+// "pull current balance". It must never present a failed live read as an
+// authoritative empty (0 kr) balance, and must fall back to the authoritative
+// cache when the scope is inactive/dirty — exactly like loadMortgageSyncSnapshot.
+describe('loadMortgageBalanceSnapshot (plan 118)', () => {
+  it('unavailable live source (query error) returns null — never an empty 0-balance snapshot', () => {
+    mem.set(IMPORT_FLAG, '1')
+    mem.set(CACHE_KEY, JSON.stringify({ version: 6, banks: [], mortgages: [mortgageRow('mC')], loan_parts: [loanPart('pC', { mortgage_id: 'mC' })], payments: [], valuations: [], rate_periods: [], contributions: [], settings: {} }))
+    mock().control.failing.add('mortgage_payments')
+    return expect(store.loadMortgageBalanceSnapshot()).resolves.toBeNull()
+  })
+
+  it('authoritative data present returns the live mortgages, parts and payments together', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.mortgages = [mortgageRow('m1')]
+    mock().tables.mortgage_loan_parts = [loanPart('p1', { mortgage_id: 'm1' })]
+    mock().tables.mortgage_payments = [mortgagePayment('pay1', 'p1', { balance_after: 400_000 })]
+    const snap = await store.loadMortgageBalanceSnapshot()
+    expect(snap?.mortgages.map(m => m.id)).toEqual(['m1'])
+    expect(snap?.parts.map(p => p.id)).toEqual(['p1'])
+    expect(snap?.payments.map(p => p.id)).toEqual(['pay1'])
+    // Wrote the live rows through to the cache (same contract as the sibling).
+    expect((cache().mortgages as { id: string }[]).map(m => m.id)).toEqual(['m1'])
+  })
+
+  it('an inactive/dirty scope returns the authoritative cache fallback, not a live 0', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    // Cache holds the household's real debt; the live tables are EMPTY, so a
+    // live read (the wrong path) would fabricate a 0 kr balance.
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 6, banks: [bankRow('b1')],
+      mortgages: [mortgageRow('mCache', { bank_id: 'b1' })],
+      loan_parts: [loanPart('pCache', { mortgage_id: 'mCache' })],
+      payments: [mortgagePayment('payCache', 'pCache', { balance_after: 750_000 })],
+      valuations: [], rate_periods: [], contributions: [], settings: {},
+    }))
+    // Dirty the mortgages resource with a failed write; the read must then serve
+    // the cache instead of the empty live tables.
+    mock().control.failing.add('mortgages')
+    await expect(store.addMortgage({ bank_id: 'b1', label: 'X', start_date: '2026-01-01', archived: true, end_date: null })).rejects.toBeTruthy()
+    expect(sync.syncCoordinator.isDirty('mortgages')).toBe(true)
+
+    const snap = await store.loadMortgageBalanceSnapshot()
+    // Parts and payments come straight from the authoritative cache — not the
+    // empty live tables — proving the read never mistakes unavailability for 0.
+    expect(snap?.parts.map(p => p.id)).toEqual(['pCache'])
+    expect(snap?.payments.map(p => p.id)).toEqual(['payCache'])
+    expect(snap?.parts).not.toHaveLength(0)
+  })
+})
+
 describe('write path', () => {
   beforeEach(() => { mem.set(IMPORT_FLAG, '1') })
 

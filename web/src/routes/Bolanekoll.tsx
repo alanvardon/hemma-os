@@ -21,6 +21,7 @@ import {
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, marketEquitySplit, derivedDeposit,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
   partsForMortgage, paymentsForMortgage, partsMissingRateTerms,
+  activeAgreementParts as activeAgreementPartsScope, activeAgreementPayments as activeAgreementPaymentsScope,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
   expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
@@ -201,18 +202,15 @@ export default function Bolanekoll() {
   // repair state with an "ej kopplad" indicator, rather than disappearing or
   // being silently adopted by the active agreement.
   const activeViewParts = useMemo(
-    () => parts.filter(p => p && (p.mortgage_id == null || p.mortgage_id === (activeMortgage?.id ?? null))),
+    () => activeAgreementPartsScope(parts, activeMortgage?.id ?? null),
     [parts, activeMortgage])
-  const activeViewPartIds = useMemo(() => new Set(activeViewParts.map(p => p.id)), [activeViewParts])
   // Ledger rows in the active view: part-linked rows via the active-view parts;
   // partless rows (down payments) via their own agreement provenance, keeping
   // unlinked legacy rows visible. Old agreement transactions live in the history
   // modal, not here (plan 109 decision 6/7).
   const activeViewPayments = useMemo(
-    () => payments.filter(p => p && (p.loan_part_id
-      ? activeViewPartIds.has(p.loan_part_id)
-      : (p.mortgage_id == null || p.mortgage_id === (activeMortgage?.id ?? null)))),
-    [payments, activeViewPartIds, activeMortgage])
+    () => activeAgreementPaymentsScope(payments, activeViewParts, activeMortgage?.id ?? null),
+    [payments, activeViewParts, activeMortgage])
   // The live ledger (non-archived active-view parts) and this agreement's own
   // settled/restructured parts (its "Avslutade" list) — NOT the old bank's
   // parts, which are reached through the history modal.

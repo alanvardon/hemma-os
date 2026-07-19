@@ -7,15 +7,23 @@ import ExpandableChartCard from './charts/ExpandableChartCard'
 import ChartLegend from './charts/ChartLegend'
 import StressChart from './charts/StressChart'
 
+export type PullStatus = 'idle' | 'loading' | 'error' | 'empty'
+
 interface Props {
   inputs: Inputs
   setField: <K extends keyof Inputs>(key: K, value: Inputs[K]) => void
   figures: Figures
   constants: Constants
   onOpenDrift: () => void
+  // Plan 118 — explicit pull of Bolånekoll's current balance (route owns state).
+  onPullMortgage: () => void
+  pullStatus: PullStatus
+  pullPreview: number | null
+  onApplyPull: () => void
+  onDismissPull: () => void
 }
 
-export default function InputsColumn({ inputs: i, setField, figures: f, constants: c, onOpenDrift }: Props) {
+export default function InputsColumn({ inputs: i, setField, figures: f, constants: c, onOpenDrift, onPullMortgage, pullStatus, pullPreview, onApplyPull, onDismissPull }: Props) {
   const [listingUrl, setListingUrl] = useState('')
 
   const bankAName = i.bankAName.trim() || 'Bank A'
@@ -50,6 +58,13 @@ export default function InputsColumn({ inputs: i, setField, figures: f, constant
           </Field>
           <Field label="Current mortgage balance">
             <CurrencyInput value={i.currentMortgage} onChange={(v) => setField('currentMortgage', v)} id="currentMortgage" ariaLabel="Current mortgage balance" />
+            <MortgagePull
+              status={pullStatus}
+              preview={pullPreview}
+              onPull={onPullMortgage}
+              onApply={onApplyPull}
+              onDismiss={onDismissPull}
+            />
           </Field>
           <Field label="Agent / selling cost">
             <CurrencyInput value={i.agentCost} onChange={(v) => setField('agentCost', v)} id="agentCost" ariaLabel="Agent cost" />
@@ -158,6 +173,59 @@ export default function InputsColumn({ inputs: i, setField, figures: f, constant
       {/* Section 4 — stress test */}
       <StressTest inputs={i} constants={c} />
     </div>
+  )
+}
+
+// Plan 118 — inline control beside "Current mortgage balance" that pulls the
+// authoritative current debt from Bolånekoll. Two-step (fetch → preview →
+// "Använd") so the overwrite of a manual value is never a surprise, and never
+// auto-runs. Swedish UI copy per the plan. Kept narrow so it wraps cleanly at
+// 320/390 px without page-level horizontal overflow.
+function MortgagePull({
+  status,
+  preview,
+  onPull,
+  onApply,
+  onDismiss,
+}: {
+  status: PullStatus
+  preview: number | null
+  onPull: () => void
+  onApply: () => void
+  onDismiss: () => void
+}) {
+  if (status === 'loading') {
+    return <span className="mortgage-pull-note" aria-live="polite">Hämtar…</span>
+  }
+  if (preview != null) {
+    return (
+      <div className="mortgage-pull-preview" aria-live="polite">
+        <span className="mortgage-pull-note">Bolånekoll: {fmt(preview)}</span>
+        <button type="button" className="field-breakdown-btn" onClick={onApply}>Använd ›</button>
+        <button type="button" className="field-breakdown-btn mortgage-pull-dismiss" onClick={onDismiss} aria-label="Avbryt">Avbryt</button>
+      </div>
+    )
+  }
+  if (status === 'empty') {
+    return (
+      <div className="mortgage-pull-preview" aria-live="polite">
+        <span className="mortgage-pull-note">Bolånekoll saknar aktuellt saldo</span>
+        <button type="button" className="field-breakdown-btn" onClick={onPull}>Försök igen ›</button>
+      </div>
+    )
+  }
+  if (status === 'error') {
+    return (
+      <div className="mortgage-pull-preview" role="alert">
+        <span className="mortgage-pull-note mortgage-pull-error">Kunde inte hämta – försök igen</span>
+        <button type="button" className="field-breakdown-btn" onClick={onPull}>Försök igen ›</button>
+      </div>
+    )
+  }
+  return (
+    <button type="button" className="field-breakdown-btn" onClick={onPull}>
+      Hämta från Bolånekoll ›
+    </button>
   )
 }
 
