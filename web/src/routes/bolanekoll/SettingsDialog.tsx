@@ -17,7 +17,7 @@ export default function SettingsDialog({ open, settings, onSave, onClose, onExpo
     const v = e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value
     setForm(p => ({ ...p, [k]: v }))
   }
-  function submit(e: React.FormEvent) { e.preventDefault(); onSave({ ...form, my_ownership_pct: Number(form.my_ownership_pct), household_income_yearly: form.household_income_yearly ? Number(form.household_income_yearly) : null }) }
+  function submit(e: React.FormEvent) { e.preventDefault(); onSave({ ...form, owner_a_ownership_pct: Number(form.owner_a_ownership_pct), household_income_yearly: form.household_income_yearly ? Number(form.household_income_yearly) : null }) }
   const { a: aName, b: bName } = usePersonNames(form.owner_a_name, form.owner_b_name)
   return (
     <DialogShell open={open} onClose={onClose} className="bk-dialog">
@@ -27,7 +27,10 @@ export default function SettingsDialog({ open, settings, onSave, onClose, onExpo
           <FormField label="Property name (optional)" wide><input type="text" placeholder="e.g. Storgatan 4" value={form.property_name} onChange={f('property_name')} /></FormField>
           <FormField label="Owner A name"><input type="text" value={form.owner_a_name} onChange={f('owner_a_name')} /></FormField>
           <FormField label="Owner B name"><input type="text" value={form.owner_b_name} onChange={f('owner_b_name')} /></FormField>
-          <FormField label="My ownership %"><input type="text" inputMode="decimal" placeholder="50" value={form.my_ownership_pct} onChange={f('my_ownership_pct')} /></FormField>
+          {/* The ownership split is a person-independent financial fact (plan
+              111): the control names owner A explicitly instead of "my
+              ownership", and owner B is always the exact complement. */}
+          <FormField label={`${aName} ägarandel (%)`}><input type="text" inputMode="decimal" placeholder="50" value={form.owner_a_ownership_pct} onChange={f('owner_a_ownership_pct')} /></FormField>
           <div className="form-field">
             <span>Which owner am I?</span>
             <Segmented value={(form.i_am as Owner) || 'a'} onChange={v => setForm(p => ({ ...p, i_am: v }))}

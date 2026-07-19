@@ -18,6 +18,7 @@ import {
   fetchHouseholdIdentity,
   getHouseholdIdentitySnapshot,
   identityErrorMessage,
+  myToolSlot,
   parseHouseholdIdentity,
   refreshHouseholdIdentity,
   setMyHouseholdPerson,
@@ -282,5 +283,36 @@ describe('identityErrorMessage', () => {
     expect(identityErrorMessage(ruleError)).toBe('Personen finns inte i hushållet. Ladda om och försök igen.')
     expect(identityErrorMessage(new TypeError('Failed to fetch')))
       .toBe('Ingen anslutning. Ändringen sparades inte i molnet.')
+  })
+})
+
+// ── myToolSlot — view perspective for Bolånekoll and friends (plan 111 St 3) ─
+
+describe('myToolSlot', () => {
+  it('returns the slot whose bound person is the signed-in account', () => {
+    // The household creator mapped to person A (bolanekoll binding a→PA).
+    expect(myToolSlot(parseHouseholdIdentity(view({ my_person_id: PA })), 'bolanekoll')).toBe('a')
+    // An invited partner mapped to the OTHER person sees slot b — same data.
+    expect(myToolSlot(parseHouseholdIdentity(view({ my_person_id: PB })), 'bolanekoll')).toBe('b')
+  })
+
+  it('follows the binding, not the canonical slot, when a tool is bound reversed', () => {
+    const reversed = parseHouseholdIdentity(view({
+      my_person_id: PA,
+      bindings: { bolanekoll: { a: PB, b: PA } },
+    }))
+    expect(myToolSlot(reversed, 'bolanekoll')).toBe('b')
+  })
+
+  it('never guesses: unmapped account, unbound tool or missing identity give null', () => {
+    // Unmapped account (legacy fallback: the tool keeps its i_am perspective).
+    expect(myToolSlot(parseHouseholdIdentity(view({ my_person_id: null })), 'bolanekoll')).toBeNull()
+    // Tool without a binding.
+    expect(myToolSlot(parseHouseholdIdentity(view({ my_person_id: PA })), 'manadsavslut')).toBeNull()
+    expect(myToolSlot(parseHouseholdIdentity(view({ my_person_id: PA, bindings: {} })), 'bolanekoll')).toBeNull()
+    // No identity at all (signed out / load failed).
+    expect(myToolSlot(null, 'bolanekoll')).toBeNull()
+    // Unconfigured household (malformed people ⇒ no bindings survive parsing).
+    expect(myToolSlot(parseHouseholdIdentity(view({ people: [], my_person_id: PA })), 'bolanekoll')).toBeNull()
   })
 })

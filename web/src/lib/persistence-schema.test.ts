@@ -379,3 +379,65 @@ describe('Mortgage and month-end persistence schemas', () => {
     expect(parseMonthEndEnvelope({ version: 1, settings: {}, items: [{ id: 'item-1', created_at: '2026-07-15T10:00:00.000Z', date_purchased: '', description: '', enter_amount: 0, split: true, amount: 0, fronted_by: 'a', owed_by: 'b', paid: false, pending: false, payment_id: 'missing', note: '', personal_items: [], personal_a: 0, personal_b: 0, source: 'manual' }], payments: [] }).ok).toBe(false)
   })
 })
+
+// ── Bolånekoll ownership perspective migration (plan 111, Stage 3) ──────────
+
+describe('mortgage settings ownership migration', () => {
+  const parseSettings = (settings: Record<string, unknown>) => {
+    const parsed = parseMortgageEnvelope({ ...mortgageBackup, settings })
+    if (!parsed.ok) throw new Error('fixture must parse')
+    return parsed.value.settings
+  }
+
+  it('migrates legacy i_am=a and i_am=b state to the same explicit A share', () => {
+    const fromA = parseSettings({ i_am: 'a', my_ownership_pct: 70 })
+    const fromB = parseSettings({ i_am: 'b', my_ownership_pct: 30 })
+    expect(fromA).toMatchObject({ owner_a_ownership_pct: 70, my_ownership_pct: 70, i_am: 'a' })
+    expect(fromB).toMatchObject({ owner_a_ownership_pct: 70, my_ownership_pct: 30, i_am: 'b' })
+  })
+
+  it('handles the 0/50/100 boundaries and defaults absent state to 50', () => {
+    expect(parseSettings({ i_am: 'a', my_ownership_pct: 0 }).owner_a_ownership_pct).toBe(0)
+    expect(parseSettings({ i_am: 'b', my_ownership_pct: 0 }).owner_a_ownership_pct).toBe(100)
+    expect(parseSettings({ i_am: 'a', my_ownership_pct: 100 }).owner_a_ownership_pct).toBe(100)
+    expect(parseSettings({ i_am: 'b', my_ownership_pct: 100 }).owner_a_ownership_pct).toBe(0)
+    expect(parseSettings({ i_am: 'b', my_ownership_pct: 50 }).owner_a_ownership_pct).toBe(50)
+    expect(parseSettings({}).owner_a_ownership_pct).toBe(50)
+  })
+
+  it('prefers a present explicit A share and keeps the legacy fields consistent', () => {
+    expect(parseSettings({ owner_a_ownership_pct: 25, i_am: 'b', my_ownership_pct: 70 }))
+      .toMatchObject({ owner_a_ownership_pct: 25, my_ownership_pct: 75, i_am: 'b' })
+  })
+
+  it('is idempotent: re-parsing an already-migrated envelope is unchanged', () => {
+    const first = parseMortgageEnvelope({ ...mortgageBackup, settings: { i_am: 'b', my_ownership_pct: 30 } })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    expect(parseMortgageEnvelope(first.value)).toEqual(first)
+  })
+
+  it('rejects malformed/non-finite/out-of-range ownership values — never clamps', () => {
+    for (const settings of [
+      { my_ownership_pct: Number.NaN }, { my_ownership_pct: Number.POSITIVE_INFINITY },
+      { my_ownership_pct: '70' }, { my_ownership_pct: -1 }, { my_ownership_pct: 101 },
+      { my_ownership_pct: null }, { my_ownership_pct: true },
+      { owner_a_ownership_pct: Number.NaN }, { owner_a_ownership_pct: '70' },
+      { owner_a_ownership_pct: -0.01 }, { owner_a_ownership_pct: 100.01 },
+      { owner_a_ownership_pct: null },
+      { i_am: 'c' }, { i_am: 1 },
+    ]) {
+      expect(parseMortgageEnvelope({ ...mortgageBackup, settings }).ok).toBe(false)
+    }
+  })
+
+  it('salvage falls back to default settings (A share 50) instead of clamping an invalid value', () => {
+    const salvaged = salvageMortgageEnvelope({ ...mortgageBackup, settings: { i_am: 'a', my_ownership_pct: 150 } })
+    expect(salvaged.value.settings.owner_a_ownership_pct).toBe(50)
+    expect(salvaged.rejected).toEqual([expect.objectContaining({ record: 'mortgage settings' })])
+    // A valid legacy blob salvages WITH its migrated share intact.
+    const legacy = salvageMortgageEnvelope({ ...mortgageBackup, settings: { i_am: 'b', my_ownership_pct: 30 } })
+    expect(legacy.value.settings.owner_a_ownership_pct).toBe(70)
+    expect(legacy.rejected).toEqual([])
+  })
+})

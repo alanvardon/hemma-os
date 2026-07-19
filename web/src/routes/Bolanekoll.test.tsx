@@ -32,6 +32,21 @@ vi.mock('../lib/riksbank', async (importOriginal) => ({
   ...await importOriginal<typeof import('../lib/riksbank')>(),
   fetchPolicyRate: vi.fn().mockRejectedValue(new Error('no network in tests')),
 }))
+// Plan 111 Stage 3 — the route derives its self/partner perspective from
+// usePersonIdentity. Mock the hook so tests drive mapped/unmapped states
+// directly; the default (below in beforeEach) is UNMAPPED, i.e. the safe
+// legacy `i_am` fallback every pre-111 test implicitly relied on.
+vi.mock('../components/usePersonIdentity', () => ({ usePersonIdentity: vi.fn() }))
+import { usePersonIdentity, type PersonIdentityView } from '../components/usePersonIdentity'
+
+function identityView(slot: 'a' | 'b' | null): PersonIdentityView {
+  return {
+    status: 'ready', identity: null, configured: slot !== null, people: [],
+    myPerson: null, personFor: () => null, isMe: () => false,
+    myToolSlot: (tool) => (tool === 'bolanekoll' ? slot : null),
+    refresh: async () => {},
+  }
+}
 
 // Bolanekoll reads useViewTransitionState (useToolPageActive), which needs a
 // data router — mount it as the sole route of an in-memory one.
@@ -48,6 +63,7 @@ function renderBolanekoll() {
 // benign empty result. Individual tests override the one write they care about.
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(usePersonIdentity).mockReturnValue(identityView(null))
   vi.stubGlobal('ResizeObserver', class ResizeObserver {
     observe() {}
     unobserve() {}
@@ -1047,5 +1063,89 @@ describe('Bolanekoll — Betalningar month disclosure (plan 115)', () => {
     // Allocation chevron toggles the detail row open.
     await user.click(insatsRow.querySelector('button.expand-btn')!)
     expect(document.querySelector('.pay-detail')).toBeInTheDocument()
+  })
+})
+
+// ── Plan 111 Stage 3 — self/partner perspective from the person binding ──────
+// The A/B ownership figures are person-independent facts; only the accent
+// ("which card is ME") follows the signed-in account's Bolånekoll binding,
+// with the legacy `i_am` perspective as the unmapped fallback. A/B order and
+// every value must be identical in all three states.
+describe('Bolanekoll — view perspective from the person binding', () => {
+  const valuation = {
+    id: 'v1', created_at: '2026-01-01', date: '2026-06-01',
+    value: 5_000_000, note: '', is_purchase: false,
+  }
+  const splitPart = {
+    id: 'p1', created_at: '2026-01-01', label: 'Lånedel 1', loan_number: '',
+    start_balance: 3_500_000, start_date: '2026-01-01', archived: false,
+  }
+  // A 70/30 household stored the NEW way, with the legacy perspective saying
+  // "I am B" — so unmapped accounts should emphasize B, mapped accounts follow
+  // their own binding regardless of `i_am`.
+  const settings70 = (i_am: 'a' | 'b') =>
+    ({ ...defaultSettings(), owner_a_ownership_pct: 70, i_am, track_contributions: true })
+
+  function seedSplit(settings: ReturnType<typeof defaultSettings>) {
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 6, banks: [bank], mortgages: [agreement], loan_parts: [splitPart],
+      payments: [], valuations: [valuation], rate_periods: [], contributions: [], settings,
+    })
+    vi.mocked(Store.listMortgages).mockResolvedValue([agreement])
+    vi.mocked(Store.listBanks).mockResolvedValue([bank])
+    vi.mocked(Store.listLoanParts).mockResolvedValue([splitPart])
+    vi.mocked(Store.listValuations).mockResolvedValue([valuation])
+    vi.mocked(Store.getSettings).mockResolvedValue(settings)
+  }
+
+  async function marketCards() {
+    // 5,000,000 value − 3,500,000 debt = 1,500,000 equity at the 70/30 target.
+    const a = (await screen.findByText(/^Alex ·/)).closest('.split-card') as HTMLElement
+    const b = (await screen.findByText(/^Sam ·/)).closest('.split-card') as HTMLElement
+    return { a, b }
+  }
+
+  it('unmapped account keeps the legacy i_am perspective (accent on B) and A/B values', async () => {
+    seedSplit(settings70('b'))
+    vi.mocked(usePersonIdentity).mockReturnValue(identityView(null))
+    renderBolanekoll()
+    const { a, b } = await marketCards()
+    expect(b.className).toContain('is-accent')
+    expect(a.className).not.toContain('is-accent')
+    // The financial fact is unchanged: A owns 70 % (1 050 000 of 1 500 000).
+    expect(a.textContent).toContain('70,00 %')
+    expect(b.textContent).toContain('30,00 %')
+  })
+
+  it('a mapped account follows its binding, not i_am, without moving or changing the cards', async () => {
+    // Same persisted household data as above (i_am still says B)…
+    seedSplit(settings70('b'))
+    vi.mocked(usePersonIdentity).mockReturnValue(identityView(null))
+    const first = renderBolanekoll()
+    const before = await marketCards()
+    const beforeValues = [before.a.textContent, before.b.textContent]
+    first.unmount()
+
+    // …but THIS account is bound to person/slot A → accent moves to A.
+    vi.mocked(usePersonIdentity).mockReturnValue(identityView('a'))
+    renderBolanekoll()
+    const { a, b } = await marketCards()
+    expect(a.className).toContain('is-accent')
+    expect(b.className).not.toContain('is-accent')
+    // A stays first in DOM order and every value is byte-for-byte identical.
+    expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect([a.textContent, b.textContent]).toEqual(beforeValues)
+  })
+
+  it('an invited partner mapped to the OTHER person sees themselves as B', async () => {
+    // The creator's legacy perspective says A, but the signed-in partner's
+    // binding resolves to slot B — their view, same household data.
+    seedSplit(settings70('a'))
+    vi.mocked(usePersonIdentity).mockReturnValue(identityView('b'))
+    renderBolanekoll()
+    const { a, b } = await marketCards()
+    expect(b.className).toContain('is-accent')
+    expect(a.className).not.toContain('is-accent')
+    expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

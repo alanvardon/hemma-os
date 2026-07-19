@@ -13,7 +13,7 @@
      cache is what makes the first-login import safe.
    - CACHE_KEY   — the write-through offline cache mirroring the whole envelope. */
 
-import { defaultSettings, legacyContributionPayment, makeRatePeriod } from './mortgage'
+import { defaultSettings, legacyContributionPayment, makeRatePeriod, migrateOwnershipSettings } from './mortgage'
 import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage, CatalogBank } from './mortgage'
 import { supabase } from './supabase'
 import { makeImportOnce, materializeImport, stamp } from './store-helpers'
@@ -90,6 +90,22 @@ interface StoreEnvelope {
   rate_periods: RatePeriod[]
   contributions: Contribution[]
   settings: MortgageSettings
+}
+
+// Every settings object that enters memory goes through this merge: defaults
+// first, then the given layers, then the plan 111 ownership migration — so a
+// legacy `i_am` + `my_ownership_pct` blob (cache, cloud tool_state, import or
+// pre-Supabase backup) is normalized to the explicit `owner_a_ownership_pct`
+// representation without changing any A/B result. Idempotent by construction.
+function mergedSettings(...layers: Array<Partial<MortgageSettings> | undefined>): MortgageSettings {
+  const merged: MortgageSettings = Object.assign(defaultSettings(), ...layers)
+  // The DEFAULT A share (50) must never shadow a legacy blob that only carries
+  // i_am/my_ownership_pct: unless some layer actually contains the explicit
+  // field, force the migration to derive the share from the legacy fields.
+  if (!layers.some((layer) => layer !== undefined && 'owner_a_ownership_pct' in layer)) {
+    merged.owner_a_ownership_pct = Number.NaN
+  }
+  return migrateOwnershipSettings(merged)
 }
 
 function warning(source: string): void {
@@ -262,7 +278,7 @@ function _envelope(raw: Record<string, unknown>, migrate: boolean): StoreEnvelop
     valuations: Array.isArray(raw.valuations) ? (raw.valuations as Valuation[]) : [],
     rate_periods: Array.isArray(raw.rate_periods) ? (raw.rate_periods as RatePeriod[]) : [],
     contributions: Array.isArray(raw.contributions) ? (raw.contributions as Contribution[]) : [],
-    settings: { ...defaultSettings(), ...(raw.settings as Partial<MortgageSettings> || {}) },
+    settings: mergedSettings(raw.settings as Partial<MortgageSettings> || {}),
   }
   if (migrate && (Number(raw.version) || 1) < 4) migrateToPeriods(out, raw)
   return out
@@ -373,7 +389,7 @@ function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): Le
       valuations: env.valuations.map((r) => ({ date: '', value: 0, note: '', is_purchase: false, ...(r as unknown as Record<string, unknown>) })),
       rate_periods: env.rate_periods.map((r) => ({ loan_part_id: null, start_date: '', end_date: null, rate: null, rate_type: 'rörlig', ...(r as unknown as Record<string, unknown>) })),
       contributions: env.contributions,
-      settings: { ...defaultSettings(), ...env.settings },
+      settings: mergedSettings(env.settings),
     }
     const canonical = canonicalizeEnvelope(normalized as StoreEnvelope)
     if (canonical.rejectedContributions) warning('säkerhetskopian')
@@ -1147,12 +1163,12 @@ export async function removeContribution(id: string): Promise<number> {
 export async function getSettings(): Promise<MortgageSettings> {
   const scope = syncCoordinator.captureScope()
   await _importLocalOnce()
-  if (!scope.isActive() || syncCoordinator.isDirty(SETTINGS_RESOURCE)) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
+  if (!scope.isActive() || syncCoordinator.isDirty(SETTINGS_RESOURCE)) return mergedSettings(_readCacheFrom(scope).settings)
   const { data, error } = await supabase.from(STATE).select('data,revision').eq('tool', SETTINGS_TOOL).maybeSingle()
-  if (!scope.isActive() || syncCoordinator.isDirty(SETTINGS_RESOURCE)) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
-  if (error) return { ...defaultSettings(), ..._readCacheFrom(scope).settings }
+  if (!scope.isActive() || syncCoordinator.isDirty(SETTINGS_RESOURCE)) return mergedSettings(_readCacheFrom(scope).settings)
+  if (error) return mergedSettings(_readCacheFrom(scope).settings)
   rememberToolRevision(SETTINGS_TOOL, data)
-  const settings = { ...defaultSettings(), ...((data?.data as Partial<MortgageSettings>) || {}) }
+  const settings = mergedSettings((data?.data as Partial<MortgageSettings>) || {})
   const cache = _readCacheFrom(scope); cache.settings = settings; scope.write(CACHE_KEY, JSON.stringify(cache))
   return settings
 }
@@ -1161,7 +1177,7 @@ export async function saveSettings(patch: Partial<MortgageSettings>): Promise<Mo
   const scope = syncCoordinator.captureScope()
   const current = await getSettings()
   if (!scope.isActive()) throw new Error('Sync identity changed while saving settings')
-  const merged = { ...defaultSettings(), ...current, ...patch }
+  const merged = mergedSettings(current, patch)
   await syncCoordinator.mutate({
     resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: merged }, entityIds: [SETTINGS_TOOL],
     expectedRevisions: { [SETTINGS_RESOURCE]: syncCoordinator.getRevision(SETTINGS_RESOURCE) },
@@ -1245,7 +1261,12 @@ export async function importJSON(text: string): Promise<Record<string, number>> 
   add(T.valuations, newVals, newVals.map(r => _row(r, 'valuations')), () => _patchCache(e => { e.valuations = [...newVals, ...e.valuations.filter(r => !new Set(newVals.map(x => x.id)).has(r.id))] }))
   add(T.periods, newRates, newRates.map(r => _row(r, 'periods')), () => _patchCache(e => { e.rate_periods = [...newRates, ...e.rate_periods.filter(r => !new Set(newRates.map(x => x.id)).has(r.id))] }))
   if (parsed.settings && typeof parsed.settings === 'object') {
-    const merged = { ...defaultSettings(), ...existingSettings, ...(parsed.settings as Partial<MortgageSettings>) }
+    // Use the PARSED settings, not the raw import object: parseMortgageEnvelope
+    // has validated them and already migrated a legacy `i_am`/`my_ownership_pct`
+    // backup to the explicit `owner_a_ownership_pct` representation. Spreading
+    // the raw legacy fields over an already-migrated `existingSettings` would
+    // let the existing explicit A share silently win over the imported split.
+    const merged = mergedSettings(existingSettings, valid.value.settings)
     operations.push({
       resource: SETTINGS_RESOURCE, operation: 'upsert', payload: { data: merged, seed: true }, entityIds: [SETTINGS_TOOL],
       expectedRevisions: { [SETTINGS_RESOURCE]: syncCoordinator.getRevision(SETTINGS_RESOURCE) },

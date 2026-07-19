@@ -1,6 +1,6 @@
 import { DEFAULT_CONSTANTS, DEFAULT_INPUTS, type Constants, type Inputs } from './calc'
 import type { Bank, Contribution, LoanPart, Mortgage, MortgageSettings, Payment as MortgagePayment, RatePeriod, Valuation } from './mortgage'
-import { BILLING_MODES, BILLING_SOURCES, defaultSettings as defaultMortgageSettings } from './mortgage'
+import { BILLING_MODES, BILLING_SOURCES, defaultSettings as defaultMortgageSettings, migrateOwnershipSettings } from './mortgage'
 import type { Item, MonthEndSettings, Payment as MonthEndPayment, PersonalEntry } from './manadsavslut'
 import { defaultSettings as defaultMonthEndSettings } from './manadsavslut'
 import type { SalarySubmission } from './hushallsbudget'
@@ -441,7 +441,16 @@ function parseMortgageSettings(raw: unknown): ParseResult<MortgageSettings> {
   const property_name = field(raw, 'property_name', defaults.property_name, (v) => text(v, 'property_name'))
   const owner_a_name = field(raw, 'owner_a_name', defaults.owner_a_name, (v) => text(v, 'owner_a_name'))
   const owner_b_name = field(raw, 'owner_b_name', defaults.owner_b_name, (v) => text(v, 'owner_b_name'))
-  const my_ownership_pct = field(raw, 'my_ownership_pct', defaults.my_ownership_pct, (v) => finite(v, 'my_ownership_pct'))
+  // Ownership percentages are validated to the 0–100 domain — an out-of-range
+  // value is rejected here, never clamped (plan 111 migration contract).
+  const ownershipPct = (value: unknown, path: string): ParseResult<number> => {
+    const parsed = finite(value, path)
+    if (!parsed.ok) return parsed
+    return parsed.value < 0 || parsed.value > 100 ? failure(path, 'must be between 0 and 100') : parsed
+  }
+  const my_ownership_pct = field(raw, 'my_ownership_pct', defaults.my_ownership_pct, (v) => ownershipPct(v, 'my_ownership_pct'))
+  // null = absent (legacy state) → derived from the legacy fields below.
+  const owner_a_ownership_pct = field<number | null>(raw, 'owner_a_ownership_pct', null, (v) => ownershipPct(v, 'owner_a_ownership_pct'))
   const i_am = field(raw, 'i_am', defaults.i_am, (v) => parseEnum(v, owners, 'i_am'))
   const currency = field(raw, 'currency', defaults.currency, (v) => text(v, 'currency'))
   const ranteavdrag = field(raw, 'ranteavdrag', defaults.ranteavdrag, (v) => boolean(v, 'ranteavdrag'))
@@ -468,9 +477,16 @@ function parseMortgageSettings(raw: unknown): ParseResult<MortgageSettings> {
   const scenarioRateIssues = scenarioRate !== null && scenarioRate < 0
     ? [{ path: 'what_if_rate_pct', reason: 'must be non-negative' }]
     : []
-  const issues = [...issueList([property_name, owner_a_name, owner_b_name, my_ownership_pct, i_am, currency, ranteavdrag, household_income_yearly, track_contributions, what_if_rate_pct]), ...presetIssues, ...scenarioRateIssues]
+  const issues = [...issueList([property_name, owner_a_name, owner_b_name, my_ownership_pct, owner_a_ownership_pct, i_am, currency, ranteavdrag, household_income_yearly, track_contributions, what_if_rate_pct]), ...presetIssues, ...scenarioRateIssues]
   if (issues.length) return { ok: false, issues }
-  return success({ property_name: valueOf(property_name), owner_a_name: valueOf(owner_a_name), owner_b_name: valueOf(owner_b_name), my_ownership_pct: valueOf(my_ownership_pct), i_am: valueOf(i_am), currency: valueOf(currency), ranteavdrag: valueOf(ranteavdrag), household_income_yearly: valueOf(household_income_yearly), import_presets, track_contributions: valueOf(track_contributions), what_if_rate_pct: valueOf(what_if_rate_pct) })
+  // Normalize to the explicit A-share representation: a valid explicit value
+  // wins; legacy `i_am` + `my_ownership_pct` state migrates to it losslessly
+  // (identical A/B percentages), and `my_ownership_pct` is kept consistent.
+  return success(migrateOwnershipSettings({
+    property_name: valueOf(property_name), owner_a_name: valueOf(owner_a_name), owner_b_name: valueOf(owner_b_name),
+    owner_a_ownership_pct: valueOf(owner_a_ownership_pct) ?? Number.NaN,
+    my_ownership_pct: valueOf(my_ownership_pct), i_am: valueOf(i_am), currency: valueOf(currency), ranteavdrag: valueOf(ranteavdrag), household_income_yearly: valueOf(household_income_yearly), import_presets, track_contributions: valueOf(track_contributions), what_if_rate_pct: valueOf(what_if_rate_pct),
+  }))
 }
 
 function parseLoanPart(raw: unknown): ParseResult<PersistedLoanPart> {

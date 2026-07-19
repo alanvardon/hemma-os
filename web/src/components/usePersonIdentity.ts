@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import {
   getHouseholdIdentitySnapshot,
+  myToolSlot,
   refreshHouseholdIdentity,
   subscribeHouseholdIdentity,
   type CanonicalSlot,
@@ -29,6 +30,9 @@ export interface PersonIdentityView {
   /** True only when the tool is bound AND the account is mapped to that slot's
       person — never guesses. */
   isMe: (tool: IdentityTool, toolSlot: CanonicalSlot) => boolean
+  /** The tool slot that IS the signed-in person (bound + mapped), else null so
+      callers keep their legacy perspective. */
+  myToolSlot: (tool: IdentityTool) => CanonicalSlot | null
   refresh: () => Promise<void>
 }
 
@@ -65,6 +69,7 @@ export function usePersonIdentity(): PersonIdentityView {
         const person = personFor(tool, toolSlot)
         return !!person && !!identity?.myPersonId && person.id === identity.myPersonId
       },
+      myToolSlot: (tool) => configured ? myToolSlot(identity, tool) : null,
       refresh: refreshHouseholdIdentity,
     }
   }, [state])

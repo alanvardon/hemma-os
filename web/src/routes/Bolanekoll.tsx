@@ -11,6 +11,7 @@ import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import Segmented from '../components/Segmented'
 import { usePersonNames } from '../components/usePersonNames'
+import { usePersonIdentity } from '../components/usePersonIdentity'
 import { useConfirm } from '../components/useConfirm'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
@@ -529,7 +530,13 @@ export default function Bolanekoll() {
   // ── Chart data (stacked area: my equity → partner → bank) ────────────────────
   // Resolve the timeline into display-ordered bands; negatives clip to 0 so the
   // stack never inverts (matches the old Chart.js Math.max(0, …)).
-  const me: Owner = settings.i_am === 'b' ? 'b' : 'a'
+  // "Me" is a VIEW concern only (plan 111): when the signed-in account has a
+  // Bolånekoll person binding it decides which of A/B is emphasized; an
+  // unmapped account keeps the legacy `i_am` perspective, so existing
+  // households look unchanged before reconciliation. A/B data, order and every
+  // calculated value are person-independent and never move with this.
+  const identityView = usePersonIdentity()
+  const me: Owner = identityView.myToolSlot('bolanekoll') ?? (settings.i_am === 'b' ? 'b' : 'a')
   const other: Owner = me === 'a' ? 'b' : 'a'
   const chartData = useMemo<EquityPoint[]>(
     () => timeline.map(r => ({

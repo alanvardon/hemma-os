@@ -161,6 +161,15 @@ export function legacyContributionPayment(contribution: Partial<Contribution>): 
 
 export interface MortgageSettings {
   property_name: string; owner_a_name: string; owner_b_name: string
+  /** Person-independent ownership fact (plan 111): owner A's share of the home
+   * in percent (0–100). Owner B's share is always the exact complement
+   * (100 − A). This is the persisted source of truth for the ownership split. */
+  owner_a_ownership_pct: number
+  /** Legacy perspective fields (pre plan 111), retained for import/fallback
+   * compatibility. `i_am` still selects the VIEW perspective for an account
+   * without a Bolånekoll person binding; `my_ownership_pct` is only read when
+   * `owner_a_ownership_pct` is absent, and is kept consistent with it on
+   * migration so legacy readers of exported state stay correct. */
   my_ownership_pct: number; i_am: Owner; currency: string; ranteavdrag: boolean
   household_income_yearly: number | null; import_presets: Record<string, ColNameMapping>
   track_contributions: boolean
@@ -186,6 +195,7 @@ export interface ColNameMapping {
 export function defaultSettings(): MortgageSettings {
   return {
     property_name: '', owner_a_name: 'Alex', owner_b_name: 'Sam',
+    owner_a_ownership_pct: 50,
     my_ownership_pct: 50, i_am: 'a', currency: 'SEK', ranteavdrag: true,
     household_income_yearly: null, import_presets: {}, track_contributions: false,
     what_if_rate_pct: null,
@@ -660,11 +670,56 @@ function clamp(pct: number, dflt = 50): number {
   const p = Number(pct); return isFinite(p) ? Math.max(0, Math.min(100, p)) : dflt
 }
 
+// ── Ownership representation migration (plan 111, Stage 3) ─────────────────
+// The persisted split used to be perspective-dependent (`i_am` +
+// `my_ownership_pct`), which cannot mean "me" for two different signed-in
+// accounts. `owner_a_ownership_pct` is the person-independent fact; these
+// helpers migrate legacy state to it WITHOUT changing any A/B result.
+
+/** True for a finite ownership percentage inside the 0–100 domain. */
+export function isValidOwnershipPct(value: unknown): value is number {
+  return typeof value === 'number' && isFinite(value) && value >= 0 && value <= 100
+}
+
+/**
+ * Owner A's share derived from the legacy perspective fields, or null when
+ * `my_ownership_pct` is malformed/non-finite/out-of-range (callers reject —
+ * never clamp — invalid persisted financial input). The `i_am = b` branch uses
+ * the exact formula the calculator always used for the other owner
+ * (`r2(100 − pct)`), so migrated A/B percentages are golden-identical.
+ */
+export function ownerAShareFromLegacy(i_am: unknown, my_ownership_pct: unknown): number | null {
+  if (!isValidOwnershipPct(my_ownership_pct)) return null
+  return i_am === 'b' ? r2(100 - my_ownership_pct) : my_ownership_pct
+}
+
+/**
+ * Idempotent in-memory forward migration of a full settings object to the
+ * explicit A-share representation. A valid `owner_a_ownership_pct` always wins
+ * (re-migration is a no-op); otherwise it is derived from the legacy fields,
+ * falling back to the 50/50 default when both are unusable (the same default
+ * the calculator applied). The legacy `my_ownership_pct` is rewritten to stay
+ * consistent with the A share so exported state remains readable by legacy
+ * importers; `i_am` is preserved as the unmapped-account view perspective.
+ */
+export function migrateOwnershipSettings(s: MortgageSettings): MortgageSettings {
+  const i_am: Owner = s.i_am === 'b' ? 'b' : 'a'
+  const a = isValidOwnershipPct(s.owner_a_ownership_pct)
+    ? s.owner_a_ownership_pct
+    : ownerAShareFromLegacy(i_am, s.my_ownership_pct) ?? 50
+  const my = i_am === 'b' ? r2(100 - a) : a
+  if (s.owner_a_ownership_pct === a && s.my_ownership_pct === my && s.i_am === i_am) return s
+  return { ...s, owner_a_ownership_pct: a, my_ownership_pct: my, i_am }
+}
+
 function ownerPercents(s: Partial<MortgageSettings>): { a: number; b: number } {
-  const me = s.i_am === 'b' ? 'b' : 'a', pct = clamp(s.my_ownership_pct ?? 50)
-  const res = { a: 0, b: 0 }
-  res[me] = pct; res[otherOwner(me)] = r2(100 - pct)
-  return res
+  // Explicit A share when present; legacy derivation (identical formulas to the
+  // pre-111 code) otherwise. The runtime clamp is calc-side defence only — the
+  // persistence parser rejects out-of-range values instead of clamping.
+  const a = typeof s.owner_a_ownership_pct === 'number' && isFinite(s.owner_a_ownership_pct)
+    ? clamp(s.owner_a_ownership_pct)
+    : s.i_am === 'b' ? r2(100 - clamp(s.my_ownership_pct ?? 50)) : clamp(s.my_ownership_pct ?? 50)
+  return { a, b: r2(100 - a) }
 }
 
 // ── Month helpers ──────────────────────────────────────────────────────────
@@ -744,6 +799,9 @@ export function equityTimeline(
     return {
       month: row.month, label: row.label, value, balance: row.balance, bank: row.balance,
       equity: eq,
+      // my/partner are the LEGACY `i_am` perspective only. View-relative
+      // selection for a bound account happens in the route via the person
+      // binding, always from the person-independent a_equity/b_equity.
       my_equity: s.i_am === 'b' ? split.b : split.a,
       a_equity: split.a,
       b_equity: split.b,
