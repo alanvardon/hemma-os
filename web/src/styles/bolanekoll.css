@@ -279,9 +279,15 @@
   .expand-btn { color: var(--accent); margin-left: -4px; margin-right: 2px; }
   /* Reserve the chevron's width on every payment-date cell so insats and
      non-insats rows share one date baseline (the toggle only shows on insats
-     rows, but the gutter is always there). */
-  .payments-table .col-date { display: flex; align-items: center; }
-  .payments-table .pay-date-slot { flex: 0 0 20px; display: inline-flex; align-items: center; }
+     rows, but the gutter is always there). The td stays a normal table-cell
+     (vertical-align: middle from the .data-table base) so the date centres to
+     the row height like every other column — an earlier `display: flex` on the
+     td floated the date to the top on multi-line rows (plan 122 F2). The 20px
+     gutter now lives entirely on the inline-flex slot span. */
+  .payments-table .pay-date-slot {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; vertical-align: middle; margin-right: 2px;
+  }
   .payments-table .pay-date-slot .expand-btn { width: 20px; height: 20px; margin: 0; }
   .data-table tr.is-expanded.is-insats td { box-shadow: none; }
   .data-table tr.pay-detail td {
@@ -530,8 +536,26 @@
   .lanedelar-table tr.ld-group .ld-countdown,
   .lanedelar-table tr.ld-group .ld-rate:not(.is-bunden) { background: var(--paper-card); }
 
-  /* Member (child) rows — indented with a tree guide line, rate badge inline */
-  .lanedelar-table tr.ld-member > td { padding-top: 0; padding-bottom: 0; }
+  /* Fixed column widths so expanding a folder never reflows the numeric columns
+     (plan 122 F1). Auto table-layout re-measures every column against the widest
+     member label on expand, sliding Balance/Share sideways — pin them so the
+     first (Lånedel) column absorbs all slack instead. Desktop only: the ≤760px
+     card mode turns these tds into blocks, where a px width would collapse the
+     card. Columns: Lånedel · Balance · Share · actions. */
+  @media (min-width: 761px) {
+    .lanedelar-table { table-layout: fixed; }
+    .lanedelar-table th:nth-child(2),
+    .lanedelar-table td:nth-child(2) { width: 132px; }   /* Balance */
+    .lanedelar-table th:nth-child(3),
+    .lanedelar-table td:nth-child(3) { width: 92px; }    /* Share   */
+    .lanedelar-table th.col-act,
+    .lanedelar-table td.col-act { width: 96px; }         /* actions */
+  }
+
+  /* Member (child) rows — indented with a tree guide line, rate badge inline.
+     Seat them on the card bg so the expanded children read as a nested block
+     distinct from the parent folder's warm band (plan 122 F3). */
+  .lanedelar-table tr.ld-member > td { background: var(--paper-card); padding-top: 0; padding-bottom: 0; }
   .lanedelar-table tr.ld-member .cell-pad { padding: 8px 0; }
   .lanedelar-table tr.ld-member > td:first-child { padding-left: 2.2rem; position: relative; }
   .lanedelar-table tr.ld-member > td:first-child::before {
