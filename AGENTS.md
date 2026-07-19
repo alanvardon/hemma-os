@@ -131,6 +131,7 @@ test.
 ## Workflow
 
 - Inspect the current branch and `git status` before editing. Preserve unrelated changes; ask only when the task overlaps them or risks overwriting them.
+- **Always do implementation work in a dedicated git worktree, not the primary checkout.** Multiple plans may be built at the same time, and a shared checkout means one plan's branch switches, edits, and commits collide with another's. Create a worktree off an up-to-date `main` for each plan/task (e.g. `git worktree add ../hemma-os-<slug> -b feat/<plan-number>-<slug> main`), work and commit there, and remove it (`git worktree remove`) once the PR is merged. This keeps concurrent builds isolated.
 - Continue on the active task branch for follow-ups. For a new task, start a branch from an up-to-date `main`. Never implement directly on `main`, which deploys production. Re-check the branch immediately before each commit — merges move `HEAD`.
 - Use `feat/<plan-number>-<slug>` for planned features and concise `fix/`, `refactor/`, or `docs/` names otherwise.
 - Keep commits small and focused with imperative English messages. One feature or plan per branch and PR; every PR bases off `main` (no stacked PRs).
