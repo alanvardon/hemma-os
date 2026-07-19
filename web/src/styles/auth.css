@@ -297,6 +297,130 @@
 }
 .hh-banner-note { margin: 0 0 0.75rem; }
 
+/* Personer i hushållet — identity setup/reconciliation (plan 111). */
+.hh-person-slot {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--rule);
+  background: var(--paper-warm);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.hh-people-note { margin: 0.5rem 0 0.75rem; }
+.hh-people-manage, .hh-people-retry { margin-top: 0.5rem; font-size: 13px; }
+
+.hh-people-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 0.25rem;
+}
+.hh-people-names {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.hh-people-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.hh-people-field > label {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.hh-people-conflict { margin: -0.25rem 0 0; }
+
+.hh-people-whoami {
+  margin: 0;
+  padding: 0;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hh-people-whoami > legend {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding: 0;
+  margin-bottom: 4px;
+}
+.hh-people-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.hh-people-radio[data-disabled] { color: var(--ink-faint); cursor: default; }
+.hh-people-radio input { accent-color: var(--accent); }
+
+.hh-people-subtitle {
+  margin: 0 0 0.25rem;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.hh-people-tools { display: flex; flex-direction: column; gap: 0.75rem; }
+.hh-people-tool {
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hh-people-tool-name {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.hh-people-map-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; }
+.hh-people-map-row > label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink);
+}
+.hh-people-select { flex-shrink: 0; width: 45%; padding: 7px 10px; }
+
+.hh-people-review {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.hh-people-review input { accent-color: var(--accent); margin-top: 2px; }
+
+.hh-people-actions { display: flex; gap: 8px; }
+
 /* Leave-household section (plan 50). */
 .hh-leave-section { border-top: 1px solid var(--rule); padding-top: 1.25rem; }
 .hh-leave-row {

@@ -12,6 +12,9 @@ export interface Member {
   user_id: string
   role: string
   email: string | null
+  /** Mapped canonical household person (plan 111); null while unmapped. */
+  person_id?: string | null
+  person_display_name?: string | null
 }
 
 export interface Invite {

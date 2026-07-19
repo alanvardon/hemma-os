@@ -33,6 +33,7 @@ import {
   syncCoordinator,
 } from '../lib/sync'
 import { hasLegacyQuarantine, removeLegacyQuarantine } from '../lib/legacy-data'
+import HouseholdPeopleSection from './HouseholdPeopleSetup'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -138,6 +139,10 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
 
   async function refreshInvites() {
     setInvites(await listInvites())
+  }
+
+  async function refreshMembers() {
+    setMembers(await listMembers())
   }
 
   async function onInvite(e: React.FormEvent) {
@@ -269,6 +274,8 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
           )}
         </section>
 
+        <HouseholdPeopleSection members={members} myEmail={email} onSaved={() => void refreshMembers()} />
+
         <section className="hh-section">
           <p className="const-group-title">Medlemmar</p>
           {members.length === 0 ? (
@@ -281,6 +288,7 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
                   <li key={m.user_id} className="hh-list-row">
                     <span className="hh-role-dot" data-role={m.role} aria-hidden="true" />
                     <span className="hh-member-email">
+                      {m.person_display_name ? `${m.person_display_name} · ` : ''}
                       {m.email ?? 'Okänd medlem'}
                       {isYou && <span className="hh-you"> (du)</span>}
                     </span>
