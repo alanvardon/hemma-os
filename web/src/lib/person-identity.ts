@@ -192,7 +192,7 @@ let stateKey: string | null = null
 const listeners = new Set<() => void>()
 
 function scopeKey(scope: Scope): string {
-  return `${scope.identity.userId} ${scope.identity.householdId}`
+  return `${scope.identity.userId}|${scope.identity.householdId}`
 }
 
 function tryCaptureScope(): Scope | null {
@@ -221,7 +221,7 @@ export function subscribeHouseholdIdentity(listener: () => void): () => void {
 export function getHouseholdIdentitySnapshot(): IdentityState {
   const active = syncCoordinator.getActiveIdentity()
   if (!active) return IDLE_STATE
-  const key = `${active.userId} ${active.householdId}`
+  const key = `${active.userId}|${active.householdId}`
   return stateKey === key ? state : IDLE_STATE
 }
 
