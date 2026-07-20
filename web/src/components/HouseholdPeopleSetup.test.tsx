@@ -141,6 +141,28 @@ describe('HouseholdPeopleSection — auto-bind by name', () => {
     expect(serverView.my_person_id).toBe(PA)
   })
 
+  it('anchors on one matching slot and binds the other by elimination (e.g. "Partner")', async () => {
+    // Person A named "Alan" (matches Hushållsbudget slot A); slot B "Partner" is
+    // a generic placeholder that matches nothing but is forced to Person B.
+    vi.mocked(loadIdentitySuggestions).mockResolvedValue([
+      suggestion('bolanekoll', 'Bolånekoll', 'Alan', 'Sam'),
+      suggestion('hushallsbudget', 'Hushållsbudget', 'Alan', 'Partner'),
+      suggestion('manadsavslut', 'Månadsavslut', 'Alan', 'Sam'),
+    ])
+    const user = userEvent.setup()
+    renderSection(ownerSelf())
+    await user.click(await screen.findByRole('button', { name: 'Kom igång' }))
+    await screen.findByRole('button', { name: 'Spara personer' })
+    // Person A prefilled "Alan" (from Bolånekoll) → every tool resolves, no picker.
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(screen.getByText('Verktyg kopplas automatiskt')).toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: /kontrollerat namnen/ }))
+    await user.click(screen.getByRole('button', { name: 'Spara personer' }))
+    await screen.findByRole('button', { name: 'Hantera personer' })
+    // "Partner" (tool slot B) bound to canonical Person B by elimination.
+    expect(serverView.bindings.hushallsbudget).toEqual({ a: PA, b: PB })
+  })
+
   it('binds a reversed tool by name without a selector', async () => {
     vi.mocked(loadIdentitySuggestions).mockResolvedValue([
       suggestion('bolanekoll', 'Bolånekoll', 'Alex', 'Sam'),

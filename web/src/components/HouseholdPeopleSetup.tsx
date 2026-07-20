@@ -53,20 +53,26 @@ function matchSlot(toolName: string, nameA: string, nameB: string): SlotChoice {
   return name === a ? 'a' : name === b ? 'b' : ''
 }
 
-/** Auto-bind a tool by comparing its stored A/B names to the canonical names:
-    an exact ordered match binds slot A→A / B→B; an exact reversed match binds
-    A→B / B→A; anything else (a name matching neither, both, or ambiguous) is a
-    conflict that must be resolved by hand. */
+/** Auto-bind a tool by comparing its stored A/B names to the canonical names.
+    Only a real name match anchors — never position: a wrong slot would mislabel
+    whose figures are whose (the column names come from the binding). But in a
+    two-person household ONE anchor is enough — if one slot matches a canonical
+    name, the other slot is forced by elimination whatever it is called (so a
+    generic "Partner" beside a matched "Alan" resolves to Person B without a
+    guess). A tool resolves when at least one slot matches; it stays a conflict
+    only when neither slot matches, or both match the same person. */
 function classifyTool(suggestion: ToolNameSuggestion, nameA: string, nameB: string): ToolBind {
   const canonA = normalize(nameA)
   const canonB = normalize(nameB)
   const toolA = normalize(suggestion.a)
   const toolB = normalize(suggestion.b)
-  if (!canonA || !canonB || !toolA || !toolB) return 'conflict'
-  const order = toolA === canonA && toolB === canonB
-  const reverse = toolA === canonB && toolB === canonA
-  if (order && !reverse) return { a: 'a', b: 'b' }
-  if (reverse && !order) return { a: 'b', b: 'a' }
+  if (!canonA || !canonB || canonA === canonB) return 'conflict'
+  // Which canonical person each tool slot matches by name ('a' | 'b' | null).
+  const mA = toolA === canonA ? 'a' : toolA === canonB ? 'b' : null
+  const mB = toolB === canonA ? 'a' : toolB === canonB ? 'b' : null
+  if (mA && mB) return mA !== mB ? { a: mA, b: mB } : 'conflict'
+  if (mA) return { a: mA, b: mA === 'a' ? 'b' : 'a' }
+  if (mB) return { a: mB === 'a' ? 'b' : 'a', b: mB }
   return 'conflict'
 }
 
