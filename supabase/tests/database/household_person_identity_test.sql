@@ -5,7 +5,7 @@ create extension if not exists pgtap with schema extensions;
 -- Plan 111 Stage 1 — household person identity. All data is fictional and all
 -- changes roll back. Fixture writes happen as postgres; assertions run through
 -- the authenticated role and the same auth.uid()/JWT boundary as PostgREST.
-select plan(56);
+select plan(41);
 
 insert into auth.users (id, email)
 values
@@ -13,22 +13,13 @@ values
   ('10000000-0000-0000-0000-000000000002', 'person-a2@example.invalid'),
   ('10000000-0000-0000-0000-000000000003', 'person-b1@example.invalid'),
   ('10000000-0000-0000-0000-000000000004', 'person-c@example.invalid'),
-  ('10000000-0000-0000-0000-000000000005', 'person-d@example.invalid'),
-  -- Email auto-claim fixtures (households D/E/F).
-  ('30000000-0000-0000-0000-000000000001', 'claim-a@example.invalid'),
-  ('30000000-0000-0000-0000-000000000002', 'claim-b@example.invalid'),
-  ('30000000-0000-0000-0000-000000000003', 'claim-c2@example.invalid'),
-  ('30000000-0000-0000-0000-000000000004', 'claim-f@example.invalid'),
-  ('30000000-0000-0000-0000-000000000005', 'claim-h@example.invalid');
+  ('10000000-0000-0000-0000-000000000005', 'person-d@example.invalid');
 
 insert into public.households (id, name)
 values
   ('20000000-0000-0000-0000-000000000001', 'Fictional household A'),
   ('20000000-0000-0000-0000-000000000002', 'Fictional household B'),
-  ('20000000-0000-0000-0000-000000000003', 'Fictional household C'),
-  ('20000000-0000-0000-0000-000000000004', 'Fictional household D'),
-  ('20000000-0000-0000-0000-000000000005', 'Fictional household E'),
-  ('20000000-0000-0000-0000-000000000006', 'Fictional household F');
+  ('20000000-0000-0000-0000-000000000003', 'Fictional household C');
 
 insert into public.household_members (household_id, user_id, role)
 values
@@ -36,12 +27,7 @@ values
   ('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000002', 'member'),
   ('20000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000003', 'owner'),
   ('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000004', 'owner'),
-  ('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000005', 'member'),
-  ('20000000-0000-0000-0000-000000000004', '30000000-0000-0000-0000-000000000001', 'owner'),
-  ('20000000-0000-0000-0000-000000000004', '30000000-0000-0000-0000-000000000002', 'member'),
-  ('20000000-0000-0000-0000-000000000004', '30000000-0000-0000-0000-000000000003', 'member'),
-  ('20000000-0000-0000-0000-000000000005', '30000000-0000-0000-0000-000000000004', 'owner'),
-  ('20000000-0000-0000-0000-000000000006', '30000000-0000-0000-0000-000000000005', 'owner');
+  ('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000005', 'member');
 
 -- ── section A: configure + read as user a1 (household A owner) ───────────────
 
@@ -54,7 +40,7 @@ select set_config(
 
 select is(
   jsonb_array_length(
-    public.configure_household_people('Alex', 'Sam', null, null, 'bolanekoll', 'a', 'b')
+    public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'a', 'b')
       -> 'people'),
   2,
   'configure creates exactly two canonical people'
@@ -83,7 +69,7 @@ create temporary table before_retry as
 
 select is(
   jsonb_array_length(
-    public.configure_household_people('Alex', 'Sam', null, null, 'bolanekoll', 'a', 'b')
+    public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'a', 'b')
       -> 'people'),
   2,
   'retrying the identical configure call succeeds'
@@ -103,17 +89,17 @@ select is(
 );
 
 select throws_ok(
-  $$select public.configure_household_people('Alex', 'Sam', null, null, 'bolanekoll', 'a', null)$$,
+  $$select public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'a', null)$$,
   'P0001', 'incomplete tool binding',
   'a binding missing one tool slot is rejected'
 );
 select throws_ok(
-  $$select public.configure_household_people('Alex', 'Sam', null, null, 'bolanekoll', 'a', 'a')$$,
+  $$select public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'a', 'a')$$,
   'P0001', 'duplicate tool binding',
   'binding both tool slots to the same person is rejected'
 );
 select throws_ok(
-  $$select public.configure_household_people('Alex', 'Sam', null, null, 'okand-verktyg', 'a', 'b')$$,
+  $$select public.configure_household_people('Alex', 'Sam', 'okand-verktyg', 'a', 'b')$$,
   'P0001', 'invalid tool',
   'an unknown tool is rejected'
 );
@@ -125,14 +111,14 @@ select throws_ok(
 
 -- A tool may bind canonical person b to its legacy slot a (swap) and back.
 select is(
-  public.configure_household_people('Alex', 'Sam', null, null, 'bolanekoll', 'b', 'a')
+  public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'b', 'a')
     -> 'bindings' -> 'bolanekoll' ->> 'a',
   (select id::text from public.household_people
     where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'b'),
   'a swapped binding maps tool slot a to canonical person b'
 );
 select is(
-  public.configure_household_people('Alex', 'Sam', null, null, 'bolanekoll', 'a', 'b')
+  public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'a', 'b')
     -> 'bindings' -> 'bolanekoll' ->> 'a',
   (select id::text from public.household_people
     where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'a'),
@@ -384,172 +370,6 @@ select is(
       and household_id = '20000000-0000-0000-0000-000000000003'),
   0::bigint,
   'the old membership (and its mapping) is gone'
-);
-
--- ── section F: configure persists normalized login emails (household E, f) ────
-
-set local role authenticated;
-select set_config(
-  'request.jwt.claims',
-  '{"sub":"30000000-0000-0000-0000-000000000004","role":"authenticated","email":"claim-f@example.invalid"}',
-  true
-);
-
--- Mixed case + surrounding whitespace on a; empty string on b (clears to null).
-select is(
-  jsonb_array_length(
-    public.configure_household_people(
-      'Fia', 'Filip', '  Fia.Mail@Example.INVALID ', '') -> 'people'),
-  2,
-  'configure with emails still creates exactly two people'
-);
-select is(
-  (select login_email from public.household_people
-    where household_id = '20000000-0000-0000-0000-000000000005' and slot = 'a'),
-  'fia.mail@example.invalid',
-  'a provided email is stored normalized (lowercased and trimmed)'
-);
-select is(
-  (select login_email from public.household_people
-    where household_id = '20000000-0000-0000-0000-000000000005' and slot = 'b'),
-  null::text,
-  'an empty-string email is normalized to null'
-);
-select throws_ok(
-  $$select public.configure_household_people('Fia', 'Filip', 'not-an-email')$$,
-  'P0001', 'invalid person email',
-  'a malformed person email is rejected'
-);
-select throws_ok(
-  $$select public.configure_household_people(
-      'Fia', 'Filip', 'dup@example.invalid', 'dup@example.invalid')$$,
-  'P0001', 'email already used',
-  'two people cannot share one login email in a household'
-);
-
--- Idempotency: re-running the identical configure must not touch either row
--- (join on id + updated_at, both NOT NULL, to avoid NULL-in-JOIN pitfalls).
-create temporary table before_email_retry as
-  select id, updated_at from public.household_people
-  where household_id = '20000000-0000-0000-0000-000000000005';
-select public.configure_household_people(
-  'Fia', 'Filip', '  Fia.Mail@Example.INVALID ', '');
-select is(
-  (select count(*) from public.household_people p
-    join before_email_retry b on b.id = p.id and b.updated_at = p.updated_at
-    where p.household_id = '20000000-0000-0000-0000-000000000005'),
-  2::bigint,
-  'an identical re-configure with the same emails changes nothing (updated_at stable)'
-);
-
--- household_identity() exposes login_email — a value on a, null on b.
-select is(
-  (select value ->> 'login_email'
-     from jsonb_array_elements(public.household_identity() -> 'people') value
-    where value ->> 'slot' = 'a'),
-  'fia.mail@example.invalid',
-  'household_identity people carry a present login_email'
-);
-select is(
-  (select value ->> 'login_email'
-     from jsonb_array_elements(public.household_identity() -> 'people') value
-    where value ->> 'slot' = 'b'),
-  null::text,
-  'household_identity people carry a null login_email when unset'
-);
-
--- ── section G: auto-claim by verified auth email (household D) ────────────────
-
--- Owner eA configures household D people, binding each canonical person to one
--- account's login email.
-select set_config(
-  'request.jwt.claims',
-  '{"sub":"30000000-0000-0000-0000-000000000001","role":"authenticated","email":"claim-a@example.invalid"}',
-  true
-);
-select public.configure_household_people(
-  'Erik', 'Eva', 'claim-a@example.invalid', 'claim-b@example.invalid');
-
-select is(
-  public.claim_my_household_person_by_email() ->> 'my_person_id',
-  (select id::text from public.household_people
-    where household_id = '20000000-0000-0000-0000-000000000004' and slot = 'a'),
-  'a caller whose auth email matches a person is mapped to that person'
-);
-select is(
-  public.claim_my_household_person_by_email() ->> 'my_person_id',
-  (select id::text from public.household_people
-    where household_id = '20000000-0000-0000-0000-000000000004' and slot = 'a'),
-  'auto-claim is idempotent: a second call keeps the same mapping'
-);
-
--- Second account eB claims only its own person (b), from the same household.
-select set_config(
-  'request.jwt.claims',
-  '{"sub":"30000000-0000-0000-0000-000000000002","role":"authenticated","email":"claim-b@example.invalid"}',
-  true
-);
-select is(
-  public.claim_my_household_person_by_email() ->> 'my_person_id',
-  (select id::text from public.household_people
-    where household_id = '20000000-0000-0000-0000-000000000004' and slot = 'b'),
-  'each account auto-claims only the person carrying its own email'
-);
-
--- eA is already mapped: changing person a''s email must not re-route eA.
-select set_config(
-  'request.jwt.claims',
-  '{"sub":"30000000-0000-0000-0000-000000000001","role":"authenticated","email":"claim-a@example.invalid"}',
-  true
-);
-select public.configure_household_people(
-  'Erik', 'Eva', 'claim-c2@example.invalid', 'claim-b@example.invalid');
-select is(
-  public.claim_my_household_person_by_email() ->> 'my_person_id',
-  (select id::text from public.household_people
-    where household_id = '20000000-0000-0000-0000-000000000004' and slot = 'a'),
-  'an already-mapped caller is a no-op and keeps its existing mapping'
-);
-
--- eC''s email now matches person a, but person a is already claimed by eA:
--- eC must stay unmapped and no error is raised.
-select set_config(
-  'request.jwt.claims',
-  '{"sub":"30000000-0000-0000-0000-000000000003","role":"authenticated","email":"claim-c2@example.invalid"}',
-  true
-);
-select is(
-  public.claim_my_household_person_by_email() ->> 'my_person_id',
-  null::text,
-  'a person already claimed by another account is never stolen; caller stays unmapped'
-);
-
--- f (household E) has no person carrying its email: stays unmapped, no error.
-select set_config(
-  'request.jwt.claims',
-  '{"sub":"30000000-0000-0000-0000-000000000004","role":"authenticated","email":"claim-f@example.invalid"}',
-  true
-);
-select is(
-  public.claim_my_household_person_by_email() ->> 'my_person_id',
-  null::text,
-  'a caller with no matching email in its household stays unmapped'
-);
-
--- A person in ANOTHER household (E, person b) now carries h''s email, but h is
--- in household F: the email must never map h across the household boundary.
-select public.configure_household_people(
-  'Fia', 'Filip', 'fia.mail@example.invalid', 'claim-h@example.invalid');
-select set_config(
-  'request.jwt.claims',
-  '{"sub":"30000000-0000-0000-0000-000000000005","role":"authenticated","email":"claim-h@example.invalid"}',
-  true
-);
-select public.configure_household_people('Hanna', 'Hugo');
-select is(
-  public.claim_my_household_person_by_email() ->> 'my_person_id',
-  null::text,
-  'a matching login email in a foreign household never maps this caller'
 );
 
 select * from finish();

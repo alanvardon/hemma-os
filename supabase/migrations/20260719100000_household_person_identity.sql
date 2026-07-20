@@ -35,26 +35,12 @@ create table if not exists public.household_people (
   display_name text not null
     check (display_name = btrim(display_name)
            and length(display_name) between 1 and 60),
-  -- Optional login email that lets an account auto-claim this person by
-  -- matching its verified auth email. Stored NORMALIZED (lowercased, trimmed)
-  -- so the per-household uniqueness index and the claim comparison are exact.
-  login_email  text
-    check (login_email is null
-           or (login_email = lower(btrim(login_email))
-               and length(login_email) between 3 and 254
-               and login_email like '%_@_%')),
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now(),
   unique (household_id, slot),
   -- Composite target for same-household FKs below.
   unique (household_id, id)
 );
-
--- Within one household a login email is unambiguous: it maps to at most one
--- person. login_email is stored already-lowercased, so no lower() is needed.
-create unique index if not exists household_people_login_email_unique
-  on public.household_people (household_id, login_email)
-  where login_email is not null;
 
 alter table public.household_people enable row level security;
 drop policy if exists hh_select on public.household_people;
@@ -127,8 +113,7 @@ grant all on table public.household_tool_person_bindings to service_role;
 -- Everything the client needs in one household-scoped payload:
 --   { "household_id": uuid,
 --     "my_person_id": uuid | null,
---     "people":   [ { "id": uuid, "slot": "a"|"b", "display_name": text,
---                     "login_email": text | null } ],
+--     "people":   [ { "id": uuid, "slot": "a"|"b", "display_name": text } ],
 --     "bindings": { "<tool>": { "a": person-uuid, "b": person-uuid } } }
 -- Returns null when the caller has no household. Nothing outside the caller's
 -- household is ever read.
@@ -157,8 +142,7 @@ begin
     'people', coalesce(
       (select pg_catalog.jsonb_agg(
                 pg_catalog.jsonb_build_object(
-                  'id', p.id, 'slot', p.slot, 'display_name', p.display_name,
-                  'login_email', p.login_email)
+                  'id', p.id, 'slot', p.slot, 'display_name', p.display_name)
                 order by p.slot)
          from public.household_people p
         where p.household_id = hid),
@@ -190,8 +174,6 @@ grant execute on function public.household_identity() to authenticated;
 create or replace function public.configure_household_people(
     p_person_a_name text,
     p_person_b_name text,
-    p_person_a_email text default null,
-    p_person_b_email text default null,
     p_tool text default null,
     p_tool_slot_a_person text default null,
     p_tool_slot_b_person text default null
@@ -205,12 +187,6 @@ declare
   hid uuid;
   name_a text := pg_catalog.btrim(coalesce(p_person_a_name, ''));
   name_b text := pg_catalog.btrim(coalesce(p_person_b_name, ''));
-  -- Normalize each email: lowercase + trim, and treat empty string as "no
-  -- email" (null) so clearing an email is expressible from the client.
-  email_a text := nullif(
-    pg_catalog.lower(pg_catalog.btrim(coalesce(p_person_a_email, ''))), '');
-  email_b text := nullif(
-    pg_catalog.lower(pg_catalog.btrim(coalesce(p_person_b_email, ''))), '');
   slot_a_person_id uuid;
   slot_b_person_id uuid;
 begin
@@ -230,33 +206,12 @@ begin
     raise exception 'invalid person name';
   end if;
 
-  if (email_a is not null
-      and (pg_catalog.length(email_a) < 3 or pg_catalog.length(email_a) > 254
-           or email_a not like '%_@_%'))
-     or (email_b is not null
-      and (pg_catalog.length(email_b) < 3 or pg_catalog.length(email_b) > 254
-           or email_b not like '%_@_%')) then
-    raise exception 'invalid person email';
-  end if;
-
-  -- Upsert names and emails together. updated_at only moves when a name or the
-  -- login email actually changed, so an identical re-configure is a true no-op.
-  -- A duplicate email within the household (two people, or a collision with the
-  -- other row) trips household_people_login_email_unique; surface it with a
-  -- stable message for the client.
-  begin
-    insert into public.household_people as hp
-        (household_id, slot, display_name, login_email)
-    values (hid, 'a', name_a, email_a), (hid, 'b', name_b, email_b)
-    on conflict (household_id, slot) do update
-      set display_name = excluded.display_name,
-          login_email = excluded.login_email,
-          updated_at = pg_catalog.now()
-      where hp.display_name is distinct from excluded.display_name
-         or hp.login_email is distinct from excluded.login_email;
-  exception when unique_violation then
-    raise exception 'email already used';
-  end;
+  insert into public.household_people as hp (household_id, slot, display_name)
+  values (hid, 'a', name_a), (hid, 'b', name_b)
+  on conflict (household_id, slot) do update
+    set display_name = excluded.display_name,
+        updated_at = pg_catalog.now()
+    where hp.display_name is distinct from excluded.display_name;
 
   if p_tool is not null
      or p_tool_slot_a_person is not null
@@ -298,14 +253,13 @@ begin
 end;
 $$;
 
-alter function
-  public.configure_household_people(text, text, text, text, text, text, text)
+alter function public.configure_household_people(text, text, text, text, text)
   owner to postgres;
 revoke all on function
-  public.configure_household_people(text, text, text, text, text, text, text)
+  public.configure_household_people(text, text, text, text, text)
   from public, anon;
 grant execute on function
-  public.configure_household_people(text, text, text, text, text, text, text)
+  public.configure_household_people(text, text, text, text, text)
   to authenticated;
 
 -- ── write RPC: set/clear the CALLER'S own person mapping ──────────────────────
@@ -349,87 +303,6 @@ $$;
 alter function public.set_my_household_person(uuid) owner to postgres;
 revoke all on function public.set_my_household_person(uuid) from public, anon;
 grant execute on function public.set_my_household_person(uuid) to authenticated;
-
--- ── write RPC: auto-claim the caller's person by verified auth email ──────────
--- Safe to call on every load. Maps the caller to the person in their household
--- whose login_email is EXACTLY the caller's own verified auth email, and only
--- if that person is still unclaimed. This is the entire security property: the
--- only matching path is the caller's own auth.users.email; there is no other
--- way to be mapped by this function. No-op (returns the current identity view
--- unchanged) when the caller is already mapped, has no matching person, or the
--- person was claimed concurrently. set_my_household_person remains the manual
--- fallback for people without an email or when auto-claim cannot resolve.
-
-create or replace function public.claim_my_household_person_by_email()
-    returns jsonb
-    language plpgsql
-    security definer
-    set search_path to ''
-    as $$
-declare
-  uid uuid := (select auth.uid());
-  hid uuid;
-  current_person uuid;
-  caller_email text;
-  target_person uuid;
-begin
-  if uid is null then
-    raise exception 'not authenticated';
-  end if;
-  select household_id, person_id into hid, current_person
-    from public.household_members where user_id = uid;
-  if hid is null then
-    return null;
-  end if;
-  -- Already mapped: never override an existing claim, even if the stored email
-  -- would now resolve elsewhere. set_my_household_person is the way to change it.
-  if current_person is not null then
-    return public.household_identity();
-  end if;
-
-  select pg_catalog.lower(pg_catalog.btrim(u.email::text)) into caller_email
-    from auth.users u where u.id = uid;
-  if caller_email is null or caller_email = '' then
-    return public.household_identity();
-  end if;
-
-  -- Only ever match the caller's own household and their own verified email.
-  -- household_people_login_email_unique guarantees at most one such person.
-  select p.id into target_person
-    from public.household_people p
-    where p.household_id = hid
-      and p.login_email = caller_email;
-  if target_person is null then
-    return public.household_identity();
-  end if;
-
-  -- Do not steal a person another account already claims.
-  if exists (
-    select 1 from public.household_members m
-    where m.household_id = hid and m.person_id = target_person
-  ) then
-    return public.household_identity();
-  end if;
-
-  begin
-    update public.household_members
-      set person_id = target_person
-      where user_id = uid;
-  exception when unique_violation then
-    -- Claimed concurrently between the check and the update: leave the caller
-    -- unmapped rather than error. Idempotent and safe under races.
-    null;
-  end;
-
-  return public.household_identity();
-end;
-$$;
-
-alter function public.claim_my_household_person_by_email() owner to postgres;
-revoke all on function public.claim_my_household_person_by_email()
-  from public, anon;
-grant execute on function public.claim_my_household_person_by_email()
-  to authenticated;
 
 -- ── household_roster: also expose each member's mapped person ─────────────────
 -- Starts from the LATEST prior text (20260705190000, grants re-tightened in
