@@ -57,7 +57,7 @@ function fakeSession(): string {
 interface IdentityView {
   household_id: string | null
   my_person_id: string | null
-  people: { id: string; slot: 'a' | 'b'; display_name: string }[]
+  people: { id: string; slot: 'a' | 'b'; display_name: string; login_email?: string | null }[]
   bindings: Record<string, { a: string; b: string }>
 }
 
@@ -263,12 +263,21 @@ async function mockBackend(page: Page): Promise<Backend> {
       // configured household returns its full view.
       return route.fulfill({ json: backend.identity.household_id ? backend.identity : null })
     }
+    // Claim-first load path: map the caller (e2e@local.test) to the person whose
+    // login_email matches, when still unclaimed, then return the identity view.
+    if (path === '/rest/v1/rpc/claim_my_household_person_by_email' && req.method() === 'POST') {
+      if (backend.identity.household_id && backend.identity.my_person_id === null) {
+        const match = backend.identity.people.find((p) => (p.login_email ?? '') === 'e2e@local.test')
+        if (match) backend.identity.my_person_id = match.id
+      }
+      return route.fulfill({ json: backend.identity.household_id ? backend.identity : null })
+    }
     if (path === '/rest/v1/rpc/configure_household_people' && req.method() === 'POST') {
       const b = req.postDataJSON() as Record<string, string | null>
       backend.identity.household_id = HH_UUID
       backend.identity.people = [
-        { id: PERSON_A, slot: 'a', display_name: String(b.p_person_a_name) },
-        { id: PERSON_B, slot: 'b', display_name: String(b.p_person_b_name) },
+        { id: PERSON_A, slot: 'a', display_name: String(b.p_person_a_name), login_email: b.p_person_a_email ?? null },
+        { id: PERSON_B, slot: 'b', display_name: String(b.p_person_b_name), login_email: b.p_person_b_email ?? null },
       ]
       if (b.p_tool) {
         const idOf = (slot: string | null) => (slot === 'a' ? PERSON_A : PERSON_B)

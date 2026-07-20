@@ -16,8 +16,8 @@ import Manadsavslut from './Manadsavslut'
 vi.mock('../lib/manadsavslut-store')
 vi.mock('../components/usePersonIdentity')
 
-const PA = { id: 'p-a', slot: 'a' as const, display_name: 'Alex' }
-const PB = { id: 'p-b', slot: 'b' as const, display_name: 'Sam' }
+const PA = { id: 'p-a', slot: 'a' as const, login_email: null, display_name: 'Alex' }
+const PB = { id: 'p-b', slot: 'b' as const, login_email: null, display_name: 'Sam' }
 
 // slot === the account's Månadsavslut person, or null = unmapped/unbound.
 function identityView(slot: 'a' | 'b' | null): PersonIdentityView {

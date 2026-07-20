@@ -1,16 +1,19 @@
 // HouseholdPeopleSetup — the "Personer i hushållet" section of the household
-// dialog (plan 111, Stage 2). First-time reconciliation and later management:
-// name the two canonical people (prefilled from current tool settings, with
-// cross-tool conflicts shown explicitly), answer "Vem är du?", and bind each
-// tool's legacy A/B slots to the canonical people. Exact-name matches are
-// preselected but Save requires an explicit review; duplicate or incomplete
-// mappings cannot be saved. Save is a sequence of idempotent server calls —
-// no optimistic "Du" is ever rendered, a failure keeps the editor open with a
-// retryable error, and identity setup never gates the rest of the app.
+// dialog (plan 111, Stage 2). The owner names the two canonical people ONCE
+// (name + optional login email) and the three tools bind by name automatically:
+// when a tool's stored A/B names match the two canonical names (in order or
+// reversed) it is auto-bound and only summarised; a tool whose names match
+// neither person is a CONFLICT and is the only case that still shows the manual
+// per-slot selectors. "Vem är du?" resolves from the caller's own account email
+// when it matches an entered email; otherwise the manual radio is the fallback.
+// Save is a sequence of idempotent server calls — no optimistic "Du" is ever
+// rendered, a failure keeps the editor open with a retryable error, and identity
+// setup never gates the rest of the app.
 import { useId, useState } from 'react'
 import type { Member } from '../lib/household'
 import {
   IDENTITY_TOOLS,
+  claimHouseholdPersonByEmail,
   configureHouseholdPeople,
   identityErrorMessage,
   refreshHouseholdIdentity,
@@ -19,19 +22,29 @@ import {
   type HouseholdIdentity,
   type IdentityTool,
 } from '../lib/person-identity'
-import { loadIdentitySuggestions, type ToolNameSuggestion } from '../lib/person-identity-suggestions'
+import { loadIdentitySuggestions, IDENTITY_TOOL_LABELS, type ToolNameSuggestion } from '../lib/person-identity-suggestions'
 import { usePersonIdentity } from './usePersonIdentity'
 
 type SlotChoice = CanonicalSlot | ''
 type ToolMap = Record<IdentityTool, { a: SlotChoice; b: SlotChoice }>
 type WhoAmI = CanonicalSlot | 'skip'
 type EditorPhase = 'closed' | 'loading' | 'open'
+/** How a tool's legacy A/B names map onto the canonical people. */
+type ToolBind = { a: CanonicalSlot; b: CanonicalSlot } | 'conflict'
 
-const normalize = (name: string) => name.trim().toLocaleLowerCase('sv-SE')
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+const normalize = (name: string) => name.trim().toLocaleLowerCase('sv-SE').replace(/\s+/g, ' ')
 
 function validName(name: string): boolean {
   const trimmed = name.trim()
   return trimmed.length >= 1 && trimmed.length <= 60
+}
+
+/** A blank email is allowed (optional); a non-blank one must look like an email. */
+function validEmail(value: string): boolean {
+  const trimmed = value.trim()
+  return trimmed === '' || EMAIL_RE.test(trimmed)
 }
 
 function slotOfPerson(identity: HouseholdIdentity | null, personId: string | null | undefined): SlotChoice {
@@ -39,13 +52,30 @@ function slotOfPerson(identity: HouseholdIdentity | null, personId: string | nul
   return identity.people.find((person) => person.id === personId)?.slot ?? ''
 }
 
-/** Preselect a tool slot only on an unambiguous exact (normalized) match. */
+/** Preselect a single tool slot only on an unambiguous exact (normalized) match. */
 function matchSlot(toolName: string, nameA: string, nameB: string): SlotChoice {
   const a = normalize(nameA)
   const b = normalize(nameB)
   if (!a || !b || a === b) return ''
   const name = normalize(toolName)
   return name === a ? 'a' : name === b ? 'b' : ''
+}
+
+/** Auto-bind a tool by comparing its stored A/B names to the canonical names:
+    an exact ordered match binds slot A→A / B→B; an exact reversed match binds
+    A→B / B→A; anything else (a name matching neither, both, or ambiguous) is a
+    conflict that must be resolved by hand. */
+function classifyTool(suggestion: ToolNameSuggestion, nameA: string, nameB: string): ToolBind {
+  const canonA = normalize(nameA)
+  const canonB = normalize(nameB)
+  const toolA = normalize(suggestion.a)
+  const toolB = normalize(suggestion.b)
+  if (!canonA || !canonB || !toolA || !toolB) return 'conflict'
+  const order = toolA === canonA && toolB === canonB
+  const reverse = toolA === canonB && toolB === canonA
+  if (order && !reverse) return { a: 'a', b: 'b' }
+  if (reverse && !order) return { a: 'b', b: 'a' }
+  return 'conflict'
 }
 
 interface Props {
@@ -64,6 +94,8 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
   const [suggestions, setSuggestions] = useState<ToolNameSuggestion[]>([])
   const [nameA, setNameA] = useState('')
   const [nameB, setNameB] = useState('')
+  const [emailA, setEmailA] = useState('')
+  const [emailB, setEmailB] = useState('')
   const [whoAmI, setWhoAmI] = useState<WhoAmI>('skip')
   const [toolMap, setToolMap] = useState<ToolMap>({
     bolanekoll: { a: '', b: '' },
@@ -91,16 +123,20 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
     setSuggestions(loaded)
 
     // Canonical-name prefill: existing people win; a fresh household starts
-    // from Bolånekoll's current names (conflicts are surfaced below).
-    const prefillA = identity?.people.find((p) => p.slot === 'a')?.display_name
-      ?? loaded.find((s) => s.tool === 'bolanekoll')?.a ?? ''
-    const prefillB = identity?.people.find((p) => p.slot === 'b')?.display_name
-      ?? loaded.find((s) => s.tool === 'bolanekoll')?.b ?? ''
+    // from Bolånekoll's current names.
+    const personA = identity?.people.find((p) => p.slot === 'a')
+    const personB = identity?.people.find((p) => p.slot === 'b')
+    const prefillA = personA?.display_name ?? loaded.find((s) => s.tool === 'bolanekoll')?.a ?? ''
+    const prefillB = personB?.display_name ?? loaded.find((s) => s.tool === 'bolanekoll')?.b ?? ''
     setNameA(prefillA)
     setNameB(prefillB)
+    // Emails prefill only from an existing configured login email, else blank.
+    setEmailA(personA?.login_email ?? '')
+    setEmailB(personB?.login_email ?? '')
 
     // "Vem är du?" — my mapped slot; else, for an invited account, suggest the
-    // one unclaimed person (still requires explicit review + save).
+    // one unclaimed person (still requires explicit review + save). Only used
+    // when the caller's email does not resolve them.
     const mySlot = slotOfPerson(identity, identity?.myPersonId)
     if (mySlot) setWhoAmI(mySlot)
     else {
@@ -108,7 +144,8 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
       setWhoAmI(identity && identity.people.length === 2 && free.length === 1 ? free[0].slot : 'skip')
     }
 
-    // Tool mappings: an existing binding wins; else preselect exact matches.
+    // Conflict tools' manual mapping: an existing binding wins; else preselect
+    // exact per-slot matches. Auto-bound tools ignore this map on save.
     const nextMap = {} as ToolMap
     for (const tool of IDENTITY_TOOLS) {
       const binding = identity?.bindings[tool]
@@ -129,17 +166,36 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
     setSaveError('')
   }
 
-  // Cross-tool conflict: tools whose (normalized, ordered) name pairs differ.
-  const distinctPairs = new Set(suggestions.map((s) => `${normalize(s.a)} / ${normalize(s.b)}`))
-  const hasNameConflict = distinctPairs.size > 1
+  // ── derived binding + validation state (recomputed each render) ────────────
+  const bindOf: Record<IdentityTool, ToolBind> = {
+    bolanekoll: 'conflict', hushallsbudget: 'conflict', manadsavslut: 'conflict',
+  }
+  for (const suggestion of suggestions) bindOf[suggestion.tool] = classifyTool(suggestion, nameA, nameB)
+  const autoTools = suggestions.filter((s) => bindOf[s.tool] !== 'conflict')
+  const conflictTools = suggestions.filter((s) => bindOf[s.tool] === 'conflict')
 
-  const incompleteTools = IDENTITY_TOOLS.filter((tool) => !toolMap[tool].a || !toolMap[tool].b)
-  const duplicateTools = IDENTITY_TOOLS.filter(
-    (tool) => toolMap[tool].a !== '' && toolMap[tool].a === toolMap[tool].b,
+  // A conflict tool must have both slots chosen and not point at the same person.
+  const unresolvedConflicts = conflictTools.filter((s) => !toolMap[s.tool].a || !toolMap[s.tool].b)
+  const duplicateConflicts = conflictTools.filter(
+    (s) => toolMap[s.tool].a !== '' && toolMap[s.tool].a === toolMap[s.tool].b,
   )
+
   const namesValid = validName(nameA) && validName(nameB)
-  const canSave = !saving && namesValid && reviewed
-    && incompleteTools.length === 0 && duplicateTools.length === 0
+  const emailsValid = validEmail(emailA) && validEmail(emailB)
+  const emailDuplicate = emailA.trim() !== '' && emailB.trim() !== ''
+    && emailA.trim().toLowerCase() === emailB.trim().toLowerCase()
+
+  // Who am I resolves from the caller's account email when it matches an entered
+  // email; otherwise the manual radio is the fallback.
+  const callerEmail = (myEmail ?? '').trim().toLowerCase()
+  const emailResolvedSlot: CanonicalSlot | null = !emailDuplicate && callerEmail
+    ? callerEmail === emailA.trim().toLowerCase() && emailA.trim() !== '' ? 'a'
+      : callerEmail === emailB.trim().toLowerCase() && emailB.trim() !== '' ? 'b'
+      : null
+    : null
+
+  const canSave = !saving && namesValid && emailsValid && !emailDuplicate && reviewed
+    && unresolvedConflicts.length === 0 && duplicateConflicts.length === 0
 
   // Strict write contract: only server responses change identity state. Every
   // call is idempotent, so a retry after a mid-sequence failure is safe.
@@ -149,15 +205,24 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
     try {
       let latest: HouseholdIdentity | null = null
       for (const tool of IDENTITY_TOOLS) {
+        const bind = bindOf[tool]
+        const slots = bind === 'conflict'
+          ? { a: toolMap[tool].a as CanonicalSlot, b: toolMap[tool].b as CanonicalSlot }
+          : bind
         latest = await configureHouseholdPeople({
           personAName: nameA,
           personBName: nameB,
+          personAEmail: emailA,
+          personBEmail: emailB,
           tool,
-          toolSlotAPerson: toolMap[tool].a as CanonicalSlot,
-          toolSlotBPerson: toolMap[tool].b as CanonicalSlot,
+          toolSlotAPerson: slots.a,
+          toolSlotBPerson: slots.b,
         })
       }
-      if (whoAmI !== 'skip') {
+      // Map the caller: by their own verified email (no-op when no match), and
+      // via the manual radio when the email did not resolve them.
+      await claimHouseholdPersonByEmail()
+      if (emailResolvedSlot === null && whoAmI !== 'skip') {
         const person = latest?.people.find((p) => p.slot === whoAmI)
         if (!person) throw new Error('Kunde inte läsa personerna efter sparning. Försök igen.')
         await setMyHouseholdPerson(person.id)
@@ -200,6 +265,7 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
                 <span className="hh-member-email">
                   {person.display_name}
                   {person.id === identity.myPersonId && <span className="hh-you"> (du)</span>}
+                  {person.login_email && <span className="hh-member-addr"> · {person.login_email}</span>}
                 </span>
               </li>
             ))}
@@ -232,113 +298,144 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
           className="hh-people-form"
           onSubmit={(e) => { e.preventDefault(); if (canSave) void onSave() }}
         >
-          <div className="hh-people-names">
-            <div className="hh-people-field">
-              <label htmlFor={`${idPrefix}-name-a`}>Person A</label>
-              <input
-                id={`${idPrefix}-name-a`}
-                className="hh-invite-input"
-                type="text"
-                maxLength={60}
-                value={nameA}
-                onChange={(e) => setNameA(e.target.value)}
-                autoComplete="off"
-              />
-            </div>
-            <div className="hh-people-field">
-              <label htmlFor={`${idPrefix}-name-b`}>Person B</label>
-              <input
-                id={`${idPrefix}-name-b`}
-                className="hh-invite-input"
-                type="text"
-                maxLength={60}
-                value={nameB}
-                onChange={(e) => setNameB(e.target.value)}
-                autoComplete="off"
-              />
-            </div>
-          </div>
+          {(['a', 'b'] as const).map((slot) => {
+            const name = slot === 'a' ? nameA : nameB
+            const email = slot === 'a' ? emailA : emailB
+            const setName = slot === 'a' ? setNameA : setNameB
+            const setEmail = slot === 'a' ? setEmailA : setEmailB
+            return (
+              <div key={slot} className="hh-people-person">
+                <div className="hh-people-field">
+                  <label htmlFor={`${idPrefix}-name-${slot}`}>Person {slot.toUpperCase()}</label>
+                  <input
+                    id={`${idPrefix}-name-${slot}`}
+                    className="hh-invite-input"
+                    type="text"
+                    maxLength={60}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="hh-people-field">
+                  <label htmlFor={`${idPrefix}-email-${slot}`}>E-post (valfritt)</label>
+                  <input
+                    id={`${idPrefix}-email-${slot}`}
+                    className="hh-invite-input"
+                    type="email"
+                    inputMode="email"
+                    maxLength={254}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    autoComplete="off"
+                  />
+                  {!validEmail(email) && <p className="auth-error hh-error">Ange en giltig e-postadress.</p>}
+                </div>
+              </div>
+            )
+          })}
+          {myEmail && (
+            <p className="modal-note hh-people-note">Din inloggning: {myEmail}</p>
+          )}
           {!namesValid && <p className="auth-error hh-error">Ange båda namnen (1–60 tecken).</p>}
+          {emailDuplicate && <p className="auth-error hh-error">Personerna kan inte dela e-postadress.</p>}
 
-          {hasNameConflict && (
-            <div className="hh-people-conflict">
-              <p className="modal-note">Verktygen använder olika namn — kontrollera kopplingen nedan.</p>
+          {emailResolvedSlot ? (
+            <p className="modal-note hh-people-resolved">
+              Du: {((emailResolvedSlot === 'a' ? nameA : nameB).trim() || `Person ${emailResolvedSlot.toUpperCase()}`)}
+              {' '}— via din e-post
+            </p>
+          ) : (
+            <fieldset className="hh-people-whoami">
+              <legend>Vem är du?</legend>
+              {(['a', 'b'] as const).map((slot) => {
+                const person = identity?.people.find((p) => p.slot === slot)
+                const claimed = !!person && claimedByOthers.has(person.id)
+                const label = (slot === 'a' ? nameA : nameB).trim() || `Person ${slot.toUpperCase()}`
+                return (
+                  <label key={slot} className="hh-people-radio" data-disabled={claimed || undefined}>
+                    <input
+                      type="radio"
+                      name={`${idPrefix}-whoami`}
+                      checked={whoAmI === slot}
+                      disabled={claimed}
+                      onChange={() => setWhoAmI(slot)}
+                    />
+                    <span>
+                      {label}
+                      {claimed && <span className="hh-you"> (vald av annan medlem)</span>}
+                    </span>
+                  </label>
+                )
+              })}
+              <label className="hh-people-radio">
+                <input
+                  type="radio"
+                  name={`${idPrefix}-whoami`}
+                  checked={whoAmI === 'skip'}
+                  onChange={() => setWhoAmI('skip')}
+                />
+                <span>Väljer senare</span>
+              </label>
+            </fieldset>
+          )}
+
+          {autoTools.length > 0 && (
+            <div className="hh-people-auto">
+              <p className="hh-people-subtitle">Verktyg kopplas automatiskt</p>
+              <ul className="hh-people-auto-list">
+                {autoTools.map((s) => (
+                  <li key={s.tool} className="hh-people-auto-row">{IDENTITY_TOOL_LABELS[s.tool]}</li>
+                ))}
+              </ul>
             </div>
           )}
 
-          <fieldset className="hh-people-whoami">
-            <legend>Vem är du?</legend>
-            {(['a', 'b'] as const).map((slot) => {
-              const person = identity?.people.find((p) => p.slot === slot)
-              const claimed = !!person && claimedByOthers.has(person.id)
-              const label = (slot === 'a' ? nameA : nameB).trim() || `Person ${slot.toUpperCase()}`
-              return (
-                <label key={slot} className="hh-people-radio" data-disabled={claimed || undefined}>
-                  <input
-                    type="radio"
-                    name={`${idPrefix}-whoami`}
-                    checked={whoAmI === slot}
-                    disabled={claimed}
-                    onChange={() => setWhoAmI(slot)}
-                  />
-                  <span>
-                    {label}
-                    {claimed && <span className="hh-you"> (vald av annan medlem)</span>}
-                  </span>
-                </label>
-              )
-            })}
-            <label className="hh-people-radio">
-              <input
-                type="radio"
-                name={`${idPrefix}-whoami`}
-                checked={whoAmI === 'skip'}
-                onChange={() => setWhoAmI('skip')}
-              />
-              <span>Väljer senare</span>
-            </label>
-          </fieldset>
-
-          <div className="hh-people-tools">
-            <p className="hh-people-subtitle">Koppla verktygens namn</p>
-            {suggestions.map((suggestion) => {
-              const duplicate = duplicateTools.includes(suggestion.tool)
-              return (
-                <div key={suggestion.tool} className="hh-people-tool">
-                  <p className="hh-people-tool-name">{suggestion.label}</p>
-                  {(['a', 'b'] as const).map((toolSlot) => (
-                    <div key={toolSlot} className="hh-people-field hh-people-map-row">
-                      <label htmlFor={`${idPrefix}-${suggestion.tool}-${toolSlot}`}>
-                        {toolSlot.toUpperCase()} · {suggestion[toolSlot]}
-                      </label>
-                      <select
-                        id={`${idPrefix}-${suggestion.tool}-${toolSlot}`}
-                        className="hh-invite-input hh-people-select"
-                        value={toolMap[suggestion.tool][toolSlot]}
-                        onChange={(e) => {
-                          const value = e.target.value as SlotChoice
-                          setToolMap((prev) => ({
-                            ...prev,
-                            [suggestion.tool]: { ...prev[suggestion.tool], [toolSlot]: value },
-                          }))
-                        }}
-                      >
-                        <option value="">Välj person …</option>
-                        <option value="a">{nameA.trim() || 'Person A'}</option>
-                        <option value="b">{nameB.trim() || 'Person B'}</option>
-                      </select>
-                    </div>
-                  ))}
-                  {duplicate && (
-                    <p className="auth-error hh-error">Samma person kan inte ha båda platserna.</p>
-                  )}
-                </div>
-              )
-            })}
-            {incompleteTools.length > 0 && (
-              <p className="modal-note hh-people-note">Välj en person för varje plats innan du sparar.</p>
-            )}
-          </div>
+          {conflictTools.length > 0 && (
+            <div className="hh-people-tools">
+              <p className="hh-people-subtitle">Koppla verktygens namn</p>
+              {conflictTools.map((suggestion) => {
+                const duplicate = duplicateConflicts.includes(suggestion)
+                return (
+                  <div key={suggestion.tool} className="hh-people-tool">
+                    <p className="hh-people-tool-name">{suggestion.label}</p>
+                    <p className="modal-note hh-people-conflict-note">
+                      Namnen i {suggestion.label} matchar inte — välj vem varje plats är.
+                    </p>
+                    {(['a', 'b'] as const).map((toolSlot) => (
+                      <div key={toolSlot} className="hh-people-field hh-people-map-row">
+                        <label htmlFor={`${idPrefix}-${suggestion.tool}-${toolSlot}`}>
+                          {toolSlot.toUpperCase()} · {suggestion[toolSlot]}
+                        </label>
+                        <select
+                          id={`${idPrefix}-${suggestion.tool}-${toolSlot}`}
+                          className="hh-invite-input hh-people-select"
+                          value={toolMap[suggestion.tool][toolSlot]}
+                          onChange={(e) => {
+                            const value = e.target.value as SlotChoice
+                            setToolMap((prev) => ({
+                              ...prev,
+                              [suggestion.tool]: { ...prev[suggestion.tool], [toolSlot]: value },
+                            }))
+                          }}
+                        >
+                          <option value="">Välj person …</option>
+                          <option value="a">{nameA.trim() || 'Person A'}</option>
+                          <option value="b">{nameB.trim() || 'Person B'}</option>
+                        </select>
+                      </div>
+                    ))}
+                    {duplicate && (
+                      <p className="auth-error hh-error">Samma person kan inte ha båda platserna.</p>
+                    )}
+                  </div>
+                )
+              })}
+              {unresolvedConflicts.length > 0 && (
+                <p className="modal-note hh-people-note">Välj en person för varje plats innan du sparar.</p>
+              )}
+            </div>
+          )}
 
           <label className="hh-people-review">
             <input

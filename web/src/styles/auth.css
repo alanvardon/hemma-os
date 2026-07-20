@@ -355,6 +355,40 @@
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
+.hh-people-person {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+}
+.hh-people-resolved {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.hh-people-auto { display: flex; flex-direction: column; gap: 6px; }
+.hh-people-auto-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.hh-people-auto-row {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--accent-faint);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.hh-people-conflict-note { margin: 0; }
 .hh-people-field {
   display: flex;
   flex-direction: column;
