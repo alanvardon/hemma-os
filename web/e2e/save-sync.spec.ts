@@ -676,8 +676,10 @@ test('identity setup marks the signed-in person "Du", persists across reload, an
   await page.getByLabel('Person A').selectOption('e2e@local.test')
   await page.getByRole('button', { name: 'Spara personer' }).click()
 
-  // The Du marker renders only from the server-confirmed view.
-  await expect(page.getByText('(du)')).toBeVisible()
+  // The Du marker renders only from the server-confirmed view — assert it on the
+  // people list (rows carry a slot badge, unlike the Medlemmar list).
+  const peopleRows = page.locator('.hh-list-row').filter({ has: page.locator('.hh-person-slot') })
+  await expect(peopleRows.filter({ hasText: 'Alex' })).toContainText('(du)')
   await page.getByRole('button', { name: 'Stäng' }).click()
 
   // Mapped → the trigger becomes the current person's initial avatar (still
@@ -717,11 +719,11 @@ test('a second account mapped to the other person sees ITS OWN perspective as Du
   await expect(page.locator('.household-btn-avatar')).toHaveText('SA')
   await page.getByRole('button', { name: 'Hushåll' }).click()
 
-  // In the people list, Sam is (du) and Alex is not.
-  const samRow = page.locator('.hh-list-row', { hasText: 'Sam' })
-  await expect(samRow).toContainText('(du)')
-  const alexRow = page.locator('.hh-list-row', { hasText: 'Alex' })
-  await expect(alexRow).not.toContainText('(du)')
+  // In the "Personer i hushållet" list (rows carry a slot badge, unlike the
+  // Medlemmar list), Sam is (du) and Alex is not.
+  const peopleRows = page.locator('.hh-list-row').filter({ has: page.locator('.hh-person-slot') })
+  await expect(peopleRows.filter({ hasText: 'Sam' })).toContainText('(du)')
+  await expect(peopleRows.filter({ hasText: 'Alex' })).not.toContainText('(du)')
 
   expect(errors).toEqual([])
 })
