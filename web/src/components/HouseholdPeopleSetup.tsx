@@ -170,10 +170,26 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
   }
 
   // ── derived binding + validation state (recomputed each render) ────────────
+  // A tool already has a valid saved binding (by person id, so it survives a
+  // name mismatch) — that resolves it without re-asking, even when its stored
+  // names differ from the canonical ones.
+  function savedBind(tool: IdentityTool): ToolBind {
+    const binding = identity?.bindings[tool]
+    if (!binding) return 'conflict'
+    const a = slotOfPerson(identity, binding.a)
+    const b = slotOfPerson(identity, binding.b)
+    if (a === '' || b === '' || a === b) return 'conflict'
+    return { a, b }
+  }
   const bindOf: Record<IdentityTool, ToolBind> = {
     bolanekoll: 'conflict', hushallsbudget: 'conflict', manadsavslut: 'conflict',
   }
-  for (const suggestion of suggestions) bindOf[suggestion.tool] = classifyTool(suggestion, nameA, nameB)
+  for (const suggestion of suggestions) {
+    // A name match binds automatically; otherwise an existing saved binding
+    // still counts as resolved so a confirmed tool is never re-asked.
+    const byName = classifyTool(suggestion, nameA, nameB)
+    bindOf[suggestion.tool] = byName !== 'conflict' ? byName : savedBind(suggestion.tool)
+  }
   const autoTools = suggestions.filter((s) => bindOf[s.tool] !== 'conflict')
   const conflictTools = suggestions.filter((s) => bindOf[s.tool] === 'conflict')
 

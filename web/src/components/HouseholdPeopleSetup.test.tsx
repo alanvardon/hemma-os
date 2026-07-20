@@ -309,6 +309,30 @@ describe('HouseholdPeopleSection — configured household', () => {
     expect(serverView.my_person_id).toBe(PA)
   })
 
+  it('does not re-ask for a tool that is already bound, even when its names differ', async () => {
+    // Hushållsbudget stores "Alan/Partner" (≠ canonical Alex/Sam) but already has
+    // a saved binding from an earlier setup — it must be treated as resolved.
+    vi.mocked(loadIdentitySuggestions).mockResolvedValue([
+      suggestion('bolanekoll', 'Bolånekoll', 'Alex', 'Sam'),
+      suggestion('hushallsbudget', 'Hushållsbudget', 'Alan', 'Partner'),
+      suggestion('manadsavslut', 'Månadsavslut', 'Alex', 'Sam'),
+    ])
+    const members: Member[] = [
+      { user_id: 'u-me', role: 'owner', email: 'me@x.se', person_id: PA, person_display_name: 'Alex' },
+    ]
+    serverView.my_person_id = PA
+    const user = userEvent.setup()
+    renderSection(members)
+    await openEditor(user, 'Hantera personer')
+    // No conflict selector — the saved binding resolved it; it is summarised.
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    expect(screen.queryByText('Koppla verktygens namn')).not.toBeInTheDocument()
+    expect(screen.getByText('Verktyg kopplas automatiskt')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Spara personer' })).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: /kontrollerat namnen/ }))
+    expect(screen.getByRole('button', { name: 'Spara personer' })).toBeEnabled()
+  })
+
   it('renders the mapped person as (du) and its login email from the roster', async () => {
     serverView.my_person_id = PB
     const members: Member[] = [
