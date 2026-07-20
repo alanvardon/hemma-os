@@ -14,15 +14,16 @@ import { fmtMoney, clean } from './shared'
 // ItemDialog form, "Cancel" discards. Nothing persists until the item is saved.
 
 interface OffsetDlgProps {
-  open: boolean; enterAmount: number; frontedBy: Person; aName: string; bName: string
+  open: boolean; enterAmount: number; frontedBy: Person; aName: string; bName: string; selfSlot?: 'a' | 'b' | null
   initial: PersonalEntry[]
   onSave: (entries: PersonalEntry[]) => void; onClose: () => void
 }
-export default function PersonalOffsetDialog({ open, enterAmount, frontedBy, aName, bName, initial, onSave, onClose }: OffsetDlgProps) {
+export default function PersonalOffsetDialog({ open, enterAmount, frontedBy, aName, bName, selfSlot, initial, onSave, onClose }: OffsetDlgProps) {
   const [entries, setEntries] = useState<PersonalEntry[]>(initial)
   const [draft, setDraft] = useState({ person: frontedBy as Person, amount: '', note: '' })
   useEffect(() => { if (open) { setEntries(initial); setDraft({ person: frontedBy, amount: '', note: '' }) } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   const { nameOf } = usePersonNames(aName, bName)
+  const duName = (p: Person | null | undefined) => (selfSlot && p === selfSlot ? `${nameOf(p)} (du)` : nameOf(p))
   const enter = isFinite(enterAmount) ? enterAmount : 0
   const owed = otherPerson(frontedBy)
   const sums = personalSums(entries)
@@ -48,8 +49,8 @@ export default function PersonalOffsetDialog({ open, enterAmount, frontedBy, aNa
         <div className="personal-add-grid">
           <FormField label="Personal to">
             <select className="select" value={draft.person} onChange={e => setDraft(d => ({ ...d, person: e.target.value as Person }))}>
-              <option value="a">{aName}</option>
-              <option value="b">{bName}</option>
+              <option value="a">{selfSlot === 'a' ? `${aName} (du)` : aName}</option>
+              <option value="b">{selfSlot === 'b' ? `${bName} (du)` : bName}</option>
             </select>
           </FormField>
           <FormField label="Amount"><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={draft.amount} onChange={e => setDraft(d => ({ ...d, amount: e.target.value }))} onKeyDown={onDraftKey} /></FormField>
@@ -61,7 +62,7 @@ export default function PersonalOffsetDialog({ open, enterAmount, frontedBy, aNa
           <ul className="personal-entry-list">
             {entries.map((e, i) => (
               <li key={i}>
-                <span className="pe-person">{nameOf(e.person)}</span>
+                <span className="pe-person">{duName(e.person)}</span>
                 <span className="pe-amount num">{fmtMoney(e.amount)}</span>
                 <span className="pe-note">{e.note}</span>
                 <button type="button" className="icon-btn" title="Remove" aria-label="Remove" onClick={() => setEntries(es => es.filter((_, j) => j !== i))}><Icon icon={X} /></button>
@@ -70,7 +71,7 @@ export default function PersonalOffsetDialog({ open, enterAmount, frontedBy, aNa
           </ul>
         )}
         <p className="form-hint">{entries.length
-          ? <>Shared {fmtMoney(remaining)} split · {nameOf(owed)} owes {fmtMoney(owedShare)}</>
+          ? <>Shared {fmtMoney(remaining)} split · {duName(owed)} owes {fmtMoney(owedShare)}</>
           : <>No personal items yet — the full {fmtMoney(enter)} splits 50/50.</>}</p>
         <div className="dialog-actions">
           {entries.length > 0 && <button type="button" className="btn btn-ghost btn-danger" onClick={() => setEntries([])}>Remove all</button>}

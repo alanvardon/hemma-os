@@ -12,6 +12,10 @@ export interface Member {
   user_id: string
   role: string
   email: string | null
+  /** Resolved name: profile name → email (plan 111). Always present. */
+  display_name?: string | null
+  /** The household-person slot this account is assigned to; null when unassigned. */
+  slot?: 'a' | 'b' | null
 }
 
 export interface Invite {

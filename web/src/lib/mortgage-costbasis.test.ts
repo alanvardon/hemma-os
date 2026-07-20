@@ -4,8 +4,9 @@ import {
   derivedDeposit, costBasisSplit, marketEquitySplit, insatsPayments, totalAmortized, defaultSettings,
   contributionSplit, equityTimeline, legacyContributionPayment, makePayment,
   extraAmorteringAllocation, settlement,
+  migrateOwnershipSettings, ownerAShareFromLegacy, isValidOwnershipPct,
 } from './mortgage'
-import type { LoanPart, Payment, Valuation, Contribution } from './mortgage'
+import type { LoanPart, MortgageSettings, Payment, Valuation, Contribution } from './mortgage'
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 // Bought for 5,000,000 with a 1,000,000 deposit → 4,000,000 original loan.
@@ -287,12 +288,12 @@ describe('extraAmorteringAllocation resolves person split independently of payer
     // 50/50
     expect(extraAmorteringAllocation(extra(), settings)).toEqual({ a: 5_000, b: 5_000, provenance: 'derived' })
 
-    // Unequal 70/30 ownership.
-    const s70 = { ...settings, my_ownership_pct: 70 }
+    // Unequal 70/30 ownership (the explicit person-independent A share).
+    const s70 = { ...settings, owner_a_ownership_pct: 70 }
     expect(extraAmorteringAllocation(extra(), s70)).toEqual({ a: 7_000, b: 3_000, provenance: 'derived' })
 
     // 100/0 ownership.
-    const s100 = { ...settings, my_ownership_pct: 100 }
+    const s100 = { ...settings, owner_a_ownership_pct: 100 }
     expect(extraAmorteringAllocation(extra(), s100)).toEqual({ a: 10_000, b: 0, provenance: 'derived' })
 
     // Odd-öre amount: the rounding remainder goes to the second person so
@@ -331,5 +332,119 @@ describe('extraAmorteringAllocation resolves person split independently of payer
     expect(contributionSplit([dpUnsplit], [], settings)).toMatchObject({ a: 10_000, b: 0, total: 10_000 })
     const dpSplit: Payment = { ...extra({ paid_by: 'a' }), id: 'dp2', kind: 'down_payment', paid_split: { a: 6_000, b: 4_000 } }
     expect(contributionSplit([dpSplit], [], settings)).toMatchObject({ a: 6_000, b: 4_000, total: 10_000 })
+  })
+})
+
+// ── Ownership perspective migration (plan 111, Stage 3) ─────────────────────
+// The persisted split moves from perspective-dependent (`i_am` +
+// `my_ownership_pct`) to the person-independent `owner_a_ownership_pct`.
+// Every A/B result must be golden-identical across the migration.
+
+describe('ownerAShareFromLegacy', () => {
+  it('derives owner A’s share from both legacy perspectives', () => {
+    expect(ownerAShareFromLegacy('a', 70)).toBe(70)
+    expect(ownerAShareFromLegacy('b', 30)).toBe(70)
+    expect(ownerAShareFromLegacy('a', 50)).toBe(50)
+    expect(ownerAShareFromLegacy('b', 50)).toBe(50)
+  })
+
+  it('handles the 0/50/100 boundaries exactly', () => {
+    expect(ownerAShareFromLegacy('a', 0)).toBe(0)
+    expect(ownerAShareFromLegacy('b', 0)).toBe(100)
+    expect(ownerAShareFromLegacy('a', 100)).toBe(100)
+    expect(ownerAShareFromLegacy('b', 100)).toBe(0)
+  })
+
+  it('rejects malformed/non-finite/out-of-range values with null — never clamps', () => {
+    for (const bad of [NaN, Infinity, -Infinity, -1, 100.01, '70', null, undefined, true]) {
+      expect(ownerAShareFromLegacy('a', bad)).toBeNull()
+      expect(ownerAShareFromLegacy('b', bad)).toBeNull()
+    }
+  })
+
+  it('isValidOwnershipPct accepts exactly the 0–100 finite domain', () => {
+    expect(isValidOwnershipPct(0)).toBe(true)
+    expect(isValidOwnershipPct(100)).toBe(true)
+    expect(isValidOwnershipPct(33.33)).toBe(true)
+    for (const bad of [-0.01, 100.01, NaN, Infinity, '50', null, undefined]) {
+      expect(isValidOwnershipPct(bad)).toBe(false)
+    }
+  })
+})
+
+describe('migrateOwnershipSettings', () => {
+  // A true legacy blob has NO owner_a_ownership_pct — model that with NaN
+  // (what the store's merge layer injects when the field is absent).
+  const legacy = (i_am: 'a' | 'b', my: number): MortgageSettings => ({
+    ...defaultSettings(), owner_a_ownership_pct: Number.NaN,
+    i_am, my_ownership_pct: my, track_contributions: true,
+  })
+
+  it('legacy i_am=a and i_am=b describing the same fact migrate to the same A share', () => {
+    const fromA = migrateOwnershipSettings(legacy('a', 70))
+    const fromB = migrateOwnershipSettings(legacy('b', 30))
+    expect(fromA.owner_a_ownership_pct).toBe(70)
+    expect(fromB.owner_a_ownership_pct).toBe(70)
+    // The legacy perspective fields stay consistent (import/fallback compat).
+    expect(fromA).toMatchObject({ i_am: 'a', my_ownership_pct: 70 })
+    expect(fromB).toMatchObject({ i_am: 'b', my_ownership_pct: 30 })
+  })
+
+  it('GOLDEN: A/B ownership and equity results are identical before and after migration', () => {
+    // The file fixtures: 5,000,000 purchase, balance 3,500,000, mixed
+    // payments/contributions. Compare pre-111 legacy settings against their
+    // migrated form, for both perspectives of the same 70/30 household.
+    const legacyPre111 = { i_am: 'a' as const, my_ownership_pct: 70, track_contributions: true }
+    const legacyPre111B = { i_am: 'b' as const, my_ownership_pct: 30, track_contributions: true }
+    const migratedA = migrateOwnershipSettings(legacy('a', 70))
+    const migratedB = migrateOwnershipSettings(legacy('b', 30))
+
+    const results = [legacyPre111, legacyPre111B, migratedA, migratedB].map((s) => ({
+      cost: costBasisSplit(5_000_000, balance, payments, contributions, s),
+      market: marketEquitySplit(7_300_000, balance, payments, contributions, s),
+      timeline: equityTimeline([part], payments, valuations, s, contributions)
+        .map(({ a_equity, b_equity, equity, balance }) => ({ a_equity, b_equity, equity, balance })),
+    }))
+    for (const result of results.slice(1)) expect(result).toEqual(results[0])
+    // And one absolute golden so the shared baseline itself is pinned: a pure
+    // 70/30 target split of 1,000,000 equity with no attributed payments.
+    expect(marketEquitySplit(2_000_000, 1_000_000, [], [], migratedA))
+      .toEqual({ a: 700_000, b: 300_000, a_pct: 70, b_pct: 30 })
+    expect(marketEquitySplit(2_000_000, 1_000_000, [], [], migratedB))
+      .toEqual({ a: 700_000, b: 300_000, a_pct: 70, b_pct: 30 })
+  })
+
+  it('owner B is always the exact complement, including 0/50/100 boundaries', () => {
+    for (const [my, i_am, expectedA] of [[0, 'a', 0], [0, 'b', 100], [50, 'a', 50], [50, 'b', 50], [100, 'a', 100], [100, 'b', 0]] as const) {
+      const migrated = migrateOwnershipSettings(legacy(i_am, my))
+      expect(migrated.owner_a_ownership_pct).toBe(expectedA)
+      const split = marketEquitySplit(2_000_000, 1_000_000, [], [], migrated)
+      expect(split.a_pct).toBe(expectedA)
+      expect(split.b_pct).toBe(100 - expectedA)
+      expect(split.a + split.b).toBe(1_000_000)
+    }
+  })
+
+  it('is idempotent: re-migrating an already-migrated object is a no-op', () => {
+    const once = migrateOwnershipSettings(legacy('b', 30))
+    // Reference equality — the function returns the SAME object when nothing
+    // needs rewriting, so repeated cache/cloud reads never churn state.
+    expect(migrateOwnershipSettings(once)).toBe(once)
+    expect(migrateOwnershipSettings(migrateOwnershipSettings(once))).toEqual(once)
+  })
+
+  it('a valid explicit A share wins over stale legacy fields and re-syncs them', () => {
+    const s = { ...defaultSettings(), owner_a_ownership_pct: 25, i_am: 'b' as const, my_ownership_pct: 70 }
+    const migrated = migrateOwnershipSettings(s)
+    expect(migrated.owner_a_ownership_pct).toBe(25)
+    expect(migrated.my_ownership_pct).toBe(75) // B's share, kept consistent
+    expect(migrated.i_am).toBe('b')
+  })
+
+  it('never clamps: an out-of-range explicit share falls back to the legacy derivation, then to 50', () => {
+    const outOfRange = { ...defaultSettings(), owner_a_ownership_pct: 150, i_am: 'a' as const, my_ownership_pct: 70 }
+    expect(migrateOwnershipSettings(outOfRange).owner_a_ownership_pct).toBe(70)
+    const bothBad = { ...defaultSettings(), owner_a_ownership_pct: Number.NaN, i_am: 'a' as const, my_ownership_pct: Number.NaN }
+    expect(migrateOwnershipSettings(bothBad).owner_a_ownership_pct).toBe(50)
   })
 })

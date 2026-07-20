@@ -13,9 +13,10 @@ import PersonalOffsetDialog from './PersonalOffsetDialog'
 
 interface ItemDlgProps {
   open: boolean; id: string | null; items: Item[]; settings: MonthEndSettings; defaultClass: Treatment
+  displayNames?: { a: string; b: string }; selfSlot?: 'a' | 'b' | null
   onSave: (rec: Omit<Item, 'id' | 'created_at'>) => void; onClose: () => void
 }
-export default function ItemDialog({ open, id, items, settings, defaultClass, onSave, onClose }: ItemDlgProps) {
+export default function ItemDialog({ open, id, items, settings, defaultClass, displayNames, selfSlot, onSave, onClose }: ItemDlgProps) {
   const rec = id ? items.find(i => i.id === id) : null
   const [form, setForm] = useState({ date: todayISO(), desc: '', amount: '', note: '', fronted: 'a' as Person, split: 'split' as 'split' | 'full' })
   const [personalItems, setPersonalItems] = useState<PersonalEntry[]>([])
@@ -27,7 +28,10 @@ export default function ItemDialog({ open, id, items, settings, defaultClass, on
     })
   }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (open) { setPersonalItems(rec?.personal_items ?? []); setOffsetDlg(false) } }, [open, id]) // eslint-disable-line react-hooks/exhaustive-deps
-  const { a: aName, b: bName, nameOf } = usePersonNames(settings.person_a_name, settings.person_b_name)
+  const { a: aName, b: bName, nameOf } = usePersonNames(displayNames?.a ?? settings.person_a_name, displayNames?.b ?? settings.person_b_name)
+  const duName = (p: Person | null | undefined) => (selfSlot && p === selfSlot ? `${nameOf(p)} (du)` : nameOf(p))
+  const aLabel = selfSlot === 'a' ? `${aName} (du)` : aName
+  const bLabel = selfSlot === 'b' ? `${bName} (du)` : bName
 
   const amt = parseAmount(form.amount)
   const isSplit = form.split === 'split'
@@ -39,7 +43,7 @@ export default function ItemDialog({ open, id, items, settings, defaultClass, on
     const share = computeOwed(amt, isSplit, form.fronted, sums.a, sums.b)
     const verb = amt < 0 ? ' is credited ' : ' will owe '
     const suffix = isSplit ? (hasOffset ? ' (shared ' + fmtMoney(Math.abs(amt) - sums.a - sums.b) + ' split)' : ' (half of ' + fmtMoney(Math.abs(amt)) + ')') : ''
-    return nameOf(owed) + verb + fmtMoney(Math.abs(share)) + suffix
+    return duName(owed) + verb + fmtMoney(Math.abs(share)) + suffix
   })()
 
   function submit(e: React.FormEvent) {
@@ -64,7 +68,7 @@ export default function ItemDialog({ open, id, items, settings, defaultClass, on
             <FormField label="Charge — minus for a refund"><input type="text" inputMode="decimal" autoComplete="off" placeholder="0" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))} /></FormField>
             <div className="form-field">
               <span>Paid by</span>
-              <Segmented value={form.fronted} onChange={v => setForm(p => ({ ...p, fronted: v }))} options={[{ v: 'a' as Person, label: aName }, { v: 'b' as Person, label: bName }]} />
+              <Segmented value={form.fronted} onChange={v => setForm(p => ({ ...p, fronted: v }))} options={[{ v: 'a' as Person, label: aLabel }, { v: 'b' as Person, label: bLabel }]} />
             </div>
             <div className="form-field">
               <span>Treatment</span>
@@ -91,7 +95,7 @@ export default function ItemDialog({ open, id, items, settings, defaultClass, on
           </div>
         </form>
       </DialogShell>
-      <PersonalOffsetDialog open={offsetDlg} enterAmount={amt} frontedBy={form.fronted} aName={aName} bName={bName}
+      <PersonalOffsetDialog open={offsetDlg} enterAmount={amt} frontedBy={form.fronted} aName={aName} bName={bName} selfSlot={selfSlot}
         initial={personalItems}
         onSave={entries => { setPersonalItems(entries); setOffsetDlg(false) }}
         onClose={() => setOffsetDlg(false)} />

@@ -33,11 +33,33 @@ import {
   syncCoordinator,
 } from '../lib/sync'
 import { hasLegacyQuarantine, removeLegacyQuarantine } from '../lib/legacy-data'
+import HouseholdPeopleSection from './HouseholdPeopleSetup'
+import { usePersonIdentity } from './usePersonIdentity'
+import { setMyProfileName, identityErrorMessage } from '../lib/person-identity'
+import { PersonAvatar, PersonLabel, personInitials } from './PersonBadge'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+// The tool routes (Hushållsbudget, Månadsavslut, Bolånekoll) link to identity
+// management once bound. They don't own the household dialog, so they ask for it
+// via this event; the always-mounted HouseholdMenu opens itself in response.
+const OPEN_EVENT = 'hemma:open-household'
+export function openHouseholdDialog() {
+  window.dispatchEvent(new CustomEvent(OPEN_EVENT))
+}
+
 export default function HouseholdMenu() {
   const [open, setOpen] = useState(false)
+  // When the signed-in account is mapped to a household person, the trigger
+  // becomes that person's initial avatar (plan 111); it keeps the same
+  // accessible label and still opens the household dialog.
+  const { myPerson } = usePersonIdentity()
+
+  useEffect(() => {
+    const openIt = () => setOpen(true)
+    window.addEventListener(OPEN_EVENT, openIt)
+    return () => window.removeEventListener(OPEN_EVENT, openIt)
+  }, [])
 
   return (
     <>
@@ -48,12 +70,16 @@ export default function HouseholdMenu() {
         aria-label="Hushåll"
         onClick={() => setOpen(true)}
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <circle cx="9" cy="8" r="3" />
-          <path d="M15.5 11a2.6 2.6 0 1 0-2.3-3.8" />
-          <path d="M3.5 19v-1a4 4 0 0 1 4-4h3a4 4 0 0 1 4 4v1" />
-          <path d="M16.5 14.2A4 4 0 0 1 20.5 18v1" />
-        </svg>
+        {myPerson ? (
+          <span className="household-btn-avatar" aria-hidden="true">{personInitials(myPerson.display_name)}</span>
+        ) : (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="9" cy="8" r="3" />
+            <path d="M15.5 11a2.6 2.6 0 1 0-2.3-3.8" />
+            <path d="M3.5 19v-1a4 4 0 0 1 4-4h3a4 4 0 0 1 4 4v1" />
+            <path d="M16.5 14.2A4 4 0 0 1 20.5 18v1" />
+          </svg>
+        )}
       </button>
       <AnimatedDialog open={open} onOpenChange={setOpen} contentClassName="modal modal-narrow">
         <HouseholdPanel open={open} onClose={() => setOpen(false)} />
@@ -67,6 +93,7 @@ function roleLabel(role: string): string {
 }
 
 function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { myPerson, identity, refresh: refreshIdentity } = usePersonIdentity()
   const [email, setEmail] = useState<string | null>(null)
   const [members, setMembers] = useState<Member[]>([])
   const [invites, setInvites] = useState<Invite[]>([])
@@ -78,6 +105,11 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
   const [actionError, setActionError] = useState('')
   const [signOutChoice, setSignOutChoice] = useState<'closed' | 'choose' | 'confirm-remove'>('closed')
   const [confirmLegacyRemove, setConfirmLegacyRemove] = useState(false)
+  // Own profile name editor (plan 111): defaults to the login email.
+  const [nameInput, setNameInput] = useState('')
+  const [nameDirty, setNameDirty] = useState(false)
+  const [nameSaving, setNameSaving] = useState(false)
+  const [nameError, setNameError] = useState('')
 
   // Load the current user + household state each time the dialog opens.
   useEffect(() => {
@@ -86,6 +118,8 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
     setConfirmLeave(false)
     setError('')
     setActionError('')
+    setNameDirty(false)
+    setNameError('')
     supabase.auth.getUser().then(({ data }) => { if (alive) setEmail(data.user?.email ?? null) })
     Promise.all([listMembers(), listInvites(), pendingInviteStatus()]).then(([m, i, pending]) => {
       if (!alive) return
@@ -95,6 +129,26 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
     })
     return () => { alive = false }
   }, [open])
+
+  // Prefill the name field from the server profile name, until the user edits it.
+  useEffect(() => {
+    if (open && !nameDirty) setNameInput(identity?.myProfileName ?? '')
+  }, [open, nameDirty, identity?.myProfileName])
+
+  async function onSaveName() {
+    setNameSaving(true)
+    setNameError('')
+    try {
+      await setMyProfileName(nameInput)
+      await refreshIdentity()
+      await refreshMembers()
+      setNameDirty(false)
+    } catch (err) {
+      setNameError(identityErrorMessage(err))
+    } finally {
+      setNameSaving(false)
+    }
+  }
 
   // Accept an invite to another household, then fully reload so every store
   // re-reads under the new household. See lib/household.acceptInvite.
@@ -138,6 +192,10 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
 
   async function refreshInvites() {
     setInvites(await listInvites())
+  }
+
+  async function refreshMembers() {
+    setMembers(await listMembers())
   }
 
   async function onInvite(e: React.FormEvent) {
@@ -234,8 +292,36 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
         <section className="hh-section">
           <p className="const-group-title">Inloggad</p>
           <div className="hh-account-row">
-            <span className="hh-email">{email ?? '…'}</span>
+            {myPerson && (
+              <PersonAvatar name={myPerson.display_name} self size="md" decorative={false} />
+            )}
+            <div className="hh-account-identity">
+              {myPerson && (
+                <PersonLabel name={myPerson.display_name} self className="hh-account-name" />
+              )}
+              <span className="hh-email">{email ?? '…'}</span>
+            </div>
             <button type="button" className="btn btn-ghost hh-signout" onClick={() => setSignOutChoice('choose')}>Logga ut</button>
+          </div>
+          <div className="hh-profile-name">
+            <label htmlFor="hh-profile-name-input">Ditt namn</label>
+            <div className="hh-profile-name-row">
+              <input
+                id="hh-profile-name-input"
+                className="hh-invite-input"
+                type="text"
+                maxLength={60}
+                value={nameInput}
+                placeholder={email ?? 'Ditt namn'}
+                autoComplete="off"
+                onChange={(e) => { setNameInput(e.target.value); setNameDirty(true); setNameError('') }}
+              />
+              <button type="button" className="btn btn-ghost" disabled={nameSaving || !nameDirty} onClick={() => void onSaveName()}>
+                {nameSaving ? 'Sparar …' : 'Spara'}
+              </button>
+            </div>
+            <p className="modal-note hh-profile-name-hint">Visas i verktygen. Utan namn används din e-post.</p>
+            {nameError && <p className="auth-error hh-error">{nameError}</p>}
           </div>
           {signOutChoice !== 'closed' && (
             <div className="hh-signout-choice" role="group" aria-label="Välj hur lokal data ska hanteras">
@@ -269,6 +355,8 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
           )}
         </section>
 
+        <HouseholdPeopleSection members={members} invites={invites} myEmail={email} onSaved={() => void refreshMembers()} />
+
         <section className="hh-section">
           <p className="const-group-title">Medlemmar</p>
           {members.length === 0 ? (
@@ -277,12 +365,15 @@ function HouseholdPanel({ open, onClose }: { open: boolean; onClose: () => void 
             <ul className="hh-list">
               {members.map((m) => {
                 const isYou = !!m.email && m.email.toLowerCase() === email?.toLowerCase()
+                const name = m.display_name && m.display_name.trim() !== '' ? m.display_name : (m.email ?? 'Okänd medlem')
+                const showEmail = !!m.email && m.email !== name
                 return (
                   <li key={m.user_id} className="hh-list-row">
                     <span className="hh-role-dot" data-role={m.role} aria-hidden="true" />
+                    <PersonAvatar name={name} self={isYou} other={!isYou} size="sm" />
                     <span className="hh-member-email">
-                      {m.email ?? 'Okänd medlem'}
-                      {isYou && <span className="hh-you"> (du)</span>}
+                      <PersonLabel name={name} self={isYou} variant="audit" className="hh-member-person" />
+                      {showEmail && <span className="hh-member-addr">{m.email}</span>}
                     </span>
                     <span className="hh-role">{roleLabel(m.role)}</span>
                   </li>

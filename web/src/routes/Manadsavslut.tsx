@@ -20,6 +20,8 @@ import Icon from '../components/Icon'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
 import { usePersonNames } from '../components/usePersonNames'
+import { usePersonIdentity } from '../components/usePersonIdentity'
+import { openHouseholdDialog } from '../components/HouseholdMenu'
 import { useSaveFlash } from '../components/useSaveFlash'
 import { useToast } from '../components/useToast'
 import { useConfirm } from '../components/useConfirm'
@@ -73,7 +75,19 @@ export default function Manadsavslut() {
   const [settingsDlg, setSettingsDlg] = useState(false)
 
   currencyState.current = settings.currency || 'SEK'
-  const { a: aName, b: bName, nameOf } = usePersonNames(settings.person_a_name, settings.person_b_name)
+  // Plan 111: when Månadsavslut's A/B slots are bound to the household's canonical
+  // people, those names display live and the signed-in slot is marked "Du". A/B
+  // attribution and transfer direction never change. Unmapped/unbound = legacy
+  // names, no Du.
+  const identityView = usePersonIdentity()
+  const maSelf = identityView.myToolSlot('manadsavslut')
+  const canonA = identityView.personFor('manadsavslut', 'a')?.display_name
+  const canonB = identityView.personFor('manadsavslut', 'b')?.display_name
+  const toolBound = !!canonA && !!canonB
+  const { a: aName, b: bName, nameOf } = usePersonNames(canonA ?? settings.person_a_name, canonB ?? settings.person_b_name)
+  // Dense audit/selector form: "Alex (du)" only for the signed-in bound slot.
+  const duName = (p: Person | null | undefined) => (maSelf && p === maSelf ? `${nameOf(p)} (du)` : nameOf(p))
+  const displayNames = { a: aName, b: bName }
 
 
   const refresh = useCallback(async () => {
@@ -279,7 +293,7 @@ export default function Manadsavslut() {
   if (!open.length && pendingCount) { balLabel = 'Nothing to settle yet'; balValue = null; balSub = pendingCount + ' awaiting a decision' }
   else if (!open.length) { balLabel = 'All settled'; balValue = null; balSub = 'Nothing outstanding.' }
   else if (!bal.from || bal.amount <= 0) { balLabel = 'Even'; balValue = 0; balSub = open.length + ' open item' + (open.length === 1 ? '' : 's') + ' · they cancel out' + pendingNote }
-  else { balLabel = nameOf(bal.from) + ' owes ' + nameOf(bal.to); balValue = bal.amount; balSub = 'across ' + open.length + ' open item' + (open.length === 1 ? '' : 's') + pendingNote }
+  else { balLabel = duName(bal.from) + ' owes ' + duName(bal.to); balValue = bal.amount; balSub = 'across ' + open.length + ' open item' + (open.length === 1 ? '' : 's') + pendingNote }
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -386,8 +400,8 @@ export default function Manadsavslut() {
               <div className="config-grid">
                 <div className="config-field">
                   <label>Whose card is this?</label>
-                  <Segmented value={importCfg.frontedBy} onChange={v => reDerive({ frontedBy: v })} options={[{ v: 'a' as Person, label: aName }, { v: 'b' as Person, label: bName }]} />
-                  <p className="config-note">{nameOf(otherPerson(importCfg.frontedBy))} owes their share of the split / “owes all” rows.</p>
+                  <Segmented value={importCfg.frontedBy} onChange={v => reDerive({ frontedBy: v })} options={[{ v: "a" as Person, label: duName("a") }, { v: "b" as Person, label: duName("b") }]} />
+                  <p className="config-note">{duName(otherPerson(importCfg.frontedBy))} owes their share of the split / “owes all” rows.</p>
                 </div>
                 <div className="config-field">
                   <label>Default treatment per row</label>
@@ -447,7 +461,7 @@ export default function Manadsavslut() {
             <span className="count-pill">{filteredItems.length}</span>
             <div className="card-actions">
               <Segmented value={currentFilter} onChange={setCurrentFilter} ariaLabel="Filter items"
-                options={[{ v: 'open' as const, label: 'Open' }, { v: 'pending' as const, label: 'Ask later' }, { v: 'all' as const, label: 'All' }, { v: 'a' as const, label: aName }, { v: 'b' as const, label: bName }]} />
+                options={[{ v: 'open' as const, label: 'Open' }, { v: 'pending' as const, label: 'Ask later' }, { v: 'all' as const, label: 'All' }, { v: "a" as const, label: duName("a") }, { v: "b" as const, label: duName("b") }]} />
               <button type="button" className="btn btn-ghost" onClick={() => setItemDlg({ open: true, id: null })}>+ Add item</button>
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger className="icon-btn" aria-label="More item actions" title="More actions">
@@ -476,8 +490,8 @@ export default function Manadsavslut() {
                       <tr key={it.id} className={it.paid ? 'is-settled' : it.pending ? 'is-pending' : ''}>
                         <td className="col-date">{it.date_purchased}</td>
                         <td className="col-desc">{it.description}{it.note && <span className="row-note"> {it.note}</span>}{it.personal_items?.length > 0 && <span className="personal-flag" title="Has personal items carved out before the split">• personal</span>}</td>
-                        <td className="col-payer">{nameOf(it.fronted_by)}</td>
-                        <td className="col-owes">{nameOf(it.owed_by)}</td>
+                        <td className="col-payer">{duName(it.fronted_by)}</td>
+                        <td className="col-owes">{duName(it.owed_by)}</td>
                         <td className="col-type">
                           {it.paid ? (it.split ? 'Split' : 'All') : (
                             // Pending → toggle shows NEITHER side active (a choice is owed); picking
@@ -587,7 +601,7 @@ export default function Manadsavslut() {
                 <div className={'history-item' + (isOpen ? ' is-open' : '')}>
                   <button type="button" className="history-summary" aria-expanded={isOpen} onClick={() => toggleSettlement(p.id)}>
                     <span className="history-period">{when && p.period_label ? <>{when} · {p.period_label}</> : p.period_label || when}</span>
-                    <span className="history-transfer">{p.from_person && p.amount > 0 ? <>{nameOf(p.from_person)} → {nameOf(p.to_person)} · <strong>{fmtMoney(p.amount)}</strong></> : 'Even — no transfer'}</span>
+                    <span className="history-transfer">{p.from_person && p.amount > 0 ? <>{duName(p.from_person)} → {duName(p.to_person)} · <strong>{fmtMoney(p.amount)}</strong></> : 'Even — no transfer'}</span>
                     <span className="history-meta">{linked.length} item{linked.length === 1 ? '' : 's'} · {fmtMoney(gross)}</span>
                   </button>
                   <Collapse open={isOpen}>
@@ -599,12 +613,12 @@ export default function Manadsavslut() {
                         <>
                           <span className="hl-date">{it.date_purchased || when}</span>
                           <span className="hl-desc">{it.description}</span>
-                          <span className="hl-payer">{nameOf(it.fronted_by)} paid {fmtMoney(it.enter_amount)}</span>
+                          <span className="hl-payer">{duName(it.fronted_by)} paid {fmtMoney(it.enter_amount)}</span>
                           {entries.length > 0 && (
-                            <span className="hl-personal">(personal: {psums.a > 0 && (nameOf('a') + ' ' + fmtMoney(psums.a))}{psums.a > 0 && psums.b > 0 ? ' · ' : ''}{psums.b > 0 && (nameOf('b') + ' ' + fmtMoney(psums.b))})</span>
+                            <span className="hl-personal">(personal: {psums.a > 0 && (duName('a') + ' ' + fmtMoney(psums.a))}{psums.a > 0 && psums.b > 0 ? ' · ' : ''}{psums.b > 0 && (duName('b') + ' ' + fmtMoney(psums.b))})</span>
                           )}
                           <span className="hl-arrow">→</span>
-                          <span className="hl-amt num">{nameOf(it.owed_by)} owes {fmtMoney(it.amount)}</span>
+                          <span className="hl-amt num">{duName(it.owed_by)} owes {fmtMoney(it.amount)}</span>
                           <span className="hl-type">{it.split ? 'Split' : 'All'}</span>
                         </>
                       )
@@ -625,7 +639,7 @@ export default function Manadsavslut() {
                             <ul className="hl-sub">
                               {entries.map((e, i) => (
                                 <li key={i}>
-                                  <span className="pe-person">{nameOf(e.person)}</span>
+                                  <span className="pe-person">{duName(e.person)}</span>
                                   <span className="pe-amount num">{fmtMoney(e.amount)}</span>
                                   {e.note && <span className="pe-note">{e.note}</span>}
                                 </li>
@@ -650,9 +664,9 @@ export default function Manadsavslut() {
 
       </main>
 
-      <ItemDialog open={itemDlg.open} id={itemDlg.id} items={items} settings={settings} defaultClass={defaultClass} onSave={handleSaveItem} onClose={() => setItemDlg({ open: false, id: null })} />
-      <SettleDialog open={settleDlg} openItems={open} pendingCount={pendingCount} settings={settings} onConfirm={confirmSettle} onClose={() => setSettleDlg(false)} />
-      <SettingsDialog open={settingsDlg} settings={settings} onSave={handleSaveSettings} onClose={() => setSettingsDlg(false)} onExport={handleExport} onImport={handleImport} />
+      <ItemDialog open={itemDlg.open} id={itemDlg.id} items={items} settings={settings} defaultClass={defaultClass} displayNames={displayNames} selfSlot={maSelf} onSave={handleSaveItem} onClose={() => setItemDlg({ open: false, id: null })} />
+      <SettleDialog open={settleDlg} openItems={open} pendingCount={pendingCount} settings={settings} displayNames={displayNames} selfSlot={maSelf} onConfirm={confirmSettle} onClose={() => setSettleDlg(false)} />
+      <SettingsDialog open={settingsDlg} settings={settings} bound={toolBound} boundNames={displayNames} onManagePeople={openHouseholdDialog} onSave={handleSaveSettings} onClose={() => setSettingsDlg(false)} onExport={handleExport} onImport={handleImport} />
 
       <div className={'ma-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
     </div>

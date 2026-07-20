@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(15);
+select plan(18);
 
 select is(
   (
@@ -11,7 +11,7 @@ select is(
     join pg_catalog.pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p')
   ),
-  18::bigint,
+  20::bigint,
   'the audited public-table inventory is complete'
 );
 
@@ -42,6 +42,7 @@ select ok(
       and c.relname not in (
         'household_invites',
         'household_members',
+        'household_people',
         'notification_state'
       )
       and not exists (
@@ -86,6 +87,51 @@ select ok(
       and 'authenticated' = any (roles)
   ),
   'notification_state is household-readable and client read-only'
+);
+
+select ok(
+  not exists (
+    select 1 from (values
+      ('household_people')
+    ) identity_tables(table_name)
+    where not exists (
+        select 1 from pg_catalog.pg_policies p
+        where p.schemaname = 'public' and p.tablename = identity_tables.table_name
+          and p.cmd = 'SELECT' and p.qual ilike '%current_household%'
+      )
+      or exists (
+        select 1 from pg_catalog.pg_policies p
+        where p.schemaname = 'public' and p.tablename = identity_tables.table_name
+          and p.cmd in ('ALL', 'INSERT', 'UPDATE', 'DELETE')
+          and 'authenticated' = any (p.roles)
+      )
+  ),
+  'identity tables are household-readable and client read-only'
+);
+
+select ok(
+  not exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public'
+      and table_name in ('household_people', 'profiles')
+      and grantee in ('PUBLIC', 'anon', 'authenticated')
+      and privilege_type in ('INSERT', 'UPDATE', 'DELETE')
+  ),
+  'client roles cannot bypass the identity RPCs with direct table writes'
+);
+
+select ok(
+  not exists (
+    select 1 from (values
+      ('public.household_identity()'),
+      ('public.assign_household_people(text,text)'),
+      ('public.set_my_profile_name(text)')
+    ) identity_rpcs(signature)
+    where has_function_privilege('public', signature, 'execute')
+       or has_function_privilege('anon', signature, 'execute')
+       or not has_function_privilege('authenticated', signature, 'execute')
+  ),
+  'only authenticated can execute the household identity RPCs'
 );
 
 select ok(

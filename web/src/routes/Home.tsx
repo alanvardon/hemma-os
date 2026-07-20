@@ -5,6 +5,7 @@ import HeroCanvas from '../components/HeroCanvas'
 import Icon from '../components/Icon'
 import FlipClock from '../components/FlipClock'
 import HouseholdMenu from '../components/HouseholdMenu'
+import { usePersonIdentity } from '../components/usePersonIdentity'
 import HubSparkline from '../components/HubSparkline'
 import { Money, MoneyCompact, Num, Percent } from '../components/AnimatedNumber'
 import { useTheme } from '../App'
@@ -183,6 +184,15 @@ const CUE_KEY = 'hemma-hero-cue-dismissed'
 export default function Home() {
   const { theme, toggleTheme } = useTheme()
   const navigate = useNavigate()
+  // Plan 111: resolve person-specific hub summaries (the Månadsavslut transfer)
+  // through the shared identity context — canonical name + "Du" when bound,
+  // legacy stat name otherwise. Household-wide figures stay account-independent.
+  const identityView = usePersonIdentity()
+  const settleName = (slot: 'a' | 'b', fallback: string): string => {
+    const person = identityView.personFor('manadsavslut', slot)
+    if (!person) return fallback
+    return identityView.isMe('manadsavslut', slot) ? `${person.display_name} (du)` : person.display_name
+  }
   // Wraps the whole hub so we can pan it as a "camera" before the zoom.
   const panRef = useRef<HTMLDivElement>(null)
   // When the hub re-mounts as the destination of the BACK whoosh, skip the
@@ -446,7 +456,7 @@ export default function Home() {
             {me.days === 0 ? 'idag' : <>om <Num value={me.days} /> {me.days === 1 ? 'dag' : 'dagar'}</>}
           </span>
           {me.settle && (
-            <span className="stat-sub">{me.settle.from} → {me.settle.to} · <Money value={me.settle.amount} /></span>
+            <span className="stat-sub">{settleName(me.settle.fromSlot, me.settle.from)} → {settleName(me.settle.toSlot, me.settle.to)} · <Money value={me.settle.amount} /></span>
           )}
         </div>
       )

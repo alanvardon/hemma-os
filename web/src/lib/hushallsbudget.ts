@@ -91,7 +91,7 @@ export function defaultState(): BudgetState {
   }
   const s: BudgetState = {
     version: 1,
-    people: ['Alan', 'Partner'],
+    people: ['Person A', 'Person B'],
     // Categories group the JOINT costs (split 50/50). Individual costs aren't
     // categorised. Rows reference a category by id; drag-and-drop reassigns it.
     categories: [

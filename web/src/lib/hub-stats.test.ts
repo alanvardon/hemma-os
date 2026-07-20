@@ -173,7 +173,7 @@ describe('latestSettle', () => {
       ],
       maSettings,
     )
-    expect(s).toEqual({ from: 'Sofia', to: 'Alan', amount: 1234 })
+    expect(s).toEqual({ from: 'Sofia', to: 'Alan', amount: 1234, fromSlot: 'b', toSlot: 'a' })
   })
 
   it('returns null when the latest settlement netted to zero / has no direction', () => {
@@ -192,7 +192,7 @@ describe('monthEndStat', () => {
     const withItems = monthEndStat([item()], [], maSettings, now)
     expect(withItems).toEqual({ days: 28, settle: null })
     const withSettle = monthEndStat([], [settle()], maSettings, now)
-    expect(withSettle!.settle).toEqual({ from: 'Sofia', to: 'Alan', amount: 1234 })
+    expect(withSettle!.settle).toEqual({ from: 'Sofia', to: 'Alan', amount: 1234, fromSlot: 'b', toSlot: 'a' })
   })
 })
 

@@ -12,7 +12,12 @@ vi.mock('./AnimatedDialog', () => ({
 }))
 
 vi.mock('../lib/supabase', () => ({
-  supabase: { auth: { getUser: vi.fn(async () => ({ data: { user: { email: 'me@example.com' } } })) } },
+  supabase: {
+    auth: { getUser: vi.fn(async () => ({ data: { user: { email: 'me@example.com' } } })) },
+    // household_identity resolves to SQL NULL (no household) so the people
+    // section renders nothing in these lifecycle-focused tests.
+    rpc: vi.fn(async () => ({ data: null, error: null })),
+  },
 }))
 
 vi.mock('../lib/household', () => ({

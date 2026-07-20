@@ -666,3 +666,83 @@ input::placeholder { color: var(--ink-faint); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ── Person identity primitives (plan 111) ───────────────────────────────────
+   Shared "Du"/avatar/column treatment. Self = filled accent + text; other =
+   outlined copper; neutral = quiet. Never colour-only: a self avatar is always
+   paired with the "Du" chip or an accessible name. */
+.person-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  border: 1.5px solid var(--rule);
+  background: var(--paper-warm);
+  color: var(--ink-soft);
+}
+.person-avatar-sm { width: 22px; height: 22px; font-size: 10px; }
+.person-avatar-md { width: 30px; height: 30px; font-size: 12px; }
+.person-avatar.is-self {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.person-avatar.is-other {
+  background: transparent;
+  border-color: var(--copper);
+  color: var(--copper);
+}
+
+.person-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.person-label .person-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.person-du-chip {
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.person-col-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--rule);
+  background: var(--paper-card);
+}
+.person-col-header.is-self {
+  border-color: var(--accent-light);
+  background: var(--accent-faint);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.person-col-head-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+.person-col-head-sub { font-size: 12px; color: var(--ink-soft); }

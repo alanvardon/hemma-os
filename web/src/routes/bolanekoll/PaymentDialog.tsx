@@ -22,6 +22,9 @@ interface PayDlgProps {
   // pre-refinance deposit records the right mortgage_id; part-linked rows derive
   // it from their part in the database and never show this control.
   mortgages: Mortgage[]; banks: Bank[]; activeMortgageId: string | null
+  // Plan 111: canonical household names + the signed-in slot for the "Du" marker
+  // on the payer selector. Falls back to legacy settings names when unbound.
+  displayNames?: { a: string; b: string }; selfSlot?: 'a' | 'b' | null
   onSave: (data: Omit<Payment, 'id' | 'created_at'>) => void
   onDelete: (id: string) => void; onClose: () => void
 }
@@ -39,7 +42,7 @@ function paymentKind(type: EntryType): Payment['kind'] {
   return type === 'extra_amortization' ? 'amortization' : type
 }
 
-export default function PaymentDialog({ open, id, payments, parts, settings, mortgages, banks, activeMortgageId, onSave, onDelete, onClose }: PayDlgProps) {
+export default function PaymentDialog({ open, id, payments, parts, settings, mortgages, banks, activeMortgageId, displayNames, selfSlot, onSave, onDelete, onClose }: PayDlgProps) {
   const confirm = useConfirm()
   const rec = id ? payments.find(p => p.id === id) : null
   const [form, setForm] = useState({ date: todayISO(), loan_part_id: '', entryType: 'payment' as EntryType, amount: '', balance_after: '', paid_by: 'joint' as PaidBy, split_a: '', split_b: '', mortgage_id: '' })
@@ -152,7 +155,9 @@ export default function PaymentDialog({ open, id, payments, parts, settings, mor
     const laterSaldo = others.some(p => p.date > form.date && p.balance_after != null)
     return !hasInterest && !laterSaldo
   }, [form.date, form.entryType, form.loan_part_id, id, payments])
-  const { a: aName, b: bName } = usePersonNames(settings.owner_a_name, settings.owner_b_name)
+  const names = usePersonNames(displayNames?.a ?? settings.owner_a_name, displayNames?.b ?? settings.owner_b_name)
+  const aName = selfSlot === 'a' ? `${names.a} (du)` : names.a
+  const bName = selfSlot === 'b' ? `${names.b} (du)` : names.b
   const isDownPayment = form.entryType === 'down_payment'
   // Agreement options, active first then archived (newest close first). The
   // deposit's provenance must be an explicit pick — legacy null rows show a

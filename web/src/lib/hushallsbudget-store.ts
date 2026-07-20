@@ -21,7 +21,7 @@ export const STORAGE_KEY = 'bostadskalkyl_budget_v1'
 export function migrateBudget(raw: unknown): BudgetState | null {
   const s = raw as BudgetState
   if (!s || s.version !== 1 || !Array.isArray(s.incomes) || !Array.isArray(s.costs) || !Array.isArray(s.savings)) return null
-  if (!Array.isArray(s.people) || s.people.length !== 2) s.people = ['Alan', 'Partner']
+  if (!Array.isArray(s.people) || s.people.length !== 2) s.people = ['Person A', 'Person B']
   // Joint savings + joint income were removed from the UI — fold any legacy
   // joint rows into person A so saved budgets keep their money and render.
   s.savings.forEach((r) => { if (r.owner === 'joint') r.owner = 'a' })

@@ -32,6 +32,21 @@ vi.mock('../lib/riksbank', async (importOriginal) => ({
   ...await importOriginal<typeof import('../lib/riksbank')>(),
   fetchPolicyRate: vi.fn().mockRejectedValue(new Error('no network in tests')),
 }))
+// Plan 111 Stage 3 — the route derives its self/partner perspective from
+// usePersonIdentity. Mock the hook so tests drive mapped/unmapped states
+// directly; the default (below in beforeEach) is UNMAPPED, i.e. the safe
+// legacy `i_am` fallback every pre-111 test implicitly relied on.
+vi.mock('../components/usePersonIdentity', () => ({ usePersonIdentity: vi.fn() }))
+import { usePersonIdentity, type PersonIdentityView } from '../components/usePersonIdentity'
+
+function identityView(slot: 'a' | 'b' | null): PersonIdentityView {
+  return {
+    status: 'ready', identity: null, configured: slot !== null, people: [],
+    myPerson: null, personFor: () => null, isMe: () => false,
+    myToolSlot: (tool) => (tool === 'bolanekoll' ? slot : null),
+    refresh: async () => {},
+  }
+}
 
 // Bolanekoll reads useViewTransitionState (useToolPageActive), which needs a
 // data router — mount it as the sole route of an in-memory one.
@@ -48,6 +63,7 @@ function renderBolanekoll() {
 // benign empty result. Individual tests override the one write they care about.
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(usePersonIdentity).mockReturnValue(identityView(null))
   vi.stubGlobal('ResizeObserver', class ResizeObserver {
     observe() {}
     unobserve() {}
@@ -446,8 +462,8 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     renderBolanekoll()
 
     await user.click(await screen.findByRole('button', { name: 'Redigera i Betalningar' }))
-    expect(screen.getByLabelText('Alex · fördelning')).toHaveValue('12000')
-    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('8000')
+    expect(screen.getByLabelText('Person A · fördelning')).toHaveValue('12000')
+    expect(screen.getByLabelText('Person B · fördelning')).toHaveValue('8000')
     expect(screen.getByLabelText('Saldo efteråt (valfritt)')).toHaveValue('980000')
     await user.click(screen.getByRole('button', { name: 'Spara' }))
 
@@ -475,20 +491,20 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     await user.selectOptions(screen.getByLabelText('Typ'), 'extra_amortization')
     await user.type(screen.getByLabelText('Belopp'), '10000')
 
-    expect(await screen.findByLabelText('Alex · fördelning')).toHaveValue('5000')
-    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+    expect(await screen.findByLabelText('Person A · fördelning')).toHaveValue('5000')
+    expect(screen.getByLabelText('Person B · fördelning')).toHaveValue('5000')
 
     // The owner reviews and edits Alex's share directly — from this point the
     // pair is "touched" and must not be silently recomputed.
-    await user.clear(screen.getByLabelText('Alex · fördelning'))
-    await user.type(screen.getByLabelText('Alex · fördelning'), '6000')
-    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+    await user.clear(screen.getByLabelText('Person A · fördelning'))
+    await user.type(screen.getByLabelText('Person A · fördelning'), '6000')
+    expect(screen.getByLabelText('Person B · fördelning')).toHaveValue('5000')
 
     // A later amount edit must not overwrite the reviewed values.
     await user.clear(screen.getByLabelText('Belopp'))
     await user.type(screen.getByLabelText('Belopp'), '12000')
-    expect(screen.getByLabelText('Alex · fördelning')).toHaveValue('6000')
-    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+    expect(screen.getByLabelText('Person A · fördelning')).toHaveValue('6000')
+    expect(screen.getByLabelText('Person B · fördelning')).toHaveValue('5000')
   })
 
   it('blocks Save for a missing, negative, or total-mismatched extra-amortering allocation (plan 116)', async () => {
@@ -512,19 +528,19 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     expect(saveBtn).toBeEnabled()
 
     // Negative allocation.
-    await user.clear(screen.getByLabelText('Alex · fördelning'))
-    await user.type(screen.getByLabelText('Alex · fördelning'), '-500')
+    await user.clear(screen.getByLabelText('Person A · fördelning'))
+    await user.type(screen.getByLabelText('Person A · fördelning'), '-500')
     expect(saveBtn).toBeDisabled()
 
     // Total mismatch (8 000 vs the 10 000 amount).
-    await user.clear(screen.getByLabelText('Alex · fördelning'))
-    await user.type(screen.getByLabelText('Alex · fördelning'), '4000')
-    await user.clear(screen.getByLabelText('Sam · fördelning'))
-    await user.type(screen.getByLabelText('Sam · fördelning'), '4000')
+    await user.clear(screen.getByLabelText('Person A · fördelning'))
+    await user.type(screen.getByLabelText('Person A · fördelning'), '4000')
+    await user.clear(screen.getByLabelText('Person B · fördelning'))
+    await user.type(screen.getByLabelText('Person B · fördelning'), '4000')
     expect(saveBtn).toBeDisabled()
 
     // Missing allocation.
-    await user.clear(screen.getByLabelText('Sam · fördelning'))
+    await user.clear(screen.getByLabelText('Person B · fördelning'))
     expect(saveBtn).toBeDisabled()
 
     await user.click(saveBtn)
@@ -547,11 +563,11 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     await user.click(await screen.findByRole('button', { name: '+ Lägg till' }))
     await user.selectOptions(screen.getByLabelText('Typ'), 'extra_amortization')
     await user.type(screen.getByLabelText('Belopp'), '10000')
-    await screen.findByLabelText('Alex · fördelning')
-    await user.clear(screen.getByLabelText('Alex · fördelning'))
-    await user.type(screen.getByLabelText('Alex · fördelning'), '6000')
-    await user.clear(screen.getByLabelText('Sam · fördelning'))
-    await user.type(screen.getByLabelText('Sam · fördelning'), '4000')
+    await screen.findByLabelText('Person A · fördelning')
+    await user.clear(screen.getByLabelText('Person A · fördelning'))
+    await user.type(screen.getByLabelText('Person A · fördelning'), '6000')
+    await user.clear(screen.getByLabelText('Person B · fördelning'))
+    await user.type(screen.getByLabelText('Person B · fördelning'), '4000')
     // Alex made the bank transfer, but the reviewed 6 000/4 000 allocation
     // must survive untouched — selecting a single payer must not collapse it
     // to paid_by: 'joint' or rewrite the split to match the payer alone.
@@ -586,8 +602,8 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
 
     await user.click(await screen.findByRole('button', { name: 'Redigera i Betalningar' }))
     // Default ownership is 50/50, so the legacy row derives an even split.
-    expect(screen.getByLabelText('Alex · fördelning')).toHaveValue('5000')
-    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+    expect(screen.getByLabelText('Person A · fördelning')).toHaveValue('5000')
+    expect(screen.getByLabelText('Person B · fördelning')).toHaveValue('5000')
     expect(screen.getByText('Beräknad från ägarfördelningen — granska innan du sparar.')).toBeInTheDocument()
     // Hydration never writes on its own.
     expect(Store.updatePayment).not.toHaveBeenCalled()
@@ -621,7 +637,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
 
     await user.click(await screen.findAllByRole('button', { name: 'Edit' }).then(buttons => buttons.at(-1)!))
     expect(screen.queryByLabelText('Betalad av')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Alex · fördelning')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Person A · fördelning')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Spara' }))
 
     expect(await screen.findByText('Payment saved.')).toBeInTheDocument()
@@ -632,7 +648,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     await user.click((await screen.findAllByRole('button', { name: 'Edit' })).at(-1)!)
     await user.selectOptions(screen.getByLabelText('Typ'), 'interest')
     expect(screen.queryByLabelText('Betalad av')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Alex · fördelning')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Person A · fördelning')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Spara' }))
     expect(Store.updatePayment).toHaveBeenLastCalledWith('pay1', expect.objectContaining({
       kind: 'interest', balance_after: null, paid_by: 'joint', paid_split: null, description: 'Bankens dragning', source: 'import',
@@ -1047,5 +1063,101 @@ describe('Bolanekoll — Betalningar month disclosure (plan 115)', () => {
     // Allocation chevron toggles the detail row open.
     await user.click(insatsRow.querySelector('button.expand-btn')!)
     expect(document.querySelector('.pay-detail')).toBeInTheDocument()
+  })
+})
+
+// ── Plan 111 Stage 3 — self/partner perspective from the person binding ──────
+// The A/B ownership figures are person-independent facts; only the accent
+// ("which card is ME") follows the signed-in account's Bolånekoll binding,
+// with the legacy `i_am` perspective as the unmapped fallback. A/B order and
+// every value must be identical in all three states.
+describe('Bolanekoll — view perspective from the person binding', () => {
+  const valuation = {
+    id: 'v1', created_at: '2026-01-01', date: '2026-06-01',
+    value: 5_000_000, note: '', is_purchase: false,
+  }
+  const splitPart = {
+    id: 'p1', created_at: '2026-01-01', label: 'Lånedel 1', loan_number: '',
+    start_balance: 3_500_000, start_date: '2026-01-01', archived: false,
+  }
+  // A 70/30 household stored the NEW way, with the legacy perspective saying
+  // "I am B" — so unmapped accounts should emphasize B, mapped accounts follow
+  // their own binding regardless of `i_am`.
+  const settings70 = (i_am: 'a' | 'b') =>
+    ({ ...defaultSettings(), owner_a_ownership_pct: 70, i_am, track_contributions: true })
+
+  function seedSplit(settings: ReturnType<typeof defaultSettings>) {
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 6, banks: [bank], mortgages: [agreement], loan_parts: [splitPart],
+      payments: [], valuations: [valuation], rate_periods: [], contributions: [], settings,
+    })
+    vi.mocked(Store.listMortgages).mockResolvedValue([agreement])
+    vi.mocked(Store.listBanks).mockResolvedValue([bank])
+    vi.mocked(Store.listLoanParts).mockResolvedValue([splitPart])
+    vi.mocked(Store.listValuations).mockResolvedValue([valuation])
+    vi.mocked(Store.getSettings).mockResolvedValue(settings)
+  }
+
+  async function marketCards() {
+    // 5,000,000 value − 3,500,000 debt = 1,500,000 equity at the 70/30 target.
+    // The owner name + share now render as a PersonLabel (name span + a
+    // ".split-pct" suffix), so locate each card by its stable market-capital
+    // data hook rather than a single combined text node.
+    const aVal = await screen.findByText((_c, el) => el?.getAttribute('data-owner-market-capital') === 'a')
+    const bVal = await screen.findByText((_c, el) => el?.getAttribute('data-owner-market-capital') === 'b')
+    const a = aVal.closest('.split-card') as HTMLElement
+    const b = bVal.closest('.split-card') as HTMLElement
+    return { a, b }
+  }
+
+  it('unmapped account keeps the legacy i_am perspective (accent on B) and A/B values', async () => {
+    seedSplit(settings70('b'))
+    vi.mocked(usePersonIdentity).mockReturnValue(identityView(null))
+    renderBolanekoll()
+    const { a, b } = await marketCards()
+    expect(b.className).toContain('is-accent')
+    expect(a.className).not.toContain('is-accent')
+    // The financial fact is unchanged: A owns 70 % (1 050 000 of 1 500 000).
+    expect(a.textContent).toContain('70,00 %')
+    expect(b.textContent).toContain('30,00 %')
+  })
+
+  it('a mapped account follows its binding, not i_am, without moving or changing the cards', async () => {
+    // The financial values (share % + equity kronor) are person-independent, so
+    // read just those from a card — the mapped view legitimately ADDS a "Du"
+    // chip + avatar, which must not count as a changed value.
+    const financials = (card: HTMLElement) => ({
+      pct: card.querySelector('.split-pct')?.textContent,
+      val: card.querySelector('.split-val')?.textContent,
+    })
+    // Same persisted household data as above (i_am still says B)…
+    seedSplit(settings70('b'))
+    vi.mocked(usePersonIdentity).mockReturnValue(identityView(null))
+    const first = renderBolanekoll()
+    const before = await marketCards()
+    const beforeValues = [financials(before.a), financials(before.b)]
+    first.unmount()
+
+    // …but THIS account is bound to person/slot A → accent moves to A.
+    vi.mocked(usePersonIdentity).mockReturnValue(identityView('a'))
+    renderBolanekoll()
+    const { a, b } = await marketCards()
+    expect(a.className).toContain('is-accent')
+    expect(b.className).not.toContain('is-accent')
+    // A stays first in DOM order and every financial value is identical.
+    expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect([financials(a), financials(b)]).toEqual(beforeValues)
+  })
+
+  it('an invited partner mapped to the OTHER person sees themselves as B', async () => {
+    // The creator's legacy perspective says A, but the signed-in partner's
+    // binding resolves to slot B — their view, same household data.
+    seedSplit(settings70('a'))
+    vi.mocked(usePersonIdentity).mockReturnValue(identityView('b'))
+    renderBolanekoll()
+    const { a, b } = await marketCards()
+    expect(b.className).toContain('is-accent')
+    expect(a.className).not.toContain('is-accent')
+    expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
