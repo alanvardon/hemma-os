@@ -37,7 +37,7 @@ describe('SettingsDialog — person-independent ownership control', () => {
     const settings = { ...defaultSettings(), owner_a_ownership_pct: 50, i_am: 'b' as const }
     const { onSave } = renderDialog(settings)
 
-    const input = screen.getByLabelText('Alex ägarandel (%)')
+    const input = screen.getByLabelText('Person A ägarandel (%)')
     await user.clear(input)
     await user.type(input, '70')
     await user.click(screen.getByRole('button', { name: 'Save' }))

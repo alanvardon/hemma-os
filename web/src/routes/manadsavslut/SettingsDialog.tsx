@@ -19,7 +19,7 @@ export default function SettingsDialog({ open, settings, bound, boundNames, onMa
   useEffect(() => { if (open) setForm({ ...settings }) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   function submit(e: React.FormEvent) {
     e.preventDefault()
-    onSave({ person_a_name: clean(form.person_a_name) || 'Alex', person_b_name: clean(form.person_b_name) || 'Sam', currency: form.currency || 'SEK', default_split: !!form.default_split })
+    onSave({ person_a_name: clean(form.person_a_name) || 'Person A', person_b_name: clean(form.person_b_name) || 'Person B', currency: form.currency || 'SEK', default_split: !!form.default_split })
   }
   return (
     <DialogShell open={open} onClose={onClose} className="ma-dialog">

@@ -60,7 +60,7 @@ export interface CsvResult { delimiter: string; headers: string[]; rows: string[
 export interface ColMapping { date_purchased: number | null; description: number | null; enter_amount: number | null }
 
 export function defaultSettings(): MonthEndSettings {
-  return { person_a_name: 'Alex', person_b_name: 'Sam', currency: 'SEK', default_split: true }
+  return { person_a_name: 'Person A', person_b_name: 'Person B', currency: 'SEK', default_split: true }
 }
 
 export function otherPerson(p: Person): Person { return p === 'a' ? 'b' : 'a' }

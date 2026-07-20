@@ -30,20 +30,20 @@ export async function loadIdentitySuggestions(): Promise<ToolNameSuggestion[]> {
     {
       tool: 'bolanekoll',
       label: IDENTITY_TOOL_LABELS.bolanekoll,
-      a: mortgage?.owner_a_name || 'Alex',
-      b: mortgage?.owner_b_name || 'Sam',
+      a: mortgage?.owner_a_name || 'Person A',
+      b: mortgage?.owner_b_name || 'Person B',
     },
     {
       tool: 'hushallsbudget',
       label: IDENTITY_TOOL_LABELS.hushallsbudget,
-      a: budget?.people?.[0] || 'Alan',
-      b: budget?.people?.[1] || 'Partner',
+      a: budget?.people?.[0] || 'Person A',
+      b: budget?.people?.[1] || 'Person B',
     },
     {
       tool: 'manadsavslut',
       label: IDENTITY_TOOL_LABELS.manadsavslut,
-      a: monthEnd?.person_a_name || 'Alex',
-      b: monthEnd?.person_b_name || 'Sam',
+      a: monthEnd?.person_a_name || 'Person A',
+      b: monthEnd?.person_b_name || 'Person B',
     },
   ]
 }

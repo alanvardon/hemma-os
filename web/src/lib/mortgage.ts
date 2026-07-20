@@ -194,7 +194,7 @@ export interface ColNameMapping {
 
 export function defaultSettings(): MortgageSettings {
   return {
-    property_name: '', owner_a_name: 'Alex', owner_b_name: 'Sam',
+    property_name: '', owner_a_name: 'Person A', owner_b_name: 'Person B',
     owner_a_ownership_pct: 50,
     my_ownership_pct: 50, i_am: 'a', currency: 'SEK', ranteavdrag: true,
     household_income_yearly: null, import_presets: {}, track_contributions: false,

@@ -462,8 +462,8 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     renderBolanekoll()
 
     await user.click(await screen.findByRole('button', { name: 'Redigera i Betalningar' }))
-    expect(screen.getByLabelText('Alex · fördelning')).toHaveValue('12000')
-    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('8000')
+    expect(screen.getByLabelText('Person A · fördelning')).toHaveValue('12000')
+    expect(screen.getByLabelText('Person B · fördelning')).toHaveValue('8000')
     expect(screen.getByLabelText('Saldo efteråt (valfritt)')).toHaveValue('980000')
     await user.click(screen.getByRole('button', { name: 'Spara' }))
 
@@ -491,20 +491,20 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     await user.selectOptions(screen.getByLabelText('Typ'), 'extra_amortization')
     await user.type(screen.getByLabelText('Belopp'), '10000')
 
-    expect(await screen.findByLabelText('Alex · fördelning')).toHaveValue('5000')
-    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+    expect(await screen.findByLabelText('Person A · fördelning')).toHaveValue('5000')
+    expect(screen.getByLabelText('Person B · fördelning')).toHaveValue('5000')
 
     // The owner reviews and edits Alex's share directly — from this point the
     // pair is "touched" and must not be silently recomputed.
-    await user.clear(screen.getByLabelText('Alex · fördelning'))
-    await user.type(screen.getByLabelText('Alex · fördelning'), '6000')
-    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+    await user.clear(screen.getByLabelText('Person A · fördelning'))
+    await user.type(screen.getByLabelText('Person A · fördelning'), '6000')
+    expect(screen.getByLabelText('Person B · fördelning')).toHaveValue('5000')
 
     // A later amount edit must not overwrite the reviewed values.
     await user.clear(screen.getByLabelText('Belopp'))
     await user.type(screen.getByLabelText('Belopp'), '12000')
-    expect(screen.getByLabelText('Alex · fördelning')).toHaveValue('6000')
-    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+    expect(screen.getByLabelText('Person A · fördelning')).toHaveValue('6000')
+    expect(screen.getByLabelText('Person B · fördelning')).toHaveValue('5000')
   })
 
   it('blocks Save for a missing, negative, or total-mismatched extra-amortering allocation (plan 116)', async () => {
@@ -528,19 +528,19 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     expect(saveBtn).toBeEnabled()
 
     // Negative allocation.
-    await user.clear(screen.getByLabelText('Alex · fördelning'))
-    await user.type(screen.getByLabelText('Alex · fördelning'), '-500')
+    await user.clear(screen.getByLabelText('Person A · fördelning'))
+    await user.type(screen.getByLabelText('Person A · fördelning'), '-500')
     expect(saveBtn).toBeDisabled()
 
     // Total mismatch (8 000 vs the 10 000 amount).
-    await user.clear(screen.getByLabelText('Alex · fördelning'))
-    await user.type(screen.getByLabelText('Alex · fördelning'), '4000')
-    await user.clear(screen.getByLabelText('Sam · fördelning'))
-    await user.type(screen.getByLabelText('Sam · fördelning'), '4000')
+    await user.clear(screen.getByLabelText('Person A · fördelning'))
+    await user.type(screen.getByLabelText('Person A · fördelning'), '4000')
+    await user.clear(screen.getByLabelText('Person B · fördelning'))
+    await user.type(screen.getByLabelText('Person B · fördelning'), '4000')
     expect(saveBtn).toBeDisabled()
 
     // Missing allocation.
-    await user.clear(screen.getByLabelText('Sam · fördelning'))
+    await user.clear(screen.getByLabelText('Person B · fördelning'))
     expect(saveBtn).toBeDisabled()
 
     await user.click(saveBtn)
@@ -563,11 +563,11 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     await user.click(await screen.findByRole('button', { name: '+ Lägg till' }))
     await user.selectOptions(screen.getByLabelText('Typ'), 'extra_amortization')
     await user.type(screen.getByLabelText('Belopp'), '10000')
-    await screen.findByLabelText('Alex · fördelning')
-    await user.clear(screen.getByLabelText('Alex · fördelning'))
-    await user.type(screen.getByLabelText('Alex · fördelning'), '6000')
-    await user.clear(screen.getByLabelText('Sam · fördelning'))
-    await user.type(screen.getByLabelText('Sam · fördelning'), '4000')
+    await screen.findByLabelText('Person A · fördelning')
+    await user.clear(screen.getByLabelText('Person A · fördelning'))
+    await user.type(screen.getByLabelText('Person A · fördelning'), '6000')
+    await user.clear(screen.getByLabelText('Person B · fördelning'))
+    await user.type(screen.getByLabelText('Person B · fördelning'), '4000')
     // Alex made the bank transfer, but the reviewed 6 000/4 000 allocation
     // must survive untouched — selecting a single payer must not collapse it
     // to paid_by: 'joint' or rewrite the split to match the payer alone.
@@ -602,8 +602,8 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
 
     await user.click(await screen.findByRole('button', { name: 'Redigera i Betalningar' }))
     // Default ownership is 50/50, so the legacy row derives an even split.
-    expect(screen.getByLabelText('Alex · fördelning')).toHaveValue('5000')
-    expect(screen.getByLabelText('Sam · fördelning')).toHaveValue('5000')
+    expect(screen.getByLabelText('Person A · fördelning')).toHaveValue('5000')
+    expect(screen.getByLabelText('Person B · fördelning')).toHaveValue('5000')
     expect(screen.getByText('Beräknad från ägarfördelningen — granska innan du sparar.')).toBeInTheDocument()
     // Hydration never writes on its own.
     expect(Store.updatePayment).not.toHaveBeenCalled()
@@ -637,7 +637,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
 
     await user.click(await screen.findAllByRole('button', { name: 'Edit' }).then(buttons => buttons.at(-1)!))
     expect(screen.queryByLabelText('Betalad av')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Alex · fördelning')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Person A · fördelning')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Spara' }))
 
     expect(await screen.findByText('Payment saved.')).toBeInTheDocument()
@@ -648,7 +648,7 @@ describe('Bolanekoll — save failures surface to the user (regression for audit
     await user.click((await screen.findAllByRole('button', { name: 'Edit' })).at(-1)!)
     await user.selectOptions(screen.getByLabelText('Typ'), 'interest')
     expect(screen.queryByLabelText('Betalad av')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Alex · fördelning')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Person A · fördelning')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Spara' }))
     expect(Store.updatePayment).toHaveBeenLastCalledWith('pay1', expect.objectContaining({
       kind: 'interest', balance_after: null, paid_by: 'joint', paid_split: null, description: 'Bankens dragning', source: 'import',
