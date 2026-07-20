@@ -744,17 +744,17 @@ export default function Hushallsbudget() {
             ) : (
               <div className="who-row">
                 <div className="who-field">
-                  <label htmlFor="personAName">Person 1</label>
+                  <label htmlFor="personAName">Person A</label>
                   <input type="text" id="personAName" value={state.people[0]} maxLength={20} autoComplete="off"
                     onChange={(e) => mutate((s) => { s.people[0] = e.target.value })}
-                    onBlur={(e) => { if (!e.target.value.trim()) mutate((s) => { s.people[0] = 'A' }) }} />
+                    onBlur={(e) => { if (!e.target.value.trim()) mutate((s) => { s.people[0] = 'Person A' }) }} />
                 </div>
                 <span className="who-amp">&amp;</span>
                 <div className="who-field">
-                  <label htmlFor="personBName">Person 2</label>
+                  <label htmlFor="personBName">Person B</label>
                   <input type="text" id="personBName" value={state.people[1]} maxLength={20} autoComplete="off"
                     onChange={(e) => mutate((s) => { s.people[1] = e.target.value })}
-                    onBlur={(e) => { if (!e.target.value.trim()) mutate((s) => { s.people[1] = 'B' }) }} />
+                    onBlur={(e) => { if (!e.target.value.trim()) mutate((s) => { s.people[1] = 'Person B' }) }} />
                 </div>
               </div>
             )}
