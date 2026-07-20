@@ -344,6 +344,17 @@
 .hh-people-note { margin: 0.5rem 0 0.75rem; }
 .hh-people-manage, .hh-people-retry { margin-top: 0.5rem; font-size: 13px; }
 
+.hh-profile-name { margin-top: 0.75rem; display: flex; flex-direction: column; gap: 4px; }
+.hh-profile-name > label {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.hh-profile-name-row { display: flex; gap: 8px; align-items: center; }
+.hh-profile-name-row input { flex: 1; min-width: 0; }
+.hh-profile-name-hint { margin: 0; font-size: 12px; color: var(--ink-soft); }
+
 .hh-people-form {
   display: flex;
   flex-direction: column;

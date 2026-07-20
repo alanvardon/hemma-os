@@ -11,27 +11,27 @@ import {
   type IdentityTool,
 } from '../lib/person-identity'
 
-// The React boundary Stage 3/4 consume for person-aware presentation. Every
+// The React boundary the tools consume for person-aware presentation. Every
 // answer is derived from the server-confirmed, (userId, householdId)-scoped
-// snapshot in lib/person-identity — an unmapped account, an unbound tool or a
-// missing/failed load all answer with the safe legacy fallback (null / false),
-// so no surface can render a potentially wrong "Du".
+// snapshot in lib/person-identity. Tools map by position — tool slot A is always
+// the household's Person A — so personFor ignores the tool. An unconfigured
+// household, an unassigned account or a missing/failed load all answer with the
+// safe legacy fallback (null / false), so no surface renders a wrong "Du".
 export interface PersonIdentityView {
   status: IdentityStatus
   identity: HouseholdIdentity | null
-  /** Both canonical people exist. */
+  /** Both people exist. */
   configured: boolean
   people: HouseholdPerson[]
-  /** The signed-in account's canonical person; null while unmapped. */
+  /** The signed-in account's person; null while unassigned. */
   myPerson: HouseholdPerson | null
-  /** The canonical person a tool's legacy A/B slot represents; null when the
-      tool is unbound (legacy fallback: keep today's A/B display). */
+  /** The household person at a tool's A/B slot (position mapping); null when the
+      household is unconfigured (legacy fallback: keep today's A/B display). */
   personFor: (tool: IdentityTool, toolSlot: CanonicalSlot) => HouseholdPerson | null
-  /** True only when the tool is bound AND the account is mapped to that slot's
-      person — never guesses. */
+  /** True only when the account is the person at that slot — never guesses. */
   isMe: (tool: IdentityTool, toolSlot: CanonicalSlot) => boolean
-  /** The tool slot that IS the signed-in person (bound + mapped), else null so
-      callers keep their legacy perspective. */
+  /** The tool slot that IS the signed-in person, else null so callers keep their
+      legacy perspective. */
   myToolSlot: (tool: IdentityTool) => CanonicalSlot | null
   refresh: () => Promise<void>
 }
@@ -50,11 +50,10 @@ export function usePersonIdentity(): PersonIdentityView {
   return useMemo(() => {
     const identity = state.identity
     const configured = !!identity && identity.people.length === 2
-    const personFor = (tool: IdentityTool, toolSlot: CanonicalSlot): HouseholdPerson | null => {
+    const personFor = (_tool: IdentityTool, toolSlot: CanonicalSlot): HouseholdPerson | null => {
       if (!identity || !configured) return null
-      const binding = identity.bindings[tool]
-      if (!binding) return null
-      return identity.people.find((person) => person.id === binding[toolSlot]) ?? null
+      // Position mapping: tool slot A ↔ household Person A.
+      return identity.people.find((person) => person.slot === toolSlot) ?? null
     }
     return {
       status: state.status,

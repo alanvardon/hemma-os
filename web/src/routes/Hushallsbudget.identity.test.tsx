@@ -21,8 +21,8 @@ vi.mock('../components/usePersonIdentity')
 // visx charts need a real ResizeObserver (absent in jsdom) — stub the donut.
 vi.mock('../components/charts/BudgetDonutChart', () => ({ default: () => null }))
 
-const PA = { id: 'p-a', slot: 'a' as const, display_name: 'Alex' }
-const PB = { id: 'p-b', slot: 'b' as const, display_name: 'Sam' }
+const PA = { id: 'p-a', slot: 'a' as const, display_name: 'Alex', assigned_email: null }
+const PB = { id: 'p-b', slot: 'b' as const, display_name: 'Sam', assigned_email: null }
 
 function identityView(slot: 'a' | 'b' | null): PersonIdentityView {
   const bound = slot !== null

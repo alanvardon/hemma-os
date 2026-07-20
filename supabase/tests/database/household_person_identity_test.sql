@@ -2,10 +2,10 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
--- Plan 111 Stage 1 — household person identity. All data is fictional and all
--- changes roll back. Fixture writes happen as postgres; assertions run through
--- the authenticated role and the same auth.uid()/JWT boundary as PostgREST.
-select plan(41);
+-- Plan 111 — household person identity (account-based). All data is fictional
+-- and rolls back. Fixture writes happen as postgres; assertions run through the
+-- authenticated role and the same auth.uid()/JWT boundary as PostgREST.
+select plan(34);
 
 insert into auth.users (id, email)
 values
@@ -29,7 +29,11 @@ values
   ('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000004', 'owner'),
   ('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000005', 'member');
 
--- ── section A: configure + read as user a1 (household A owner) ───────────────
+-- Household A has a pending invite (no account yet) so a slot can be pre-assigned.
+insert into public.household_invites (household_id, email)
+values ('20000000-0000-0000-0000-000000000001', 'invitee@example.invalid');
+
+-- ── section A: owner a1 assigns both people and sets their own name ───────────
 
 set local role authenticated;
 select set_config(
@@ -38,12 +42,13 @@ select set_config(
   true
 );
 
+-- Assign slot a to the owner and slot b to the pending invite email.
 select is(
   jsonb_array_length(
-    public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'a', 'b')
+    public.assign_household_people('person-a1@example.invalid', 'invitee@example.invalid')
       -> 'people'),
   2,
-  'configure creates exactly two canonical people'
+  'assign creates exactly two people'
 );
 select is(
   (select count(*) from public.household_people
@@ -52,110 +57,68 @@ select is(
   'household A has two people rows'
 );
 select is(
-  public.household_identity() -> 'bindings' -> 'bolanekoll' ->> 'a',
-  (select id::text from public.household_people
-    where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'a'),
-  'bolanekoll tool slot a is bound to canonical person a'
-);
-select is(
-  public.household_identity() ->> 'my_person_id',
-  null::text,
-  'a fresh configuration leaves the caller unmapped'
-);
-
-create temporary table before_retry as
-  select id, slot, display_name, updated_at from public.household_people
-  where household_id = '20000000-0000-0000-0000-000000000001';
-
-select is(
-  jsonb_array_length(
-    public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'a', 'b')
-      -> 'people'),
-  2,
-  'retrying the identical configure call succeeds'
-);
-select is(
-  (select count(*) from public.household_people p
-    join before_retry b using (id, slot, display_name, updated_at)
-    where p.household_id = '20000000-0000-0000-0000-000000000001'),
-  2::bigint,
-  'retry rewrites nothing: same person ids, names and updated_at'
-);
-select is(
-  (select count(*) from public.household_tool_person_bindings
-    where household_id = '20000000-0000-0000-0000-000000000001'),
-  2::bigint,
-  'retry does not duplicate bindings'
-);
-
-select throws_ok(
-  $$select public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'a', null)$$,
-  'P0001', 'incomplete tool binding',
-  'a binding missing one tool slot is rejected'
-);
-select throws_ok(
-  $$select public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'a', 'a')$$,
-  'P0001', 'duplicate tool binding',
-  'binding both tool slots to the same person is rejected'
-);
-select throws_ok(
-  $$select public.configure_household_people('Alex', 'Sam', 'okand-verktyg', 'a', 'b')$$,
-  'P0001', 'invalid tool',
-  'an unknown tool is rejected'
-);
-select throws_ok(
-  $$select public.configure_household_people('   ', 'Sam')$$,
-  'P0001', 'invalid person name',
-  'a blank person name is rejected'
-);
-
--- A tool may bind canonical person b to its legacy slot a (swap) and back.
-select is(
-  public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'b', 'a')
-    -> 'bindings' -> 'bolanekoll' ->> 'a',
-  (select id::text from public.household_people
-    where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'b'),
-  'a swapped binding maps tool slot a to canonical person b'
-);
-select is(
-  public.configure_household_people('Alex', 'Sam', 'bolanekoll', 'a', 'b')
-    -> 'bindings' -> 'bolanekoll' ->> 'a',
-  (select id::text from public.household_people
-    where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'a'),
-  'the binding can be swapped back without constraint conflicts'
-);
-
-select lives_ok(
-  $$select public.set_my_household_person(
-      (select id from public.household_people
-        where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'a'))$$,
-  'the caller can claim a person of their household'
-);
-select is(
   public.household_identity() ->> 'my_person_id',
   (select id::text from public.household_people
     where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'a'),
-  'household_identity reports the caller mapping'
-);
-select lives_ok(
-  $$select public.set_my_household_person(
-      (select id from public.household_people
-        where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'a'))$$,
-  'retrying the same mapping is an idempotent no-op'
+  'the caller is "du" for the slot carrying their own email'
 );
 select is(
-  (select person_display_name from public.household_roster()
+  (public.household_identity() -> 'people' -> 0 ->> 'display_name'),
+  'person-a1@example.invalid',
+  'an un-named account resolves its display name to its email'
+);
+select is(
+  (public.household_identity() -> 'people' -> 1 ->> 'display_name'),
+  'invitee@example.invalid',
+  'a pending-invite slot shows the invited email until they join'
+);
+
+-- Setting a profile name flows into the identity display name.
+select lives_ok(
+  $$select public.set_my_profile_name('Alan')$$,
+  'the caller can set their own profile name'
+);
+select is(
+  (public.household_identity() -> 'people' -> 0 ->> 'display_name'),
+  'Alan',
+  'the slot display name becomes the account profile name'
+);
+select is(
+  (select display_name from public.household_roster()
     where user_id = '10000000-0000-0000-0000-000000000001'),
-  'Alex',
-  'household_roster exposes the mapped display name'
+  'Alan',
+  'household_roster resolves the profile name'
 );
 select is(
-  (select count(*) from public.household_roster() where person_id is null),
-  1::bigint,
-  'household_roster shows the unmapped member with a null person'
+  (select slot from public.household_roster()
+    where user_id = '10000000-0000-0000-0000-000000000001'),
+  'a',
+  'household_roster reports the member''s assigned slot'
+);
+select is(
+  (select slot from public.household_roster()
+    where user_id = '10000000-0000-0000-0000-000000000002'),
+  null::text,
+  'an unassigned member has a null slot'
 );
 
--- ── section B: second account a2 — duplicate claim and caller-only writes ────
+-- A blank profile name clears it back to the email.
+select lives_ok(
+  $$select public.set_my_profile_name('   ')$$,
+  'a blank profile name is accepted (clears the name)'
+);
+select is(
+  (public.household_identity() -> 'people' -> 0 ->> 'display_name'),
+  'person-a1@example.invalid',
+  'a cleared profile name falls back to the email'
+);
+select throws_ok(
+  $$select public.set_my_profile_name(repeat('x', 61))$$,
+  'P0001', 'invalid profile name',
+  'an over-long profile name is rejected'
+);
+
+-- ── section B: any member assigns; validation; idempotence ───────────────────
 
 select set_config(
   'request.jwt.claims',
@@ -163,79 +126,61 @@ select set_config(
   true
 );
 
-select throws_ok(
-  $$select public.set_my_household_person(
-      (select id from public.household_people
-        where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'a'))$$,
-  'P0001', 'person already claimed',
-  'two accounts cannot claim the same person'
+-- A plain member (not the owner) may reassign — assigning people is shared.
+select is(
+  public.assign_household_people('person-a1@example.invalid', 'person-a2@example.invalid') ->> 'my_person_id',
+  (select id::text from public.household_people
+    where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'b'),
+  'any member can assign, and a2 becomes "du" for slot b'
 );
+
+create temporary table before_retry as
+  select id, slot, assigned_email, updated_at from public.household_people
+  where household_id = '20000000-0000-0000-0000-000000000001';
+
 select lives_ok(
-  $$select public.set_my_household_person(
-      (select id from public.household_people
-        where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'b'))$$,
-  'the second account claims the remaining person'
+  $$select public.assign_household_people('person-a1@example.invalid', 'person-a2@example.invalid')$$,
+  'retrying the identical assignment succeeds'
 );
--- PostgreSQL requires a data-modifying CTE at statement top level; this helper
--- keeps the affected-row assertion valid (same as household_isolation_test).
-create function pg_temp.assert_affected(
-  p_statement text,
-  p_expected bigint,
-  p_description text
-) returns text
-language plpgsql
-as $$
-declare
-  affected bigint;
-begin
-  execute format(
-    'with changed as (%s returning 1) select count(*) from changed',
-    p_statement
-  ) into affected;
-  return extensions.is(affected, p_expected, p_description);
-end;
-$$;
-
-select pg_temp.assert_affected(
-  $$update public.household_members set person_id = null
-    where user_id = '10000000-0000-0000-0000-000000000001'$$,
-  0::bigint,
-  'a member cannot rewrite another account''s mapping directly'
-);
-select throws_ok(
-  $$insert into public.household_people (household_id, slot, display_name)
-    values ('20000000-0000-0000-0000-000000000001', 'a', 'Intrang')$$,
-  '42501', 'permission denied for table household_people',
-  'direct people inserts are revoked; use configure_household_people'
-);
-select throws_ok(
-  $$update public.household_people set display_name = 'Intrang'$$,
-  '42501', 'permission denied for table household_people',
-  'direct people updates are revoked'
-);
-select throws_ok(
-  $$insert into public.household_tool_person_bindings
-      (household_id, tool, tool_slot, person_id)
-    select '20000000-0000-0000-0000-000000000001', 'manadsavslut', 'a', id
-      from public.household_people
-      where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'a'$$,
-  '42501', 'permission denied for table household_tool_person_bindings',
-  'direct binding inserts are revoked'
-);
-select throws_ok(
-  $$delete from public.household_tool_person_bindings$$,
-  '42501', 'permission denied for table household_tool_person_bindings',
-  'direct binding deletes are revoked'
+select is(
+  (select count(*) from public.household_people p
+    join before_retry b using (id, slot, assigned_email, updated_at)
+    where p.household_id = '20000000-0000-0000-0000-000000000001'),
+  2::bigint,
+  'retry rewrites nothing: same ids, emails and updated_at'
 );
 
--- ── section C: cross-household isolation as user b1 (household B) ────────────
+select throws_ok(
+  $$select public.assign_household_people('person-a1@example.invalid', 'person-a1@example.invalid')$$,
+  'P0001', 'duplicate person email',
+  'the two slots cannot share an email'
+);
+select throws_ok(
+  $$select public.assign_household_people('person-a1@example.invalid', 'stranger@nope.invalid')$$,
+  'P0001', 'unknown person email',
+  'an email that is neither a member nor an invite is rejected'
+);
+
+-- Clearing a slot: my_person_id disappears for the cleared account.
+select is(
+  public.assign_household_people('person-a1@example.invalid', null) ->> 'my_person_id',
+  null::text,
+  'clearing slot b leaves a2 unassigned (null my_person_id)'
+);
+select is(
+  (select assigned_email from public.household_people
+    where household_id = '20000000-0000-0000-0000-000000000001' and slot = 'b'),
+  null::text,
+  'the cleared slot has a null assigned_email'
+);
+
+-- ── section C: cross-household isolation (b1) ────────────────────────────────
 
 select set_config(
   'request.jwt.claims',
   '{"sub":"10000000-0000-0000-0000-000000000003","role":"authenticated","email":"person-b1@example.invalid"}',
   true
 );
-
 select is(
   (select count(*) from public.household_people
     where household_id = '20000000-0000-0000-0000-000000000001'),
@@ -243,23 +188,9 @@ select is(
   'a foreign household''s people are invisible'
 );
 select is(
-  (select count(*) from public.household_tool_person_bindings
-    where household_id = '20000000-0000-0000-0000-000000000001'),
-  0::bigint,
-  'a foreign household''s bindings are invisible'
-);
-select is(
-  public.configure_household_people('Berit', 'Bosse') ->> 'household_id',
+  public.assign_household_people('person-b1@example.invalid', null) ->> 'household_id',
   '20000000-0000-0000-0000-000000000002',
-  'configure only ever writes the caller''s own household'
-);
--- household A's raw person id survives in the pg_temp snapshot, so this claim
--- attempt is a real foreign uuid even though RLS hides the row from b1.
-select throws_ok(
-  $$select public.set_my_household_person(
-      (select id from before_retry where slot = 'a'))$$,
-  'P0001', 'person not in household',
-  'claiming a person of a foreign household is rejected'
+  'assign only ever writes the caller''s own household'
 );
 select is(
   (select count(*) from public.household_roster()),
@@ -267,55 +198,42 @@ select is(
   'household_roster stays scoped to the caller''s household'
 );
 
--- request.jwt.claims is transaction-scoped, so clear it explicitly to test the
--- unauthenticated boundary.
+-- ── section D: revoked direct writes + unauthenticated boundary ──────────────
+
+select throws_ok(
+  $$insert into public.household_people (household_id, slot, assigned_email)
+    values ('20000000-0000-0000-0000-000000000002', 'a', 'x@example.invalid')$$,
+  '42501', 'permission denied for table household_people',
+  'direct people inserts are revoked; use assign_household_people'
+);
+select throws_ok(
+  $$update public.household_people set assigned_email = 'x@example.invalid'$$,
+  '42501', 'permission denied for table household_people',
+  'direct people updates are revoked'
+);
+select throws_ok(
+  $$insert into public.profiles (user_id, display_name)
+    values ('10000000-0000-0000-0000-000000000003', 'Hax')$$,
+  '42501', 'permission denied for table profiles',
+  'direct profile writes are revoked; use set_my_profile_name'
+);
+
 reset role;
 select set_config('request.jwt.claims', '', true);
 select throws_ok(
-  $$select public.set_my_household_person(
-      (select id from before_retry where slot = 'a'))$$,
+  $$select public.assign_household_people('a@example.invalid', 'b@example.invalid')$$,
   'P0001', 'not authenticated',
-  'the mapping RPC requires an authenticated caller'
+  'assign requires an authenticated caller'
+);
+select throws_ok(
+  $$select public.set_my_profile_name('Nope')$$,
+  'P0001', 'not authenticated',
+  'set_my_profile_name requires an authenticated caller'
 );
 
--- ── section D: leaving removes the mapping but keeps the people ──────────────
+-- ── section E: leave keeps people; accept-invite starts fresh ────────────────
 
-set local role authenticated;
-select set_config(
-  'request.jwt.claims',
-  '{"sub":"10000000-0000-0000-0000-000000000002","role":"authenticated","email":"person-a2@example.invalid"}',
-  true
-);
-select lives_ok(
-  $$select public.leave_household()$$,
-  'the mapped second member can leave the household'
-);
-
-reset role;
-select is(
-  (select count(*) from public.household_members
-    where user_id = '10000000-0000-0000-0000-000000000002'),
-  0::bigint,
-  'leaving removes the membership row and with it the mapping'
-);
-select is(
-  (select count(*) from public.household_people
-    where household_id = '20000000-0000-0000-0000-000000000001'),
-  2::bigint,
-  'leaving never deletes household_people rows'
-);
-select is(
-  (select count(*) from public.household_members m
-    join public.household_people p
-      on p.household_id = m.household_id and p.id = m.person_id
-    where p.household_id = '20000000-0000-0000-0000-000000000001'
-      and p.slot = 'b'),
-  0::bigint,
-  'the departed member''s person is unclaimed and reusable'
-);
-
--- ── section E: accepting an invite starts unmapped ───────────────────────────
-
+-- Household C assigns its owner, who then moves to household A via an invite.
 set local role authenticated;
 select set_config(
   'request.jwt.claims',
@@ -324,15 +242,15 @@ select set_config(
 );
 select is(
   jsonb_array_length(
-    public.configure_household_people('Cesar', 'Doris') -> 'people'),
+    public.assign_household_people('person-c@example.invalid', 'person-d@example.invalid') -> 'people'),
   2,
-  'household C configures its own people before the move'
+  'household C assigns its own two people'
 );
-select lives_ok(
-  $$select public.set_my_household_person(
-      (select id from public.household_people
-        where household_id = '20000000-0000-0000-0000-000000000003' and slot = 'a'))$$,
-  'the mover is mapped in the old household'
+select is(
+  public.household_identity() ->> 'my_person_id',
+  (select id::text from public.household_people
+    where household_id = '20000000-0000-0000-0000-000000000003' and slot = 'a'),
+  'the mover is "du" in the old household'
 );
 
 reset role;
@@ -350,14 +268,14 @@ select is(
   '20000000-0000-0000-0000-000000000001'::uuid,
   'the invite moves the account into household A'
 );
+-- In household A the mover is only "du" if the household assigned their email.
+select is(
+  public.household_identity() ->> 'my_person_id',
+  null::text,
+  'the mover starts unassigned in the new household'
+);
 
 reset role;
-select is(
-  (select person_id from public.household_members
-    where user_id = '10000000-0000-0000-0000-000000000004'),
-  null::uuid,
-  'the new membership starts unmapped — identity never crosses households'
-);
 select is(
   (select count(*) from public.household_people
     where household_id = '20000000-0000-0000-0000-000000000003'),
@@ -369,7 +287,7 @@ select is(
     where user_id = '10000000-0000-0000-0000-000000000004'
       and household_id = '20000000-0000-0000-0000-000000000003'),
   0::bigint,
-  'the old membership (and its mapping) is gone'
+  'the old membership is gone'
 );
 
 select * from finish();

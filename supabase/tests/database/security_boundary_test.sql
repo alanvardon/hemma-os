@@ -43,7 +43,6 @@ select ok(
         'household_invites',
         'household_members',
         'household_people',
-        'household_tool_person_bindings',
         'notification_state'
       )
       and not exists (
@@ -93,8 +92,7 @@ select ok(
 select ok(
   not exists (
     select 1 from (values
-      ('household_people'),
-      ('household_tool_person_bindings')
+      ('household_people')
     ) identity_tables(table_name)
     where not exists (
         select 1 from pg_catalog.pg_policies p
@@ -115,7 +113,7 @@ select ok(
   not exists (
     select 1 from information_schema.table_privileges
     where table_schema = 'public'
-      and table_name in ('household_people', 'household_tool_person_bindings')
+      and table_name in ('household_people', 'profiles')
       and grantee in ('PUBLIC', 'anon', 'authenticated')
       and privilege_type in ('INSERT', 'UPDATE', 'DELETE')
   ),
@@ -126,8 +124,8 @@ select ok(
   not exists (
     select 1 from (values
       ('public.household_identity()'),
-      ('public.configure_household_people(text,text,text,text,text)'),
-      ('public.set_my_household_person(uuid)')
+      ('public.assign_household_people(text,text)'),
+      ('public.set_my_profile_name(text)')
     ) identity_rpcs(signature)
     where has_function_privilege('public', signature, 'execute')
        or has_function_privilege('anon', signature, 'execute')

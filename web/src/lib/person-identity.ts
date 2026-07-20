@@ -1,15 +1,18 @@
 /* person-identity.ts — the client boundary for household person identity
-   (plan 111, Stage 2). Wraps the three Stage 1 RPCs (household_identity,
-   configure_household_people, set_my_household_person), parses the identity
-   view defensively (malformed data is treated as unconfigured, never a crash),
-   and keeps one account/household-scoped snapshot for the UI.
+   (plan 111). The household has two people (slot 'a'/'b'); each slot is assigned
+   an email from the household's members or pending invites, and the account that
+   owns that email IS that person. The signed-in account is "du" for the slot
+   carrying its own email. Tools map by position — tool slot A is always the
+   household's Person A — so there is no per-tool binding.
 
-   Strict write contract: state only ever changes from a server response — no
-   optimistic "Du" before an RPC succeeds, and a failed call leaves the prior
-   snapshot intact. The offline cache stores the RAW server envelope under a
-   syncCoordinator-scoped key, so it is namespaced by (userId, householdId) and
-   quarantined/removed with the existing sign-out/household-transition flow;
-   server state wins after every successful refresh. */
+   A person's display name resolves server-side to the assigned account's profile
+   name, then its email, then "Person A"/"Person B"; it is always a usable string.
+
+   Strict write contract: state only ever changes from a server response. The
+   offline cache stores the RAW server envelope under a syncCoordinator-scoped
+   key, so it is namespaced by (userId, householdId) and quarantined/removed with
+   the existing sign-out/household-transition flow; server state wins after every
+   successful refresh. */
 
 import { supabase } from './supabase'
 import { syncCoordinator } from './sync'
@@ -22,23 +25,20 @@ export type CanonicalSlot = 'a' | 'b'
 export interface HouseholdPerson {
   id: string
   slot: CanonicalSlot
+  /** Always a usable label: profile name → assigned email → "Person A/B". */
   display_name: string
-}
-
-/** Which canonical person each of a tool's legacy A/B slots represents. */
-export interface ToolBinding {
-  a: string
-  b: string
+  /** The email assigned to this slot, or null while unassigned. */
+  assigned_email: string | null
 }
 
 export interface HouseholdIdentity {
   householdId: string
-  /** The signed-in account's canonical person; null while unmapped. */
+  /** The slot carrying the signed-in account's email; null when unassigned. */
   myPersonId: string | null
-  /** Both canonical people (slot order) when configured, [] when not. */
+  /** The caller's own raw profile name (null when unset), for the name editor. */
+  myProfileName: string | null
+  /** Both people (slot order) when configured, [] when not. */
   people: HouseholdPerson[]
-  /** Only bound tools have a key; a binding is always complete (a + b). */
-  bindings: Partial<Record<IdentityTool, ToolBinding>>
 }
 
 // ── defensive parsing ────────────────────────────────────────────────────────
@@ -54,20 +54,20 @@ function parsePerson(raw: unknown): HouseholdPerson | null {
   const person = raw as Record<string, unknown>
   if (!isUuid(person.id)) return null
   if (person.slot !== 'a' && person.slot !== 'b') return null
-  if (typeof person.display_name !== 'string' || person.display_name.trim() === '') return null
-  // Any stray field (e.g. a legacy login_email) is ignored — a person is just
-  // { id, slot, display_name }; the account mapping lives in household_members.
-  return {
-    id: person.id,
-    slot: person.slot,
-    display_name: person.display_name,
-  }
+  const email = typeof person.assigned_email === 'string' && person.assigned_email.trim() !== ''
+    ? person.assigned_email
+    : null
+  // The server always sends a resolved name; fall back defensively so a
+  // malformed name can never render as blank or "null".
+  const name = typeof person.display_name === 'string' && person.display_name.trim() !== ''
+    ? person.display_name
+    : `Person ${person.slot.toUpperCase()}`
+  return { id: person.id, slot: person.slot, display_name: name, assigned_email: email }
 }
 
 /** Parse the household_identity() jsonb view. Returns null for SQL NULL (no
-    household) or an unusable envelope. Malformed people make the household
-    read as UNCONFIGURED (people [], bindings {}) rather than crash or guess;
-    malformed binding entries are dropped individually. */
+    household) or an unusable envelope. Malformed people make the household read
+    as UNCONFIGURED (people []) rather than crash or guess. */
 export function parseHouseholdIdentity(raw: unknown): HouseholdIdentity | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const view = raw as Record<string, unknown>
@@ -85,40 +85,25 @@ export function parseHouseholdIdentity(raw: unknown): HouseholdIdentity | null {
     }
   }
   const knownIds = new Set(people.map((p) => p.id))
-
   const myPersonId = isUuid(view.my_person_id) && knownIds.has(view.my_person_id)
     ? view.my_person_id
     : null
+  const myProfileName = typeof view.my_profile_name === 'string' && view.my_profile_name.trim() !== ''
+    ? view.my_profile_name
+    : null
 
-  const bindings: Partial<Record<IdentityTool, ToolBinding>> = {}
-  const rawBindings = view.bindings
-  if (rawBindings && typeof rawBindings === 'object' && !Array.isArray(rawBindings)) {
-    for (const tool of IDENTITY_TOOLS) {
-      const entry = (rawBindings as Record<string, unknown>)[tool]
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
-      const { a, b } = entry as Record<string, unknown>
-      if (isUuid(a) && isUuid(b) && a !== b && knownIds.has(a) && knownIds.has(b)) {
-        bindings[tool] = { a, b }
-      }
-    }
-  }
-
-  return { householdId: view.household_id, myPersonId, people, bindings }
+  return { householdId: view.household_id, myPersonId, myProfileName, people }
 }
 
 /**
- * The tool slot that represents the signed-in account's person — only when the
- * tool is bound AND the account is mapped to one of that binding's people.
- * Null in every other case (unmapped account, unbound tool, no identity), so
- * callers fall back to their legacy perspective and never guess "me".
+ * The tool slot that represents the signed-in account. Tools map by position —
+ * tool slot A is always the household's Person A — so this is simply the slot of
+ * the account's own person, independent of the tool. Null when the account is
+ * unassigned, so callers fall back to their legacy perspective and never guess.
  */
-export function myToolSlot(identity: HouseholdIdentity | null, tool: IdentityTool): CanonicalSlot | null {
+export function myToolSlot(identity: HouseholdIdentity | null, _tool: IdentityTool): CanonicalSlot | null {
   if (!identity?.myPersonId) return null
-  const binding = identity.bindings[tool]
-  if (!binding) return null
-  if (binding.a === identity.myPersonId) return 'a'
-  if (binding.b === identity.myPersonId) return 'b'
-  return null
+  return identity.people.find((p) => p.id === identity.myPersonId)?.slot ?? null
 }
 
 // ── error mapping (stable P0001 messages → concise Swedish) ──────────────────
@@ -132,12 +117,9 @@ export class IdentityRuleError extends Error {
 }
 
 const RULE_MESSAGES: [string, string][] = [
-  ['person already claimed', 'Personen är redan vald av en annan medlem.'],
-  ['person not in household', 'Personen finns inte i hushållet. Ladda om och försök igen.'],
-  ['incomplete tool binding', 'Välj en person för båda platserna innan du sparar.'],
-  ['duplicate tool binding', 'Samma person kan inte ha båda platserna i ett verktyg.'],
-  ['invalid tool', 'Verktyget kunde inte kopplas. Ladda om och försök igen.'],
-  ['invalid person name', 'Namnen måste vara 1–60 tecken.'],
+  ['unknown person email', 'E-postadressen tillhör inte hushållet.'],
+  ['duplicate person email', 'Person A och Person B kan inte vara samma konto.'],
+  ['invalid profile name', 'Namnet får vara högst 60 tecken.'],
 ]
 
 function toIdentityError(error: unknown): Error {
@@ -198,9 +180,9 @@ export function subscribeHouseholdIdentity(listener: () => void): () => void {
   return () => { listeners.delete(listener) }
 }
 
-/** The snapshot for the ACTIVE (userId, householdId) only. Another account's
-    or household's state is never returned — a scope change reads as idle until
-    that scope refreshes, so stale identity can never flash after sign-in or a
+/** The snapshot for the ACTIVE (userId, householdId) only. Another account's or
+    household's state is never returned — a scope change reads as idle until that
+    scope refreshes, so stale identity can never flash after sign-in or a
     household switch. */
 export function getHouseholdIdentitySnapshot(): IdentityState {
   const active = syncCoordinator.getActiveIdentity()
@@ -245,8 +227,8 @@ export async function fetchHouseholdIdentity(): Promise<HouseholdIdentity | null
 
 /** Refresh the scoped snapshot from the server. Never throws — failures leave
     the previous snapshot (seeded from the scoped cache when the scope is new)
-    with status 'error' so the UI can offer retry; a successful response wins
-    and rewrites the cache. */
+    with status 'error' so the UI can offer retry; a successful response wins and
+    rewrites the cache. */
 export async function refreshHouseholdIdentity(): Promise<void> {
   const scope = tryCaptureScope()
   if (!scope) return
@@ -264,26 +246,21 @@ export async function refreshHouseholdIdentity(): Promise<void> {
   }
 }
 
-export interface ConfigurePeopleInput {
-  personAName: string
-  personBName: string
-  tool?: IdentityTool
-  /** Which canonical slot the tool's legacy slot A/B represents. */
-  toolSlotAPerson?: CanonicalSlot
-  toolSlotBPerson?: CanonicalSlot
-}
-
-/** Upsert the two canonical people and optionally one complete tool binding
-    (idempotent server-side). On success the returned server view becomes the
-    new snapshot + cache; on failure nothing changes locally. */
-export async function configureHouseholdPeople(input: ConfigurePeopleInput): Promise<HouseholdIdentity | null> {
+/** Assign the two people to emails (member or pending-invite emails). null
+    clears a slot. On success the returned server view becomes the new snapshot +
+    cache; on failure nothing changes locally. */
+export async function assignHouseholdPeople(
+  slotAEmail: string | null,
+  slotBEmail: string | null,
+): Promise<HouseholdIdentity | null> {
   const scope = tryCaptureScope()
-  const { data, error } = await supabase.rpc('configure_household_people', {
-    p_person_a_name: input.personAName.trim(),
-    p_person_b_name: input.personBName.trim(),
-    p_tool: input.tool ?? null,
-    p_tool_slot_a_person: input.toolSlotAPerson ?? null,
-    p_tool_slot_b_person: input.toolSlotBPerson ?? null,
+  const norm = (v: string | null) => {
+    const t = (v ?? '').trim()
+    return t === '' ? null : t
+  }
+  const { data, error } = await supabase.rpc('assign_household_people', {
+    p_slot_a_email: norm(slotAEmail),
+    p_slot_b_email: norm(slotBEmail),
   })
   if (error) throw toIdentityError(error)
   const parsed = parseHouseholdIdentity(data)
@@ -294,10 +271,11 @@ export async function configureHouseholdPeople(input: ConfigurePeopleInput): Pro
   return parsed
 }
 
-/** Set or clear (null) the CALLER'S own person mapping. The snapshot is not
-    touched here — callers refresh so the marker only ever renders from a
+/** Set or clear (blank) the caller's own profile name. The snapshot is not
+    touched here — callers refresh so a new name only ever renders from a
     server-confirmed view. */
-export async function setMyHouseholdPerson(personId: string | null): Promise<void> {
-  const { error } = await supabase.rpc('set_my_household_person', { p_person_id: personId })
+export async function setMyProfileName(name: string | null): Promise<void> {
+  const trimmed = (name ?? '').trim()
+  const { error } = await supabase.rpc('set_my_profile_name', { p_name: trimmed === '' ? null : trimmed })
   if (error) throw toIdentityError(error)
 }

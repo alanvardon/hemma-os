@@ -53,12 +53,12 @@ function fakeSession(): string {
 }
 
 // A minimal stand-in for the plan-111 household_identity jsonb view, mutated by
-// the three identity RPCs so a real setup → reload round trip can be verified.
+// the identity RPCs so a real assign → reload round trip can be verified.
 interface IdentityView {
   household_id: string | null
   my_person_id: string | null
-  people: { id: string; slot: 'a' | 'b'; display_name: string }[]
-  bindings: Record<string, { a: string; b: string }>
+  my_profile_name: string | null
+  people: { id: string; slot: 'a' | 'b'; display_name: string; assigned_email: string | null }[]
 }
 
 interface Backend {
@@ -109,7 +109,7 @@ async function mockBackend(page: Page): Promise<Backend> {
     },
     // Starts as a provisioned-but-unconfigured household (people: []), which is
     // what household_identity() returns before "Personer i hushållet" is saved.
-    identity: { household_id: HH_UUID, my_person_id: null, people: [], bindings: {} },
+    identity: { household_id: HH_UUID, my_person_id: null, my_profile_name: null, people: [] },
   }
 
   await page.addInitScript(
@@ -263,29 +263,32 @@ async function mockBackend(page: Page): Promise<Backend> {
       // configured household returns its full view.
       return route.fulfill({ json: backend.identity.household_id ? backend.identity : null })
     }
-    if (path === '/rest/v1/rpc/configure_household_people' && req.method() === 'POST') {
+    if (path === '/rest/v1/rpc/assign_household_people' && req.method() === 'POST') {
       const b = req.postDataJSON() as Record<string, string | null>
+      const nameFor = (email: string | null, slot: 'a' | 'b') =>
+        email === 'e2e@local.test' ? (backend.identity.my_profile_name ?? email) : (email ?? `Person ${slot.toUpperCase()}`)
       backend.identity.household_id = HH_UUID
       backend.identity.people = [
-        { id: PERSON_A, slot: 'a', display_name: String(b.p_person_a_name) },
-        { id: PERSON_B, slot: 'b', display_name: String(b.p_person_b_name) },
+        { id: PERSON_A, slot: 'a', display_name: nameFor(b.p_slot_a_email, 'a'), assigned_email: b.p_slot_a_email ?? null },
+        { id: PERSON_B, slot: 'b', display_name: nameFor(b.p_slot_b_email, 'b'), assigned_email: b.p_slot_b_email ?? null },
       ]
-      if (b.p_tool) {
-        const idOf = (slot: string | null) => (slot === 'a' ? PERSON_A : PERSON_B)
-        backend.identity.bindings[b.p_tool] = { a: idOf(b.p_tool_slot_a_person), b: idOf(b.p_tool_slot_b_person) }
-      }
+      // "Du" is the slot carrying the signed-in account's own email.
+      backend.identity.my_person_id = b.p_slot_a_email === 'e2e@local.test' ? PERSON_A
+        : b.p_slot_b_email === 'e2e@local.test' ? PERSON_B : null
       return route.fulfill({ json: backend.identity })
     }
-    if (path === '/rest/v1/rpc/set_my_household_person' && req.method() === 'POST') {
-      const b = req.postDataJSON() as { p_person_id: string | null }
-      backend.identity.my_person_id = b.p_person_id
+    if (path === '/rest/v1/rpc/set_my_profile_name' && req.method() === 'POST') {
+      const b = req.postDataJSON() as { p_name: string | null }
+      backend.identity.my_profile_name = b.p_name
+      backend.identity.people = backend.identity.people.map((p) =>
+        p.assigned_email === 'e2e@local.test' ? { ...p, display_name: b.p_name ?? 'e2e@local.test' } : p)
       return route.fulfill({ json: null })
     }
     if (path === '/rest/v1/rpc/household_roster' && req.method() === 'POST') {
-      const me = backend.identity.people.find((p) => p.id === backend.identity.my_person_id)
+      const mine = backend.identity.people.find((p) => p.assigned_email === 'e2e@local.test')
       return route.fulfill({ json: [{
         user_id: 'user-e2e', role: 'owner', email: 'e2e@local.test',
-        person_id: backend.identity.my_person_id, person_display_name: me?.display_name ?? null,
+        display_name: backend.identity.my_profile_name ?? 'e2e@local.test', slot: mine?.slot ?? null,
       }] })
     }
     if (resources[path.slice('/rest/v1/'.length)] && req.method() === 'GET') {
@@ -665,18 +668,12 @@ test('identity setup marks the signed-in person "Du", persists across reload, an
   await page.getByRole('button', { name: 'Hushåll' }).click()
   await expect(page.locator('.household-btn-avatar')).toHaveCount(0)
 
-  // Personer i hushållet → run first-time setup with the prefilled defaults.
+  // Set your own profile name, then assign yourself as Person A.
+  await page.getByLabel('Ditt namn').fill('Alex')
+  await page.getByRole('button', { name: 'Spara', exact: true }).click()
   await page.getByRole('button', { name: 'Kom igång' }).click()
   await expect(page.getByRole('button', { name: 'Spara personer' })).toBeVisible()
-  await page.getByLabel('Person A').fill('Alex')
-  await page.getByLabel('Person B').fill('Sam')
-  // Bind every tool's A/B slots (A→a, B→b) so no tool is left incomplete.
-  const selects = page.locator('select.hh-people-select')
-  const count = await selects.count()
-  for (let i = 0; i < count; i++) await selects.nth(i).selectOption(i % 2 === 0 ? 'a' : 'b')
-  // "Vem är du?" → Alex (slot A), then confirm the review gate and save.
-  await page.getByRole('radio', { name: 'Alex' }).check()
-  await page.getByRole('checkbox', { name: /kontrollerat namnen/ }).check()
+  await page.getByLabel('Person A').selectOption('e2e@local.test')
   await page.getByRole('button', { name: 'Spara personer' }).click()
 
   // The Du marker renders only from the server-confirmed view.
@@ -692,7 +689,7 @@ test('identity setup marks the signed-in person "Du", persists across reload, an
 
   // A household transition (server now reports no household) must not leave a
   // stale identity avatar behind — it reverts to the anonymous icon.
-  backend.identity = { household_id: null, my_person_id: null, people: [], bindings: {} }
+  backend.identity = { household_id: null, my_person_id: null, my_profile_name: null, people: [] }
   await page.reload()
   await expect(page.locator('.household-btn-avatar')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Hushåll' })).toBeVisible()
@@ -708,11 +705,11 @@ test('a second account mapped to the other person sees ITS OWN perspective as Du
   backend.identity = {
     household_id: HH_UUID,
     my_person_id: '22222222-2222-4222-8222-222222222222',
+    my_profile_name: 'Sam',
     people: [
-      { id: '11111111-1111-4111-8111-111111111111', slot: 'a', display_name: 'Alex' },
-      { id: '22222222-2222-4222-8222-222222222222', slot: 'b', display_name: 'Sam' },
+      { id: '11111111-1111-4111-8111-111111111111', slot: 'a', display_name: 'Alex', assigned_email: 'creator@local.test' },
+      { id: '22222222-2222-4222-8222-222222222222', slot: 'b', display_name: 'Sam', assigned_email: 'e2e@local.test' },
     ],
-    bindings: { bolanekoll: { a: '11111111-1111-4111-8111-111111111111', b: '22222222-2222-4222-8222-222222222222' } },
   }
   await page.goto('/#/')
 
