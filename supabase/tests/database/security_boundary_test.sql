@@ -126,7 +126,8 @@ select ok(
   not exists (
     select 1 from (values
       ('public.household_identity()'),
-      ('public.configure_household_people(text,text,text,text,text)'),
+      ('public.configure_household_people(text,text,text,text,text,text,text)'),
+      ('public.claim_my_household_person_by_email()'),
       ('public.set_my_household_person(uuid)')
     ) identity_rpcs(signature)
     where has_function_privilege('public', signature, 'execute')
