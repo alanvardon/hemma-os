@@ -1,19 +1,19 @@
 // HouseholdPeopleSetup — the "Personer i hushållet" section of the household
-// dialog (plan 111, Stage 2). The owner names the two canonical people ONCE
-// (name + optional login email) and the three tools bind by name automatically:
-// when a tool's stored A/B names match the two canonical names (in order or
-// reversed) it is auto-bound and only summarised; a tool whose names match
-// neither person is a CONFLICT and is the only case that still shows the manual
-// per-slot selectors. "Vem är du?" resolves from the caller's own account email
-// when it matches an entered email; otherwise the manual radio is the fallback.
-// Save is a sequence of idempotent server calls — no optimistic "Du" is ever
-// rendered, a failure keeps the editor open with a retryable error, and identity
-// setup never gates the rest of the app.
+// dialog (plan 111, Stage 2). The owner names the two canonical people ONCE and
+// the three tools bind by name automatically: when a tool's stored A/B names
+// match the two canonical names (in order or reversed) it is auto-bound and only
+// summarised; a tool whose names match neither person is a CONFLICT and is the
+// only case that still shows the manual per-slot selectors. A person's login
+// email is NOT typed — it is shown automatically from the account mapped to that
+// person (via the roster); the partner's email appears once they log in and are
+// identified as Person B. "Vem är du?" defaults to Person A for the household
+// owner and Person B for a member, and stays overridable. Save is a sequence of
+// idempotent server calls — no optimistic "Du" is ever rendered, a failure keeps
+// the editor open with a retryable error, and identity setup never gates the app.
 import { useId, useState } from 'react'
 import type { Member } from '../lib/household'
 import {
   IDENTITY_TOOLS,
-  claimHouseholdPersonByEmail,
   configureHouseholdPeople,
   identityErrorMessage,
   refreshHouseholdIdentity,
@@ -32,19 +32,11 @@ type EditorPhase = 'closed' | 'loading' | 'open'
 /** How a tool's legacy A/B names map onto the canonical people. */
 type ToolBind = { a: CanonicalSlot; b: CanonicalSlot } | 'conflict'
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
 const normalize = (name: string) => name.trim().toLocaleLowerCase('sv-SE').replace(/\s+/g, ' ')
 
 function validName(name: string): boolean {
   const trimmed = name.trim()
   return trimmed.length >= 1 && trimmed.length <= 60
-}
-
-/** A blank email is allowed (optional); a non-blank one must look like an email. */
-function validEmail(value: string): boolean {
-  const trimmed = value.trim()
-  return trimmed === '' || EMAIL_RE.test(trimmed)
 }
 
 function slotOfPerson(identity: HouseholdIdentity | null, personId: string | null | undefined): SlotChoice {
@@ -94,8 +86,6 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
   const [suggestions, setSuggestions] = useState<ToolNameSuggestion[]>([])
   const [nameA, setNameA] = useState('')
   const [nameB, setNameB] = useState('')
-  const [emailA, setEmailA] = useState('')
-  const [emailB, setEmailB] = useState('')
   const [whoAmI, setWhoAmI] = useState<WhoAmI>('skip')
   const [toolMap, setToolMap] = useState<ToolMap>({
     bolanekoll: { a: '', b: '' },
@@ -106,14 +96,28 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
 
-  // Person ids claimed by OTHER members (the roster exposes each member's
-  // mapped person since Stage 1) — those cannot be picked as "du".
+  const callerEmail = (myEmail ?? '').trim().toLowerCase()
+
+  // Person ids claimed by OTHER members (the roster exposes each member's mapped
+  // person since Stage 1) — those cannot be picked as "du".
   const claimedByOthers = new Set(
     members
       .filter((member) => member.person_id
-        && (member.email ?? '').toLowerCase() !== (myEmail ?? '').toLowerCase())
+        && (member.email ?? '').toLowerCase() !== callerEmail)
       .map((member) => member.person_id as string),
   )
+
+  // The login email shown for a canonical slot: the email of the account mapped
+  // to that person (from the roster). When no account is mapped yet, the caller's
+  // own email is shown on the slot they will claim ("din inloggning"); the other
+  // slot has none until the partner logs in.
+  function emailOfSlot(slot: CanonicalSlot): { email: string | null; mine: boolean } {
+    const person = identity?.people.find((p) => p.slot === slot)
+    const mapped = person ? (members.find((m) => m.person_id === person.id)?.email ?? null) : null
+    if (mapped) return { email: mapped, mine: mapped.toLowerCase() === callerEmail }
+    if (whoAmI === slot && myEmail) return { email: myEmail, mine: true }
+    return { email: null, mine: false }
+  }
 
   async function openEditor() {
     setEditor('loading')
@@ -130,18 +134,17 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
     const prefillB = personB?.display_name ?? loaded.find((s) => s.tool === 'bolanekoll')?.b ?? ''
     setNameA(prefillA)
     setNameB(prefillB)
-    // Emails prefill only from an existing configured login email, else blank.
-    setEmailA(personA?.login_email ?? '')
-    setEmailB(personB?.login_email ?? '')
 
-    // "Vem är du?" — my mapped slot; else, for an invited account, suggest the
-    // one unclaimed person (still requires explicit review + save). Only used
-    // when the caller's email does not resolve them.
+    // "Vem är du?": my existing mapped slot wins; else, for an invited account,
+    // the single unclaimed person; else default by role — the household owner is
+    // Person A, a member is Person B. Still overridable and gated by review.
+    const myRole = members.find((m) => (m.email ?? '').toLowerCase() === callerEmail)?.role
+    const roleDefault: WhoAmI = myRole === 'owner' ? 'a' : 'b'
     const mySlot = slotOfPerson(identity, identity?.myPersonId)
     if (mySlot) setWhoAmI(mySlot)
     else {
       const free = (identity?.people ?? []).filter((p) => !claimedByOthers.has(p.id))
-      setWhoAmI(identity && identity.people.length === 2 && free.length === 1 ? free[0].slot : 'skip')
+      setWhoAmI(identity && identity.people.length === 2 && free.length === 1 ? free[0].slot : roleDefault)
     }
 
     // Conflict tools' manual mapping: an existing binding wins; else preselect
@@ -181,20 +184,8 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
   )
 
   const namesValid = validName(nameA) && validName(nameB)
-  const emailsValid = validEmail(emailA) && validEmail(emailB)
-  const emailDuplicate = emailA.trim() !== '' && emailB.trim() !== ''
-    && emailA.trim().toLowerCase() === emailB.trim().toLowerCase()
 
-  // Who am I resolves from the caller's account email when it matches an entered
-  // email; otherwise the manual radio is the fallback.
-  const callerEmail = (myEmail ?? '').trim().toLowerCase()
-  const emailResolvedSlot: CanonicalSlot | null = !emailDuplicate && callerEmail
-    ? callerEmail === emailA.trim().toLowerCase() && emailA.trim() !== '' ? 'a'
-      : callerEmail === emailB.trim().toLowerCase() && emailB.trim() !== '' ? 'b'
-      : null
-    : null
-
-  const canSave = !saving && namesValid && emailsValid && !emailDuplicate && reviewed
+  const canSave = !saving && namesValid && reviewed
     && unresolvedConflicts.length === 0 && duplicateConflicts.length === 0
 
   // Strict write contract: only server responses change identity state. Every
@@ -212,17 +203,13 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
         latest = await configureHouseholdPeople({
           personAName: nameA,
           personBName: nameB,
-          personAEmail: emailA,
-          personBEmail: emailB,
           tool,
           toolSlotAPerson: slots.a,
           toolSlotBPerson: slots.b,
         })
       }
-      // Map the caller: by their own verified email (no-op when no match), and
-      // via the manual radio when the email did not resolve them.
-      await claimHouseholdPersonByEmail()
-      if (emailResolvedSlot === null && whoAmI !== 'skip') {
+      // Map the caller to the person they picked (owner→A / member→B by default).
+      if (whoAmI !== 'skip') {
         const person = latest?.people.find((p) => p.slot === whoAmI)
         if (!person) throw new Error('Kunde inte läsa personerna efter sparning. Försök igen.')
         await setMyHouseholdPerson(person.id)
@@ -259,16 +246,19 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
       {editor === 'closed' && identity && configured && (
         <>
           <ul className="hh-list">
-            {identityView.people.map((person) => (
-              <li key={person.id} className="hh-list-row">
-                <span className="hh-person-slot" aria-hidden="true">{person.slot.toUpperCase()}</span>
-                <span className="hh-member-email">
-                  {person.display_name}
-                  {person.id === identity.myPersonId && <span className="hh-you"> (du)</span>}
-                  {person.login_email && <span className="hh-member-addr"> · {person.login_email}</span>}
-                </span>
-              </li>
-            ))}
+            {identityView.people.map((person) => {
+              const addr = members.find((m) => m.person_id === person.id)?.email ?? null
+              return (
+                <li key={person.id} className="hh-list-row">
+                  <span className="hh-person-slot" aria-hidden="true">{person.slot.toUpperCase()}</span>
+                  <span className="hh-member-email">
+                    {person.display_name}
+                    {person.id === identity.myPersonId && <span className="hh-you"> (du)</span>}
+                    {addr && <span className="hh-member-addr"> · {addr}</span>}
+                  </span>
+                </li>
+              )
+            })}
           </ul>
           {!identity.myPersonId && (
             <p className="modal-note hh-people-note">Du har inte valt vem du är ännu.</p>
@@ -300,9 +290,8 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
         >
           {(['a', 'b'] as const).map((slot) => {
             const name = slot === 'a' ? nameA : nameB
-            const email = slot === 'a' ? emailA : emailB
             const setName = slot === 'a' ? setNameA : setNameB
-            const setEmail = slot === 'a' ? setEmailA : setEmailB
+            const linked = emailOfSlot(slot)
             return (
               <div key={slot} className="hh-people-person">
                 <div className="hh-people-field">
@@ -317,68 +306,52 @@ export default function HouseholdPeopleSection({ members, myEmail, onSaved }: Pr
                     autoComplete="off"
                   />
                 </div>
-                <div className="hh-people-field">
-                  <label htmlFor={`${idPrefix}-email-${slot}`}>E-post (valfritt)</label>
-                  <input
-                    id={`${idPrefix}-email-${slot}`}
-                    className="hh-invite-input"
-                    type="email"
-                    inputMode="email"
-                    maxLength={254}
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    autoComplete="off"
-                  />
-                  {!validEmail(email) && <p className="auth-error hh-error">Ange en giltig e-postadress.</p>}
-                </div>
+                {linked.email ? (
+                  <p className="modal-note hh-people-addr">
+                    {linked.email}{linked.mine && <span className="hh-people-addr-tag"> (din inloggning)</span>}
+                  </p>
+                ) : (
+                  <p className="modal-note hh-people-addr hh-people-addr-empty">
+                    Kopplas när personen loggar in
+                  </p>
+                )}
               </div>
             )
           })}
-          {myEmail && (
-            <p className="modal-note hh-people-note">Din inloggning: {myEmail}</p>
-          )}
           {!namesValid && <p className="auth-error hh-error">Ange båda namnen (1–60 tecken).</p>}
-          {emailDuplicate && <p className="auth-error hh-error">Personerna kan inte dela e-postadress.</p>}
 
-          {emailResolvedSlot ? (
-            <p className="modal-note hh-people-resolved">
-              Du: {((emailResolvedSlot === 'a' ? nameA : nameB).trim() || `Person ${emailResolvedSlot.toUpperCase()}`)}
-              {' '}— via din e-post
-            </p>
-          ) : (
-            <fieldset className="hh-people-whoami">
-              <legend>Vem är du?</legend>
-              {(['a', 'b'] as const).map((slot) => {
-                const person = identity?.people.find((p) => p.slot === slot)
-                const claimed = !!person && claimedByOthers.has(person.id)
-                const label = (slot === 'a' ? nameA : nameB).trim() || `Person ${slot.toUpperCase()}`
-                return (
-                  <label key={slot} className="hh-people-radio" data-disabled={claimed || undefined}>
-                    <input
-                      type="radio"
-                      name={`${idPrefix}-whoami`}
-                      checked={whoAmI === slot}
-                      disabled={claimed}
-                      onChange={() => setWhoAmI(slot)}
-                    />
-                    <span>
-                      {label}
-                      {claimed && <span className="hh-you"> (vald av annan medlem)</span>}
-                    </span>
-                  </label>
-                )
-              })}
-              <label className="hh-people-radio">
-                <input
-                  type="radio"
-                  name={`${idPrefix}-whoami`}
-                  checked={whoAmI === 'skip'}
-                  onChange={() => setWhoAmI('skip')}
-                />
-                <span>Väljer senare</span>
-              </label>
-            </fieldset>
-          )}
+          <fieldset className="hh-people-whoami">
+            <legend>Vem är du?</legend>
+            {(['a', 'b'] as const).map((slot) => {
+              const person = identity?.people.find((p) => p.slot === slot)
+              const claimed = !!person && claimedByOthers.has(person.id)
+              const label = (slot === 'a' ? nameA : nameB).trim() || `Person ${slot.toUpperCase()}`
+              return (
+                <label key={slot} className="hh-people-radio" data-disabled={claimed || undefined}>
+                  <input
+                    type="radio"
+                    name={`${idPrefix}-whoami`}
+                    checked={whoAmI === slot}
+                    disabled={claimed}
+                    onChange={() => setWhoAmI(slot)}
+                  />
+                  <span>
+                    {label}
+                    {claimed && <span className="hh-you"> (vald av annan medlem)</span>}
+                  </span>
+                </label>
+              )
+            })}
+            <label className="hh-people-radio">
+              <input
+                type="radio"
+                name={`${idPrefix}-whoami`}
+                checked={whoAmI === 'skip'}
+                onChange={() => setWhoAmI('skip')}
+              />
+              <span>Väljer senare</span>
+            </label>
+          </fieldset>
 
           {autoTools.length > 0 && (
             <div className="hh-people-auto">

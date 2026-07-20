@@ -14,7 +14,6 @@ vi.mock('./supabase', () => {
 const mock = () => holder.current
 
 import {
-  claimHouseholdPersonByEmail,
   configureHouseholdPeople,
   fetchHouseholdIdentity,
   getHouseholdIdentitySnapshot,
@@ -66,25 +65,22 @@ describe('parseHouseholdIdentity', () => {
       householdId: HH,
       myPersonId: PB,
       people: [
-        { id: PA, slot: 'a', login_email: null, display_name: 'Alex' },
-        { id: PB, slot: 'b', login_email: null, display_name: 'Sam' },
+        { id: PA, slot: 'a', display_name: 'Alex' },
+        { id: PB, slot: 'b', display_name: 'Sam' },
       ],
       bindings: { bolanekoll: { a: PA, b: PB } },
     })
   })
 
-  it('parses login_email (value / null / malformed → null)', () => {
+  it('ignores a stray legacy login_email field on a person', () => {
     const parsed = parseHouseholdIdentity(view({
       people: [
-        { id: PA, slot: 'a', display_name: 'Alex', login_email: 'ALEX@Example.SE' },
-        { id: PB, slot: 'b', display_name: 'Sam', login_email: 'not-an-email' },
+        { id: PA, slot: 'a', display_name: 'Alex', login_email: 'alex@example.se' },
+        { id: PB, slot: 'b', display_name: 'Sam' },
       ],
     }))
-    // A value is normalized to lowercase; a malformed address is dropped to null.
-    expect(parsed?.people[0].login_email).toBe('alex@example.se')
-    expect(parsed?.people[1].login_email).toBeNull()
-    // A missing key is null.
-    expect(parseHouseholdIdentity(view())?.people[0].login_email).toBeNull()
+    expect(parsed?.people[0]).toEqual({ id: PA, slot: 'a', display_name: 'Alex' })
+    expect(parsed?.people[0]).not.toHaveProperty('login_email')
   })
 
   it('returns null for SQL NULL and unusable envelopes', () => {
@@ -224,59 +220,14 @@ describe('refreshHouseholdIdentity (scoped snapshot + raw-envelope cache)', () =
   })
 })
 
-describe('claimHouseholdPersonByEmail + claim-first load path', () => {
-  it('returns the identity the claim RPC resolves (caller mapped by email)', async () => {
-    let called = 0
-    mock().control.rpcHandlers.claim_my_household_person_by_email = () => { called += 1; return view({ my_person_id: PA }) }
-    const claimed = await claimHouseholdPersonByEmail()
-    expect(called).toBe(1)
-    expect(claimed?.myPersonId).toBe(PA)
-  })
-
-  it('tolerates a non-match / failure without throwing (resolves null)', async () => {
-    mock().control.failing.add('claim_my_household_person_by_email')
-    await expect(claimHouseholdPersonByEmail()).resolves.toBeNull()
-  })
-
-  it('the load path calls claim FIRST and reflects its identity (auto-claim)', async () => {
-    let claimCalls = 0
-    let identityCalls = 0
-    // Claim both maps AND returns the identity, so household_identity is never
-    // needed when claim succeeds.
-    mock().control.rpcHandlers.claim_my_household_person_by_email = () => { claimCalls += 1; return view({ my_person_id: PB }) }
-    mock().control.rpcHandlers.household_identity = () => { identityCalls += 1; return view() }
-    await refreshHouseholdIdentity()
-    const snapshot = getHouseholdIdentitySnapshot()
-    expect(snapshot.status).toBe('ready')
-    expect(snapshot.identity?.myPersonId).toBe(PB)
-    expect(claimCalls).toBe(1)
-    expect(identityCalls).toBe(0)
-  })
-
-  it('is a no-op when the caller is already mapped (claim returns the same view)', async () => {
-    mock().control.rpcHandlers.claim_my_household_person_by_email = () => view({ my_person_id: PA })
-    await refreshHouseholdIdentity()
-    expect(getHouseholdIdentitySnapshot().identity?.myPersonId).toBe(PA)
-    // A second load keeps the same mapping — claim never overrides it.
-    await refreshHouseholdIdentity()
-    expect(getHouseholdIdentitySnapshot().identity?.myPersonId).toBe(PA)
-  })
-
-  it('discards a claim response that lands after a scope switch (no cross-account leak)', async () => {
-    activateSyncIdentity({ userId: 'user-a', householdId: 'house-a' })
-    mock().control.rpcHandlers.claim_my_household_person_by_email = () => {
-      activateSyncIdentity({ userId: 'user-b', householdId: 'house-b' })
-      return view({ my_person_id: PA })
-    }
-    await refreshHouseholdIdentity()
-    expect(getHouseholdIdentitySnapshot()).toEqual({ status: 'idle', identity: null })
-  })
-
-  it('falls back to household_identity when claim is unavailable', async () => {
-    mock().control.failing.add('claim_my_household_person_by_email')
+describe('refreshHouseholdIdentity — load path uses household_identity only', () => {
+  it('reads household_identity and never a claim RPC (mapping persists via person_id)', async () => {
+    let claimCalled = false
+    mock().control.rpcHandlers.claim_my_household_person_by_email = () => { claimCalled = true; return view({ my_person_id: PA }) }
     mock().control.rpcHandlers.household_identity = () => view({ my_person_id: PB })
     await refreshHouseholdIdentity()
     expect(getHouseholdIdentitySnapshot().identity?.myPersonId).toBe(PB)
+    expect(claimCalled).toBe(false)
   })
 })
 
@@ -293,7 +244,6 @@ describe('configureHouseholdPeople', () => {
     })
     expect(args).toEqual({
       p_person_a_name: 'Alex', p_person_b_name: 'Sam',
-      p_person_a_email: null, p_person_b_email: null,
       p_tool: 'bolanekoll', p_tool_slot_a_person: 'a', p_tool_slot_b_person: 'b',
     })
     expect(result?.people).toHaveLength(2)
@@ -309,22 +259,8 @@ describe('configureHouseholdPeople', () => {
     await configureHouseholdPeople({ personAName: 'Alex', personBName: 'Sam' })
     expect(args).toEqual({
       p_person_a_name: 'Alex', p_person_b_name: 'Sam',
-      p_person_a_email: null, p_person_b_email: null,
       p_tool: null, p_tool_slot_a_person: null, p_tool_slot_b_person: null,
     })
-  })
-
-  it('sends the two login emails in their param positions (empty → null)', async () => {
-    let args: Record<string, unknown> | undefined
-    mock().control.rpcHandlers.configure_household_people = (raw) => {
-      args = raw as Record<string, unknown>
-      return view()
-    }
-    await configureHouseholdPeople({
-      personAName: 'Alex', personBName: 'Sam',
-      personAEmail: '  Alex@Example.se ', personBEmail: '  ',
-    })
-    expect(args).toMatchObject({ p_person_a_email: 'Alex@Example.se', p_person_b_email: null })
   })
 
   it('maps stable rule errors to Swedish and leaves prior state intact', async () => {

@@ -22,9 +22,6 @@ export type CanonicalSlot = 'a' | 'b'
 export interface HouseholdPerson {
   id: string
   slot: CanonicalSlot
-  /** The account email that auto-claims this person (server-normalized,
-      lowercase); null when the person has no login email yet. */
-  login_email: string | null
   display_name: string
 }
 
@@ -52,28 +49,17 @@ function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_RE.test(value)
 }
 
-// Loose, server-aligned email shape (the DB constraint is `%_@_%`, no dot
-// required). A value that is not a string or has no local@domain shape parses
-// to null so a malformed login_email is treated as "no login email" rather
-// than crashing or being surfaced as a bindable address.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+$/
-
-function parseLoginEmail(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null
-  const email = raw.trim().toLowerCase()
-  return EMAIL_RE.test(email) ? email : null
-}
-
 function parsePerson(raw: unknown): HouseholdPerson | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const person = raw as Record<string, unknown>
   if (!isUuid(person.id)) return null
   if (person.slot !== 'a' && person.slot !== 'b') return null
   if (typeof person.display_name !== 'string' || person.display_name.trim() === '') return null
+  // Any stray field (e.g. a legacy login_email) is ignored — a person is just
+  // { id, slot, display_name }; the account mapping lives in household_members.
   return {
     id: person.id,
     slot: person.slot,
-    login_email: parseLoginEmail(person.login_email),
     display_name: person.display_name,
   }
 }
@@ -152,8 +138,6 @@ const RULE_MESSAGES: [string, string][] = [
   ['duplicate tool binding', 'Samma person kan inte ha båda platserna i ett verktyg.'],
   ['invalid tool', 'Verktyget kunde inte kopplas. Ladda om och försök igen.'],
   ['invalid person name', 'Namnen måste vara 1–60 tecken.'],
-  ['invalid person email', 'Ange en giltig e-postadress.'],
-  ['email already used', 'E-postadressen används redan av en annan person.'],
 ]
 
 function toIdentityError(error: unknown): Error {
@@ -254,42 +238,9 @@ async function rpcIdentityView(): Promise<unknown> {
   return data
 }
 
-/** Claim-first load: map the caller to the household person whose login_email
-    equals their OWN verified auth email (only when unclaimed) AND return the
-    full identity view in one call, so an invited partner auto-claims on their
-    first load. The RPC is idempotent and no-ops when already mapped or when no
-    email matches. Falls back to a plain household_identity() read when the
-    claim RPC is unavailable or yields no usable envelope, so a load never fails
-    just because auto-claim could not run. */
-async function rpcClaimIdentityView(): Promise<unknown> {
-  try {
-    const { data, error } = await supabase.rpc('claim_my_household_person_by_email')
-    if (error) throw toIdentityError(error)
-    if (data !== null && data !== undefined) return data
-  } catch {
-    // claim unavailable/failed — fall through to a plain read.
-  }
-  return rpcIdentityView()
-}
-
 /** Read the current identity view. Throws a user-worded error on failure. */
 export async function fetchHouseholdIdentity(): Promise<HouseholdIdentity | null> {
   return parseHouseholdIdentity(await rpcIdentityView())
-}
-
-/** Claim the caller's own household person by their verified email, returning
-    the resulting identity view. Never throws (mirrors refresh's error
-    tolerance): a non-match, an unavailable RPC or a transient failure resolves
-    to null rather than surfacing an error — auto-claim is best-effort and the
-    scoped snapshot stays the source of truth. */
-export async function claimHouseholdPersonByEmail(): Promise<HouseholdIdentity | null> {
-  try {
-    const { data, error } = await supabase.rpc('claim_my_household_person_by_email')
-    if (error) throw toIdentityError(error)
-    return parseHouseholdIdentity(data)
-  } catch {
-    return null
-  }
 }
 
 /** Refresh the scoped snapshot from the server. Never throws — failures leave
@@ -303,7 +254,7 @@ export async function refreshHouseholdIdentity(): Promise<void> {
   const prior = stateKey === key ? state.identity : readCachedIdentity(scope)
   setState(key, { status: 'loading', identity: prior })
   try {
-    const rawView = await rpcClaimIdentityView()
+    const rawView = await rpcIdentityView()
     if (!scope.isActive()) return
     writeCachedIdentity(scope, rawView)
     setState(key, { status: 'ready', identity: parseHouseholdIdentity(rawView) })
@@ -316,21 +267,10 @@ export async function refreshHouseholdIdentity(): Promise<void> {
 export interface ConfigurePeopleInput {
   personAName: string
   personBName: string
-  /** Optional login email for each person (auto-claim address). Empty/undefined
-      clears it. The server lowercases/trims and maps empty → null. */
-  personAEmail?: string
-  personBEmail?: string
   tool?: IdentityTool
   /** Which canonical slot the tool's legacy slot A/B represents. */
   toolSlotAPerson?: CanonicalSlot
   toolSlotBPerson?: CanonicalSlot
-}
-
-/** Empty/whitespace/undefined → null; otherwise the trimmed value (the server
-    lowercases and re-validates). */
-function emailArg(value: string | undefined): string | null {
-  const trimmed = (value ?? '').trim()
-  return trimmed === '' ? null : trimmed
 }
 
 /** Upsert the two canonical people and optionally one complete tool binding
@@ -341,8 +281,6 @@ export async function configureHouseholdPeople(input: ConfigurePeopleInput): Pro
   const { data, error } = await supabase.rpc('configure_household_people', {
     p_person_a_name: input.personAName.trim(),
     p_person_b_name: input.personBName.trim(),
-    p_person_a_email: emailArg(input.personAEmail),
-    p_person_b_email: emailArg(input.personBEmail),
     p_tool: input.tool ?? null,
     p_tool_slot_a_person: input.toolSlotAPerson ?? null,
     p_tool_slot_b_person: input.toolSlotBPerson ?? null,

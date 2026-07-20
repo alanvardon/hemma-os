@@ -363,13 +363,14 @@
   border: 1px solid var(--rule);
   border-radius: 12px;
 }
-.hh-people-resolved {
+.hh-people-addr {
   margin: 0;
-  font-family: var(--font-ui);
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink);
+  font-size: 12px;
+  color: var(--ink-soft);
+  word-break: break-word;
 }
+.hh-people-addr-empty { font-style: italic; }
+.hh-people-addr-tag { color: var(--ink-soft); }
 .hh-people-auto { display: flex; flex-direction: column; gap: 6px; }
 .hh-people-auto-list {
   list-style: none;
