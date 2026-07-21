@@ -239,7 +239,35 @@
     border: 1px solid var(--rule);
     border-radius: var(--r-md);
     padding: 0.85rem 0.85rem 0.7rem;
+    display: flex;
+    flex-direction: column;
     min-width: 0;
+  }
+
+  /* Individual costs and savings share this card anatomy: a yielding name
+     track, a stable amount track and a reserved action track. Keep this
+     scoped to owner cards so joint categories and income retain their own
+     row contracts. */
+  .owner-col .owner-block-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 92px 26px;
+    align-items: center;
+    gap: 6px;
+  }
+  .owner-col .owner-block-title { grid-column: 1; }
+  .owner-col .owner-block-sub {
+    grid-column: 2;
+    margin-left: 0;
+    padding: 0 9px;
+    text-align: right;
+  }
+  .owner-col .b-list { flex: 1; }
+  .owner-col .b-row .name-display { align-items: flex-start; }
+  .owner-col .b-row .name-text {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
   }
 
   .b-list { display: flex; flex-direction: column; gap: 7px; margin-bottom: 7px; min-width: 0; }
@@ -270,13 +298,12 @@
   }
   .b-row-remove:hover { color: var(--warn); background: var(--warn-faint); border-color: var(--warn); }
 
-  /* In the narrow income & individual columns, stack amount under label */
-  .income-col .b-row,
-  .owner-col .b-row { grid-template-columns: 1fr auto; }
-  .income-col .b-row-amount,
-  .owner-col .b-row-amount { grid-column: 1; }
-  .income-col .b-row-remove,
-  .owner-col .b-row-remove { grid-column: 2; grid-row: 1 / span 2; }
+  /* Income columns remain compact; owner cards use the stable row grid above. */
+  .income-col .b-row { grid-template-columns: 1fr auto; }
+  .income-col .b-row-amount { grid-column: 1; }
+  .income-col .b-row-remove { grid-column: 2; grid-row: 1 / span 2; }
+
+  .owner-col .b-row { grid-template-columns: minmax(0, 1fr) 92px 26px; }
 
   .row-add-btn {
     align-self: flex-start;
@@ -1177,18 +1204,20 @@ html:has(dialog.hb-modal[open]) { overflow: hidden; }
   .hb-root .bolan-row,
   .hb-root .bolan-card .cat-head { grid-template-columns: minmax(0, 1fr) 72px 26px; }
 
-  /* Income + individual columns go full-width; their rows return to a
-     single wide line (label | amount | remove). */
+  /* Income columns go full-width; their rows return to a single wide line. */
   .hb-root .income-cols { grid-template-columns: 1fr; }
-  .hb-root .owner-cols { grid-template-columns: 1fr; }
   .hb-root .income-col .b-row,
-  .hb-root .owner-col .b-row { grid-template-columns: minmax(0, 1fr) 72px auto; }
-  .hb-root .income-col .b-row-amount,
-  .hb-root .owner-col .b-row-amount { grid-column: auto; }
-  .hb-root .income-col .b-row-remove,
-  .hb-root .owner-col .b-row-remove { grid-column: auto; grid-row: auto; }
+  .hb-root .owner-col .b-row { grid-template-columns: minmax(0, 1fr) 72px 26px; }
+  .hb-root .income-col .b-row-amount { grid-column: auto; }
+  .hb-root .income-col .b-row-remove { grid-column: auto; grid-row: auto; }
+  .hb-root .owner-col .owner-block-head { grid-template-columns: minmax(0, 1fr) 72px 26px; }
   .hb-root .bolan-ghost,
   .hb-root .bolan-hint { align-items: flex-start; flex-direction: column; }
+}
+
+/* Stack owner cards before their three-track rows become cramped. */
+@media (max-width: 680px) {
+  .hb-root .owner-cols { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 480px) {
