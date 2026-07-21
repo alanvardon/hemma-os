@@ -35,10 +35,11 @@ describe('PersonAvatar', () => {
 
 describe('PersonLabel', () => {
   it('renders the name plus a visible "Du" chip for self (compact)', () => {
-    render(<PersonLabel name="Alex" self />)
+    const { container } = render(<PersonLabel name="Alex" self />)
     expect(screen.getByText('Alex')).toBeInTheDocument()
     // The marker is visible text, not colour-only, so it is in the a11y tree.
     expect(screen.getByText('Du')).toBeInTheDocument()
+    expect(container.querySelector('.person-avatar')).not.toBeInTheDocument()
   })
 
   it('never renders "Du" alone — the other person shows just the name', () => {
@@ -68,6 +69,7 @@ describe('PersonColumnHeader', () => {
     expect(header.getAttribute('aria-label')).toBe('Alex, du')
     expect(header.className).toContain('is-self')
     expect(screen.getByText('70 %')).toBeInTheDocument()
+    expect(header.querySelector('.person-avatar')).not.toBeInTheDocument()
   })
 
   it('does not label the other column as self and uses the other tone', () => {

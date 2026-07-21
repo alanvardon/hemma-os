@@ -556,7 +556,6 @@ export default function Bolanekoll() {
       name={ownerName(o)}
       self={isSelf(o)}
       other={isOther(o)}
-      avatar={mappedSlot != null}
       suffix={<span className="split-pct"> · {fmtPct(pct)}</span>}
     />
   )

@@ -77,6 +77,8 @@ describe('Hushållsbudget — signed-in person treatment', () => {
     expect(b.className).not.toContain('is-self')
     expect(b.textContent).toContain('Sam')
     expect(b.textContent).not.toContain('Du')
+    expect(a.querySelector('.person-avatar')).not.toBeInTheDocument()
+    expect(b.querySelector('.person-avatar')).not.toBeInTheDocument()
   })
 
   it('mapped to B marks the B column with the same treatment, no column move', async () => {

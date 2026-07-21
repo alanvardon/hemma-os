@@ -561,8 +561,8 @@ export default function Hushallsbudget() {
   const nameA = toolBound ? boundA.display_name : (state.people[0] || 'A')
   const nameB = toolBound ? boundB.display_name : (state.people[1] || 'B')
   const personName = (owner: Owner) => owner === 'a' ? nameA : owner === 'b' ? nameB : 'Together'
-  const personHead = (owner: 'a' | 'b', avatar = true) => (
-    <PersonLabel name={owner === 'a' ? nameA : nameB} self={isSelf(owner)} other={isOther(owner)} avatar={avatar} />
+  const personHead = (owner: 'a' | 'b') => (
+    <PersonLabel name={owner === 'a' ? nameA : nameB} self={isSelf(owner)} other={isOther(owner)} />
   )
 
   // ── Immutable state mutation helper ────────────────────────────────────────
@@ -1014,8 +1014,8 @@ export default function Hushallsbudget() {
             <div className="sum-big">{M(r.equalShare)}</div>
             <div className="sum-card-subtitle">take-home each, after the split</div>
             <div className="sum-rows">
-              <div className="sum-row"><span className="sum-row-label">{personHead("a", false)}</span><span className="sum-row-val">{M(r.incomeA)}</span></div>
-              <div className="sum-row"><span className="sum-row-label">{personHead("b", false)}</span><span className="sum-row-val">{M(r.incomeB)}</span></div>
+              <div className="sum-row"><span className="sum-row-label">{personHead("a")}</span><span className="sum-row-val">{M(r.incomeA)}</span></div>
+              <div className="sum-row"><span className="sum-row-label">{personHead("b")}</span><span className="sum-row-val">{M(r.incomeB)}</span></div>
             </div>
           </div>
 
@@ -1034,8 +1034,8 @@ export default function Hushallsbudget() {
             <div className="sum-big positive">{Pct1(r.savingsRate * 100)}</div>
             <div className="sum-card-subtitle">of total household income</div>
             <div className="sum-rows">
-              <div className="sum-row"><span className="sum-row-label">{personHead("a", false)}</span><span className="sum-row-val">{M(r.savingsA)}</span></div>
-              <div className="sum-row"><span className="sum-row-label">{personHead("b", false)}</span><span className="sum-row-val">{M(r.savingsB)}</span></div>
+              <div className="sum-row"><span className="sum-row-label">{personHead("a")}</span><span className="sum-row-val">{M(r.savingsA)}</span></div>
+              <div className="sum-row"><span className="sum-row-label">{personHead("b")}</span><span className="sum-row-val">{M(r.savingsB)}</span></div>
             </div>
           </div>
 
