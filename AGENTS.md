@@ -84,7 +84,7 @@ The application contains real household data. Production data and administration
 - For material UI work, verify the changed flow at 390x844 and desktop, plus relevant themes and states. Add 320 px, keyboard, loading/error, touch, and animation checks when the change affects them.
 - Run UI verification against the local dev server only (`npm run dev`, http://localhost:5174), which uses local Supabase with dev auth. Never verify against production or live household data; use fictional data.
 - If the server is unreachable because a stale instance is already holding the port, stop that instance and start a fresh one before testing.
-- Drive interactive verification with Playwright against that dev server (agents with a Playwright MCP server should use it); this is separate from the scripted `e2e/` suite, which runs against a preview build.
+- Drive interactive verification against that dev server with the configured Playwright MCP server. In Codex IDE/CLI sessions, use the `mcp__playwright__*` tools directly—do not use or require the desktop-only `@Browser`/in-app-browser backend. Report browser verification as blocked only if the Playwright MCP server itself cannot initialize or navigate. This is separate from the scripted `e2e/` suite, which runs against a preview build.
 - Leave the dev server running after verification so the owner can review the change before confirming the merge.
 
 ## Testing and verify gates
