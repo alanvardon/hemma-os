@@ -53,22 +53,67 @@ type NumericInputKey = Exclude<keyof StudentLoanInputs, 'hold_threshold_flat' | 
 const RATE_STRESS_MIN = 0
 const RATE_STRESS_MAX = 5
 
+interface HydratedTextInputProps {
+  id: string
+  display: string
+  disabled: boolean
+  placeholder?: string
+  onChange: (value: string) => void
+}
+
+// The persisted model is numeric, but the editing buffer deliberately remains
+// text. This keeps partially typed values such as `3.` visible until blur while
+// still letting a completed external hydrate replace every unfocused field.
+function HydratedTextInput({ id, display, disabled, placeholder, onChange }: HydratedTextInputProps) {
+  const [editing, setEditing] = useState(false)
+  const [buffer, setBuffer] = useState('')
+
+  return (
+    <input
+      type="text"
+      id={id}
+      inputMode="decimal"
+      autoComplete="off"
+      disabled={disabled}
+      placeholder={placeholder}
+      value={editing ? buffer : display}
+      onFocus={() => {
+        setBuffer(display)
+        setEditing(true)
+      }}
+      onChange={(e) => {
+        const next = e.target.value
+        setBuffer(next)
+        onChange(next)
+      }}
+      onBlur={() => setEditing(false)}
+    />
+  )
+}
+
 export default function StudentLoan() {
   const { theme } = useTheme()
   const active = useToolPageActive('/student-loan')
   const [inputs, setInputs] = useState<StudentLoanInputs>(defaultStudentLoanInputs)
+  const [hydrated, setHydrated] = useState(false)
 
   // Load persisted inputs once on mount (async — localStorage today, cloud
   // after the swap). Saves are imperative (in the handlers), so there's no
   // save-on-change effect to race with this hydrate.
   useEffect(() => {
     let alive = true
-    studentLoanStore.load().then((saved) => { if (alive && saved) setInputs(saved) })
+    void studentLoanStore.load().then(
+      (saved) => {
+        if (!alive) return
+        if (saved) setInputs(saved)
+        setHydrated(true)
+      },
+      () => { if (alive) setHydrated(true) },
+    )
     return () => { alive = false }
   }, [])
 
   const { saveVisible, flashSaved } = useSaveFlash()
-  const [resetKey, setResetKey] = useState(0)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const reduceMotion = useReducedMotion()
 
@@ -106,11 +151,6 @@ export default function StudentLoan() {
     saveToStorage(next)
   }
 
-  function handleBlur(e: React.FocusEvent<HTMLInputElement>, key: NumericInputKey, kind: FieldKind) {
-    const v = inputs[key]
-    e.target.value = kind === 'gbp' || kind === 'sek' ? curStr(v) : kind === 'year' ? yearStr(v) : numStr(v)
-  }
-
   function handleToggleFlat(checked: boolean) {
     const next = { ...inputs, hold_threshold_flat: checked }
     setInputs(next)
@@ -127,7 +167,6 @@ export default function StudentLoan() {
     const d = defaultStudentLoanInputs()
     setInputs(d)
     saveToStorage(d)
-    setResetKey((k) => k + 1)
   }
 
   function field(
@@ -144,15 +183,12 @@ export default function StudentLoan() {
       <div className={`field${wide ? ' field-wide' : ''}`} key={id}>
         <label htmlFor={id}>{label}</label>
         <div className="input-wrap">
-          <input
-            type="text"
+          <HydratedTextInput
             id={id}
-            inputMode="decimal"
-            autoComplete="off"
-            key={resetKey}
-            defaultValue={display}
-            onChange={(e) => handleChange(key, e.target.value)}
-            onBlur={(e) => handleBlur(e, key, kind)}
+            display={hydrated ? display : ''}
+            disabled={!hydrated}
+            placeholder={hydrated ? undefined : 'Loading…'}
+            onChange={(value) => handleChange(key, value)}
           />
           <span className="unit">{unit}</span>
         </div>
@@ -212,7 +248,7 @@ export default function StudentLoan() {
         saveVisible={saveVisible}
         actions={<>
           <ThemeToggle />
-          <button className="btn btn-ghost" onClick={handleReset}>Reset</button>
+          <button className="btn btn-ghost" onClick={handleReset} disabled={!hydrated}>Reset</button>
         </>}
       />
 
@@ -234,11 +270,11 @@ export default function StudentLoan() {
             <div className="mini-readout">
               <div className="mini-stat">
                 <span className="mini-stat-label">Written off</span>
-                <span className="mini-stat-val"><Num value={result.writeoff_year} /></span>
+                <span className="mini-stat-val">{hydrated ? <Num value={result.writeoff_year} /> : '—'}</span>
               </div>
               <div className="mini-stat">
                 <span className="mini-stat-label">Effective rate</span>
-                <span className="mini-stat-val">{numStr(effectiveRate)}&nbsp;%</span>
+                <span className="mini-stat-val">{hydrated ? <>{numStr(effectiveRate)}&nbsp;%</> : '—'}</span>
               </div>
             </div>
           </div>
@@ -264,6 +300,7 @@ export default function StudentLoan() {
                 max={RATE_STRESS_MAX}
                 step={0.05}
                 value={inputs.rate_stress}
+                disabled={!hydrated}
                 style={{ '--fill': stressFill } as CSSProperties}
                 onChange={(e) => handleRateStress(parseFloat(e.target.value))}
                 aria-label="Interest rate stress"
@@ -292,11 +329,11 @@ export default function StudentLoan() {
             <div className="mini-readout">
               <div className="mini-stat">
                 <span className="mini-stat-label">Income in £</span>
-                <span className="mini-stat-val">{gbp(result.income_gbp)}</span>
+                <span className="mini-stat-val">{hydrated ? gbp(result.income_gbp) : '—'}</span>
               </div>
               <div className="mini-stat">
                 <span className="mini-stat-label">Mandated monthly</span>
-                <span className="mini-stat-val">{gbp(result.monthly_repayment_gbp)}</span>
+                <span className="mini-stat-val">{hydrated ? gbp(result.monthly_repayment_gbp) : '—'}</span>
               </div>
             </div>
           </div>
@@ -319,6 +356,7 @@ export default function StudentLoan() {
                 <input
                   type="checkbox"
                   checked={inputs.hold_threshold_flat}
+                  disabled={!hydrated}
                   onChange={(e) => handleToggleFlat(e.target.checked)}
                   aria-label="Hold Sweden threshold flat instead of growing with salary"
                 />
@@ -328,7 +366,7 @@ export default function StudentLoan() {
           </div>
 
           <div className={'section section-rates' + (advancedOpen ? ' is-open' : '')}>
-            <button type="button" className="section-label section-label-summary rates-toggle" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen(v => !v)}>
+            <button type="button" className="section-label section-label-summary rates-toggle" aria-expanded={advancedOpen} disabled={!hydrated} onClick={() => setAdvancedOpen(v => !v)}>
               <span className="section-num">5</span>
               <span className="section-title">Advanced</span>
               <motion.span
@@ -349,18 +387,12 @@ export default function StudentLoan() {
                 <div className="field" key="in-slc">
                   <label htmlFor="in-slc">SLC letter monthly (optional)</label>
                   <div className="input-wrap">
-                    <input
-                      type="text"
+                    <HydratedTextInput
                       id="in-slc"
-                      inputMode="decimal"
-                      autoComplete="off"
-                      key={resetKey}
-                      defaultValue={inputs.slc_monthly_gbp != null ? curStr(inputs.slc_monthly_gbp) : ''}
-                      placeholder="—"
-                      onChange={(e) => handleSlcChange(e.target.value)}
-                      onBlur={(e) => {
-                        e.target.value = inputs.slc_monthly_gbp != null ? curStr(inputs.slc_monthly_gbp) : ''
-                      }}
+                      display={hydrated && inputs.slc_monthly_gbp != null ? curStr(inputs.slc_monthly_gbp) : ''}
+                      disabled={!hydrated}
+                      placeholder={hydrated ? '—' : 'Loading…'}
+                      onChange={handleSlcChange}
                     />
                     <span className="unit">£/mo</span>
                   </div>
@@ -373,7 +405,9 @@ export default function StudentLoan() {
 
         {/* ── VERDICT + CHART (right) ───────────────── */}
         <div className="ledger-col">
-
+          {!hydrated ? (
+            <div className="hero-card" style={{ minHeight: 340 }} role="status">Loading saved loan…</div>
+          ) : <>
           <div className="hero-card">
             <div className={`verdict ${result.recommendation === 'never' ? 'verdict-good' : 'verdict-warn'}`}>
               <span className="verdict-icon">{result.recommendation === 'never' ? '✓' : '⚠'}</span>
@@ -467,18 +501,19 @@ export default function StudentLoan() {
             UK Plan 1 (Post-2006, England/Wales), overseas Sweden-resident repayment. Write-off = first due
             (April) + 25 years, no age-65 path. FX rate held flat for the projection. Not financial advice.
           </p>
+          </>}
         </div>
       </div>
 
       <div className="mobile-bar">
         <div className="mobile-bar-inner">
           <div className="mobile-stat">
-            <span className="mobile-stat-label">{heroLabel}</span>
-            <span className="mobile-stat-val">{gbp(result.savings_gbp)}</span>
+            <span className="mobile-stat-label">{hydrated ? heroLabel : 'Loading saved loan…'}</span>
+            <span className="mobile-stat-val">{hydrated ? gbp(result.savings_gbp) : '—'}</span>
           </div>
           <div className="mobile-stat">
             <span className="mobile-stat-label">Written off</span>
-            <span className="mobile-stat-val"><Num value={result.writeoff_year} /></span>
+            <span className="mobile-stat-val">{hydrated ? <Num value={result.writeoff_year} /> : '—'}</span>
           </div>
         </div>
       </div>
