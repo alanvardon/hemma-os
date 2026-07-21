@@ -22,6 +22,7 @@ const mock = () => holder.current
 const PREFIX = 'hemma-sync-v1:test-user:test-house:'
 const scoped = (key: string) => PREFIX + key
 const CACHE_KEY = scoped('bostadskalkyl_mortgage_cache_v1')
+const TOMBSTONE_CACHE_KEY = scoped('sync-tombstones-cache-v1')
 const IMPORT_FLAG = scoped('bostadskalkyl_mortgage_supabase_imported')
 
 const mem = new Map<string, string>()
@@ -155,6 +156,66 @@ describe('loadMortgageBalanceSnapshot (plan 118)', () => {
     expect(snap?.parts.map(p => p.id)).toEqual(['pCache'])
     expect(snap?.payments.map(p => p.id)).toEqual(['payCache'])
     expect(snap?.parts).not.toHaveLength(0)
+  })
+})
+
+describe('loadActiveMortgageCostSnapshot (plan 125)', () => {
+  it('returns all four live resources together and writes one coherent cache snapshot', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.mortgages = [mortgageRow('m1')]
+    mock().tables.mortgage_loan_parts = [loanPart('p1', { mortgage_id: 'm1' })]
+    mock().tables.mortgage_rate_periods = [ratePeriod('r1', 'p1', { rate: 3.5 })]
+    mock().tables.mortgage_payments = [mortgagePayment('pay1', 'p1', { balance_after: 400_000 })]
+
+    const snap = await store.loadActiveMortgageCostSnapshot()
+    expect(snap).toMatchObject({
+      mortgages: [{ id: 'm1' }], parts: [{ id: 'p1' }],
+      periods: [{ id: 'r1' }], payments: [{ id: 'pay1' }],
+    })
+    expect(cache()).toMatchObject({
+      mortgages: [{ id: 'm1' }], loan_parts: [{ id: 'p1' }],
+      rate_periods: [{ id: 'r1' }], payments: [{ id: 'pay1' }],
+    })
+  })
+
+  it('is all-or-nothing: one failed resource returns unavailable, never a plausible partial snapshot', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mock().tables.mortgages = [mortgageRow('m1')]
+    mock().tables.mortgage_loan_parts = [loanPart('p1', { mortgage_id: 'm1' })]
+    mock().tables.mortgage_payments = [mortgagePayment('pay1', 'p1')]
+    mock().control.failing.add('mortgage_rate_periods')
+
+    await expect(store.loadActiveMortgageCostSnapshot()).resolves.toBeNull()
+  })
+
+  it('a dirty resource returns one tombstone-filtered cached snapshot instead of mixing cloud rows', async () => {
+    mem.set(IMPORT_FLAG, '1')
+    mem.set(CACHE_KEY, JSON.stringify({
+      version: 6, banks: [bankRow('b1')], mortgages: [mortgageRow('m-cache')],
+      loan_parts: [loanPart('p-cache', { mortgage_id: 'm-cache' })],
+      payments: [
+        mortgagePayment('pay-cache', 'p-cache', { balance_after: 750_000 }),
+        mortgagePayment('pay-deleted', 'p-cache', { amount: 99_999 }),
+      ],
+      valuations: [], rate_periods: [ratePeriod('rate-cache', 'p-cache', { rate: 3.25 })],
+      contributions: [], settings: {},
+    }))
+    mem.set(TOMBSTONE_CACHE_KEY, JSON.stringify({
+      version: 1,
+      resources: { mortgage_payments: { 'pay-deleted': '2026-07-21T10:00:00.000Z' } },
+    }))
+    mock().tables.mortgages = [mortgageRow('m-cloud')]
+    mock().tables.mortgage_loan_parts = [loanPart('p-cloud', { mortgage_id: 'm-cloud' })]
+    mock().tables.mortgage_rate_periods = [ratePeriod('rate-cloud', 'p-cloud', { rate: 9 })]
+    mock().tables.mortgage_payments = [mortgagePayment('pay-cloud', 'p-cloud')]
+    mock().control.failing.add('mortgage_rate_periods')
+    await expect(store.addRatePeriod({ loan_part_id: 'p-cache', start_date: '2026-01-01', end_date: null, rate: 3.5, rate_type: 'rörlig' })).rejects.toBeTruthy()
+
+    const snap = await store.loadActiveMortgageCostSnapshot()
+    expect(snap?.mortgages.map((row) => row.id)).toEqual(['m-cache'])
+    expect(snap?.parts.map((row) => row.id)).toEqual(['p-cache'])
+    expect(snap?.periods.map((row) => row.loan_part_id)).toEqual(['p-cache', 'p-cache'])
+    expect(snap?.payments.map((row) => row.id)).toEqual(['pay-cache'])
   })
 })
 

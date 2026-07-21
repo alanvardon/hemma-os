@@ -1,6 +1,7 @@
-import { useEffect, useState, type CSSProperties } from 'react'
-import { stressAt, type Inputs, type Figures, type BankFigures, type Constants } from '../lib/calc'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { mortgageComparisonDeltas, mortgageComparisonLeg, stressAt, type Inputs, type Figures, type BankFigures, type Constants, type MortgageComparisonLeg } from '../lib/calc'
 import { fmt } from '../lib/format'
+import type { ActiveAgreementMonthlyCost } from '../lib/mortgage'
 import { CurrencyInput, NumberInput, Field, DerivedRow } from './fields'
 import { Money } from './AnimatedNumber'
 import ExpandableChartCard from './charts/ExpandableChartCard'
@@ -8,6 +9,15 @@ import ChartLegend from './charts/ChartLegend'
 import StressChart from './charts/StressChart'
 
 export type PullStatus = 'idle' | 'loading' | 'error' | 'empty'
+
+// Route-owned ephemeral state for Plan 125's live, read-only comparison. It is
+// deliberately not part of Inputs, a draft, or a persisted scenario.
+export type CurrentMortgageComparatorState =
+  | { status: 'loading' }
+  | { status: 'empty' }
+  | { status: 'missing-rate'; missingRatePartIds: string[] }
+  | { status: 'unavailable' }
+  | { status: 'ready'; cost: ActiveAgreementMonthlyCost & { rate: number; interest: number }; updatedAt: Date }
 
 interface Props {
   inputs: Inputs
@@ -21,20 +31,21 @@ interface Props {
   pullPreview: number | null
   onApplyPull: () => void
   onDismissPull: () => void
+  currentComparator: CurrentMortgageComparatorState
+  onRefreshCurrentComparator: () => void
 }
 
-export default function InputsColumn({ inputs: i, setField, figures: f, constants: c, onOpenDrift, onPullMortgage, pullStatus, pullPreview, onApplyPull, onDismissPull }: Props) {
+export default function InputsColumn({ inputs: i, setField, figures: f, constants: c, onOpenDrift, onPullMortgage, pullStatus, pullPreview, onApplyPull, onDismissPull, currentComparator, onRefreshCurrentComparator }: Props) {
   const [listingUrl, setListingUrl] = useState('')
 
   const bankAName = i.bankAName.trim() || 'Bank A'
   const bankBName = i.bankBName.trim() || 'Bank B'
-  const diff = f.bankDiff
-  const diffText =
-    diff > 0
-      ? `${bankBName} is cheaper by ${fmt(Math.abs(diff))}/mo`
-      : diff < 0
-        ? `${bankAName} is cheaper by ${fmt(Math.abs(diff))}/mo`
-        : 'Same cost'
+  const currentLeg = useMemo(() => currentComparator.status === 'ready'
+    ? mortgageComparisonLeg(currentComparator.cost.balance, currentComparator.cost.rate, currentComparator.cost.regularAmortization, c.ranteavdrag)
+    : null, [c.ranteavdrag, currentComparator])
+  const comparisonDeltas = useMemo(() => currentLeg
+    ? mortgageComparisonDeltas(currentLeg, f.bankA.mortgage, f.bankB.mortgage)
+    : null, [currentLeg, f.bankA.mortgage, f.bankB.mortgage])
 
   const openListing = () => {
     const u = listingUrl.trim()
@@ -159,15 +170,15 @@ export default function InputsColumn({ inputs: i, setField, figures: f, constant
           </Field>
         </div>
 
-        <div className="bank-compare">
+        <div className="bank-compare" data-testid="mortgage-comparison">
+          <CurrentMortgageCol state={currentComparator} leg={currentLeg} onRefresh={onRefreshCurrentComparator} />
+          <div className="bank-divider" />
           <BankCol name={i.bankAName} onName={(v) => setField('bankAName', v)} rate={i.interestRateA} onRate={(v) => setField('interestRateA', v)} bank={f.bankA} idSuffix="A" />
           <div className="bank-divider" />
           <BankCol name={i.bankBName} onName={(v) => setField('bankBName', v)} rate={i.interestRateB} onRate={(v) => setField('interestRateB', v)} bank={f.bankB} idSuffix="B" />
         </div>
-        <div className="bank-diff-row">
-          <span className="derived-label">Difference ({bankAName} vs {bankBName})</span>
-          <span className={diff !== 0 ? 'derived-value positive' : 'derived-value'}>{diffText}</span>
-        </div>
+        {comparisonDeltas && <ComparisonDeltas deltas={comparisonDeltas} bankAName={bankAName} bankBName={bankBName} />}
+        <ProposedHomeCosts bankA={f.bankA} bankB={f.bankB} bankAName={bankAName} bankBName={bankBName} />
       </div>
 
       {/* Section 4 — stress test */}
@@ -245,23 +256,133 @@ function BankCol({
   idSuffix: string
 }) {
   return (
-    <div className="bank-col">
+    <div className="bank-col" data-testid={`proposed-bank-${idSuffix.toLowerCase()}`}>
       <div className="bank-header">
         <input className="bank-name-input" value={name} onChange={(e) => onName(e.target.value)} placeholder="Bank name" aria-label={`Bank ${idSuffix} name`} />
       </div>
-      <Field label="Interest rate">
+      <Field label="Räntesats">
         <NumberInput value={rate} onChange={onRate} suffix="%" min={0} max={20} step={0.1} ariaLabel={`Interest rate ${idSuffix}`} />
       </Field>
-      <div className="bank-breakdown">
-        <DerivedRow label="Monthly interest" value={<Money value={bank.interest} />} />
-        <DerivedRow label="Amortisation" value={<Money value={bank.amort} />} />
-        <DerivedRow label="Property tax" value={<Money value={bank.tax} />} />
-        <DerivedRow label="Driftkostnad" value={<Money value={bank.drift} />} />
-        <DerivedRow rowClass="bank-total-row" label="Total monthly" value={<Money value={bank.total} />} />
-        <DerivedRow rowClass="derived-relief" label="Ränteavdrag relief" value={<Money value={bank.relief / 12} prefix="−" />} cls="positive" />
-        <DerivedRow rowClass="derived-effective" label="Effective monthly" value={<Money value={bank.effective} />} cls="positive" />
-      </div>
+      <MortgageComparisonRows leg={bank.mortgage} />
     </div>
+  )
+}
+
+function CurrentMortgageCol({
+  state,
+  leg,
+  onRefresh,
+}: {
+  state: CurrentMortgageComparatorState
+  leg: MortgageComparisonLeg | null
+  onRefresh: () => void
+}) {
+  return (
+    <div className="bank-col current-mortgage-col" data-testid="current-mortgage-column">
+      <div className="bank-header current-mortgage-header">
+        <span className="current-mortgage-title">Nuvarande bolån</span>
+        <span className="current-mortgage-source">Bolånkoll · live</span>
+      </div>
+      {state.status === 'ready' ? leg && (
+        <>
+          <div className="current-mortgage-freshness">Uppdaterad nu</div>
+          <MortgageComparisonRows leg={leg} />
+          <AmortizationSource source={state.cost.amortizationSource} />
+          <button type="button" className="field-breakdown-btn current-mortgage-refresh" onClick={onRefresh}>Uppdatera ›</button>
+        </>
+      ) : <CurrentMortgageStatus state={state} onRefresh={onRefresh} />}
+    </div>
+  )
+}
+
+function CurrentMortgageStatus({ state, onRefresh }: { state: Exclude<CurrentMortgageComparatorState, { status: 'ready' }>; onRefresh: () => void }) {
+  if (state.status === 'loading') return (
+    <div className="current-mortgage-state" aria-live="polite">
+      <p className="current-mortgage-note">Hämtar aktuella bolånekostnader från Bolånkoll…</p>
+      <button type="button" className="field-breakdown-btn" onClick={onRefresh}>Uppdatera igen ›</button>
+    </div>
+  )
+  if (state.status === 'empty') return (
+    <div className="current-mortgage-state" aria-live="polite">
+      <p className="current-mortgage-note">Inget aktivt bolån med saldo hittades i Bolånkoll.</p>
+      <button type="button" className="field-breakdown-btn" onClick={onRefresh}>Uppdatera ›</button>
+    </div>
+  )
+  if (state.status === 'missing-rate') return (
+    <div className="current-mortgage-state" role="status">
+      <p className="current-mortgage-note">Aktuellt bolån saknar räntesats. Lägg till aktuella räntevillkor i Bolånkoll för att jämföra.</p>
+      <button type="button" className="field-breakdown-btn" onClick={onRefresh}>Försök igen ›</button>
+    </div>
+  )
+  return (
+    <div className="current-mortgage-state" role="alert">
+      <p className="current-mortgage-note mortgage-pull-error">Bolånekoll är inte tillgängligt just nu. Ingen nuvarande kostnad visas.</p>
+      <button type="button" className="field-breakdown-btn" onClick={onRefresh}>Försök igen ›</button>
+    </div>
+  )
+}
+
+function MortgageComparisonRows({ leg }: { leg: MortgageComparisonLeg }) {
+  return (
+    <div className="bank-breakdown mortgage-comparison-rows">
+      <DerivedRow label="Bolåneskuld" value={<Money value={leg.balance} />} />
+      <DerivedRow label="Räntesats" value={<>{leg.rate.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %</>} />
+      <DerivedRow label="Ränta per månad" value={<Money value={leg.interest} />} />
+      <DerivedRow label="Amortering per månad" value={<Money value={leg.amortization} />} />
+      <DerivedRow rowClass="bank-total-row" label="Bolånebetalning" value={<Money value={leg.gross} />} />
+      <DerivedRow rowClass="derived-relief" label="Uppskattat ränteavdrag" value={<Money value={leg.relief} prefix="−" />} cls="positive" />
+      <DerivedRow rowClass="derived-effective" label="Bolånekostnad efter avdrag" value={<Money value={leg.effective} />} cls="positive" />
+    </div>
+  )
+}
+
+function AmortizationSource({ source }: { source: 'declared' | 'observed' | 'none' }) {
+  const text = source === 'declared'
+    ? 'Löpande amortering enligt amorteringsplan.'
+    : source === 'observed'
+      ? 'Löpande amortering beräknad från betalningshistorik.'
+      : 'Ingen löpande amortering hittad.'
+  return <p className="current-mortgage-provenance">{text}</p>
+}
+
+function ComparisonDeltas({
+  deltas,
+  bankAName,
+  bankBName,
+}: {
+  deltas: ReturnType<typeof mortgageComparisonDeltas>
+  bankAName: string
+  bankBName: string
+}) {
+  const difference = (label: string, delta: number, cheaper: string) => {
+    const text = delta === 0 ? 'Samma bolånebetalning' : `${cheaper} är ${fmt(Math.abs(delta))}/mån billigare`
+    return <div className="bank-diff-row" key={label}><span className="derived-label">{label}</span><span className={delta === 0 ? 'derived-value' : 'derived-value positive'}>{text}</span></div>
+  }
+  return (
+    <div className="bank-diff-list" aria-label="Skillnader i bolånebetalning">
+      {difference(`${bankAName} jämfört med nuvarande`, deltas.currentVsA.amount, deltas.currentVsA.cheaper === 'a' ? bankAName : 'Nuvarande bolån')}
+      {difference(`${bankBName} jämfört med nuvarande`, deltas.currentVsB.amount, deltas.currentVsB.cheaper === 'b' ? bankBName : 'Nuvarande bolån')}
+      {difference(`${bankAName} jämfört med ${bankBName}`, deltas.aVsB.amount, deltas.aVsB.cheaper === 'a' ? bankAName : bankBName)}
+    </div>
+  )
+}
+
+function ProposedHomeCosts({ bankA, bankB, bankAName, bankBName }: { bankA: BankFigures; bankB: BankFigures; bankAName: string; bankBName: string }) {
+  const column = (name: string, bank: BankFigures) => (
+    <div className="proposed-home-cost-column" key={name}>
+      <span className="proposed-home-cost-name">{name}</span>
+      <DerivedRow label="Fastighetsavgift" value={<Money value={bank.tax} />} />
+      <DerivedRow label="Driftkostnad" value={<Money value={bank.drift} />} />
+      <DerivedRow rowClass="bank-total-row" label="Total boendekostnad" value={<Money value={bank.total} />} />
+      <DerivedRow rowClass="derived-effective" label="Efter uppskattat ränteavdrag" value={<Money value={bank.effective} />} cls="positive" />
+    </div>
+  )
+  return (
+    <section className="proposed-home-costs" aria-label="Föreslagen bostads övriga kostnader">
+      <p className="proposed-home-costs-title">Föreslagen bostad · utöver bolånejämförelsen</p>
+      <p className="proposed-home-costs-note">Fastighetsavgift och drift finns inte i Bolånkoll och ingår därför bara i de föreslagna totalerna.</p>
+      <div className="proposed-home-cost-grid">{column(bankAName, bankA)}{column(bankBName, bankB)}</div>
+    </section>
   )
 }
 

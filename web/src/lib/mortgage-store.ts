@@ -657,54 +657,84 @@ export interface ActiveMortgageBalanceSnapshot {
 }
 
 const BALANCE_RESOURCES = [RESOURCES.mortgages, RESOURCES.parts, RESOURCES.payments, CASCADE_RESOURCE, ...AGREEMENT_RESOURCES]
+const COST_RESOURCES = [RESOURCES.mortgages, RESOURCES.parts, RESOURCES.periods, RESOURCES.payments, CASCADE_RESOURCE, ...AGREEMENT_RESOURCES]
 
-export async function loadMortgageBalanceSnapshot(): Promise<ActiveMortgageBalanceSnapshot | null> {
+interface ActiveMortgageResourceSnapshot extends ActiveMortgageBalanceSnapshot {
+  periods: RatePeriod[]
+}
+
+async function loadActiveMortgageResources(includePeriods: boolean): Promise<ActiveMortgageResourceSnapshot | null> {
   const scope = syncCoordinator.captureScope()
-  const fallback = (): ActiveMortgageBalanceSnapshot => {
+  const resources = includePeriods ? COST_RESOURCES : BALANCE_RESOURCES
+  const fallback = (): ActiveMortgageResourceSnapshot => {
     const cache = _readCacheFrom(scope)
     return {
       mortgages: withoutTombstones(cache.mortgages, cachedTombstoneIds(scope, RESOURCES.mortgages)),
       parts: withoutTombstones(cache.loan_parts, cachedTombstoneIds(scope, RESOURCES.parts)),
+      periods: includePeriods
+        ? withoutTombstones(cache.rate_periods, cachedTombstoneIds(scope, RESOURCES.periods))
+        : [],
       payments: withoutTombstones(cache.payments, cachedTombstoneIds(scope, RESOURCES.payments)),
     }
   }
   await _importLocalOnce()
-  if (!scope.isActive() || BALANCE_RESOURCES.some((resource) => syncCoordinator.isDirty(resource))) {
-    return fallback()
-  }
-  const [mortgagesResult, partsResult, paymentsResult, mortgageTombstones, partTombstones, paymentTombstones] = await Promise.all([
+  if (!scope.isActive() || resources.some((resource) => syncCoordinator.isDirty(resource))) return fallback()
+
+  const [mortgagesResult, partsResult, periodsResult, paymentsResult, mortgageTombstones, partTombstones, periodTombstones, paymentTombstones] = await Promise.all([
     supabase.from(T.mortgages).select('*').order('created_at', { ascending: true }),
     supabase.from(T.parts).select('*').order('created_at', { ascending: true }),
+    includePeriods ? supabase.from(T.periods).select('*') : Promise.resolve({ data: [], error: null }),
     supabase.from(T.payments).select('*'),
     loadTombstoneIds(scope, RESOURCES.mortgages),
     loadTombstoneIds(scope, RESOURCES.parts),
+    includePeriods ? loadTombstoneIds(scope, RESOURCES.periods) : Promise.resolve(new Set<string>()),
     loadTombstoneIds(scope, RESOURCES.payments),
   ])
-  if (!scope.isActive() || BALANCE_RESOURCES.some((resource) => syncCoordinator.isDirty(resource))) {
-    return fallback()
-  }
-  if (mortgagesResult.error || partsResult.error || paymentsResult.error ||
-      !mortgagesResult.data || !partsResult.data || !paymentsResult.data) return null
+  if (!scope.isActive() || resources.some((resource) => syncCoordinator.isDirty(resource))) return fallback()
+  if (mortgagesResult.error || partsResult.error || periodsResult.error || paymentsResult.error ||
+      !mortgagesResult.data || !partsResult.data || !periodsResult.data || !paymentsResult.data) return null
+
   rememberRowRevisions(RESOURCES.mortgages, mortgagesResult.data as unknown as Record<string, unknown>[])
   rememberRowRevisions(RESOURCES.parts, partsResult.data as unknown as Record<string, unknown>[])
+  if (includePeriods) rememberRowRevisions(RESOURCES.periods, periodsResult.data as unknown as Record<string, unknown>[])
   rememberRowRevisions(RESOURCES.payments, paymentsResult.data as unknown as Record<string, unknown>[])
   const parsedMortgages = salvageMortgageRows(mortgagesResult.data, 'mortgages')
   const parsedParts = salvageMortgageRows(partsResult.data, 'loan_parts')
+  const parsedPeriods = includePeriods
+    ? salvageMortgageRows(periodsResult.data, 'rate_periods')
+    : { value: [] as RatePeriod[], rejected: [] as unknown[] }
   const parsedPayments = salvageMortgageRows(paymentsResult.data, 'payments')
-  if (parsedMortgages.rejected.length || parsedParts.rejected.length || parsedPayments.rejected.length) warning('molnet')
-  const snapshot: ActiveMortgageBalanceSnapshot = {
+  if (parsedMortgages.rejected.length || parsedParts.rejected.length || parsedPeriods.rejected.length || parsedPayments.rejected.length) warning('molnet')
+  const snapshot: ActiveMortgageResourceSnapshot = {
     mortgages: withoutTombstones(parsedMortgages.value as Mortgage[], mortgageTombstones),
     parts: withoutTombstones(parsedParts.value as LoanPart[], partTombstones),
+    periods: withoutTombstones(parsedPeriods.value as RatePeriod[], periodTombstones),
     payments: withoutTombstones(parsedPayments.value as Payment[], paymentTombstones).map(canonicalPayment),
   }
   const cache = _readCacheFrom(scope)
-  {
-    cache.mortgages = snapshot.mortgages
-    cache.loan_parts = snapshot.parts
-    cache.payments = snapshot.payments
-  }
+  cache.mortgages = snapshot.mortgages
+  cache.loan_parts = snapshot.parts
+  if (includePeriods) cache.rate_periods = snapshot.periods
+  cache.payments = snapshot.payments
   scope.write(CACHE_KEY, JSON.stringify(cache))
   return snapshot
+}
+
+export async function loadMortgageBalanceSnapshot(): Promise<ActiveMortgageBalanceSnapshot | null> {
+  const snapshot = await loadActiveMortgageResources(false)
+  if (!snapshot) return null
+  return { mortgages: snapshot.mortgages, parts: snapshot.parts, payments: snapshot.payments }
+}
+
+// Four-resource, all-or-nothing snapshot for the live Bostadskalkyl current-
+// cost comparator. It shares the Plan 118 plumbing while adding rate periods;
+// dirty/inactive reads use one captured, tombstone-filtered cache envelope.
+export interface ActiveMortgageCostSnapshot extends ActiveMortgageBalanceSnapshot {
+  periods: RatePeriod[]
+}
+
+export async function loadActiveMortgageCostSnapshot(): Promise<ActiveMortgageCostSnapshot | null> {
+  return loadActiveMortgageResources(true)
 }
 
 export async function listLoanParts(): Promise<LoanPart[]> {

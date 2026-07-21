@@ -9,6 +9,8 @@ import {
   derive,
   DEFAULT_INPUTS,
   DEFAULT_CONSTANTS,
+  mortgageComparisonDeltas,
+  mortgageComparisonLeg,
 } from './calc'
 
 // ── Ported from the vanilla calc.test.js ────────────────────────────
@@ -26,6 +28,47 @@ describe('pure functions', () => {
   it('equityPct: zero price returns 0', () => expect(equityPct(0, 0)).toBe(0))
   it('fastighetsavgiftCap: above cap (10 425, income year 2026)', () => expect(fastighetsavgiftCap(12_000)).toBe(10_425))
   it('fastighetsavgiftCap: below cap', () => expect(fastighetsavgiftCap(6_000)).toBe(6_000))
+})
+
+describe('mortgage-only comparison contract', () => {
+  it('GOLDEN: all legs share monthly interest, gross, relief and effective definitions', () => {
+    const current = mortgageComparisonLeg(2_400_000, 3.75, 4_000)
+    const bankA = mortgageComparisonLeg(3_000_000, 3.5, 5_000)
+    const bankB = mortgageComparisonLeg(3_000_000, 3.9, 5_000)
+
+    expect(current).toEqual({ balance: 2_400_000, rate: 3.75, interest: 7_500, amortization: 4_000, gross: 11_500, relief: 2_250, effective: 9_250 })
+    expect(bankA).toEqual({ balance: 3_000_000, rate: 3.5, interest: 8_750, amortization: 5_000, gross: 13_750, relief: 2_587.5, effective: 11_162.5 })
+    expect(bankB).toEqual({ balance: 3_000_000, rate: 3.9, interest: 9_750, amortization: 5_000, gross: 14_750, relief: 2_797.5, effective: 11_952.5 })
+
+    expect(mortgageComparisonDeltas(current, bankA, bankB)).toEqual({
+      currentVsA: { amount: -2_250, cheaper: 'current' },
+      currentVsB: { amount: -3_250, cheaper: 'current' },
+      aVsB: { amount: -1_000, cheaper: 'a' },
+    })
+  })
+
+  it('uses the configured annual relief brackets and keeps rounding boundaries deterministic', () => {
+    const cfg = { thresholdKr: 1_000, lowPct: 30, highPct: 20 }
+    const leg = mortgageComparisonLeg(100_005, 3.333, 123.456, cfg)
+    expect(leg).toMatchObject({ balance: 100_005, rate: 3.333, amortization: 123.456 })
+    expect(leg.interest).toBeCloseTo(277.7638875, 8)
+    expect(leg.gross).toBeCloseTo(401.2198875, 8)
+    expect(leg.relief).toBeCloseTo(63.88611083, 8)
+    expect(leg.effective).toBeCloseTo(337.33377667, 8)
+    // Formatting rounds only at the display boundary; domain precision remains.
+    expect(Math.round(leg.interest)).toBe(278)
+    expect(Math.round(leg.effective)).toBe(337)
+  })
+
+  it('proposed property tax and drift affect full totals but never mortgage-only figures', () => {
+    const base = derive({ ...DEFAULT_INPUTS, propertyTax: 0, driftkostnad: 0 })
+    const withPropertyCosts = derive({ ...DEFAULT_INPUTS, propertyTax: 12_000, driftkostnad: 4_000 })
+
+    expect(withPropertyCosts.bankA.mortgage).toEqual(base.bankA.mortgage)
+    expect(withPropertyCosts.bankB.mortgage).toEqual(base.bankB.mortgage)
+    expect(withPropertyCosts.bankA.total - base.bankA.total).toBe(5_000)
+    expect(withPropertyCosts.bankB.total - base.bankB.total).toBe(5_000)
+  })
 })
 
 // ── requiredAmortRate (amorteringskrav) ─────────────────────────────
