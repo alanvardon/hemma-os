@@ -70,9 +70,6 @@ interface PersonLabelProps {
   /** 'compact' → `Alex` + a `Du` chip; 'audit' → inline `Alex (du)` for history
       and dense audit rows. Never renders "Du" alone. */
   variant?: 'compact' | 'audit'
-  /** Show the initials avatar before the name. */
-  avatar?: boolean
-  avatarSize?: 'sm' | 'md'
   className?: string
   /** Extra trailing content (e.g. a percentage) rendered after the name/chip. */
   suffix?: ReactNode
@@ -82,13 +79,12 @@ interface PersonLabelProps {
     always paired with the name (never "Du" alone) and is both visible and part
     of the accessible name, so self is distinguishable without relying on colour. */
 export function PersonLabel({
-  name, self, other, variant = 'compact', avatar = false, avatarSize = 'sm', className, suffix,
+  name, self, other, variant = 'compact', className, suffix,
 }: PersonLabelProps) {
   const tone = toneOf(self, other)
   const cls = ['person-label', `is-${tone}`, className].filter(Boolean).join(' ')
   return (
     <span className={cls}>
-      {avatar && <PersonAvatar name={name} self={self} other={other} size={avatarSize} />}
       {variant === 'audit'
         ? <span className="person-name">{self ? `${name} (du)` : name}</span>
         : (
@@ -108,22 +104,20 @@ interface PersonColumnHeaderProps {
   other?: boolean
   /** Optional secondary line under the name (e.g. a percentage or role). */
   sub?: ReactNode
-  avatar?: boolean
   className?: string
 }
 
 /** The shared comparison-column header treatment: a restrained accent edge and
-    tinted header for self, an outlined copper avatar for the other person, and
-    the same neutral header otherwise. Values below it are never enlarged. */
+    tinted header for self, with the same neutral header otherwise. Values below
+    it are never enlarged. */
 export function PersonColumnHeader({
-  name, self, other, sub, avatar = true, className,
+  name, self, other, sub, className,
 }: PersonColumnHeaderProps) {
   const tone = toneOf(self, other)
   const cls = ['person-col-header', `is-${tone}`, className].filter(Boolean).join(' ')
   return (
     <div className={cls} aria-label={self ? `${name}, du` : undefined}>
       <span className="person-col-head-main">
-        {avatar && <PersonAvatar name={name} self={self} other={other} size="sm" />}
         <PersonLabel name={name} self={self} other={other} />
       </span>
       {sub != null && <span className="person-col-head-sub">{sub}</span>}

@@ -1125,7 +1125,7 @@ describe('Bolanekoll — view perspective from the person binding', () => {
   it('a mapped account follows its binding, not i_am, without moving or changing the cards', async () => {
     // The financial values (share % + equity kronor) are person-independent, so
     // read just those from a card — the mapped view legitimately ADDS a "Du"
-    // chip + avatar, which must not count as a changed value.
+    // chip, which must not count as a changed value.
     const financials = (card: HTMLElement) => ({
       pct: card.querySelector('.split-pct')?.textContent,
       val: card.querySelector('.split-val')?.textContent,
@@ -1144,6 +1144,8 @@ describe('Bolanekoll — view perspective from the person binding', () => {
     const { a, b } = await marketCards()
     expect(a.className).toContain('is-accent')
     expect(b.className).not.toContain('is-accent')
+    expect(a.querySelector('.person-avatar')).not.toBeInTheDocument()
+    expect(b.querySelector('.person-avatar')).not.toBeInTheDocument()
     // A stays first in DOM order and every financial value is identical.
     expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect([financials(a), financials(b)]).toEqual(beforeValues)
