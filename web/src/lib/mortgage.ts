@@ -3,6 +3,7 @@
 
 // Re-exported so Bolanekoll keeps importing it alongside the mortgage math.
 import { todayISO } from './date'
+import { mortgageComparisonLeg } from './calc'
 export { todayISO }
 
 function r2(n: number): number { return Math.round((Number(n) || 0) * 100) / 100 }
@@ -2059,6 +2060,135 @@ export function activeAgreementBalance(mortgages: Mortgage[], parts: LoanPart[],
   const ap = activeAgreementParts(parts, m?.id ?? null)
   const pp = activeAgreementPayments(payments, ap, m?.id ?? null)
   return totalBalance(ap, pp)
+}
+
+export type RegularAmortizationSource = 'declared' | 'observed' | 'none'
+
+export interface ActiveAgreementMonthlyCost {
+  mortgageId: string | null
+  balance: number
+  rate: number | null
+  interest: number | null
+  regularAmortization: number
+  amortizationSource: RegularAmortizationSource
+  missingRatePartIds: string[]
+}
+
+function medianTrailing(values: Array<{ date: string; amount: number }>): number | null {
+  const trailing = values
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-3)
+    .map(row => row.amount)
+    .sort((a, b) => a - b)
+  return trailing.length ? r2(trailing[trailing.length >> 1]) : null
+}
+
+/**
+ * Detect ordinary monthly principal from real bank evidence only. Explicit
+ * amortisation rows take priority per part; otherwise a statement's payment
+ * minus its paired interest is used. One-off insatser and accepted prediction
+ * rows are deliberately not recurring evidence.
+ */
+function observedRegularAmortization(parts: LoanPart[], payments: Payment[]): { amount: number; found: boolean } {
+  let amount = 0
+  let found = false
+  for (const part of (parts || []).filter(row => row && !row.archived)) {
+    const real = (payments || []).filter(row => row?.loan_part_id === part.id && row.source !== 'predicted' && !row.is_insats)
+    const explicit = medianTrailing(real
+      .filter(row => row.kind === 'amortization' && validLedgerDate(row.date) && positiveLedgerAmount(row.amount) != null)
+      .map(row => ({ date: row.date, amount: positiveLedgerAmount(row.amount)! })))
+    if (explicit != null) {
+      amount += explicit
+      found = true
+      continue
+    }
+
+    const months = new Map<string, { payment: number; interest: number; interestRows: number }>()
+    for (const row of real) {
+      if (!validLedgerDate(row.date) || (row.kind !== 'payment' && row.kind !== 'interest')) continue
+      const key = monthKey(row.date)
+      const month = months.get(key) ?? { payment: 0, interest: 0, interestRows: 0 }
+      if (row.kind === 'payment') {
+        month.payment += positiveLedgerAmount(row.amount) ?? 0
+      } else {
+        const interest = Number(row.amount)
+        if (isFinite(interest) && interest >= 0) {
+          month.interest += r2(interest)
+          month.interestRows++
+        }
+      }
+      months.set(key, month)
+    }
+    const paired = medianTrailing([...months.entries()]
+      .filter(([, month]) => month.payment > 0 && month.interestRows > 0)
+      .map(([date, month]) => ({ date, amount: Math.max(0, r2(month.payment - month.interest)) })))
+    if (paired != null) {
+      amount += paired
+      found = true
+    }
+  }
+  return { amount: r2(amount), found }
+}
+
+/**
+ * Normalized current monthly mortgage cost for the same legacy-tolerant active
+ * agreement view as Bolånkoll and Plan 118. A missing rate remains explicit;
+ * it never turns an unavailable interest cost into 0 kr.
+ */
+export function activeAgreementMonthlyCost(
+  mortgages: Mortgage[],
+  parts: LoanPart[],
+  periods: RatePeriod[],
+  payments: Payment[],
+  asOf: string = todayISO(),
+): ActiveAgreementMonthlyCost {
+  const active = activeAgreementMortgage(mortgages)
+  const activeParts = activeAgreementParts(parts, active?.id ?? null)
+  const activePayments = activeAgreementPayments(payments, activeParts, active?.id ?? null)
+  const balance = totalBalance(activeParts, activePayments)
+  const currentParts = activeParts.filter(part => part && !part.archived && partBalance(part, activePayments) > 0)
+  const missingRatePartIds: string[] = []
+  let weightedRates = 0
+  let weightedBalance = 0
+  for (const part of currentParts) {
+    const partCurrentBalance = partBalance(part, activePayments)
+    const rate = effectiveRatePeriod(part, periods, asOf)?.rate
+    if (rate == null || !isFinite(Number(rate)) || Number(rate) < 0) {
+      missingRatePartIds.push(part.id)
+      continue
+    }
+    weightedRates += partCurrentBalance * Number(rate)
+    weightedBalance += partCurrentBalance
+  }
+
+  const declared = declaredMonthlyAmortization(currentParts, asOf)
+  const observed = declared == null ? observedRegularAmortization(currentParts, activePayments) : null
+  const regularAmortization = declared != null ? declared : observed?.amount ?? 0
+  const amortizationSource: RegularAmortizationSource = declared != null
+    ? 'declared'
+    : observed?.found ? 'observed' : 'none'
+
+  if (balance <= 0 || missingRatePartIds.length || r2(weightedBalance) !== balance) {
+    return {
+      mortgageId: active?.id ?? null,
+      balance,
+      rate: null,
+      interest: null,
+      regularAmortization,
+      amortizationSource,
+      missingRatePartIds,
+    }
+  }
+  const rate = r2(weightedRates / weightedBalance)
+  return {
+    mortgageId: active?.id ?? null,
+    balance,
+    rate,
+    interest: mortgageComparisonLeg(balance, rate, regularAmortization).interest,
+    regularAmortization,
+    amortizationSource,
+    missingRatePartIds,
+  }
 }
 
 // Lifetime amortised principal across the FULL agreement history: every part

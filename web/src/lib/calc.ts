@@ -56,6 +56,76 @@ export function ranteavdrag(
   return cfg.thresholdKr * (cfg.lowPct / 100) + (annualInterest - cfg.thresholdKr) * (cfg.highPct / 100)
 }
 
+export interface MortgageComparisonLeg {
+  balance: number
+  rate: number
+  interest: number
+  amortization: number
+  gross: number
+  relief: number
+  effective: number
+}
+
+/**
+ * The mortgage-only monthly figures shared by current Bolånkoll and both
+ * proposed-bank legs. Relief is monthly, while its brackets are evaluated on
+ * annual interest so every leg uses the same Bostadskalkyl tax assumptions.
+ */
+export function mortgageComparisonLeg(
+  balance: number,
+  rate: number,
+  regularAmortization: number,
+  reliefConfig: Constants['ranteavdrag'] = DEFAULT_CONSTANTS.ranteavdrag,
+): MortgageComparisonLeg {
+  const annualInterest = balance * rate / 100
+  const interest = annualInterest / 12
+  const gross = interest + regularAmortization
+  const relief = ranteavdrag(annualInterest, reliefConfig) / 12
+  return {
+    balance,
+    rate,
+    interest,
+    amortization: regularAmortization,
+    gross,
+    relief,
+    effective: gross - relief,
+  }
+}
+
+export type MortgageComparisonCheaper = 'current' | 'a' | 'b' | 'equal'
+export interface MortgageComparisonDelta {
+  amount: number
+  cheaper: MortgageComparisonCheaper
+}
+
+export interface MortgageComparisonDeltas {
+  currentVsA: MortgageComparisonDelta
+  currentVsB: MortgageComparisonDelta
+  aVsB: MortgageComparisonDelta
+}
+
+/** Signed gross-payment deltas: first leg minus second leg. */
+export function mortgageComparisonDeltas(
+  current: MortgageComparisonLeg,
+  bankA: MortgageComparisonLeg,
+  bankB: MortgageComparisonLeg,
+): MortgageComparisonDeltas {
+  const compare = (
+    first: MortgageComparisonLeg,
+    second: MortgageComparisonLeg,
+    firstName: Exclude<MortgageComparisonCheaper, 'equal'>,
+    secondName: Exclude<MortgageComparisonCheaper, 'equal'>,
+  ): MortgageComparisonDelta => {
+    const amount = first.gross - second.gross
+    return { amount, cheaper: amount < 0 ? firstName : amount > 0 ? secondName : 'equal' }
+  }
+  return {
+    currentVsA: compare(current, bankA, 'current', 'a'),
+    currentVsB: compare(current, bankB, 'current', 'b'),
+    aVsB: compare(bankA, bankB, 'a', 'b'),
+  }
+}
+
 export function fastighetsavgiftCap(
   propertyTax: number,
   cap: number = DEFAULT_CONSTANTS.fastighetsavgiftCap,
@@ -149,6 +219,7 @@ export interface BankFigures {
   annualInterest: number
   relief: number // annual ränteavdrag
   effective: number // total − relief/12
+  mortgage: MortgageComparisonLeg // mortgage-only comparison, excluding tax/drift
 }
 
 export interface Figures {
@@ -189,6 +260,7 @@ function bankFigures(
   drift: number,
   ravCfg: Constants['ranteavdrag'] = DEFAULT_CONSTANTS.ranteavdrag,
 ): BankFigures {
+  const mortgage = mortgageComparisonLeg(loanAmount, ratePct, monthlyAmort, ravCfg)
   const interest = (loanAmount * (ratePct / 100)) / 12
   const total = interest + monthlyAmort + taxMonthly + drift
   const annualInterest = interest * 12
@@ -202,6 +274,7 @@ function bankFigures(
     annualInterest,
     relief,
     effective: total - relief / 12,
+    mortgage,
   }
 }
 

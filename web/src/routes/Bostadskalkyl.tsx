@@ -1,19 +1,19 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Moon, Settings2, Sun } from 'lucide-react'
 import { derive } from '../lib/calc'
 import { useStore } from '../store/useStore'
 import { useTheme } from '../App'
 import Icon from '../components/Icon'
-import InputsColumn from '../components/InputsColumn'
+import InputsColumn, { type CurrentMortgageComparatorState } from '../components/InputsColumn'
 import SummaryColumn from '../components/SummaryColumn'
 import SavePrompt from '../components/SavePrompt'
 import DriftModal from '../components/DriftModal'
 import SavingsModal from '../components/SavingsModal'
 import ConstantsModal from '../components/ConstantsModal'
 import { Money } from '../components/AnimatedNumber'
-import { loadMortgageBalanceSnapshot } from '../lib/mortgage-store'
-import { activeAgreementBalance, activeAgreementMortgage } from '../lib/mortgage'
+import { loadActiveMortgageCostSnapshot, loadMortgageBalanceSnapshot } from '../lib/mortgage-store'
+import { activeAgreementBalance, activeAgreementMonthlyCost, activeAgreementMortgage } from '../lib/mortgage'
 
 export type PullStatus = 'idle' | 'loading' | 'error' | 'empty'
 
@@ -84,6 +84,52 @@ export default function Bostadskalkyl() {
   const [pullStatus, setPullStatus] = useState<PullStatus>('idle')
   const [pullPreview, setPullPreview] = useState<number | null>(null)
   const pullReqRef = useRef(0)
+
+  // Plan 125 — this is deliberately a second, live read-only view. It never
+  // touches inputs.currentMortgage: that field remains Plan 118's explicit
+  // scenario snapshot and can therefore differ from today's Bolånkoll costs.
+  const [currentComparator, setCurrentComparator] = useState<CurrentMortgageComparatorState>({ status: 'loading' })
+  const comparatorReqRef = useRef(0)
+
+  const refreshCurrentComparator = useCallback(async () => {
+    const reqId = ++comparatorReqRef.current
+    setCurrentComparator({ status: 'loading' })
+    let snapshot: Awaited<ReturnType<typeof loadActiveMortgageCostSnapshot>>
+    try {
+      snapshot = await loadActiveMortgageCostSnapshot()
+    } catch {
+      snapshot = null
+    }
+    // A manual refresh, route unmount, or a household-scope transition can
+    // supersede this read. Never paint its data after that point.
+    if (reqId !== comparatorReqRef.current) return
+    if (!snapshot) {
+      setCurrentComparator({ status: 'unavailable' })
+      return
+    }
+    const cost = activeAgreementMonthlyCost(snapshot.mortgages, snapshot.parts, snapshot.periods, snapshot.payments)
+    if (!cost.mortgageId || cost.balance <= 0) {
+      setCurrentComparator({ status: 'empty' })
+      return
+    }
+    if (cost.rate == null || cost.interest == null) {
+      setCurrentComparator({ status: 'missing-rate', missingRatePartIds: cost.missingRatePartIds })
+      return
+    }
+    setCurrentComparator({ status: 'ready', cost: { ...cost, rate: cost.rate, interest: cost.interest }, updatedAt: new Date() })
+  }, [])
+
+  // Auto-load on every Bostadskalkyl visit. The snapshot loader captures one
+  // household scope and returns either all four resources or no live result.
+  useEffect(() => {
+    const comparatorRequests = comparatorReqRef
+    const pullRequests = pullReqRef
+    void refreshCurrentComparator()
+    return () => {
+      comparatorRequests.current++
+      pullRequests.current++
+    }
+  }, [refreshCurrentComparator])
 
   const handlePullMortgage = async () => {
     const reqId = ++pullReqRef.current
@@ -196,6 +242,8 @@ export default function Bostadskalkyl() {
           pullPreview={pullPreview}
           onApplyPull={handleApplyPull}
           onDismissPull={handleDismissPull}
+          currentComparator={currentComparator}
+          onRefreshCurrentComparator={refreshCurrentComparator}
         />
         <SummaryColumn
           inputs={inputs}
