@@ -180,7 +180,11 @@ input::placeholder { color: var(--ink-faint); }
 
 .bank-name-input:focus { border-bottom-color: var(--accent-light); background: transparent; box-shadow: none; }
 
-.bank-breakdown { margin-top: auto; }
+/* Top-anchor the comparison rows so they align row-for-row across all three
+   columns. The "Nuvarande bolån" column carries an extra footer (source,
+   freshness, provenance, refresh) below its rows; bottom-anchoring (margin-top:
+   auto) let that footer shove its rows up and out of step with the bank columns. */
+.bank-breakdown { margin-top: 0; }
 
 .bank-col .field { margin-bottom: 0.75rem; }
 
