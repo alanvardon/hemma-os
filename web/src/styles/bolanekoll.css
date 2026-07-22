@@ -531,6 +531,10 @@
     background: var(--paper-card); border: 1px solid var(--rule); border-radius: 999px; padding: 1px 8px;
   }
   .ld-sum { font-weight: 600; color: var(--ink); }
+  /* Insatt kapital — the reconciling row that closes the Share column to 100 %.
+     A quiet accent-tinted band, set apart from the loan folders above it. */
+  .lanedelar-table tr.ld-insatt > td { background: var(--accent-faint); border-top: 1px solid var(--rule); }
+  .lanedelar-table tr.ld-insatt .ld-name { font-weight: 600; color: var(--ink); }
   /* Neutral pills sit on the warm folder band — lift onto a card bg so they read
      (the accent-tinted .is-bunden badge already has enough contrast) */
   .lanedelar-table tr.ld-group .ld-countdown,
@@ -919,6 +923,8 @@ dialog.bk-wizard, dialog.bk-history { width: min(680px, calc(100vw - 2rem)); }
   .bk-root .lanedelar-table tr.ld-group.is-expired { background: var(--warn-faint); }
   .bk-root .lanedelar-table tr.ld-group.is-expired > td { background: transparent; }
   .bk-root .lanedelar-table tr.ld-group.is-catchall { background: transparent; }
+  .bk-root .lanedelar-table tr.ld-insatt { background: var(--accent-faint); }
+  .bk-root .lanedelar-table tr.ld-insatt > td { background: transparent; }
   .bk-root .lanedelar-table tr.ld-member > td { padding: 0; }
   .bk-root .lanedelar-table tr.ld-member > td:first-child { padding-left: 1.1rem; position: static; }
   .bk-root .lanedelar-table tr.ld-member > td:first-child::before { display: none; }
