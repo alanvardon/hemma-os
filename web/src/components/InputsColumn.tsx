@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { Popover } from 'radix-ui'
+import { Info } from 'lucide-react'
 import { mortgageComparisonDeltas, mortgageComparisonLeg, stressAt, type Inputs, type Figures, type BankFigures, type Constants, type MortgageComparisonLeg } from '../lib/calc'
 import { fmt } from '../lib/format'
 import type { ActiveAgreementMonthlyCost } from '../lib/mortgage'
+import Icon from './Icon'
 import { CurrencyInput, NumberInput, Field, DerivedRow } from './fields'
 import { Money } from './AnimatedNumber'
 import ExpandableChartCard from './charts/ExpandableChartCard'
@@ -301,9 +304,7 @@ function CurrentMortgageCol({
           </Field>
           <MortgageComparisonRows leg={leg} />
           <footer className="current-mortgage-footer">
-            <span className="current-mortgage-source">Bolånkoll · live</span>
-            <span className="current-mortgage-freshness">Uppdaterad nu</span>
-            <AmortizationSource source={state.cost.amortizationSource} />
+            <CurrentMortgageInfo source={state.cost.amortizationSource} />
             <button type="button" className="field-breakdown-btn current-mortgage-refresh" onClick={onRefresh}>Uppdatera ›</button>
           </footer>
         </>
@@ -352,13 +353,47 @@ function MortgageComparisonRows({ leg }: { leg: MortgageComparisonLeg }) {
   )
 }
 
-function AmortizationSource({ source }: { source: 'declared' | 'observed' | 'none' }) {
-  const text = source === 'declared'
+function amortizationSourceText(source: 'declared' | 'observed' | 'none'): string {
+  return source === 'declared'
     ? 'Löpande amortering enligt amorteringsplan.'
     : source === 'observed'
       ? 'Löpande amortering beräknad från betalningshistorik.'
       : 'Ingen löpande amortering hittad.'
-  return <p className="current-mortgage-provenance">{text}</p>
+}
+
+// Provenance for the live current-mortgage leg, tucked behind an info button so
+// it never clutters or lengthens the comparison column. Popover (not hover
+// Tooltip) so it opens on tap for mobile.
+function CurrentMortgageInfo({ source }: { source: 'declared' | 'observed' | 'none' }) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          className="current-mortgage-info-btn"
+          data-testid="current-mortgage-info"
+          aria-label="Om nuvarande bolånedata"
+        >
+          <Icon icon={Info} size={15} />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          className="current-mortgage-info-popover"
+          data-testid="current-mortgage-info-popover"
+          side="top"
+          align="start"
+          sideOffset={6}
+          collisionPadding={12}
+        >
+          <p className="current-mortgage-info-source">Bolånkoll · live</p>
+          <p>Uppdaterad nu</p>
+          <p>{amortizationSourceText(source)}</p>
+          <Popover.Arrow className="current-mortgage-info-arrow" />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  )
 }
 
 function ComparisonDeltas({
