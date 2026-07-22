@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Bolanekoll from './Bolanekoll'
 import * as Store from '../lib/mortgage-store'
 import { defaultSettings } from '../lib/mortgage'
-import type { Bank, LoanPart, Mortgage, Payment, RatePeriod } from '../lib/mortgage'
+import type { Bank, LoanPart, Mortgage, Payment, RatePeriod, Valuation } from '../lib/mortgage'
 
 vi.mock('../lib/mortgage-store')
 vi.mock('../lib/hushallsbudget-store', () => ({ loadBudget: vi.fn(async () => null) }))
@@ -299,5 +299,53 @@ describe('Bolanekoll — active view scopes to the active agreement (plan 109c)'
     const insatsCard = container.querySelector('#kontantinsatser') as HTMLElement
     expect(insatsCard.querySelector('[data-source-payment-id="dp0"]')).not.toBeNull()
     expect(within(insatsCard).getByText('1', { selector: '.count-pill' })).toBeInTheDocument()
+  })
+})
+
+// ── Share column measured against the köpeskilling ───────────────────────────
+// When a purchase price is recorded, each loan part's Share is a fraction of the
+// köpeskilling (not of the loan alone), so the parts sum to loan/price and the
+// remainder up to 100 % is Insatt kapital (balance + costBasisEq ≡ price). With
+// no köpeskilling the column falls back to the loan-only basis and still reads
+// 100 %, with no Insatt kapital row.
+describe('Bolanekoll — Share reconciles to the köpeskilling', () => {
+  const purchase: Valuation = {
+    id: 'v-buy', created_at: '2024-03-01', date: '2024-03-01',
+    value: 2_000_000, note: 'Köpeskilling', is_purchase: true,
+  }
+
+  it('measures Share against the price and adds an Insatt kapital remainder row', async () => {
+    // One part at 1 000 000 against a 2 000 000 köpeskilling: the part is 50 % of
+    // the price and Insatt kapital (2 000 000 − 1 000 000) is the other 50 %.
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 6, banks: [bank], mortgages: [agreement],
+      loan_parts: [part], payments: [], valuations: [purchase], rate_periods: [], contributions: [],
+      settings: defaultSettings(),
+    })
+    vi.mocked(Store.listValuations).mockResolvedValue([purchase])
+
+    const { container } = renderBolanekoll()
+    await screen.findByRole('heading', { name: /Bolåneavtal/ })
+
+    const ledger = container.querySelector('.lanedelar-table') as HTMLElement
+    const insattRow = ledger.querySelector('tr.ld-insatt') as HTMLElement
+    expect(insattRow).not.toBeNull()
+    expect(within(insattRow).getByText('Insatt kapital')).toBeInTheDocument()
+    expect(insattRow).toHaveTextContent('50,00 %')
+
+    // The single loan-part group also reads 50 % — not the loan-only 100 %.
+    const groupRow = within(ledger).getByText('Rörlig del').closest('tr') as HTMLElement
+    expect(groupRow).toHaveTextContent('50,00 %')
+    expect(groupRow).not.toHaveTextContent('100,00 %')
+  })
+
+  it('falls back to the loan-only basis (100 %, no Insatt row) when no köpeskilling is recorded', async () => {
+    const { container } = renderBolanekoll()
+    await screen.findByRole('heading', { name: /Bolåneavtal/ })
+
+    const ledger = container.querySelector('.lanedelar-table') as HTMLElement
+    expect(ledger.querySelector('tr.ld-insatt')).toBeNull()
+    const groupRow = within(ledger).getByText('Rörlig del').closest('tr') as HTMLElement
+    expect(groupRow).toHaveTextContent('100,00 %')
   })
 })

@@ -810,6 +810,14 @@ export default function Bolanekoll() {
 
   const lastCost = costRows.length ? costRows[costRows.length - 1] : null
   const partsTotal = balance
+  // Share column basis. When a köpeskilling is recorded, each loan part's Share
+  // is measured against the purchase price rather than the loan alone, so the
+  // parts sum to loan/price and the remainder up to 100% is Insatt kapital
+  // (balance + costBasisEq ≡ price, see costBasisEquity in mortgage.ts). Without
+  // a purchase price — or if the loan somehow exceeds it — fall back to the
+  // loan-only basis so the column still reads 100 %.
+  const insattShareActive = price > 0 && costBasisEq > 0
+  const shareBasis = insattShareActive ? price : partsTotal
 
   const chronVals = useMemo(() => valuations.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))), [valuations])
   const maxVal = chronVals.reduce((mx, v) => Math.max(mx, Number(v.value) || 0), 0)
@@ -1410,13 +1418,13 @@ export default function Bolanekoll() {
                             </button>
                           </td>
                           <td className="num ld-sum">{fmtMoney(g.total_balance)}</td>
-                          <td className="num ld-sum">{fmtPct(g.share_pct)}</td>
+                          <td className="num ld-sum">{fmtPct(shareBasis > 0 ? g.total_balance / shareBasis * 100 : 0)}</td>
                           <td className="col-act"></td>
                         </tr>
                         <AnimatePresence initial={false}>
                           {isExp && g.parts.map(p => {
                             const bal = partBalance(p, payments)
-                            const share = partsTotal > 0 ? bal / partsTotal * 100 : 0
+                            const share = shareBasis > 0 ? bal / shareBasis * 100 : 0
                             const per = effectiveRatePeriod(p, periods)
                             return (
                               <motion.tr key={p.id} className="ld-member">
@@ -1439,6 +1447,22 @@ export default function Bolanekoll() {
                       </Fragment>
                     )
                   })}
+                  {/* Insatt kapital closes the Share column to 100 %: the loan
+                      parts above cover loan/price, this row covers the equity
+                      that's already been paid in (deposit + amortised). */}
+                  {insattShareActive && (
+                    <tr className="ld-insatt">
+                      <td>
+                        <span className="ld-member-label">
+                          <span className="ld-name">Insatt kapital</span>
+                          <span className="ld-count">paid in · insatt</span>
+                        </span>
+                      </td>
+                      <td className="num ld-sum">{fmtMoney(costBasisEq)}</td>
+                      <td className="num ld-sum">{fmtPct(shareBasis > 0 ? costBasisEq / shareBasis * 100 : 0)}</td>
+                      <td className="col-act"></td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
               {archivedParts.length > 0 && (
