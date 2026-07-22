@@ -222,6 +222,16 @@ input::placeholder { color: var(--ink-faint); }
 .current-mortgage-refresh { margin-top: 0.3rem; align-self: flex-start; }
 .mortgage-comparison-rows { min-width: 0; }
 
+/* Give the label a fixed share of each (equal-width) column so its wrapping
+   depends only on column width, not on the value width beside it. Otherwise a
+   borderline label like "Amortering per månad" wraps to two lines in a column
+   with a wide value but stays on one line where the value is narrow, throwing
+   the rows below it out of alignment between the three columns. The value fills
+   the rest and stays right-aligned for clean tabular reading. */
+.mortgage-comparison-rows .derived-row { gap: 0.5rem; }
+.mortgage-comparison-rows .derived-label { flex: 0 0 50%; min-width: 0; }
+.mortgage-comparison-rows .derived-value { flex: 1 1 auto; min-width: 0; text-align: right; }
+
 .bank-total-row {
   border-top: 1px solid var(--rule) !important;
   padding-top: 10px !important;
