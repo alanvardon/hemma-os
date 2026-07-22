@@ -198,28 +198,66 @@ input::placeholder { color: var(--ink-faint); }
   color: var(--ink);
   border-bottom: 1px solid var(--rule);
 }
-.current-mortgage-source, .current-mortgage-freshness, .current-mortgage-provenance, .current-mortgage-note {
+.current-mortgage-note {
   margin: 0;
   font-size: 12px;
   line-height: 1.45;
   color: var(--ink-soft);
 }
-.current-mortgage-source { color: var(--accent); font-weight: 600; }
 .current-mortgage-rate {
   min-height: 39px;
   display: flex;
   align-items: center;
   padding: 10px 12px;
+  /* Match the proposed-bank NumberInput exactly. Without an explicit size the
+     output inherits 15px/1.5 line-height and renders ~5px taller than the bank
+     inputs, pushing this column's breakdown rows out of step with them. */
+  font-size: 14px;
+  line-height: normal;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
   background: var(--input-bg);
   border: 1px solid var(--rule);
   border-radius: 10px;
 }
-.current-mortgage-footer { display: grid; gap: 0.45rem; margin-top: 0.7rem; }
-.current-mortgage-provenance { margin: 0; }
 .current-mortgage-state { display: grid; gap: 0.5rem; align-content: start; min-height: 8rem; }
-.current-mortgage-refresh { margin-top: 0.3rem; align-self: flex-start; }
+
+/* Provenance (source · freshness · amortisation basis) lives in an info popover
+   rather than as visible footer text, so the three columns stay lean. */
+.current-mortgage-footer { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.7rem; }
+.current-mortgage-refresh { margin: 0; }
+.current-mortgage-info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  line-height: 0;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.current-mortgage-info-btn:hover { color: var(--accent); }
+.current-mortgage-info-btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.current-mortgage-info-popover {
+  display: grid;
+  gap: 0.3rem;
+  max-width: 15rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--paper-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  z-index: 60;
+}
+.current-mortgage-info-popover p { margin: 0; }
+.current-mortgage-info-source { color: var(--accent); font-weight: 600; }
+.current-mortgage-info-arrow { fill: var(--paper-card); }
 .mortgage-comparison-rows { min-width: 0; }
 
 /* Give the label a fixed share of each (equal-width) column so its wrapping
