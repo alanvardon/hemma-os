@@ -17,12 +17,15 @@ import Bostadskalkyl from './Bostadskalkyl'
 import { useStore } from '../store/useStore'
 import { DEFAULT_INPUTS, DEFAULT_CONSTANTS } from '../lib/calc'
 import * as MortgageStore from '../lib/mortgage-store'
+import * as BudgetStore from '../lib/hushallsbudget-store'
 import * as storage from '../lib/storage'
 import type { Scenario } from '../lib/storage'
 import type { LoanPart, Payment, Mortgage, RatePeriod } from '../lib/mortgage'
 import type { ActiveMortgageBalanceSnapshot, ActiveMortgageCostSnapshot } from '../lib/mortgage-store'
+import { defaultState } from '../lib/hushallsbudget'
 
 vi.mock('../lib/mortgage-store')
+vi.mock('../lib/hushallsbudget-store')
 vi.mock('@number-flow/react', () => ({ default: ({ value }: { value: number }) => <span>{value}</span> }))
 
 // Fully mock the persistence adapter so hydrate + auto-save run against
@@ -111,9 +114,63 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
   vi.mocked(MortgageStore.loadActiveMortgageCostSnapshot).mockResolvedValue(null)
+  vi.mocked(BudgetStore.loadBudget).mockResolvedValue(null)
 })
 
 describe('Bostadskalkyl — live Bolånkoll mortgage comparison (plan 125)', () => {
+  it('shows that current shared costs are still loading rather than a made-up total', async () => {
+    const request = deferred<Awaited<ReturnType<typeof BudgetStore.loadBudget>>>()
+    vi.mocked(BudgetStore.loadBudget).mockReturnValueOnce(request.promise)
+
+    renderRoute('/bostadskalkyl/new')
+
+    expect(await screen.findByTestId('current-shared-cost-column')).toHaveTextContent('Hämtar delade kostnader från Hushållsbudget…')
+    request.resolve(null)
+  })
+
+  it('loads the saved Hushållsbudget joint-cost total read-only', async () => {
+    const budget = defaultState()
+    budget.costs = [
+      { id: 'joint-a', label: 'Boende', amount: 30_000, owner: 'joint' },
+      { id: 'joint-b', label: 'Mat', amount: 10_000, owner: 'joint' },
+      { id: 'individual', label: 'Eget', amount: 999, owner: 'a' },
+    ]
+    vi.mocked(BudgetStore.loadBudget).mockResolvedValue(budget)
+
+    renderRoute('/bostadskalkyl/new')
+
+    const proposedCosts = await screen.findByLabelText('Föreslagen bostads övriga kostnader')
+    await waitFor(() => expect(proposedCosts).toHaveAttribute('data-current-shared-cost-status', 'ready'))
+    expect(proposedCosts).toHaveAttribute('data-current-shared-cost', '40000')
+    const currentCosts = screen.getByTestId('current-shared-cost-column')
+    expect(currentCosts).toHaveTextContent('Hushåll nu')
+    expect(currentCosts).toHaveTextContent('40000')
+    expect(currentCosts).toHaveTextContent('Ingår i Hushåll nu')
+    expect(currentCosts).toHaveTextContent('Inte beräknad')
+    expect(BudgetStore.saveBudget).not.toHaveBeenCalled()
+    expect(storage.saveScenarios).not.toHaveBeenCalled()
+    expect(storage.saveDraft).not.toHaveBeenCalled()
+  })
+
+  it('distinguishes no saved Hushållsbudget from a rejected read without using defaults', async () => {
+    vi.mocked(BudgetStore.loadBudget).mockResolvedValueOnce(null)
+    const first = renderRoute('/bostadskalkyl/new')
+    const missing = await screen.findByLabelText('Föreslagen bostads övriga kostnader')
+    await waitFor(() => expect(missing).toHaveAttribute('data-current-shared-cost-status', 'empty'))
+    expect(missing).not.toHaveAttribute('data-current-shared-cost')
+    expect(screen.getByTestId('current-shared-cost-column')).toHaveTextContent('Ingen sparad Hushållsbudget hittades.')
+    first.unmount()
+
+    resetStore()
+    vi.mocked(BudgetStore.loadBudget).mockRejectedValueOnce(new Error('budget unavailable'))
+    renderRoute('/bostadskalkyl/new')
+    const rejected = await screen.findByLabelText('Föreslagen bostads övriga kostnader')
+    await waitFor(() => expect(rejected).toHaveAttribute('data-current-shared-cost-status', 'unavailable'))
+    expect(rejected).not.toHaveAttribute('data-current-shared-cost')
+    expect(screen.getByTestId('current-shared-cost-column')).toHaveTextContent('Hushållsbudget är inte tillgänglig just nu. Ingen nuvarande kostnad visas.')
+    expect(BudgetStore.saveBudget).not.toHaveBeenCalled()
+  })
+
   it('auto-loads a read-only current leg without persisting or replacing Plan 118 currentMortgage', async () => {
     vi.mocked(storage.loadScenarios).mockResolvedValue([scenario()])
     vi.mocked(MortgageStore.loadActiveMortgageCostSnapshot).mockResolvedValue(costSnapshot())
@@ -130,7 +187,7 @@ describe('Bostadskalkyl — live Bolånkoll mortgage comparison (plan 125)', () 
     // is not repeated in the aligned monthly-breakdown rows below it.
     expect(screen.getByTestId('current-mortgage-rate')).toHaveTextContent('3,25 %')
     expect(screen.getAllByText('Räntesats')).toHaveLength(3)
-    expect(screen.getByText(/Hushåll nu i Bolånkoll visar alla delade kostnader från Hushållsbudget/)).toBeTruthy()
+    expect(screen.getByText(/Hushåll nu visar alla delade kostnader från Hushållsbudget/)).toBeTruthy()
     // Deterministic fixture/defaults: current 6 337,50 kr/mån gross, Bank A
     // 26 812,50 and Bank B 28 762,50. All three gross-payment comparisons
     // must identify the cheaper leg and keep Swedish grouped `kr/mån` copy.

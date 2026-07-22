@@ -19,6 +19,15 @@ export type CurrentMortgageComparatorState =
   | { status: 'unavailable' }
   | { status: 'ready'; cost: ActiveAgreementMonthlyCost & { rate: number; interest: number }; updatedAt: Date }
 
+// Read-only state for the whole household's current shared monthly costs from
+// the saved Hushållsbudget. A saved zero remains ready; empty means no saved
+// budget exists, and unavailable means the read failed.
+export type CurrentSharedCostState =
+  | { status: 'loading' }
+  | { status: 'empty' }
+  | { status: 'unavailable' }
+  | { status: 'ready'; costsJoint: number }
+
 interface Props {
   inputs: Inputs
   setField: <K extends keyof Inputs>(key: K, value: Inputs[K]) => void
@@ -33,9 +42,10 @@ interface Props {
   onDismissPull: () => void
   currentComparator: CurrentMortgageComparatorState
   onRefreshCurrentComparator: () => void
+  currentSharedCosts: CurrentSharedCostState
 }
 
-export default function InputsColumn({ inputs: i, setField, figures: f, constants: c, onOpenDrift, onPullMortgage, pullStatus, pullPreview, onApplyPull, onDismissPull, currentComparator, onRefreshCurrentComparator }: Props) {
+export default function InputsColumn({ inputs: i, setField, figures: f, constants: c, onOpenDrift, onPullMortgage, pullStatus, pullPreview, onApplyPull, onDismissPull, currentComparator, onRefreshCurrentComparator, currentSharedCosts }: Props) {
   const [listingUrl, setListingUrl] = useState('')
 
   const bankAName = i.bankAName.trim() || 'Bank A'
@@ -178,7 +188,7 @@ export default function InputsColumn({ inputs: i, setField, figures: f, constant
           <BankCol name={i.bankBName} onName={(v) => setField('bankBName', v)} rate={i.interestRateB} onRate={(v) => setField('interestRateB', v)} bank={f.bankB} idSuffix="B" />
         </div>
         {comparisonDeltas && <ComparisonDeltas deltas={comparisonDeltas} bankAName={bankAName} bankBName={bankBName} />}
-        <ProposedHomeCosts bankA={f.bankA} bankB={f.bankB} bankAName={bankAName} bankBName={bankBName} />
+        <ProposedHomeCosts bankA={f.bankA} bankB={f.bankB} bankAName={bankAName} bankBName={bankBName} currentSharedCosts={currentSharedCosts} />
       </div>
 
       {/* Section 4 — stress test */}
@@ -373,7 +383,7 @@ function ComparisonDeltas({
   )
 }
 
-function ProposedHomeCosts({ bankA, bankB, bankAName, bankBName }: { bankA: BankFigures; bankB: BankFigures; bankAName: string; bankBName: string }) {
+function ProposedHomeCosts({ bankA, bankB, bankAName, bankBName, currentSharedCosts }: { bankA: BankFigures; bankB: BankFigures; bankAName: string; bankBName: string; currentSharedCosts: CurrentSharedCostState }) {
   const column = (name: string, bank: BankFigures) => (
     <div className="proposed-home-cost-column" key={name}>
       <span className="proposed-home-cost-name">{name}</span>
@@ -384,12 +394,46 @@ function ProposedHomeCosts({ bankA, bankB, bankAName, bankBName }: { bankA: Bank
     </div>
   )
   return (
-    <section className="proposed-home-costs" aria-label="Föreslagen bostads övriga kostnader">
+    <section
+      className="proposed-home-costs"
+      aria-label="Föreslagen bostads övriga kostnader"
+      data-current-shared-cost-status={currentSharedCosts.status}
+      data-current-shared-cost={currentSharedCosts.status === 'ready' ? currentSharedCosts.costsJoint : undefined}
+    >
       <p className="proposed-home-costs-title">Föreslagen bostad · utöver bolånejämförelsen</p>
-      <p className="proposed-home-costs-note">Hushåll nu i Bolånkoll visar alla delade kostnader från Hushållsbudget, inte bara boendet. Därför jämförs den inte med den föreslagna bostadens fastighetsavgift och drift här.</p>
-      <div className="proposed-home-cost-grid">{column(bankAName, bankA)}{column(bankBName, bankB)}</div>
+      <p className="proposed-home-costs-note">Hushåll nu visar alla delade kostnader från Hushållsbudget. Bank A och Bank B visar bara kostnader för den föreslagna bostaden.</p>
+      <div className="proposed-home-cost-grid">
+        <CurrentSharedCostsColumn state={currentSharedCosts} />
+        {column(bankAName, bankA)}
+        {column(bankBName, bankB)}
+      </div>
     </section>
   )
+}
+
+function CurrentSharedCostsColumn({ state }: { state: CurrentSharedCostState }) {
+  return (
+    <div className="proposed-home-cost-column current-shared-cost-column" data-testid="current-shared-cost-column">
+      <span className="proposed-home-cost-name">Hushåll nu</span>
+      {state.status === 'ready' ? (
+        <>
+          <DerivedRow label="Fastighetsavgift" value="Ingår i Hushåll nu" />
+          <DerivedRow label="Driftkostnad" value="Ingår i Hushåll nu" />
+          <DerivedRow rowClass="bank-total-row" label="Alla delade kostnader" value={<Money value={state.costsJoint} />} />
+          <DerivedRow rowClass="derived-effective" label="Efter uppskattat ränteavdrag" value="Inte beräknad" />
+        </>
+      ) : <CurrentSharedCostsStatus status={state.status} />}
+    </div>
+  )
+}
+
+function CurrentSharedCostsStatus({ status }: { status: Exclude<CurrentSharedCostState['status'], 'ready'> }) {
+  const message = status === 'loading'
+    ? 'Hämtar delade kostnader från Hushållsbudget…'
+    : status === 'empty'
+      ? 'Ingen sparad Hushållsbudget hittades.'
+      : 'Hushållsbudget är inte tillgänglig just nu. Ingen nuvarande kostnad visas.'
+  return <p className="current-shared-cost-status" role={status === 'unavailable' ? 'alert' : 'status'}>{message}</p>
 }
 
 function StressTest({ inputs, constants }: { inputs: Inputs; constants: Constants }) {

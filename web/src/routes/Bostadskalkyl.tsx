@@ -5,7 +5,7 @@ import { derive } from '../lib/calc'
 import { useStore } from '../store/useStore'
 import { useTheme } from '../App'
 import Icon from '../components/Icon'
-import InputsColumn, { type CurrentMortgageComparatorState } from '../components/InputsColumn'
+import InputsColumn, { type CurrentMortgageComparatorState, type CurrentSharedCostState } from '../components/InputsColumn'
 import SummaryColumn from '../components/SummaryColumn'
 import SavePrompt from '../components/SavePrompt'
 import DriftModal from '../components/DriftModal'
@@ -14,6 +14,8 @@ import ConstantsModal from '../components/ConstantsModal'
 import { Money } from '../components/AnimatedNumber'
 import { loadActiveMortgageCostSnapshot, loadMortgageBalanceSnapshot } from '../lib/mortgage-store'
 import { activeAgreementBalance, activeAgreementMonthlyCost, activeAgreementMortgage } from '../lib/mortgage'
+import { loadBudget } from '../lib/hushallsbudget-store'
+import { computeBudget } from '../lib/hushallsbudget'
 
 export type PullStatus = 'idle' | 'loading' | 'error' | 'empty'
 
@@ -91,6 +93,13 @@ export default function Bostadskalkyl() {
   const [currentComparator, setCurrentComparator] = useState<CurrentMortgageComparatorState>({ status: 'loading' })
   const comparatorReqRef = useRef(0)
 
+  // The current household total shown in Bolånkoll comes from the saved
+  // Hushållsbudget's joint costs. Keep this independent from the mortgage
+  // snapshot: a missing budget is authoritative empty data, while a rejected
+  // read is unavailable and must never fall back to the example budget.
+  const [currentSharedCosts, setCurrentSharedCosts] = useState<CurrentSharedCostState>({ status: 'loading' })
+  const sharedCostsReqRef = useRef(0)
+
   const refreshCurrentComparator = useCallback(async () => {
     const reqId = ++comparatorReqRef.current
     setCurrentComparator({ status: 'loading' })
@@ -119,17 +128,37 @@ export default function Bostadskalkyl() {
     setCurrentComparator({ status: 'ready', cost: { ...cost, rate: cost.rate, interest: cost.interest }, updatedAt: new Date() })
   }, [])
 
+  const loadCurrentSharedCosts = useCallback(async () => {
+    const reqId = ++sharedCostsReqRef.current
+    setCurrentSharedCosts({ status: 'loading' })
+    try {
+      const budget = await loadBudget()
+      if (reqId !== sharedCostsReqRef.current) return
+      if (!budget) {
+        setCurrentSharedCosts({ status: 'empty' })
+        return
+      }
+      setCurrentSharedCosts({ status: 'ready', costsJoint: computeBudget(budget).costsJoint })
+    } catch {
+      if (reqId !== sharedCostsReqRef.current) return
+      setCurrentSharedCosts({ status: 'unavailable' })
+    }
+  }, [])
+
   // Auto-load on every Bostadskalkyl visit. The snapshot loader captures one
   // household scope and returns either all four resources or no live result.
   useEffect(() => {
     const comparatorRequests = comparatorReqRef
     const pullRequests = pullReqRef
+    const sharedCostRequests = sharedCostsReqRef
     void refreshCurrentComparator()
+    void loadCurrentSharedCosts()
     return () => {
       comparatorRequests.current++
       pullRequests.current++
+      sharedCostRequests.current++
     }
-  }, [refreshCurrentComparator])
+  }, [loadCurrentSharedCosts, refreshCurrentComparator])
 
   const handlePullMortgage = async () => {
     const reqId = ++pullReqRef.current
@@ -244,6 +273,7 @@ export default function Bostadskalkyl() {
           onDismissPull={handleDismissPull}
           currentComparator={currentComparator}
           onRefreshCurrentComparator={refreshCurrentComparator}
+          currentSharedCosts={currentSharedCosts}
         />
         <SummaryColumn
           inputs={inputs}
