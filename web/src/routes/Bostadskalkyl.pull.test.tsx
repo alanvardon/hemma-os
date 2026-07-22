@@ -126,6 +126,11 @@ describe('Bostadskalkyl — live Bolånkoll mortgage comparison (plan 125)', () 
     expect(screen.getByTestId('proposed-bank-a')).toBeTruthy()
     expect(screen.getByTestId('proposed-bank-b')).toBeTruthy()
     expect(screen.getByText('Föreslagen bostad · utöver bolånejämförelsen')).toBeTruthy()
+    // The current leg uses the same rate slot as both proposed banks; the rate
+    // is not repeated in the aligned monthly-breakdown rows below it.
+    expect(screen.getByTestId('current-mortgage-rate')).toHaveTextContent('3,25 %')
+    expect(screen.getAllByText('Räntesats')).toHaveLength(3)
+    expect(screen.getByText(/Hushåll nu i Bolånkoll visar alla delade kostnader från Hushållsbudget/)).toBeTruthy()
     // Deterministic fixture/defaults: current 6 337,50 kr/mån gross, Bank A
     // 26 812,50 and Bank B 28 762,50. All three gross-payment comparisons
     // must identify the cheaper leg and keep Swedish grouped `kr/mån` copy.

@@ -281,14 +281,21 @@ function CurrentMortgageCol({
     <div className="bank-col current-mortgage-col" data-testid="current-mortgage-column">
       <div className="bank-header current-mortgage-header">
         <span className="current-mortgage-title">Nuvarande bolån</span>
-        <span className="current-mortgage-source">Bolånkoll · live</span>
       </div>
       {state.status === 'ready' ? leg && (
         <>
-          <div className="current-mortgage-freshness">Uppdaterad nu</div>
+          <Field label="Räntesats">
+            <output className="current-mortgage-rate" data-testid="current-mortgage-rate">
+              {leg.rate.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %
+            </output>
+          </Field>
           <MortgageComparisonRows leg={leg} />
-          <AmortizationSource source={state.cost.amortizationSource} />
-          <button type="button" className="field-breakdown-btn current-mortgage-refresh" onClick={onRefresh}>Uppdatera ›</button>
+          <footer className="current-mortgage-footer">
+            <span className="current-mortgage-source">Bolånkoll · live</span>
+            <span className="current-mortgage-freshness">Uppdaterad nu</span>
+            <AmortizationSource source={state.cost.amortizationSource} />
+            <button type="button" className="field-breakdown-btn current-mortgage-refresh" onClick={onRefresh}>Uppdatera ›</button>
+          </footer>
         </>
       ) : <CurrentMortgageStatus state={state} onRefresh={onRefresh} />}
     </div>
@@ -326,7 +333,6 @@ function MortgageComparisonRows({ leg }: { leg: MortgageComparisonLeg }) {
   return (
     <div className="bank-breakdown mortgage-comparison-rows">
       <DerivedRow label="Bolåneskuld" value={<Money value={leg.balance} />} />
-      <DerivedRow label="Räntesats" value={<>{leg.rate.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %</>} />
       <DerivedRow label="Ränta per månad" value={<Money value={leg.interest} />} />
       <DerivedRow label="Amortering per månad" value={<Money value={leg.amortization} />} />
       <DerivedRow rowClass="bank-total-row" label="Bolånebetalning" value={<Money value={leg.gross} />} />
@@ -380,7 +386,7 @@ function ProposedHomeCosts({ bankA, bankB, bankAName, bankBName }: { bankA: Bank
   return (
     <section className="proposed-home-costs" aria-label="Föreslagen bostads övriga kostnader">
       <p className="proposed-home-costs-title">Föreslagen bostad · utöver bolånejämförelsen</p>
-      <p className="proposed-home-costs-note">Fastighetsavgift och drift finns inte i Bolånkoll och ingår därför bara i de föreslagna totalerna.</p>
+      <p className="proposed-home-costs-note">Hushåll nu i Bolånkoll visar alla delade kostnader från Hushållsbudget, inte bara boendet. Därför jämförs den inte med den föreslagna bostadens fastighetsavgift och drift här.</p>
       <div className="proposed-home-cost-grid">{column(bankAName, bankA)}{column(bankBName, bankB)}</div>
     </section>
   )

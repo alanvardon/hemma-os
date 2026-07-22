@@ -184,8 +184,16 @@ input::placeholder { color: var(--ink-faint); }
 
 .bank-col .field { margin-bottom: 0.75rem; }
 
-.current-mortgage-header { display: flex; flex-direction: column; gap: 2px; }
-.current-mortgage-title { font-family: var(--font-display); font-size: 17px; color: var(--ink); }
+.current-mortgage-title {
+  display: block;
+  padding: 2px 0 6px;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: normal;
+  color: var(--ink);
+  border-bottom: 1px solid var(--rule);
+}
 .current-mortgage-source, .current-mortgage-freshness, .current-mortgage-provenance, .current-mortgage-note {
   margin: 0;
   font-size: 12px;
@@ -193,10 +201,21 @@ input::placeholder { color: var(--ink-faint); }
   color: var(--ink-soft);
 }
 .current-mortgage-source { color: var(--accent); font-weight: 600; }
-.current-mortgage-freshness { margin-bottom: 0.75rem; }
-.current-mortgage-provenance { margin-top: 0.7rem; }
+.current-mortgage-rate {
+  min-height: 39px;
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--input-bg);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+}
+.current-mortgage-footer { display: grid; gap: 0.45rem; margin-top: 0.7rem; }
+.current-mortgage-provenance { margin: 0; }
 .current-mortgage-state { display: grid; gap: 0.5rem; align-content: start; min-height: 8rem; }
-.current-mortgage-refresh { margin-top: 0.75rem; align-self: flex-start; }
+.current-mortgage-refresh { margin-top: 0.3rem; align-self: flex-start; }
 .mortgage-comparison-rows { min-width: 0; }
 
 .bank-total-row {
