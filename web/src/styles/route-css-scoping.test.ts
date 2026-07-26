@@ -16,7 +16,7 @@ const routeSheets: readonly RouteSheet[] = [
   { file: 'student-loan.css', root: '.sl-root' },
   { file: 'bolanekoll.css', root: '.bk-root' },
   { file: 'manadsavslut.css', root: '.ma-root' },
-  { file: 'hushallsbudget.css', root: '.hb-root', allowUnscoped: ['html:has(dialog.hb-modal[open])'] },
+  { file: 'hushallsbudget.css', root: '.hb-root' },
   { file: 'huskalendern.css', root: '.hk-root' },
   { file: 'dashboard.css', root: '.bk-page-root' },
 ]

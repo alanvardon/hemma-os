@@ -73,7 +73,23 @@
    a modal <dialog> (dialog:modal { margin: auto }), which would otherwise pin
    every native dialog — bk-dialog, ma-dialog, hb-modal — to the top-left.
    Restore it. */
-dialog:modal { margin: auto; }
+dialog:modal {
+  margin: auto;
+  /* The UA cap is calc(100% - 36px) of the LARGE viewport, so on a phone a tall
+     dialog runs behind the browser chrome with no scrollbar to recover it — see
+     --dialog-max-h in tokens.css. Per-dialog rules that set their own
+     max-height (hb-modal) must fold this in themselves. */
+  max-height: var(--dialog-max-h);
+  /* Content taller than the cap scrolls inside the dialog (UA overflow:auto);
+     keep that gesture from chaining out to the page underneath. */
+  overscroll-behavior: contain;
+}
+
+/* showModal() inert-s the background but does not stop it scrolling. On mobile
+   that reads as a broken modal: the drag moves the page behind instead of the
+   dialog's own overflow. (Hushållsbudget shipped this for .hb-modal alone;
+   :modal generalises it to every native dialog.) */
+html:has(dialog:modal) { overflow: hidden; }
 
 /* Default: page scrolls normally (hub, future scrollable routes).
    The .calc-layout class is toggled onto <html> by the Bostadskalkyl route to
