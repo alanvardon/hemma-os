@@ -1394,7 +1394,14 @@ export function weightedAvgRate(parts: LoanPart[], periods: RatePeriod[], paymen
 
 export function derivedRate(part: LoanPart, payments: Payment[], opts?: { trailing?: number }): number | null {
   const trail = opts?.trailing || 3
-  const ints = payments.filter(p => p?.loan_part_id === part?.id && p.kind === 'interest' && p.date && Math.abs(Number(p.amount)) > 0)
+  // Historiken (plan 127 §5) reverse-engineers the rate from REAL rows only.
+  // An accepted forecast row stays authoritative for balance (see
+  // resolvePartBalance's comment above) but plan 126 froze it as
+  // source:'predicted' FOREVER, so replaying it back in here would let a
+  // logged prediction inflate confidence in the very number that produced it.
+  // `source !== 'predicted'` is the same real-row marker used throughout this
+  // file (partOriginal, matchPredictedRows, stalePredictedRows, …).
+  const ints = payments.filter(p => p?.loan_part_id === part?.id && p.kind === 'interest' && p.source !== 'predicted' && p.date && Math.abs(Number(p.amount)) > 0)
     .sort((a, b) => a.date.localeCompare(b.date))
   if (ints.length < 2) return null
   const ps: Array<{ rate: number; days: number }> = []
