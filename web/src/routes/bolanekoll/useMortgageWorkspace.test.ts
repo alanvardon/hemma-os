@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { defaultSettings, type Bank, type LoanPart, type Mortgage } from '../../lib/mortgage'
+import { defaultSettings, type Bank, type LoanPart, type Mortgage, type RatePeriod } from '../../lib/mortgage'
 import * as Store from '../../lib/mortgage-store'
 import { useMortgageWorkspace } from './useMortgageWorkspace'
 
@@ -39,7 +39,7 @@ const oldBank: Bank = {
 }
 const newBank: Bank = { ...oldBank, id: 'b2', label: 'New bank' }
 
-function seedReads(parts: LoanPart[] | Promise<LoanPart[]> = [cloudPart]) {
+function seedReads(parts: LoanPart[] | Promise<LoanPart[]> = [cloudPart], periods: RatePeriod[] = []) {
   vi.mocked(Store.cachedSnapshot).mockReturnValue({
     version: 6,
     banks: [oldBank, newBank],
@@ -47,14 +47,14 @@ function seedReads(parts: LoanPart[] | Promise<LoanPart[]> = [cloudPart]) {
     loan_parts: [cachedPart],
     payments: [],
     valuations: [],
-    rate_periods: [],
+    rate_periods: periods,
     contributions: [],
     settings: defaultSettings(),
   })
   vi.mocked(Store.listLoanParts).mockImplementation(() => Promise.resolve(parts))
   vi.mocked(Store.listPayments).mockResolvedValue([])
   vi.mocked(Store.listValuations).mockResolvedValue([])
-  vi.mocked(Store.listRatePeriods).mockResolvedValue([])
+  vi.mocked(Store.listRatePeriods).mockResolvedValue(periods)
   vi.mocked(Store.listContributions).mockResolvedValue([])
   vi.mocked(Store.getSettings).mockResolvedValue(defaultSettings())
   vi.mocked(Store.listBanks).mockResolvedValue([oldBank, newBank])
@@ -150,5 +150,178 @@ describe('useMortgageWorkspace', () => {
     expect(payments).not.toHaveProperty('refreshPredicted')
     expect(Object.keys(payments).sort())
       .toEqual(['clear', 'copy', 'logPredicted', 'remove', 'save'])
+  })
+})
+
+// ── Plan 127 §3 — the sequential rate-period write ───────────────────────────
+// Creating a rate period is the one workspace write that touches two rows: the
+// new period, then the predecessor it supersedes. The atomic RPC was cut
+// deliberately (plan 127 Fix 3), so the whole safety argument rests on step 2
+// failing LOUDLY and naming the repair. These pin the order of the writes, that
+// nothing is written when the draft is rejected, and that a half-completed
+// transition comes back as a specific, dated instruction rather than
+// "kunde inte spara".
+function ratePeriod(p: Partial<RatePeriod>): RatePeriod {
+  return {
+    id: 'rp-prev', created_at: '2026-05-01T00:00:00Z', loan_part_id: 'part-1',
+    start_date: '2026-05-01', end_date: null, rate: 3.93, rate_type: 'rörlig', ...p,
+  }
+}
+const newRate = {
+  loan_part_id: 'part-1', start_date: '2026-08-01', end_date: null,
+  rate: 4.29, rate_type: 'rörlig' as const,
+}
+
+async function mountWorkspace() {
+  const { result } = renderHook(() => useMortgageWorkspace())
+  await waitFor(() => expect(result.current.state.loaded).toBe(true))
+  return result
+}
+
+describe('useMortgageWorkspace.savePeriod — sequential create with a visible failure', () => {
+  it('inserts the new period first, then closes the predecessor on the day before', async () => {
+    seedReads([cloudPart], [ratePeriod({ id: 'rp-prev', end_date: null })])
+    const result = await mountWorkspace()
+
+    let outcome!: Awaited<ReturnType<typeof result.current.actions.parts.savePeriod>>
+    await act(async () => { outcome = await result.current.actions.parts.savePeriod('part-1', newRate) })
+
+    expect(outcome).toEqual({ ok: true })
+    expect(Store.addRatePeriod).toHaveBeenCalledWith({
+      loan_part_id: 'part-1', start_date: '2026-08-01', end_date: null, rate: 4.29, rate_type: 'rörlig',
+    })
+    expect(Store.updateRatePeriod).toHaveBeenCalledWith('rp-prev', { end_date: '2026-07-31' })
+    // The insert must land before the close: the reverse order would leave the
+    // part with no rate at all if the second write failed.
+    expect(vi.mocked(Store.addRatePeriod).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(Store.updateRatePeriod).mock.invocationCallOrder[0])
+    expect(result.current.feedback.toast).toEqual({ msg: 'Ny räntesats sparad.', show: true })
+  })
+
+  it('reports the exact date to set by hand when closing the predecessor fails', async () => {
+    seedReads([cloudPart], [ratePeriod({ id: 'rp-prev', end_date: null })])
+    vi.mocked(Store.updateRatePeriod).mockRejectedValueOnce({ message: 'Failed to fetch' })
+    const result = await mountWorkspace()
+    const readsBeforeSave = vi.mocked(Store.listRatePeriods).mock.calls.length
+
+    let outcome!: Awaited<ReturnType<typeof result.current.actions.parts.savePeriod>>
+    await act(async () => { outcome = await result.current.actions.parts.savePeriod('part-1', newRate) })
+
+    expect(outcome).toEqual({
+      ok: false,
+      message: 'Den nya perioden sparades, men den föregående kunde inte avslutas. '
+        + 'Perioderna överlappar — öppna föregående period och sätt slutdatum 2026-07-31.',
+    })
+    // Not the generic persistence copy: that would hide the outstanding repair.
+    expect(outcome.ok === false && outcome.message).not.toBe('Ingen anslutning. Ändringen sparades inte i molnet.')
+    // The new period IS persisted; only the close is missing.
+    expect(Store.addRatePeriod).toHaveBeenCalledTimes(1)
+    expect(result.current.feedback.toast.msg).toContain('sätt slutdatum 2026-07-31')
+    // Refreshed anyway, so the page shows the overlap the owner must repair.
+    expect(vi.mocked(Store.listRatePeriods).mock.calls.length).toBeGreaterThan(readsBeforeSave)
+  })
+
+  it('writes nothing further when the insert itself fails', async () => {
+    seedReads([cloudPart], [ratePeriod({ id: 'rp-prev', end_date: null })])
+    vi.mocked(Store.addRatePeriod).mockRejectedValueOnce({ message: 'Failed to fetch' })
+    const result = await mountWorkspace()
+
+    let outcome!: Awaited<ReturnType<typeof result.current.actions.parts.savePeriod>>
+    await act(async () => { outcome = await result.current.actions.parts.savePeriod('part-1', newRate) })
+
+    expect(outcome).toEqual({ ok: false, message: 'Ingen anslutning. Ändringen sparades inte i molnet.' })
+    expect(Store.updateRatePeriod).not.toHaveBeenCalled()
+  })
+
+  it('performs exactly one write when the predecessor is already contiguous', async () => {
+    seedReads([cloudPart], [ratePeriod({ id: 'rp-prev', end_date: '2026-07-31' })])
+    const result = await mountWorkspace()
+
+    let outcome!: Awaited<ReturnType<typeof result.current.actions.parts.savePeriod>>
+    await act(async () => { outcome = await result.current.actions.parts.savePeriod('part-1', newRate) })
+
+    expect(outcome).toEqual({ ok: true })
+    expect(Store.addRatePeriod).toHaveBeenCalledTimes(1)
+    expect(Store.updateRatePeriod).not.toHaveBeenCalled()
+  })
+
+  it('writes nothing at all when the draft leaves a gap after the predecessor', async () => {
+    seedReads([cloudPart], [ratePeriod({ id: 'rp-prev', end_date: '2026-07-31' })])
+    const result = await mountWorkspace()
+
+    let outcome!: Awaited<ReturnType<typeof result.current.actions.parts.savePeriod>>
+    await act(async () => {
+      outcome = await result.current.actions.parts.savePeriod('part-1', { ...newRate, start_date: '2026-08-05' })
+    })
+
+    expect(outcome).toEqual({
+      ok: false,
+      message: 'Perioderna lämnar ett glapp. Den nya perioden måste börja 2026-08-01 '
+        + 'eller så behöver den föregående perioden korrigeras.',
+    })
+    expect(Store.addRatePeriod).not.toHaveBeenCalled()
+    expect(Store.updateRatePeriod).not.toHaveBeenCalled()
+  })
+
+  it('writes nothing at all when the draft duplicates an existing start date', async () => {
+    seedReads([cloudPart], [ratePeriod({ id: 'rp-prev', start_date: '2026-08-01', end_date: null })])
+    const result = await mountWorkspace()
+
+    let outcome!: Awaited<ReturnType<typeof result.current.actions.parts.savePeriod>>
+    await act(async () => { outcome = await result.current.actions.parts.savePeriod('part-1', newRate) })
+
+    expect(outcome.ok).toBe(false)
+    expect(outcome.ok === false && outcome.message).toContain('Redigera den befintliga perioden')
+    expect(Store.addRatePeriod).not.toHaveBeenCalled()
+    expect(Store.updateRatePeriod).not.toHaveBeenCalled()
+  })
+
+  it('writes nothing at all when the rate is missing', async () => {
+    seedReads([cloudPart], [])
+    const result = await mountWorkspace()
+
+    let outcome!: Awaited<ReturnType<typeof result.current.actions.parts.savePeriod>>
+    await act(async () => {
+      outcome = await result.current.actions.parts.savePeriod('part-1', { ...newRate, rate: null })
+    })
+
+    expect(outcome).toEqual({ ok: false, message: 'Ange en räntesats i procent, noll eller högre.' })
+    expect(Store.addRatePeriod).not.toHaveBeenCalled()
+  })
+
+  it('keeps editing on the plain update path without re-resolving neighbours', async () => {
+    // The predecessor overlaps the edited row on purpose: an edit must not
+    // silently close it (plan 127 §1 cut that deliberately).
+    seedReads([cloudPart], [
+      ratePeriod({ id: 'rp-prev', end_date: null }),
+      ratePeriod({ id: 'rp-edit', start_date: '2026-08-01', end_date: null, rate: 4.29 }),
+    ])
+    const result = await mountWorkspace()
+
+    let outcome!: Awaited<ReturnType<typeof result.current.actions.parts.savePeriod>>
+    await act(async () => {
+      outcome = await result.current.actions.parts.savePeriod('part-1', { ...newRate, rate: 4.35 }, 'rp-edit')
+    })
+
+    expect(outcome).toEqual({ ok: true })
+    expect(Store.updateRatePeriod).toHaveBeenCalledTimes(1)
+    expect(Store.updateRatePeriod).toHaveBeenCalledWith('rp-edit', { ...newRate, rate: 4.35 })
+    expect(Store.addRatePeriod).not.toHaveBeenCalled()
+    expect(result.current.feedback.toast).toEqual({ msg: 'Ränteperioden uppdaterad.', show: true })
+  })
+
+  it('rejects an edit whose villkorsändringsdag precedes its start date', async () => {
+    seedReads([cloudPart], [ratePeriod({ id: 'rp-edit', start_date: '2026-08-01', end_date: null })])
+    const result = await mountWorkspace()
+
+    let outcome!: Awaited<ReturnType<typeof result.current.actions.parts.savePeriod>>
+    await act(async () => {
+      outcome = await result.current.actions.parts.savePeriod(
+        'part-1', { ...newRate, end_date: '2026-07-01' }, 'rp-edit',
+      )
+    })
+
+    expect(outcome).toEqual({ ok: false, message: 'Villkorsändringsdagen kan inte infalla före startdatumet.' })
+    expect(Store.updateRatePeriod).not.toHaveBeenCalled()
   })
 })

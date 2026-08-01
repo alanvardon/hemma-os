@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ChevronRight, Copy, EllipsisVertical, Pencil, Settings2, X } from 'lucide-react'
+import { ChevronRight, Copy, EllipsisVertical, Pencil, Percent, Settings2, X } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import RiksbankChart from '../components/charts/RiksbankChart'
@@ -31,6 +31,7 @@ import {
   todayISO,
   bankForPart, suggestBankProfile, effectiveBankProfile,
   isExtraAmortering, extraAmorteringAllocation,
+  upcomingRatePeriods,
 } from '../lib/mortgage'
 import type { LoanPart, LoanPartGroup, Payment, CsvResult, ColMapping, Owner, ExpectedCharge, Mortgage, CatalogBank, EffectiveBankProfile } from '../lib/mortgage'
 import {
@@ -43,6 +44,7 @@ import * as Store from '../lib/mortgage-store'
 import { loadBudget } from '../lib/hushallsbudget-store'
 import { computeBudget } from '../lib/hushallsbudget'
 import PartDialog from './bolanekoll/PartDialog'
+import PeriodDialog from './bolanekoll/PeriodDialog'
 import ValuationDialog from './bolanekoll/ValuationDialog'
 import PaymentDialog from './bolanekoll/PaymentDialog'
 import CopyToPartsDialog from './bolanekoll/CopyToPartsDialog'
@@ -86,6 +88,13 @@ function fmtChargeMonth(iso: string): string {
 function swedishList(names: string[]): string {
   if (names.length <= 1) return names[0] ?? ''
   return names.slice(0, -1).join(', ') + ' och ' + names[names.length - 1]
+}
+
+/** "om 1 dag" / "om 2 dagar" — the Kommande band's countdown chip (plan 127
+ * §4). Correct Swedish singular/plural only; `n` is always >= 1 here because
+ * `upcomingRatePeriods` never returns a group starting today or earlier. */
+function omDagarLabel(n: number): string {
+  return 'om ' + n + ' dag' + (n === 1 ? '' : 'ar')
 }
 
 /** The rate input is deliberately stricter than parseAmount(): a trailing
@@ -138,6 +147,10 @@ export default function Bolanekoll() {
   const scenarioRateSavingRef = useRef<number | null>(null)
 
   const [partDlg, setPartDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
+  // Plan 127 §2 — the ONE standalone PeriodDialog instance for the whole page:
+  // a row's percent action and PartDialog's rate-history editor both target
+  // this same state, so a correction never stacks on top of another dialog.
+  const [periodDlg, setPeriodDlg] = useState<{ open: boolean; partId: string | null; id: string | null }>({ open: false, partId: null, id: null })
   const [valDlg, setValDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [payDlg, setPayDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [copyDlg, setCopyDlg] = useState<{ open: boolean; source: Payment | null }>({ open: false, source: null })
@@ -145,6 +158,8 @@ export default function Bolanekoll() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const groupsSeeded = useRef(false)
   const [avslutadeOpen, setAvslutadeOpen] = useState(false)
+  // Plan 127 §4 — the Kommande band starts collapsed, same as Avslutade.
+  const [kommandeOpen, setKommandeOpen] = useState(false)
   const reduceMotion = useReducedMotion()
   const [settingsDlg, setSettingsDlg] = useState(false)
   const [profileDlg, setProfileDlg] = useState(false)
@@ -227,6 +242,11 @@ export default function Bolanekoll() {
   // parts, which are reached through the history modal.
   const activeParts = useMemo(() => activeViewParts.filter(p => !p.archived), [activeViewParts])
   const archivedParts = useMemo(() => activeViewParts.filter(p => p.archived), [activeViewParts])
+  // Plan 127 §4 — Kommande band: future rate periods on the live Lånedelar
+  // rows only (`activeParts`, never archived/other-agreement parts), grouped
+  // by the day they take effect. Pure grouping/counting lives in
+  // upcomingRatePeriods; this component only renders what it returns.
+  const upcoming = useMemo(() => upcomingRatePeriods(activeParts, periods, today), [activeParts, periods, today])
 
   const balance = useMemo(() => totalBalance(activeViewParts, activeViewPayments), [activeViewParts, activeViewPayments])
   // The balance resolver is also the provenance source for the dashboard: a
@@ -330,8 +350,17 @@ export default function Bolanekoll() {
         {fmtPct(rate)}{type ? ' · ' + (type === 'bunden' ? 'bunden' : 'rörlig') : ''}
       </span>
     )
-  const partActs = (p: LoanPart) => (
+  // `active` adds the one-click "Ny räntesats" action (plan 127 §2) — only for
+  // the live Lånedelar rows, never the Avslutade (archived) list, which reuses
+  // this same function for its Edit/Ta bort pair.
+  const partActs = (p: LoanPart, active?: boolean) => (
     <>
+      {active && (
+        <button type="button" className="icon-btn" title="Ny räntesats" aria-label="Ny räntesats"
+          onClick={() => setPeriodDlg({ open: true, partId: p.id, id: null })}>
+          <Icon icon={Percent} />
+        </button>
+      )}
       <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPartDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button>
       <button type="button" className="icon-btn" data-del-part title="Ta bort" aria-label="Ta bort" onClick={async () => { if (await confirm({ title: 'Ta bort lånedelen?', message: 'Alla dess betalningar och ränteperioder tas bort. Det går inte att ångra.' })) handleDeletePart(p.id) }}><Icon icon={X} /></button>
     </>
@@ -743,6 +772,18 @@ export default function Bolanekoll() {
   const handleSavePeriod = workspaceActions.parts.savePeriod
   const handleDeletePeriod = workspaceActions.parts.removePeriod
   const handleEnableTracking = workspaceActions.settings.enableContributionTracking
+  const closePeriodDlg = () => setPeriodDlg({ open: false, partId: null, id: null })
+  // Plan 127 §2 — "Ny räntesats" (a Lånedelar row action) and PartDialog's
+  // rate-history editor both funnel through this: null periodId is a create,
+  // a real one is a correction, and both open the SAME standalone dialog.
+  function handleEditPeriod(partId: string, periodId: string | null) {
+    setPartDlg({ open: false, id: null })
+    setPeriodDlg({ open: true, partId, id: periodId })
+  }
+  function handleDeletePeriodFromDialog(id: string) {
+    handleDeletePeriod(id)
+    closePeriodDlg()
+  }
 
   async function handleSaveVal(data: Parameters<typeof workspaceActions.valuations.save>[0]) {
     if (await workspaceActions.valuations.save(data, valDlg.id)) {
@@ -1428,6 +1469,62 @@ export default function Bolanekoll() {
               </span>
             </div>
           )}
+          {/* Plan 127 §4 — Kommande: rate periods that have not started yet on
+              the live Lånedelar rows. Default-collapsed, no empty state (the
+              whole band renders only when something is actually upcoming),
+              and structurally the same disclosure pattern as Avslutade below
+              (chevron toggle + Collapse) so the two preview/archive bands
+              read as one family. A SEPARATE table from Lånedelar, never a
+              merged row, so Balance/Share still close to exactly 100 % once —
+              these parts' balances are already counted in their current
+              Lånedelar row. */}
+          {upcoming.groups.length > 0 && (() => {
+            const days = daysUntil(upcoming.earliestStartDate!, today)
+            const n = upcoming.uniquePartCount
+            return (
+              <div className="kommande-section">
+                <button type="button" className="kommande-toggle" aria-expanded={kommandeOpen}
+                  aria-label={(kommandeOpen ? 'Dölj' : 'Visa') + ' kommande ränteperioder'}
+                  onClick={() => setKommandeOpen(v => !v)}>
+                  <motion.span
+                    className="expand-btn"
+                    animate={{ rotate: kommandeOpen ? 90 : 0 }}
+                    transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                  ><Icon icon={ChevronRight} size={12} /></motion.span>
+                  Kommande
+                  {days != null && <span className="kommande-chip">{omDagarLabel(days)}</span>}
+                  <span className="count-pill">{n} lånedel{n === 1 ? '' : 'ar'}</span>
+                </button>
+                <Collapse open={kommandeOpen}>
+                  <div className="table-wrap kommande-table-wrap">
+                    <table className="data-table kommande-table">
+                      <thead>
+                        <tr>
+                          <th>Startdatum</th><th>Ränta</th><th>Lånedel</th><th>Slutdatum</th><th className="col-act"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {upcoming.groups.flatMap(g => g.items.map(it => (
+                          <tr key={it.period.id}>
+                            <td className="col-date">{fmtRateDate(g.start_date)}</td>
+                            <td>{rateBadge(it.period.rate, it.period.rate_type)}</td>
+                            <td>{it.partLabel || '(no name)'}</td>
+                            <td className="col-date">{it.period.end_date ? fmtRateDate(it.period.end_date) : '—'}</td>
+                            <td className="col-act">
+                              <button type="button" className="icon-btn" title="Redigera" aria-label={'Redigera ränteperiod för ' + (it.partLabel || 'lånedel')}
+                                onClick={() => handleEditPeriod(it.partId, it.period.id)}>
+                                <Icon icon={Pencil} />
+                              </button>
+                            </td>
+                          </tr>
+                        )))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Collapse>
+              </div>
+            )
+          })()}
           {!activeViewParts.length ? (
             <p className="empty">
               {activeMortgage
@@ -1483,7 +1580,7 @@ export default function Bolanekoll() {
                                 </td>
                                 <td className="num"><CellReveal reduce={reduceMotion}>{fmtMoney(bal)}</CellReveal></td>
                                 <td className="num"><CellReveal reduce={reduceMotion}>{fmtPct(share)}</CellReveal></td>
-                                <td className="col-act"><CellReveal reduce={reduceMotion}>{partActs(p)}</CellReveal></td>
+                                <td className="col-act"><CellReveal reduce={reduceMotion}>{partActs(p, true)}</CellReveal></td>
                               </motion.tr>
                             )
                           })}
@@ -1959,7 +2056,14 @@ export default function Bolanekoll() {
       {/* ── Dialogs ── */}
       <PartDialog open={partDlg.open} id={partDlg.id} parts={parts} periods={periods} payments={payments}
         onSave={handleSavePart} onDelete={handleDeletePart} onClose={() => setPartDlg({ open: false, id: null })}
-        onSavePeriod={handleSavePeriod} onDeletePeriod={handleDeletePeriod} />
+        onEditPeriod={handleEditPeriod} onDeletePeriod={handleDeletePeriod} />
+      {/* Plan 127 §2 — the ONE standalone rate-period dialog on the page: the
+          Lånedelar row's "Ny räntesats" action and PartDialog's rate-history
+          editor both target `periodDlg`, so a correction never opens on top of
+          another dialog. */}
+      <PeriodDialog open={periodDlg.open} partId={periodDlg.partId} id={periodDlg.id} periods={periods}
+        onSave={data => handleSavePeriod(periodDlg.partId!, data, periodDlg.id || undefined)}
+        onDelete={handleDeletePeriodFromDialog} onClose={closePeriodDlg} />
       <ValuationDialog open={valDlg.open} id={valDlg.id} valuations={valuations} onSave={handleSaveVal} onDelete={handleDeleteVal} onClose={() => setValDlg({ open: false, id: null })} />
       <PaymentDialog open={payDlg.open} id={payDlg.id} payments={payments} parts={parts} settings={settings}
         mortgages={mortgages} banks={banks} activeMortgageId={activeMortgage?.id ?? null}

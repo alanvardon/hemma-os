@@ -547,7 +547,7 @@
     .lanedelar-table th:nth-child(3),
     .lanedelar-table td:nth-child(3) { width: 92px; }    /* Share   */
     .lanedelar-table th.col-act,
-    .lanedelar-table td.col-act { width: 96px; }         /* actions */
+    .lanedelar-table td.col-act { width: 132px; }        /* actions — 3 icon-btns on an active row (plan 127 §2) */
   }
 
   /* Member (child) rows — indented with a tree guide line, rate badge inline.
@@ -593,6 +593,29 @@
   .avslutade-toggle:hover, .avslutade-toggle:hover .expand-btn { color: var(--ink-mid); }
   .avslutade-table { margin-top: 0.4rem; }
   .avslutade-table tr.is-settled .ld-name { font-weight: 500; color: var(--ink-soft); }
+
+  /* Kommande — default-collapsed preview of rate periods that have not
+     started yet (plan 127 §4). Same disclosure shape as Avslutade above
+     (toggle button + chevron .expand-btn + Collapse), sitting ABOVE the
+     Lånedelar table rather than below it, and with one addition: the
+     .kommande-chip countdown, the prominent lead element the collapsed row
+     is built around. Its accent tint is a supplement to the "om N dagar"
+     text, never the only signal (no colour-only meaning). */
+  .kommande-section { margin-bottom: 0.9rem; padding-bottom: 0.7rem; border-bottom: 1px solid var(--rule); }
+  .kommande-toggle {
+    display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0.55rem;
+    background: none; border: none; cursor: pointer; padding: 4px 2px;
+    font-size: 13px; font-weight: 600; color: var(--ink-mid); text-align: left;
+  }
+  .kommande-toggle .expand-btn { display: inline-flex; color: var(--ink-soft); width: 12px; height: 12px; margin: 0; }
+  .kommande-toggle:hover, .kommande-toggle:hover .expand-btn { color: var(--accent); }
+  .kommande-chip {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.01em; white-space: nowrap;
+    color: var(--accent); background: var(--accent-faint);
+    border: 1px solid var(--accent-light); border-radius: 999px; padding: 2px 10px;
+  }
+  .kommande-table-wrap { margin-top: 0.55rem; }
+  .kommande-table .col-date { white-space: nowrap; }
 }
 
 /* ── Dialogs (rendered in the top layer; the <dialog> is a DOM descendant of
@@ -645,6 +668,12 @@ dialog.bk-dialog {
   border-radius: var(--r-sm); padding: 9px 11px; width: 100%;
 }
 .bk-dialog .form-field input:focus { outline: none; border-color: var(--accent-light); box-shadow: var(--ring); background: var(--input-focus-bg); }
+/* Plan 127 §2 — the rate delta beside Räntesats once a valid number is
+   entered. The leading +/− sign already carries the meaning, so colour is a
+   reinforcement, never the only signal (no colour-only meaning). */
+.bk-dialog .rate-delta { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.bk-dialog .rate-delta.is-up { color: var(--warn, #b8860b); }
+.bk-dialog .rate-delta.is-down { color: var(--accent); }
 .bk-dialog .select {
   font-family: var(--font-ui); font-size: 14px; color: var(--ink);
   background: var(--input-bg); border: 1px solid var(--rule);
@@ -694,6 +723,13 @@ dialog.bk-dialog {
 }
 .bk-dialog .bankprofil-drift p { margin: 0.25rem 0; }
 .bk-dialog .btn-xs { padding: 0.1rem 0.45rem; font-size: 11px; line-height: 1.5; border-radius: 6px; }
+/* Plan 127 §3 — discloses the predecessor close that saving will also perform,
+   so the write always matches what the owner was shown. */
+.bk-dialog .rate-transition-note {
+  padding: 0.5rem 0.7rem; border-radius: 8px;
+  background: var(--paper-warm); border: 1px solid var(--rule);
+  color: var(--ink-soft);
+}
 .bk-dialog .dialog-error {
   margin-top: 0.9rem; padding: 0.55rem 0.75rem; border-radius: 8px;
   background: var(--danger-faint, #fdecea); border: 1px solid var(--danger, #c0392b);
@@ -924,6 +960,12 @@ dialog.bk-wizard, dialog.bk-history { width: min(680px, calc(100vw - 2rem)); }
   .bk-root .lanedelar-table tr.ld-member td:nth-child(3) { padding-left: 1.1rem; }
   .bk-root .lanedelar-table tr.ld-member .cell-pad { padding: 0; }
   .bk-root .avslutade-table td { padding-left: 8px; padding-right: 8px; }
+  /* Kommande stays a plain scrollable table at mobile width, same as
+     Avslutade above — a secondary, collapsed-by-default table, not the
+     primary Lånedelar ledger. `.table-wrap` (components.css) already gives
+     it its own horizontal scroll container, so a tight 320px viewport
+     scrolls the table, never the page. */
+  .bk-root .kommande-table th, .bk-root .kommande-table td { padding-left: 8px; padding-right: 8px; }
 
   /* Import triage rows */
   .bk-root .triage-table tr {

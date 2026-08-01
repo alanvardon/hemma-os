@@ -1,10 +1,10 @@
 // mortgage.ts — pure math for Bolånekoll.
 // TypeScript port of mortgagetracker.js lines 22-916. No DOM dependency.
 
-// Re-exported so Bolanekoll keeps importing it alongside the mortgage math.
-import { todayISO } from './date'
+// Re-exported so Bolanekoll keeps importing them alongside the mortgage math.
+import { todayISO, addDaysISO, dayBefore } from './date'
 import { mortgageComparisonLeg } from './calc'
-export { todayISO }
+export { todayISO, addDaysISO, dayBefore }
 
 function r2(n: number): number { return Math.round((Number(n) || 0) * 100) / 100 }
 
@@ -819,15 +819,8 @@ function daysBetween(a: string, b: string): number | null {
   return Math.round((db.getTime() - da.getTime()) / 86400000)
 }
 
-// The calendar day before `iso`. Built on Date arithmetic so month, year and
-// leap boundaries fall out for free (2028-03-01 → 2028-02-29).
-function dayBefore(iso: string): string | null {
-  const d = new Date(iso + 'T00:00:00')
-  if (isNaN(d.getTime())) return null
-  d.setDate(d.getDate() - 1)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
-}
+// `dayBefore` / `addDaysISO` live in ./date and are re-exported at the top of
+// this file; they are generic calendar arithmetic, not mortgage math.
 
 // ── Balance as-of date ─────────────────────────────────────────────────────
 
@@ -1099,6 +1092,234 @@ export function strictRatePeriodCoverage(
   return covered.length === 1 ? 'covered' : 'outside-known-terms'
 }
 
+// ── Rate period transition (plan 127 §1) ───────────────────────────────────
+
+export interface RatePeriodTransition {
+  successor: Omit<RatePeriod, 'id' | 'created_at'>
+  /** The predecessor to close, with the end_date it must take. Null when none. */
+  close: { id: string; end_date: string } | null
+}
+
+export type RatePeriodTransitionResult =
+  | { status: 'valid'; transition: RatePeriodTransition }
+  | {
+      status: 'invalid'
+      reason: 'invalid-date' | 'invalid-rate' | 'start-after-end' |
+        'duplicate-start' | 'gap-before' | 'overlap-after'
+    }
+
+export type RatePeriodTransitionReason = Extract<RatePeriodTransitionResult, { status: 'invalid' }>['reason']
+
+export interface RatePeriodNeighbours {
+  /** Latest period on the part starting strictly before `startDate`. */
+  previous: RatePeriod | null
+  /** Earliest period on the part starting strictly after `startDate`. */
+  next: RatePeriod | null
+  /** A period already starting exactly on `startDate` — a duplicate start. */
+  sameStart: RatePeriod | null
+}
+
+// One definition of "which periods sit either side of this draft", shared by
+// the transition proposal below and by the dialog copy that has to NAME the
+// neighbouring dates ("måste börja 2026-08-01"). Kept exported rather than
+// duplicated in the UI so the copy can never describe a different neighbour
+// than the one the save path acts on.
+//
+// Only this part's timeline matters. Rows without a usable start_date cannot be
+// ordered at all, so they are ignored rather than mistaken for neighbours.
+export function ratePeriodNeighbours(
+  partId: string,
+  periods: RatePeriod[],
+  startDate: string,
+): RatePeriodNeighbours {
+  const mine = (periods || [])
+    .filter(r => r?.loan_part_id === partId && validLedgerDate(r.start_date))
+    .sort((a, b) => a.start_date.localeCompare(b.start_date))
+  return {
+    previous: mine.filter(r => r.start_date < startDate).pop() ?? null,
+    next: mine.find(r => r.start_date > startDate) ?? null,
+    sameStart: mine.find(r => r.start_date === startDate) ?? null,
+  }
+}
+
+export type RatePeriodStatus = 'past' | 'current' | 'upcoming'
+
+// Plan 127 §5 — the rate-history list needs a Swedish status word instead of
+// the old ad hoc "nu · now" placeholder. Mirrors the exact "covered" rule
+// strictRatePeriodCoverage already uses (start_date <= asOf <= end_date, an
+// absent end_date reads as still open), so the word in the history list can
+// never disagree with the coverage/forecast logic elsewhere.
+export function ratePeriodStatus(period: RatePeriod, asOf: string): RatePeriodStatus {
+  if (period.start_date > asOf) return 'upcoming'
+  if (period.end_date != null && period.end_date < asOf) return 'past'
+  return 'current'
+}
+
+// The CREATE path only: "Ny räntesats" always inserts a period, while
+// correcting an existing one is an edit and keeps the plain update path (plan
+// 127 §1). Both share these date/rate rules, but only a creation can also close
+// a predecessor.
+//
+// Neighbours resolve against the DRAFT START DATE, never against today: a rate
+// entered in advance must line up with the timeline it will live in, not with
+// the day it happens to be typed. predecessor = latest period starting before
+// the draft, successor = earliest starting after it, an equal start is a
+// duplicate. A `before-predecessor` reason is therefore unreachable by
+// construction and deliberately absent.
+//
+// Nothing is clamped or guessed: an unusable draft comes back as a reason the
+// dialog turns into Swedish copy, and a gap is never bridged by stretching the
+// old rate over days it did not contractually govern.
+export function proposeRatePeriodTransition(
+  partId: string,
+  periods: RatePeriod[],
+  draft: Pick<RatePeriod, 'start_date' | 'end_date' | 'rate' | 'rate_type'>,
+): RatePeriodTransitionResult {
+  const invalid = (reason: RatePeriodTransitionReason): RatePeriodTransitionResult => ({ status: 'invalid', reason })
+
+  const start = draft?.start_date
+  if (!validLedgerDate(start)) return invalid('invalid-date')
+  // null / '' is the supported "no known villkorsändringsdag", not a bad date.
+  const end = (draft.end_date == null || draft.end_date === '') ? null : draft.end_date
+  if (end != null && !validLedgerDate(end)) return invalid('invalid-date')
+
+  const rate = draft.rate
+  if (typeof rate !== 'number' || !isFinite(rate) || rate < 0) return invalid('invalid-rate')
+
+  if (end != null && end < start) return invalid('start-after-end')
+
+  const boundary = dayBefore(start)
+  if (boundary == null) return invalid('invalid-date')
+
+  const { previous: prev, next, sameStart } = ratePeriodNeighbours(partId, periods, start)
+  if (sameStart) return invalid('duplicate-start')
+
+  let close: { id: string; end_date: string } | null = null
+  if (prev) {
+    // A stored end_date that is blank or unparseable is treated as open-ended:
+    // it cannot bound anything, so the predecessor still needs closing.
+    const prevEnd = validLedgerDate(prev.end_date) ? prev.end_date : null
+    if (prevEnd == null || prevEnd >= start) close = { id: prev.id, end_date: boundary }
+    else if (prevEnd < boundary) return invalid('gap-before')
+    // prevEnd === boundary → already contiguous, so no needless write.
+  }
+
+  let successorEnd = end
+  if (next) {
+    const required = dayBefore(next.start_date)
+    if (required == null) return invalid('invalid-date')   // guard only; start_date is validated above
+    if (successorEnd == null) successorEnd = required      // pre-fill the boundary
+    else if (successorEnd !== required) return invalid('overlap-after')
+  }
+
+  return {
+    status: 'valid',
+    transition: {
+      successor: makeRatePeriod({
+        loan_part_id: partId, start_date: start, end_date: successorEnd,
+        rate, rate_type: draft.rate_type,
+      }),
+      close,
+    },
+  }
+}
+
+// Plan 127 §2 — "Ny räntesats" default `start_date`: the day after a CLOSED
+// predecessor (so a repriced part's next period starts exactly where the old
+// one stopped), else `today`. Resolved against `today`, not an empty draft
+// start, because that is the one anchor guaranteed to exist before the owner
+// has typed anything. An open-ended predecessor (no end_date yet) is not
+// "closed", so it falls through to `today` — the transition proposal is what
+// later proposes closing it, not this default.
+export function defaultRatePeriodStart(partId: string, periods: RatePeriod[], today: string): string {
+  const { previous } = ratePeriodNeighbours(partId, periods, today)
+  if (previous?.end_date) {
+    const next = addDaysISO(previous.end_date, 1)
+    if (next != null) return next
+  }
+  return today
+}
+
+// ── Kommande band (plan 127 §4) ─────────────────────────────────────────────
+
+export interface UpcomingRatePeriodItem {
+  period: RatePeriod
+  partId: string
+  /** Denormalised so the UI never re-joins `parts` per row. Raw `LoanPart.label`
+   * (may be ''); the caller applies the same "(no name)" fallback the rest of
+   * the page's Lånedelar rows use. */
+  partLabel: string
+}
+
+export interface UpcomingRatePeriodGroup {
+  start_date: string
+  items: UpcomingRatePeriodItem[]
+}
+
+export interface UpcomingRatePeriodsSummary {
+  /** Ascending by `start_date`. */
+  groups: UpcomingRatePeriodGroup[]
+  /** The earliest group's `start_date`, i.e. `groups[0]?.start_date`. Null when empty. */
+  earliestStartDate: string | null
+  /** Unique loan parts across every group — NOT the number of date groups
+   * (two parts repricing the same day is one group, two parts). */
+  uniquePartCount: number
+}
+
+// Every future rate period on the currently visible (active-view) loan parts,
+// grouped by the day they take effect. "Future" reuses `ratePeriodStatus` —
+// the SAME rule the rate-history list uses for its status word — so a period
+// can never read `upcoming` here while the history list calls that same day
+// `Aktuell`: a period starting exactly on `asOf` is current, not upcoming.
+//
+// Deliberately carries NO balance or share figures: the parts these periods
+// belong to are already counted in their current Lånedelar rows, so summing a
+// balance here would double-count it. Only what the collapsed chip / expanded
+// table need travels: per-group entries (with a denormalised part label) plus
+// the two summary numbers the collapsed band leads with.
+//
+// `parts` scopes the result to whatever the caller currently shows as the live
+// Lånedelar table (active-view, non-archived parts) — a period on a part NOT
+// in that list (e.g. archived, or another agreement) is excluded even if its
+// start date is genuinely in the future. Malformed rows never take down the
+// band: an unparseable/blank `start_date`, a null `loan_part_id`, or a
+// duplicate period id are all skipped rather than thrown.
+export function upcomingRatePeriods(parts: LoanPart[], periods: RatePeriod[], asOf: string): UpcomingRatePeriodsSummary {
+  const empty: UpcomingRatePeriodsSummary = { groups: [], earliestStartDate: null, uniquePartCount: 0 }
+  if (!validLedgerDate(asOf)) return empty
+
+  const partById = new Map((parts || []).filter((p): p is LoanPart => !!p?.id).map(p => [p.id, p]))
+  const seenIds = new Set<string>()
+  const byDate = new Map<string, UpcomingRatePeriodItem[]>()
+  const partIds = new Set<string>()
+
+  for (const period of periods || []) {
+    if (!period || period.loan_part_id == null) continue
+    const part = partById.get(period.loan_part_id)
+    if (!part) continue                                    // not in the active view
+    if (!validLedgerDate(period.start_date)) continue
+    if (ratePeriodStatus(period, asOf) !== 'upcoming') continue
+    if (period.id == null || seenIds.has(period.id)) continue   // defend against duplicate rows
+    seenIds.add(period.id)
+
+    const item: UpcomingRatePeriodItem = { period, partId: part.id, partLabel: part.label || '' }
+    const bucket = byDate.get(period.start_date)
+    if (bucket) bucket.push(item)
+    else byDate.set(period.start_date, [item])
+    partIds.add(part.id)
+  }
+
+  const groups = [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([start_date, items]) => ({ start_date, items }))
+
+  return {
+    groups,
+    earliestStartDate: groups[0]?.start_date ?? null,
+    uniquePartCount: partIds.size,
+  }
+}
+
 // ── Two-segment split at a rate boundary (plan 126 §4) ─────────────────────
 
 // How the accrual interval (lastChargeDate, nextDate] — the `days` calendar
@@ -1282,7 +1503,14 @@ export function weightedAvgRate(parts: LoanPart[], periods: RatePeriod[], paymen
 
 export function derivedRate(part: LoanPart, payments: Payment[], opts?: { trailing?: number }): number | null {
   const trail = opts?.trailing || 3
-  const ints = payments.filter(p => p?.loan_part_id === part?.id && p.kind === 'interest' && p.date && Math.abs(Number(p.amount)) > 0)
+  // Historiken (plan 127 §5) reverse-engineers the rate from REAL rows only.
+  // An accepted forecast row stays authoritative for balance (see
+  // resolvePartBalance's comment above) but plan 126 froze it as
+  // source:'predicted' FOREVER, so replaying it back in here would let a
+  // logged prediction inflate confidence in the very number that produced it.
+  // `source !== 'predicted'` is the same real-row marker used throughout this
+  // file (partOriginal, matchPredictedRows, stalePredictedRows, …).
+  const ints = payments.filter(p => p?.loan_part_id === part?.id && p.kind === 'interest' && p.source !== 'predicted' && p.date && Math.abs(Number(p.amount)) > 0)
     .sort((a, b) => a.date.localeCompare(b.date))
   if (ints.length < 2) return null
   const ps: Array<{ rate: number; days: number }> = []
