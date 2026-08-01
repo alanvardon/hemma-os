@@ -593,6 +593,29 @@
   .avslutade-toggle:hover, .avslutade-toggle:hover .expand-btn { color: var(--ink-mid); }
   .avslutade-table { margin-top: 0.4rem; }
   .avslutade-table tr.is-settled .ld-name { font-weight: 500; color: var(--ink-soft); }
+
+  /* Kommande — default-collapsed preview of rate periods that have not
+     started yet (plan 127 §4). Same disclosure shape as Avslutade above
+     (toggle button + chevron .expand-btn + Collapse), sitting ABOVE the
+     Lånedelar table rather than below it, and with one addition: the
+     .kommande-chip countdown, the prominent lead element the collapsed row
+     is built around. Its accent tint is a supplement to the "om N dagar"
+     text, never the only signal (no colour-only meaning). */
+  .kommande-section { margin-bottom: 0.9rem; padding-bottom: 0.7rem; border-bottom: 1px solid var(--rule); }
+  .kommande-toggle {
+    display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0.55rem;
+    background: none; border: none; cursor: pointer; padding: 4px 2px;
+    font-size: 13px; font-weight: 600; color: var(--ink-mid); text-align: left;
+  }
+  .kommande-toggle .expand-btn { display: inline-flex; color: var(--ink-soft); width: 12px; height: 12px; margin: 0; }
+  .kommande-toggle:hover, .kommande-toggle:hover .expand-btn { color: var(--accent); }
+  .kommande-chip {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.01em; white-space: nowrap;
+    color: var(--accent); background: var(--accent-faint);
+    border: 1px solid var(--accent-light); border-radius: 999px; padding: 2px 10px;
+  }
+  .kommande-table-wrap { margin-top: 0.55rem; }
+  .kommande-table .col-date { white-space: nowrap; }
 }
 
 /* ── Dialogs (rendered in the top layer; the <dialog> is a DOM descendant of
@@ -937,6 +960,12 @@ dialog.bk-wizard, dialog.bk-history { width: min(680px, calc(100vw - 2rem)); }
   .bk-root .lanedelar-table tr.ld-member td:nth-child(3) { padding-left: 1.1rem; }
   .bk-root .lanedelar-table tr.ld-member .cell-pad { padding: 0; }
   .bk-root .avslutade-table td { padding-left: 8px; padding-right: 8px; }
+  /* Kommande stays a plain scrollable table at mobile width, same as
+     Avslutade above — a secondary, collapsed-by-default table, not the
+     primary Lånedelar ledger. `.table-wrap` (components.css) already gives
+     it its own horizontal scroll container, so a tight 320px viewport
+     scrolls the table, never the page. */
+  .bk-root .kommande-table th, .bk-root .kommande-table td { padding-left: 8px; padding-right: 8px; }
 
   /* Import triage rows */
   .bk-root .triage-table tr {

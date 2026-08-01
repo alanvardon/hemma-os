@@ -31,6 +31,7 @@ import {
   todayISO,
   bankForPart, suggestBankProfile, effectiveBankProfile,
   isExtraAmortering, extraAmorteringAllocation,
+  upcomingRatePeriods,
 } from '../lib/mortgage'
 import type { LoanPart, LoanPartGroup, Payment, CsvResult, ColMapping, Owner, ExpectedCharge, Mortgage, CatalogBank, EffectiveBankProfile } from '../lib/mortgage'
 import {
@@ -87,6 +88,13 @@ function fmtChargeMonth(iso: string): string {
 function swedishList(names: string[]): string {
   if (names.length <= 1) return names[0] ?? ''
   return names.slice(0, -1).join(', ') + ' och ' + names[names.length - 1]
+}
+
+/** "om 1 dag" / "om 2 dagar" — the Kommande band's countdown chip (plan 127
+ * §4). Correct Swedish singular/plural only; `n` is always >= 1 here because
+ * `upcomingRatePeriods` never returns a group starting today or earlier. */
+function omDagarLabel(n: number): string {
+  return 'om ' + n + ' dag' + (n === 1 ? '' : 'ar')
 }
 
 /** The rate input is deliberately stricter than parseAmount(): a trailing
@@ -150,6 +158,8 @@ export default function Bolanekoll() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const groupsSeeded = useRef(false)
   const [avslutadeOpen, setAvslutadeOpen] = useState(false)
+  // Plan 127 §4 — the Kommande band starts collapsed, same as Avslutade.
+  const [kommandeOpen, setKommandeOpen] = useState(false)
   const reduceMotion = useReducedMotion()
   const [settingsDlg, setSettingsDlg] = useState(false)
   const [profileDlg, setProfileDlg] = useState(false)
@@ -232,6 +242,11 @@ export default function Bolanekoll() {
   // parts, which are reached through the history modal.
   const activeParts = useMemo(() => activeViewParts.filter(p => !p.archived), [activeViewParts])
   const archivedParts = useMemo(() => activeViewParts.filter(p => p.archived), [activeViewParts])
+  // Plan 127 §4 — Kommande band: future rate periods on the live Lånedelar
+  // rows only (`activeParts`, never archived/other-agreement parts), grouped
+  // by the day they take effect. Pure grouping/counting lives in
+  // upcomingRatePeriods; this component only renders what it returns.
+  const upcoming = useMemo(() => upcomingRatePeriods(activeParts, periods, today), [activeParts, periods, today])
 
   const balance = useMemo(() => totalBalance(activeViewParts, activeViewPayments), [activeViewParts, activeViewPayments])
   // The balance resolver is also the provenance source for the dashboard: a
@@ -1453,6 +1468,62 @@ export default function Bolanekoll() {
               </span>
             </div>
           )}
+          {/* Plan 127 §4 — Kommande: rate periods that have not started yet on
+              the live Lånedelar rows. Default-collapsed, no empty state (the
+              whole band renders only when something is actually upcoming),
+              and structurally the same disclosure pattern as Avslutade below
+              (chevron toggle + Collapse) so the two preview/archive bands
+              read as one family. A SEPARATE table from Lånedelar, never a
+              merged row, so Balance/Share still close to exactly 100 % once —
+              these parts' balances are already counted in their current
+              Lånedelar row. */}
+          {upcoming.groups.length > 0 && (() => {
+            const days = daysUntil(upcoming.earliestStartDate!, today)
+            const n = upcoming.uniquePartCount
+            return (
+              <div className="kommande-section">
+                <button type="button" className="kommande-toggle" aria-expanded={kommandeOpen}
+                  aria-label={(kommandeOpen ? 'Dölj' : 'Visa') + ' kommande ränteperioder'}
+                  onClick={() => setKommandeOpen(v => !v)}>
+                  <motion.span
+                    className="expand-btn"
+                    animate={{ rotate: kommandeOpen ? 90 : 0 }}
+                    transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                  ><Icon icon={ChevronRight} size={12} /></motion.span>
+                  Kommande
+                  {days != null && <span className="kommande-chip">{omDagarLabel(days)}</span>}
+                  <span className="count-pill">{n} lånedel{n === 1 ? '' : 'ar'}</span>
+                </button>
+                <Collapse open={kommandeOpen}>
+                  <div className="table-wrap kommande-table-wrap">
+                    <table className="data-table kommande-table">
+                      <thead>
+                        <tr>
+                          <th>Startdatum</th><th>Ränta</th><th>Lånedel</th><th>Slutdatum</th><th className="col-act"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {upcoming.groups.flatMap(g => g.items.map(it => (
+                          <tr key={it.period.id}>
+                            <td className="col-date">{fmtRateDate(g.start_date)}</td>
+                            <td>{rateBadge(it.period.rate, it.period.rate_type)}</td>
+                            <td>{it.partLabel || '(no name)'}</td>
+                            <td className="col-date">{it.period.end_date ? fmtRateDate(it.period.end_date) : '—'}</td>
+                            <td className="col-act">
+                              <button type="button" className="icon-btn" title="Redigera" aria-label={'Redigera ränteperiod för ' + (it.partLabel || 'lånedel')}
+                                onClick={() => handleEditPeriod(it.partId, it.period.id)}>
+                                <Icon icon={Pencil} />
+                              </button>
+                            </td>
+                          </tr>
+                        )))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Collapse>
+              </div>
+            )
+          })()}
           {!activeViewParts.length ? (
             <p className="empty">
               {activeMortgage

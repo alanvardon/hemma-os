@@ -1240,6 +1240,86 @@ export function defaultRatePeriodStart(partId: string, periods: RatePeriod[], to
   return today
 }
 
+// ── Kommande band (plan 127 §4) ─────────────────────────────────────────────
+
+export interface UpcomingRatePeriodItem {
+  period: RatePeriod
+  partId: string
+  /** Denormalised so the UI never re-joins `parts` per row. Raw `LoanPart.label`
+   * (may be ''); the caller applies the same "(no name)" fallback the rest of
+   * the page's Lånedelar rows use. */
+  partLabel: string
+}
+
+export interface UpcomingRatePeriodGroup {
+  start_date: string
+  items: UpcomingRatePeriodItem[]
+}
+
+export interface UpcomingRatePeriodsSummary {
+  /** Ascending by `start_date`. */
+  groups: UpcomingRatePeriodGroup[]
+  /** The earliest group's `start_date`, i.e. `groups[0]?.start_date`. Null when empty. */
+  earliestStartDate: string | null
+  /** Unique loan parts across every group — NOT the number of date groups
+   * (two parts repricing the same day is one group, two parts). */
+  uniquePartCount: number
+}
+
+// Every future rate period on the currently visible (active-view) loan parts,
+// grouped by the day they take effect. "Future" reuses `ratePeriodStatus` —
+// the SAME rule the rate-history list uses for its status word — so a period
+// can never read `upcoming` here while the history list calls that same day
+// `Aktuell`: a period starting exactly on `asOf` is current, not upcoming.
+//
+// Deliberately carries NO balance or share figures: the parts these periods
+// belong to are already counted in their current Lånedelar rows, so summing a
+// balance here would double-count it. Only what the collapsed chip / expanded
+// table need travels: per-group entries (with a denormalised part label) plus
+// the two summary numbers the collapsed band leads with.
+//
+// `parts` scopes the result to whatever the caller currently shows as the live
+// Lånedelar table (active-view, non-archived parts) — a period on a part NOT
+// in that list (e.g. archived, or another agreement) is excluded even if its
+// start date is genuinely in the future. Malformed rows never take down the
+// band: an unparseable/blank `start_date`, a null `loan_part_id`, or a
+// duplicate period id are all skipped rather than thrown.
+export function upcomingRatePeriods(parts: LoanPart[], periods: RatePeriod[], asOf: string): UpcomingRatePeriodsSummary {
+  const empty: UpcomingRatePeriodsSummary = { groups: [], earliestStartDate: null, uniquePartCount: 0 }
+  if (!validLedgerDate(asOf)) return empty
+
+  const partById = new Map((parts || []).filter((p): p is LoanPart => !!p?.id).map(p => [p.id, p]))
+  const seenIds = new Set<string>()
+  const byDate = new Map<string, UpcomingRatePeriodItem[]>()
+  const partIds = new Set<string>()
+
+  for (const period of periods || []) {
+    if (!period || period.loan_part_id == null) continue
+    const part = partById.get(period.loan_part_id)
+    if (!part) continue                                    // not in the active view
+    if (!validLedgerDate(period.start_date)) continue
+    if (ratePeriodStatus(period, asOf) !== 'upcoming') continue
+    if (period.id == null || seenIds.has(period.id)) continue   // defend against duplicate rows
+    seenIds.add(period.id)
+
+    const item: UpcomingRatePeriodItem = { period, partId: part.id, partLabel: part.label || '' }
+    const bucket = byDate.get(period.start_date)
+    if (bucket) bucket.push(item)
+    else byDate.set(period.start_date, [item])
+    partIds.add(part.id)
+  }
+
+  const groups = [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([start_date, items]) => ({ start_date, items }))
+
+  return {
+    groups,
+    earliestStartDate: groups[0]?.start_date ?? null,
+    uniquePartCount: partIds.size,
+  }
+}
+
 // ── Two-segment split at a rate boundary (plan 126 §4) ─────────────────────
 
 // How the accrual interval (lastChargeDate, nextDate] — the `days` calendar
