@@ -8,12 +8,13 @@ import { makeLoanPart, parseAmount, todayISO, derivedRate } from '../../lib/mort
 import type { LoanPart, RatePeriod, Payment } from '../../lib/mortgage'
 import { fmtPct } from './shared'
 import PeriodDialog from './PeriodDialog'
+import type { SavePeriodResult } from './useMortgageWorkspace'
 
 interface PartDlgProps {
   open: boolean; id: string | null; parts: LoanPart[]; periods: RatePeriod[]; payments: Payment[]
   onSave: (data: Omit<LoanPart, 'id' | 'created_at'>) => void
   onDelete: (id: string) => void; onClose: () => void
-  onSavePeriod: (partId: string, data: Omit<RatePeriod, 'id' | 'created_at'>, existingId?: string) => void
+  onSavePeriod: (partId: string, data: Omit<RatePeriod, 'id' | 'created_at'>, existingId?: string) => Promise<SavePeriodResult>
   onDeletePeriod: (id: string) => void
 }
 export default function PartDialog({ open, id, parts, periods, payments, onSave, onDelete, onClose, onSavePeriod, onDeletePeriod }: PartDlgProps) {
@@ -93,8 +94,12 @@ export default function PartDialog({ open, id, parts, periods, payments, onSave,
           </div>
         </form>
       </DialogShell>
+      {/* The nested dialog no longer closes itself on submit: PeriodDialog owns
+          close-on-success and calls onClose only when the save resolves, so a
+          failed save stays open with its draft and repair message (plan 127
+          §3). Plan 127 §2 removes this nesting entirely. */}
       <PeriodDialog open={periodDlg.open} partId={id} id={periodDlg.id} periods={periods}
-        onSave={data => { onSavePeriod(id!, data, periodDlg.id || undefined); setPeriodDlg({ open: false, id: null }) }}
+        onSave={data => onSavePeriod(id!, data, periodDlg.id || undefined)}
         onDelete={pid => { onDeletePeriod(pid); setPeriodDlg({ open: false, id: null }) }}
         onClose={() => setPeriodDlg({ open: false, id: null })} />
     </>

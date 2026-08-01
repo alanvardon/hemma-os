@@ -694,6 +694,13 @@ dialog.bk-dialog {
 }
 .bk-dialog .bankprofil-drift p { margin: 0.25rem 0; }
 .bk-dialog .btn-xs { padding: 0.1rem 0.45rem; font-size: 11px; line-height: 1.5; border-radius: 6px; }
+/* Plan 127 §3 — discloses the predecessor close that saving will also perform,
+   so the write always matches what the owner was shown. */
+.bk-dialog .rate-transition-note {
+  padding: 0.5rem 0.7rem; border-radius: 8px;
+  background: var(--paper-warm); border: 1px solid var(--rule);
+  color: var(--ink-soft);
+}
 .bk-dialog .dialog-error {
   margin-top: 0.9rem; padding: 0.55rem 0.75rem; border-radius: 8px;
   background: var(--danger-faint, #fdecea); border: 1px solid var(--danger, #c0392b);

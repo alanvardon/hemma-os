@@ -6,6 +6,8 @@ import {
   hasChargeInMonth,
   makeBank,
   makePayment,
+  proposeRatePeriodTransition,
+  ratePeriodNeighbours,
   type Bank,
   type CatalogBank,
   type Contribution,
@@ -22,8 +24,22 @@ import type { CreateAgreementInput } from './AgreementDialog'
 import type { BankProfileSaveInput } from './BankProfileDialog'
 import type { BankChangeResult } from './BankChangeWizard'
 import type { BankSelection } from './BankPicker'
+import {
+  predecessorCloseFailedMessage,
+  ratePeriodInvalidMessage,
+  RATE_PERIOD_CREATED_TOAST,
+  RATE_PERIOD_UPDATED_TOAST,
+} from './ratePeriodCopy'
 
 export type PendingChargeKind = 'interest' | 'payment' | 'amortization'
+
+/**
+ * A save that the caller must be able to act on: the rate-period dialog stays
+ * open with the draft intact and renders `message` inline, because a paired
+ * write can fail halfway and leave a repair the owner has to perform by hand
+ * (plan 127 §3).
+ */
+export type SavePeriodResult = { ok: true } | { ok: false; message: string }
 
 interface WorkspaceState {
   banks: Bank[]
@@ -229,22 +245,76 @@ export function useMortgageWorkspace() {
     }
   }
 
+  // Plan 127 §3. Creating a rate period is the one workspace write that may
+  // have to touch a SECOND row — the predecessor it supersedes — so it reports
+  // a result rather than a bare boolean: the dialog has to stay open with the
+  // draft intact and show which repair is outstanding.
   async function savePeriod(
     partId: string,
     data: Omit<RatePeriod, 'id' | 'created_at'>,
     existingId?: string,
-  ): Promise<boolean> {
+  ): Promise<SavePeriodResult> {
+    // Both paths run the same pure proposal, but an edit is a correction of one
+    // row and deliberately keeps today's plain update path (plan 127 §1): with
+    // an empty timeline the proposal applies exactly the date/rate rules and no
+    // neighbour rules, so an edit is validated without re-resolving neighbours.
+    const proposal = proposeRatePeriodTransition(partId, existingId ? [] : workspace.periods, data)
+    if (proposal.status === 'invalid') {
+      const neighbours = existingId ? null : ratePeriodNeighbours(partId, workspace.periods, data.start_date)
+      const message = ratePeriodInvalidMessage(proposal.reason, neighbours)
+      showToast(message)
+      return { ok: false, message }
+    }
+
+    if (existingId) {
+      try {
+        await Store.updateRatePeriod(existingId, data)
+        await refresh()
+        flashSaved()
+        showToast(RATE_PERIOD_UPDATED_TOAST)
+        return { ok: true }
+      } catch (error) {
+        saveError(error)
+        return { ok: false, message: persistenceErrorMessage(error) }
+      }
+    }
+
+    const { successor, close } = proposal.transition
+
+    // Step 1 — insert. Nothing is written yet, so a failure here leaves the
+    // stored timeline exactly as it was.
     try {
-      if (existingId) await Store.updateRatePeriod(existingId, data)
-      else await Store.addRatePeriod({ ...data, loan_part_id: partId })
-      await refresh()
-      flashSaved()
-      showToast(existingId ? 'Rate period updated.' : 'Rate period added.')
-      return true
+      await Store.addRatePeriod(successor)
     } catch (error) {
       saveError(error)
-      return false
+      return { ok: false, message: persistenceErrorMessage(error) }
     }
+
+    // Step 2 — close the predecessor. Deliberately NOT atomic: plan 127 Fix 3
+    // cut the security-definer RPC (migration, row locking, server-side
+    // revalidation, replay idempotence) because this is a low-frequency
+    // single-user write whose failure mode is a visible, repairable overlap —
+    // plan 126's strict resolution renders an overlapping timeline as "no
+    // current rate" on a named part, never as a wrong figure. The price of that
+    // cut is this branch: the owner must be told the exact date to set by hand.
+    if (close) {
+      try {
+        await Store.updateRatePeriod(close.id, { end_date: close.end_date })
+      } catch {
+        // The new period IS persisted, so refresh anyway — the page has to show
+        // the overlap the owner is being asked to repair. A refresh that itself
+        // fails must not swallow the repair instruction.
+        await refresh().catch(() => {})
+        const message = predecessorCloseFailedMessage(close.end_date)
+        showToast(message)
+        return { ok: false, message }
+      }
+    }
+
+    await refresh()
+    flashSaved()
+    showToast(RATE_PERIOD_CREATED_TOAST)
+    return { ok: true }
   }
 
   async function removePeriod(id: string): Promise<boolean> {
