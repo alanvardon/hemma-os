@@ -547,7 +547,7 @@
     .lanedelar-table th:nth-child(3),
     .lanedelar-table td:nth-child(3) { width: 92px; }    /* Share   */
     .lanedelar-table th.col-act,
-    .lanedelar-table td.col-act { width: 96px; }         /* actions */
+    .lanedelar-table td.col-act { width: 132px; }        /* actions — 3 icon-btns on an active row (plan 127 §2) */
   }
 
   /* Member (child) rows — indented with a tree guide line, rate badge inline.
@@ -645,6 +645,12 @@ dialog.bk-dialog {
   border-radius: var(--r-sm); padding: 9px 11px; width: 100%;
 }
 .bk-dialog .form-field input:focus { outline: none; border-color: var(--accent-light); box-shadow: var(--ring); background: var(--input-focus-bg); }
+/* Plan 127 §2 — the rate delta beside Räntesats once a valid number is
+   entered. The leading +/− sign already carries the meaning, so colour is a
+   reinforcement, never the only signal (no colour-only meaning). */
+.bk-dialog .rate-delta { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.bk-dialog .rate-delta.is-up { color: var(--warn, #b8860b); }
+.bk-dialog .rate-delta.is-down { color: var(--accent); }
 .bk-dialog .select {
   font-family: var(--font-ui); font-size: 14px; color: var(--ink);
   background: var(--input-bg); border: 1px solid var(--rule);

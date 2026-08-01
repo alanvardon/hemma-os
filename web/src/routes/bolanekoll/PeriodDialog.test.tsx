@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import PeriodDialog from './PeriodDialog'
 import type { SavePeriodResult } from './useMortgageWorkspace'
+import { addDaysISO, dayBefore, todayISO } from '../../lib/mortgage'
 import type { RatePeriod } from '../../lib/mortgage'
 
 // A single open-ended `rörlig` period at 3,93 %, the shape a household actually
@@ -39,9 +40,9 @@ function renderDialog(
   return { onClose }
 }
 
-const startInput = () => screen.getByLabelText('From (start)')
-const rateInput = () => screen.getByLabelText('Interest rate %')
-const saveButton = () => screen.getByRole('button', { name: 'Save' })
+const startInput = () => screen.getByLabelText('Gäller från')
+const rateInput = () => screen.getByLabelText('Räntesats %')
+const saveButton = () => screen.getByRole('button', { name: 'Spara' })
 
 /** Enter a valid successor: 4,29 % from 2026-08-01, closing the predecessor. */
 async function enterSuccessor(user: ReturnType<typeof userEvent.setup>) {
@@ -115,5 +116,74 @@ describe('PeriodDialog — the save contract', () => {
     await user.click(saveButton())
     expect(onSave).not.toHaveBeenCalled()
     expect(onClose).not.toHaveBeenCalled()
+  })
+})
+
+// ── Contextual create defaults (plan 127 §2) ────────────────────────────────
+// Dates are derived from the REAL today() rather than hard-coded, so the test
+// stays deterministic without pinning the system clock to a fictional date.
+describe('PeriodDialog — contextual create defaults', () => {
+  it('defaults Gäller från to the day after a closed predecessor, carries Typ, leaves Räntesats empty, and pre-fills the end boundary from a later period', () => {
+    const today = todayISO()
+    const closedEnd = addDaysISO(today, -40)!
+    const closedStart = addDaysISO(closedEnd, -90)!
+    const laterStart = addDaysISO(today, 90)!
+    const closedPredecessor: RatePeriod = {
+      id: 'rp-a', created_at: '2026-01-01T00:00:00Z', loan_part_id: 'part-1',
+      start_date: closedStart, end_date: closedEnd, rate: 3.5, rate_type: 'bunden',
+    }
+    const later: RatePeriod = {
+      id: 'rp-c', created_at: '2026-01-01T00:00:00Z', loan_part_id: 'part-1',
+      start_date: laterStart, end_date: null, rate: 4.5, rate_type: 'rörlig',
+    }
+    renderDialog(vi.fn(), [closedPredecessor, later])
+
+    expect(startInput()).toHaveValue(addDaysISO(closedEnd, 1))
+    expect(rateInput()).toHaveValue('') // Räntesats is the value being changed — never guessed.
+    expect(screen.getByLabelText('Villkorsändringsdag (valfritt)')).toHaveValue(dayBefore(laterStart))
+    expect(screen.getByRole('radio', { name: 'Bunden' })).toBeChecked() // Typ carries from the predecessor.
+  })
+
+  it('defaults Gäller från to today when the latest predecessor is still open-ended', () => {
+    renderDialog(vi.fn()) // default fixture: predecessor is open-ended
+    expect(startInput()).toHaveValue(todayISO())
+  })
+
+  it('never overwrites an end date or type the owner already typed, even after Gäller från changes again', async () => {
+    const user = userEvent.setup()
+    renderDialog(vi.fn())
+
+    const endInput = screen.getByLabelText('Villkorsändringsdag (valfritt)')
+    fireEvent.change(endInput, { target: { value: '2026-12-24' } })
+    await user.click(screen.getByRole('radio', { name: 'Bunden' }))
+
+    // Changing Gäller från again would normally re-derive both fields; since
+    // the owner already touched them, they must stay exactly as typed.
+    fireEvent.change(startInput(), { target: { value: '2026-09-15' } })
+
+    expect(endInput).toHaveValue('2026-12-24')
+    expect(screen.getByRole('radio', { name: 'Bunden' })).toBeChecked()
+  })
+})
+
+// ── Rate delta (plan 127 §2) ────────────────────────────────────────────────
+describe('PeriodDialog — rate delta', () => {
+  it('shows no delta until a valid rate is entered', () => {
+    renderDialog(vi.fn())
+    expect(screen.queryByText(/pp$/)).not.toBeInTheDocument()
+  })
+
+  it('shows an increasing delta with a plus sign, in percentage points against the predecessor', async () => {
+    const user = userEvent.setup()
+    renderDialog(vi.fn()) // predecessor rate 3,93 %
+    await user.type(rateInput(), '4,29')
+    expect(screen.getByText('+0,36 pp')).toBeInTheDocument()
+  })
+
+  it('shows a decreasing delta with a minus sign', async () => {
+    const user = userEvent.setup()
+    renderDialog(vi.fn())
+    await user.type(rateInput(), '3,50')
+    expect(screen.getByText('−0,43 pp')).toBeInTheDocument()
   })
 })

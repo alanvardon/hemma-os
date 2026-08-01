@@ -4,24 +4,27 @@ import DialogShell from '../../components/DialogShell'
 import FormField from '../../components/FormField'
 import Icon from '../../components/Icon'
 import { useConfirm } from '../../components/useConfirm'
-import { makeLoanPart, parseAmount, todayISO, derivedRate } from '../../lib/mortgage'
+import { makeLoanPart, parseAmount, todayISO, derivedRate, ratePeriodStatus } from '../../lib/mortgage'
 import type { LoanPart, RatePeriod, Payment } from '../../lib/mortgage'
 import { fmtPct } from './shared'
-import PeriodDialog from './PeriodDialog'
-import type { SavePeriodResult } from './useMortgageWorkspace'
+import { RATE_PERIOD_DELETE_CONFIRM_TITLE, RATE_PERIOD_STATUS_LABEL } from './ratePeriodCopy'
 
 interface PartDlgProps {
   open: boolean; id: string | null; parts: LoanPart[]; periods: RatePeriod[]; payments: Payment[]
   onSave: (data: Omit<LoanPart, 'id' | 'created_at'>) => void
   onDelete: (id: string) => void; onClose: () => void
-  onSavePeriod: (partId: string, data: Omit<RatePeriod, 'id' | 'created_at'>, existingId?: string) => Promise<SavePeriodResult>
+  // Plan 127 §2 — the rate-history list no longer owns a nested PeriodDialog.
+  // Choosing "edit" (a real periodId) or "+ Lägg till ränteperiod" (null,
+  // meaning create) both hand off to the ONE standalone dialog the caller
+  // mounts, so a correction and a fresh "Ny räntesats" never stack two
+  // dialogs on screen.
+  onEditPeriod: (partId: string, periodId: string | null) => void
   onDeletePeriod: (id: string) => void
 }
-export default function PartDialog({ open, id, parts, periods, payments, onSave, onDelete, onClose, onSavePeriod, onDeletePeriod }: PartDlgProps) {
+export default function PartDialog({ open, id, parts, periods, payments, onSave, onDelete, onClose, onEditPeriod, onDeletePeriod }: PartDlgProps) {
   const confirm = useConfirm()
   const rec = id ? parts.find(p => p.id === id) : null
   const [form, setForm] = useState({ label: '', loan_number: '', start_balance: '', start_date: '', planned_amortization: '', planned_amortization_start: '' })
-  const [periodDlg, setPeriodDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   useEffect(() => {
     if (open) setForm({
       label: rec?.label || '', loan_number: rec?.loan_number || '',
@@ -45,63 +48,59 @@ export default function PartDialog({ open, id, parts, periods, payments, onSave,
   }
   const der = id && rec ? derivedRate(rec, payments) : null
   return (
-    <>
-      <DialogShell open={open} onClose={onClose} className="bk-dialog">
-        <form className="dialog-body" onSubmit={submit}>
-          <h3 className="dialog-title">{id ? 'Edit loan part' : 'Add loan part'}</h3>
-          <div className="form-grid">
-            <FormField label="Label" wide><input type="text" placeholder="e.g. Lånedel 1 (rörlig)" value={form.label} onChange={e => set('label', e.target.value)} /></FormField>
-            <FormField label="Loan # (optional)"><input type="text" placeholder="e.g. 9021 33 12345" value={form.loan_number} onChange={e => set('loan_number', e.target.value)} /></FormField>
-            <FormField label="Start balance"><input type="text" inputMode="decimal" placeholder="0" value={form.start_balance} onChange={e => set('start_balance', e.target.value)} /></FormField>
-            <FormField label="As of date"><input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} /></FormField>
-            <FormField label="Planerad amortering (kr/mån)"><input type="text" inputMode="decimal" placeholder="beräknas från historik" value={form.planned_amortization} onChange={e => set('planned_amortization', e.target.value)} /></FormField>
-            <FormField label="Gäller från (valfritt)"><input type="date" value={form.planned_amortization_start} onChange={e => set('planned_amortization_start', e.target.value)} /></FormField>
-          </div>
-          <p className="form-hint">The start balance is the part's debt on the "as of" date. The interest rate is set per period below.</p>
-          <p className="form-hint">Planerad amortering överstyr det som räknas fram från historiken — lämna tomt för att detektera. 0 kr låser delen som amorteringsfri. "Gäller från" daterar en ändring så den inte skrivs bakåt.</p>
-          {id && (
-            <div className="rate-history">
-              <div className="rate-history-head">
-                <span>Rate periods</span>
-                <span className="rate-derived">{der != null ? 'Ledger ≈ ' + fmtPct(der) : ''}</span>
-              </div>
-              {myPeriods.length ? (
-                <ul className="rate-list">
-                  {myPeriods.map(r => {
-                    const bunden = r.rate_type === 'bunden'
-                    return (
-                      <li key={r.id}>
-                        <span className="rate-when">{r.start_date || '—'} → {r.end_date || 'nu · now'}</span>
-                        <span className="rate-pct">{r.rate != null ? fmtPct(r.rate) : '—'}</span>
-                        <span className={'rate-type' + (bunden ? ' is-bunden' : '')}>{bunden ? 'Bunden' : 'Rörlig'}</span>
-                        <span className="rate-acts">
-                          <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPeriodDlg({ open: true, id: r.id })}><Icon icon={Pencil} /></button>
-                          <button type="button" className="icon-btn" title="Delete" aria-label="Delete" onClick={async () => { if (await confirm({ title: 'Delete this rate period?' })) onDeletePeriod(r.id) }}><Icon icon={X} /></button>
-                        </span>
-                      </li>
-                    )
-                  })}
-                </ul>
-              ) : <ul className="rate-list"><li className="rate-empty">No rate periods yet — add one to set this part’s rate.</li></ul>}
-              <button type="button" className="btn btn-ghost" id="p-rate-add" onClick={() => setPeriodDlg({ open: true, id: null })}>+ Add rate period</button>
+    <DialogShell open={open} onClose={onClose} className="bk-dialog">
+      <form className="dialog-body" onSubmit={submit}>
+        <h3 className="dialog-title">{id ? 'Edit loan part' : 'Add loan part'}</h3>
+        <div className="form-grid">
+          <FormField label="Label" wide><input type="text" placeholder="e.g. Lånedel 1 (rörlig)" value={form.label} onChange={e => set('label', e.target.value)} /></FormField>
+          <FormField label="Loan # (optional)"><input type="text" placeholder="e.g. 9021 33 12345" value={form.loan_number} onChange={e => set('loan_number', e.target.value)} /></FormField>
+          <FormField label="Start balance"><input type="text" inputMode="decimal" placeholder="0" value={form.start_balance} onChange={e => set('start_balance', e.target.value)} /></FormField>
+          <FormField label="As of date"><input type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} /></FormField>
+          <FormField label="Planerad amortering (kr/mån)"><input type="text" inputMode="decimal" placeholder="beräknas från historik" value={form.planned_amortization} onChange={e => set('planned_amortization', e.target.value)} /></FormField>
+          <FormField label="Gäller från (valfritt)"><input type="date" value={form.planned_amortization_start} onChange={e => set('planned_amortization_start', e.target.value)} /></FormField>
+        </div>
+        <p className="form-hint">The start balance is the part's debt on the "as of" date. The interest rate is set per period below.</p>
+        <p className="form-hint">Planerad amortering överstyr det som räknas fram från historiken — lämna tomt för att detektera. 0 kr låser delen som amorteringsfri. "Gäller från" daterar en ändring så den inte skrivs bakåt.</p>
+        {id && (
+          <div className="rate-history">
+            <div className="rate-history-head">
+              <span>Ränteperioder</span>
+              <span className="rate-derived">{der != null ? 'Historiken ≈ ' + fmtPct(der) : ''}</span>
             </div>
-          )}
-          <div className="dialog-actions">
-            {id && <button type="button" className="btn btn-ghost btn-danger" onClick={async () => { if (await confirm({ title: 'Delete this loan part?', message: 'All its payments and rate periods are deleted too. This can’t be undone.' })) onDelete(id) }}>Delete</button>}
-            <span style={{ flex: 1 }} />
-            <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary">Save</button>
+            {myPeriods.length ? (
+              <ul className="rate-list">
+                {myPeriods.map(r => {
+                  const bunden = r.rate_type === 'bunden'
+                  // Plan 127 §5 — an open-ended period has no real end date to
+                  // show, so the placeholder is the actual Swedish status
+                  // (Aktuell/Kommande) instead of the old "nu · now" stand-in.
+                  // A period WITH an end date already communicates via that
+                  // date and keeps showing it verbatim.
+                  const openEndedStatus = r.end_date ? null : RATE_PERIOD_STATUS_LABEL[ratePeriodStatus(r, todayISO())]
+                  return (
+                    <li key={r.id}>
+                      <span className="rate-when">{r.start_date || '—'} → {r.end_date || openEndedStatus}</span>
+                      <span className="rate-pct">{r.rate != null ? fmtPct(r.rate) : '—'}</span>
+                      <span className={'rate-type' + (bunden ? ' is-bunden' : '')}>{bunden ? 'Bunden' : 'Rörlig'}</span>
+                      <span className="rate-acts">
+                        <button type="button" className="icon-btn" title="Redigera" aria-label="Redigera" onClick={() => onEditPeriod(id!, r.id)}><Icon icon={Pencil} /></button>
+                        <button type="button" className="icon-btn" title="Ta bort" aria-label="Ta bort" onClick={async () => { if (await confirm({ title: RATE_PERIOD_DELETE_CONFIRM_TITLE })) onDeletePeriod(r.id) }}><Icon icon={X} /></button>
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : <ul className="rate-list"><li className="rate-empty">Inga ränteperioder än — lägg till en för att sätta lånedelens ränta.</li></ul>}
+            <button type="button" className="btn btn-ghost" id="p-rate-add" onClick={() => onEditPeriod(id!, null)}>+ Lägg till ränteperiod</button>
           </div>
-        </form>
-      </DialogShell>
-      {/* The nested dialog no longer closes itself on submit: PeriodDialog owns
-          close-on-success and calls onClose only when the save resolves, so a
-          failed save stays open with its draft and repair message (plan 127
-          §3). Plan 127 §2 removes this nesting entirely. */}
-      <PeriodDialog open={periodDlg.open} partId={id} id={periodDlg.id} periods={periods}
-        onSave={data => onSavePeriod(id!, data, periodDlg.id || undefined)}
-        onDelete={pid => { onDeletePeriod(pid); setPeriodDlg({ open: false, id: null }) }}
-        onClose={() => setPeriodDlg({ open: false, id: null })} />
-    </>
+        )}
+        <div className="dialog-actions">
+          {id && <button type="button" className="btn btn-ghost btn-danger" onClick={async () => { if (await confirm({ title: 'Delete this loan part?', message: 'All its payments and rate periods are deleted too. This can’t be undone.' })) onDelete(id) }}>Delete</button>}
+          <span style={{ flex: 1 }} />
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </DialogShell>
   )
 }

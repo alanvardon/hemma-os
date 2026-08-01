@@ -1142,6 +1142,19 @@ export function ratePeriodNeighbours(
   }
 }
 
+export type RatePeriodStatus = 'past' | 'current' | 'upcoming'
+
+// Plan 127 §5 — the rate-history list needs a Swedish status word instead of
+// the old ad hoc "nu · now" placeholder. Mirrors the exact "covered" rule
+// strictRatePeriodCoverage already uses (start_date <= asOf <= end_date, an
+// absent end_date reads as still open), so the word in the history list can
+// never disagree with the coverage/forecast logic elsewhere.
+export function ratePeriodStatus(period: RatePeriod, asOf: string): RatePeriodStatus {
+  if (period.start_date > asOf) return 'upcoming'
+  if (period.end_date != null && period.end_date < asOf) return 'past'
+  return 'current'
+}
+
 // The CREATE path only: "Ny räntesats" always inserts a period, while
 // correcting an existing one is an edit and keeps the plain update path (plan
 // 127 §1). Both share these date/rate rules, but only a creation can also close
@@ -1209,6 +1222,22 @@ export function proposeRatePeriodTransition(
       close,
     },
   }
+}
+
+// Plan 127 §2 — "Ny räntesats" default `start_date`: the day after a CLOSED
+// predecessor (so a repriced part's next period starts exactly where the old
+// one stopped), else `today`. Resolved against `today`, not an empty draft
+// start, because that is the one anchor guaranteed to exist before the owner
+// has typed anything. An open-ended predecessor (no end_date yet) is not
+// "closed", so it falls through to `today` — the transition proposal is what
+// later proposes closing it, not this default.
+export function defaultRatePeriodStart(partId: string, periods: RatePeriod[], today: string): string {
+  const { previous } = ratePeriodNeighbours(partId, periods, today)
+  if (previous?.end_date) {
+    const next = addDaysISO(previous.end_date, 1)
+    if (next != null) return next
+  }
+  return today
 }
 
 // ── Two-segment split at a rate boundary (plan 126 §4) ─────────────────────

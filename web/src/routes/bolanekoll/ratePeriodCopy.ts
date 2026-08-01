@@ -6,12 +6,20 @@
 // conflict is always fixable by hand, and a message that only says "kunde inte
 // spara" leaves the owner with an overlapping timeline and no instruction.
 import { addDaysISO, dayBefore } from '../../lib/mortgage'
-import type { RatePeriod, RatePeriodNeighbours, RatePeriodTransitionReason } from '../../lib/mortgage'
+import type { RatePeriod, RatePeriodNeighbours, RatePeriodStatus, RatePeriodTransitionReason } from '../../lib/mortgage'
 import { fmtPct } from './shared'
 
 const RATE_TYPE_LABEL: Record<RatePeriod['rate_type'], string> = {
   rörlig: 'rörlig',
   bunden: 'bunden',
+}
+
+/** Plan 127 §5 — the word shown next to an open-ended period in the history
+ * list, replacing the old "nu · now" placeholder. */
+export const RATE_PERIOD_STATUS_LABEL: Record<RatePeriodStatus, string> = {
+  past: 'Tidigare',
+  current: 'Aktuell',
+  upcoming: 'Kommande',
 }
 
 /**
@@ -71,3 +79,22 @@ export function predecessorCloseFailedMessage(endDate: string): string {
 
 export const RATE_PERIOD_CREATED_TOAST = 'Ny räntesats sparad.'
 export const RATE_PERIOD_UPDATED_TOAST = 'Ränteperioden uppdaterad.'
+
+/** Shared by the standalone dialog's own delete button and PartDialog's
+ * per-row delete, so the two confirmations never drift apart. */
+export const RATE_PERIOD_DELETE_CONFIRM_TITLE = 'Ta bort ränteperioden?'
+
+/**
+ * Plan 127 §2 — the delta shown beside the new rate once a valid number is
+ * entered, e.g. "+0,36 pp". Built on `fmtPct` (never re-derives Swedish
+ * number formatting) with its " %" suffix swapped for " pp" (percentage
+ * points, not a percentage), and an explicit sign so the meaning never rests
+ * on colour alone.
+ */
+export function rateDeltaLabel(currentRate: number, enteredRate: number): string {
+  const delta = enteredRate - currentRate
+  const magnitude = fmtPct(Math.abs(delta)).replace(' %', ' pp')
+  if (delta > 0) return `+${magnitude}`
+  if (delta < 0) return `−${magnitude}`
+  return `±${magnitude}`
+}

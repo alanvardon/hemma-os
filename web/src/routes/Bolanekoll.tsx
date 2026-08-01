@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ChevronRight, Copy, EllipsisVertical, Pencil, Settings2, X } from 'lucide-react'
+import { ChevronRight, Copy, EllipsisVertical, Pencil, Percent, Settings2, X } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
 import EquityStackChart, { type EquityPoint } from '../components/charts/EquityStackChart'
 import RiksbankChart from '../components/charts/RiksbankChart'
@@ -43,6 +43,7 @@ import * as Store from '../lib/mortgage-store'
 import { loadBudget } from '../lib/hushallsbudget-store'
 import { computeBudget } from '../lib/hushallsbudget'
 import PartDialog from './bolanekoll/PartDialog'
+import PeriodDialog from './bolanekoll/PeriodDialog'
 import ValuationDialog from './bolanekoll/ValuationDialog'
 import PaymentDialog from './bolanekoll/PaymentDialog'
 import CopyToPartsDialog from './bolanekoll/CopyToPartsDialog'
@@ -138,6 +139,10 @@ export default function Bolanekoll() {
   const scenarioRateSavingRef = useRef<number | null>(null)
 
   const [partDlg, setPartDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
+  // Plan 127 §2 — the ONE standalone PeriodDialog instance for the whole page:
+  // a row's percent action and PartDialog's rate-history editor both target
+  // this same state, so a correction never stacks on top of another dialog.
+  const [periodDlg, setPeriodDlg] = useState<{ open: boolean; partId: string | null; id: string | null }>({ open: false, partId: null, id: null })
   const [valDlg, setValDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [payDlg, setPayDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [copyDlg, setCopyDlg] = useState<{ open: boolean; source: Payment | null }>({ open: false, source: null })
@@ -330,8 +335,17 @@ export default function Bolanekoll() {
         {fmtPct(rate)}{type ? ' · ' + (type === 'bunden' ? 'bunden' : 'rörlig') : ''}
       </span>
     )
-  const partActs = (p: LoanPart) => (
+  // `active` adds the one-click "Ny räntesats" action (plan 127 §2) — only for
+  // the live Lånedelar rows, never the Avslutade (archived) list, which reuses
+  // this same function for its Edit/Ta bort pair.
+  const partActs = (p: LoanPart, active?: boolean) => (
     <>
+      {active && (
+        <button type="button" className="icon-btn" title="Ny räntesats" aria-label="Ny räntesats"
+          onClick={() => setPeriodDlg({ open: true, partId: p.id, id: null })}>
+          <Icon icon={Percent} />
+        </button>
+      )}
       <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setPartDlg({ open: true, id: p.id })}><Icon icon={Pencil} /></button>
       <button type="button" className="icon-btn" data-del-part title="Ta bort" aria-label="Ta bort" onClick={async () => { if (await confirm({ title: 'Ta bort lånedelen?', message: 'Alla dess betalningar och ränteperioder tas bort. Det går inte att ångra.' })) handleDeletePart(p.id) }}><Icon icon={X} /></button>
     </>
@@ -742,6 +756,18 @@ export default function Bolanekoll() {
   const handleSavePeriod = workspaceActions.parts.savePeriod
   const handleDeletePeriod = workspaceActions.parts.removePeriod
   const handleEnableTracking = workspaceActions.settings.enableContributionTracking
+  const closePeriodDlg = () => setPeriodDlg({ open: false, partId: null, id: null })
+  // Plan 127 §2 — "Ny räntesats" (a Lånedelar row action) and PartDialog's
+  // rate-history editor both funnel through this: null periodId is a create,
+  // a real one is a correction, and both open the SAME standalone dialog.
+  function handleEditPeriod(partId: string, periodId: string | null) {
+    setPartDlg({ open: false, id: null })
+    setPeriodDlg({ open: true, partId, id: periodId })
+  }
+  function handleDeletePeriodFromDialog(id: string) {
+    handleDeletePeriod(id)
+    closePeriodDlg()
+  }
 
   async function handleSaveVal(data: Parameters<typeof workspaceActions.valuations.save>[0]) {
     if (await workspaceActions.valuations.save(data, valDlg.id)) {
@@ -1482,7 +1508,7 @@ export default function Bolanekoll() {
                                 </td>
                                 <td className="num"><CellReveal reduce={reduceMotion}>{fmtMoney(bal)}</CellReveal></td>
                                 <td className="num"><CellReveal reduce={reduceMotion}>{fmtPct(share)}</CellReveal></td>
-                                <td className="col-act"><CellReveal reduce={reduceMotion}>{partActs(p)}</CellReveal></td>
+                                <td className="col-act"><CellReveal reduce={reduceMotion}>{partActs(p, true)}</CellReveal></td>
                               </motion.tr>
                             )
                           })}
@@ -1956,7 +1982,14 @@ export default function Bolanekoll() {
       {/* ── Dialogs ── */}
       <PartDialog open={partDlg.open} id={partDlg.id} parts={parts} periods={periods} payments={payments}
         onSave={handleSavePart} onDelete={handleDeletePart} onClose={() => setPartDlg({ open: false, id: null })}
-        onSavePeriod={handleSavePeriod} onDeletePeriod={handleDeletePeriod} />
+        onEditPeriod={handleEditPeriod} onDeletePeriod={handleDeletePeriod} />
+      {/* Plan 127 §2 — the ONE standalone rate-period dialog on the page: the
+          Lånedelar row's "Ny räntesats" action and PartDialog's rate-history
+          editor both target `periodDlg`, so a correction never opens on top of
+          another dialog. */}
+      <PeriodDialog open={periodDlg.open} partId={periodDlg.partId} id={periodDlg.id} periods={periods}
+        onSave={data => handleSavePeriod(periodDlg.partId!, data, periodDlg.id || undefined)}
+        onDelete={handleDeletePeriodFromDialog} onClose={closePeriodDlg} />
       <ValuationDialog open={valDlg.open} id={valDlg.id} valuations={valuations} onSave={handleSaveVal} onDelete={handleDeleteVal} onClose={() => setValDlg({ open: false, id: null })} />
       <PaymentDialog open={payDlg.open} id={payDlg.id} payments={payments} parts={parts} settings={settings}
         mortgages={mortgages} banks={banks} activeMortgageId={activeMortgage?.id ?? null}

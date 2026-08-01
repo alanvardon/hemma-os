@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { proposeRatePeriodTransition } from './mortgage'
+import { defaultRatePeriodStart, proposeRatePeriodTransition, ratePeriodStatus } from './mortgage'
 import type { RatePeriod, RatePeriodTransitionResult } from './mortgage'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -257,5 +257,54 @@ describe('proposeRatePeriodTransition — scoping and input shape', () => {
     const periods = [period({ id: 'rp-a', start_date: '2026-05-01', end_date: null, rate: 3.93 })]
     const t = valid(proposeRatePeriodTransition('part-1', periods, draft({ start_date: '2027-01-01' })))
     expect(t.close).toEqual({ id: 'rp-a', end_date: '2026-12-31' })
+  })
+})
+
+// ── ratePeriodStatus (plan 127 §5) ──────────────────────────────────────────
+describe('ratePeriodStatus', () => {
+  it('is upcoming when the period starts after asOf', () => {
+    expect(ratePeriodStatus(period({ start_date: '2026-09-01', end_date: null }), '2026-08-01')).toBe('upcoming')
+  })
+
+  it('is current when asOf falls within an open-ended period', () => {
+    expect(ratePeriodStatus(period({ start_date: '2026-05-01', end_date: null }), '2026-08-01')).toBe('current')
+  })
+
+  it('is current when asOf falls within a closed period, inclusive of both boundaries', () => {
+    const p = period({ start_date: '2026-05-01', end_date: '2026-07-31' })
+    expect(ratePeriodStatus(p, '2026-05-01')).toBe('current')
+    expect(ratePeriodStatus(p, '2026-07-31')).toBe('current')
+    expect(ratePeriodStatus(p, '2026-06-15')).toBe('current')
+  })
+
+  it('is past once asOf is after a known end_date', () => {
+    expect(ratePeriodStatus(period({ start_date: '2026-05-01', end_date: '2026-07-31' }), '2026-08-01')).toBe('past')
+  })
+})
+
+// ── defaultRatePeriodStart (plan 127 §2) ────────────────────────────────────
+describe('defaultRatePeriodStart', () => {
+  it('defaults to today when the part has no periods at all', () => {
+    expect(defaultRatePeriodStart('part-1', [], '2026-08-01')).toBe('2026-08-01')
+  })
+
+  it('defaults to today when the latest predecessor is still open-ended', () => {
+    const periods = [period({ start_date: '2026-05-01', end_date: null })]
+    expect(defaultRatePeriodStart('part-1', periods, '2026-08-01')).toBe('2026-08-01')
+  })
+
+  it('defaults to the day after a closed predecessor ends', () => {
+    const periods = [period({ start_date: '2026-05-01', end_date: '2026-07-31' })]
+    expect(defaultRatePeriodStart('part-1', periods, '2026-08-15')).toBe('2026-08-01')
+  })
+
+  it('carries a leap-day boundary correctly', () => {
+    const periods = [period({ start_date: '2027-12-01', end_date: '2028-02-28' })]
+    expect(defaultRatePeriodStart('part-1', periods, '2028-03-15')).toBe('2028-02-29')
+  })
+
+  it('ignores another loan part entirely', () => {
+    const periods = [period({ loan_part_id: 'other-part', start_date: '2026-05-01', end_date: '2026-07-31' })]
+    expect(defaultRatePeriodStart('part-1', periods, '2026-08-15')).toBe('2026-08-15')
   })
 })
