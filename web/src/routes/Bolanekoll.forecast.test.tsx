@@ -12,7 +12,7 @@ import Bolanekoll from './Bolanekoll'
 import { ConfirmProvider } from '../components/useConfirm'
 import * as Store from '../lib/mortgage-store'
 import { defaultSettings } from '../lib/mortgage'
-import type { LoanPart, Payment, RatePeriod } from '../lib/mortgage'
+import type { LoanPart, Mortgage, Payment, RatePeriod } from '../lib/mortgage'
 
 vi.mock('../lib/mortgage-store')
 vi.mock('../lib/hushallsbudget-store', () => ({ loadBudget: vi.fn(async () => null) }))
@@ -245,10 +245,17 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     ])
   })
 
-  it('offers a one-click refresh when logged förväntade rows drift from the current forecast', async () => {
+  // Plan 126 §5 — the acceptance boundary. These two tests REPLACE the pair
+  // that used to assert the banner's one-click refresh ("offers a one-click
+  // refresh when logged förväntade rows drift from the current forecast" and
+  // "a failed refresh surfaces the error toast and keeps the banner"). Settled
+  // meaning 7 makes an approved row frozen forever, so the rewrite path — the
+  // action, its store method and its failure toast — is gone; what is left must
+  // be provably read-only, which is what these assert instead.
+  it('reports drifting godkända prognosrader as fact, with no rewrite action', async () => {
     // Flat-monthly bank (4 061 kr every month) + two July förväntad rows
-    // logged with the OLD days-model (the ×1.86 bug: 7 565 kr). The banner
-    // rewrites them to the current forecast on an explicit click.
+    // logged with an older model (7 565 kr). The banner names the drift and
+    // stops there: reality (the bank's next import) supersedes them.
     const B = 1_350_000
     const flatRow = (date: string, kind: Payment['kind'], amount: number, over: Partial<Payment> = {}): Payment => ({
       id: kind[0] + date, created_at: '', loan_part_id: 'p1', date, kind,
@@ -264,23 +271,18 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     ]
     // The listed rate this flat ledger was billed at: 4 061 × 12 / 1 350 000 = 3,61 %.
     seedStore(ledger, PART, [{ ...PERIOD, rate: 3.61 }])
-    vi.mocked(Store.updatePayment).mockImplementation(async (id, patch) =>
-      ({ ...ledger.find(p => p.id === id)!, ...patch } as Payment))
-    const user = userEvent.setup()
     renderBolanekoll()
 
-    expect(await screen.findByText(/godkända prognosrader beräknades med en äldre modell/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Uppdatera godkända rader' }))
-
-    // 1 350 000 × 3.61/100 / 12 = 4 061,25 (was 4 061,00 — the old branch echoed
-    // the last charge instead of pricing the entered rate).
-    expect(Store.updatePayment).toHaveBeenCalledTimes(2)
-    expect(Store.updatePayment).toHaveBeenCalledWith('stale-i', { amount: 4061.25, balance_after: B })
-    expect(Store.updatePayment).toHaveBeenCalledWith('stale-b', { amount: 4061.25, balance_after: B })
-    expect(await screen.findByText(/godkända prognosrader uppdaterade till aktuell prognos/)).toBeInTheDocument()
+    // The banner states a fact and names the self-healing path…
+    const banner = await screen.findByText(/godkända prognosrader beräknades med en äldre modell/)
+    expect(banner).toHaveTextContent('Bankens nästa import ersätter dem.')
+    // …and it is informational markup, announced but not actionable.
+    expect(banner).toHaveAttribute('role', 'status')
+    expect(banner.querySelector('button')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Uppdatera godkända rader/ })).not.toBeInTheDocument()
   })
 
-  it('a failed refresh surfaces the error toast and keeps the banner', async () => {
+  it('never rewrites an approved prognosrad — no ledger mutation on visit or interaction', async () => {
     const B = 1_350_000
     const stale: Payment = {
       id: 'stale-i', created_at: '', loan_part_id: 'p1', date: '2026-07-01', kind: 'interest',
@@ -294,15 +296,15 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
       stale,
     ]
     seedStore(ledger)
-    vi.mocked(Store.updatePayment).mockRejectedValueOnce({ message: 'Failed to fetch' })
-    const user = userEvent.setup()
     renderBolanekoll()
 
-    await user.click(await screen.findByRole('button', { name: 'Uppdatera godkända rader' }))
-
-    expect(await screen.findByText('Ingen anslutning. Ändringen sparades inte i molnet.')).toBeInTheDocument()
-    // The rows were not rewritten, so the banner must still be offering the fix.
-    expect(screen.getByRole('button', { name: 'Uppdatera godkända rader' })).toBeInTheDocument()
+    expect(await screen.findByText(/godkänd prognosrad beräknades med en äldre modell/))
+      .toHaveTextContent('Bankens nästa import ersätter den.')
+    // The approved row keeps the amount it was approved at — nothing in the
+    // page's render path writes to it, and no control offers to.
+    expect(Store.updatePayment).not.toHaveBeenCalled()
+    expect(Store.addPayments).not.toHaveBeenCalled()
+    expect(Store.removePayments).not.toHaveBeenCalled()
   })
 
   it('shows the month AFTER one already covered, without logging anything', async () => {
@@ -482,5 +484,88 @@ describe('Bolånekoll forecast — import supersede (plan 23 phase C)', () => {
     // badge shows in the triage row and the summary counts it.
     expect((await screen.findAllByText(/matchar prognosen/)).length).toBeGreaterThan(0)
     expect(Store.removePayments).not.toHaveBeenCalled()
+  })
+})
+
+// Plan 126 §2 — the missing-terms split, at the component level. Two distinct
+// states, two distinct messages, and a part is never in both:
+//
+//   no rate period at all          → "Räntevillkor saknas." + Lägg till räntevillkor
+//   periods exist, none covers today → "Räntevillkor saknas för idag."
+//
+// The second class is what the plan closes: such a part shows no Nästa
+// avisering, no rate badge and sits in the catch-all group, so without this
+// warning it is silently rateless with no explanation anywhere on the page.
+//
+// Every fixture below lapses in 2025 or is open-ended, so the assertions hold
+// on any real clock from 2026 onwards rather than only on the day written.
+describe('Bolånekoll — missing current rate terms (plan 126 §2)', () => {
+  const AGREEMENT: Mortgage = {
+    id: 'm1', created_at: '', bank_id: null, label: 'Vårt bolån', start_date: '2024-01-01', archived: false,
+  }
+  const p1: LoanPart = { ...PART, id: 'p1', label: 'Lånedel 1', mortgage_id: 'm1', start_balance: 1_000_000, start_date: '2024-01-01' }
+  const p2: LoanPart = { ...PART, id: 'p2', label: 'Lånedel 2', mortgage_id: 'm1', start_balance: 500_000, start_date: '2024-01-01' }
+  const covering = (id: string, loan_part_id: string, rate: number): RatePeriod =>
+    ({ id, created_at: '', loan_part_id, start_date: '2024-01-01', end_date: null, rate, rate_type: 'rörlig' })
+  const lapsed = (id: string, loan_part_id: string, rate: number): RatePeriod =>
+    ({ id, created_at: '', loan_part_id, start_date: '2024-01-01', end_date: '2025-06-01', rate, rate_type: 'bunden' })
+
+  function seedAgreement(parts: LoanPart[], ratePeriods: RatePeriod[]) {
+    vi.mocked(Store.cachedSnapshot).mockReturnValue({
+      version: 1, banks: [], mortgages: [AGREEMENT], loan_parts: parts, payments: [],
+      valuations: [], rate_periods: ratePeriods, contributions: [], settings: defaultSettings(),
+    })
+    vi.mocked(Store.listLoanParts).mockResolvedValue(parts)
+    vi.mocked(Store.listPayments).mockResolvedValue([])
+    vi.mocked(Store.listValuations).mockResolvedValue([])
+    vi.mocked(Store.listRatePeriods).mockResolvedValue(ratePeriods)
+    vi.mocked(Store.listContributions).mockResolvedValue([])
+    vi.mocked(Store.getSettings).mockResolvedValue(defaultSettings())
+    vi.mocked(Store.listBanks).mockResolvedValue([])
+    vi.mocked(Store.listMortgages).mockResolvedValue([AGREEMENT])
+    vi.mocked(Store.listCatalogBanks).mockResolvedValue([])
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+  })
+
+  it('names only the part whose periods no longer reach today', async () => {
+    // Lånedel 1 is open-ended (covered); Lånedel 2's only period lapsed in 2025.
+    seedAgreement([p1, p2], [covering('r1', 'p1', 3.5), lapsed('r2', 'p2', 4.0)])
+    renderBolanekoll()
+
+    const warning = await screen.findByText(/Räntevillkor saknas för idag/)
+    const banner = warning.closest('.missing-rate-prompt') as HTMLElement
+    expect(banner).not.toBeNull()
+    expect(banner).toHaveTextContent('Kontrollera perioderna för Lånedel 2.')
+    expect(banner).not.toHaveTextContent('Lånedel 1')
+    // Announced, and the fix is reachable by keyboard — a real button, not a
+    // colour-only cue.
+    expect(banner).toHaveAttribute('role', 'status')
+    expect(within(banner).getByRole('button', { name: 'Öppna Lånedel 2' })).toBeInTheDocument()
+    // The OTHER message is for parts with nothing entered at all, so it stays
+    // silent here: Lånedel 2 has villkor, they just need correcting.
+    expect(screen.queryByRole('button', { name: /Lägg till räntevillkor/ })).not.toBeInTheDocument()
+  })
+
+  it('stays silent when every active part has a period covering today', async () => {
+    seedAgreement([p1, p2], [covering('r1', 'p1', 3.5), covering('r2', 'p2', 4.0)])
+    renderBolanekoll()
+
+    // Both parts are loaded and grouped (rörlig, so the catch-all group)…
+    const group = await screen.findByText('No reprice date set')
+    expect(group.closest('tr')?.querySelector('.ld-count')?.textContent).toBe('2 parts')
+    // …and neither triggers the warning.
+    expect(screen.queryByText(/Räntevillkor saknas för idag/)).not.toBeInTheDocument()
+  })
+
+  it('leaves a part with no villkor at all to the Lägg till räntevillkor prompt', async () => {
+    // p2 has NO rate period. The two messages must not both claim it.
+    seedAgreement([p1, p2], [covering('r1', 'p1', 3.5)])
+    renderBolanekoll()
+
+    expect(await screen.findByRole('button', { name: '+ Lägg till räntevillkor: Lånedel 2' })).toBeInTheDocument()
+    expect(screen.queryByText(/Räntevillkor saknas för idag/)).not.toBeInTheDocument()
   })
 })

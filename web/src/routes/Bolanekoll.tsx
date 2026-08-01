@@ -23,7 +23,7 @@ import {
   propertyValue, equity, loanToValue,
   purchasePrice, costBasisEquity, costBasisOwnedPct, costBasisSplit, marketEquitySplit, derivedDeposit,
   effectiveRatePeriod, groupLoanParts, weightedAvgRate, amorteringskravStatus,
-  partsForMortgage, paymentsForMortgage, partsMissingRateTerms,
+  partsForMortgage, paymentsForMortgage, partsMissingRateTerms, partsMissingCurrentRateTerms,
   activeAgreementParts as activeAgreementPartsScope, activeAgreementPayments as activeAgreementPaymentsScope,
   equityTimeline, equityBridge, projectMilestones, monthlyAmortizationRate, monthlyCost, rateWhatIf,
   expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
@@ -78,6 +78,14 @@ function fmtChargeMonth(iso: string): string {
   return d
     .toLocaleDateString('sv-SE', { month: 'short', year: 'numeric' })
     .replace(/\./g, '')
+}
+
+/** Swedish enumeration for a short list of names: "A", "A och B",
+ * "A, B och C". Display formatting only — the list itself is decided in
+ * lib/mortgage. */
+function swedishList(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return names.slice(0, -1).join(', ') + ' och ' + names[names.length - 1]
 }
 
 /** The rate input is deliberately stricter than parseAmount(): a trailing
@@ -341,7 +349,11 @@ export default function Bolanekoll() {
   const bridge = useMemo(() => equityBridge(parts, payments, valuations, bridgeFrom, today), [parts, payments, valuations, bridgeFrom, today])
 
   const costRows = useMemo(() => monthlyCost(payments, { ranteavdrag: settings.ranteavdrag }), [payments, settings.ranteavdrag])
-  const blended = useMemo(() => weightedAvgRate(activeViewParts, periods, activeViewPayments), [activeViewParts, periods, activeViewPayments])
+  // Plan 126 §2 — the blended rate (and the Prognos "Nu (…)" label it feeds) is
+  // a CURRENT figure, so it reads the periods covering `today`, the same
+  // captured day the groups and member badges use. A part with no current
+  // coverage contributes nothing rather than contributing a future rate.
+  const blended = useMemo(() => weightedAvgRate(activeViewParts, periods, activeViewPayments, today), [activeViewParts, periods, activeViewPayments, today])
   const krav = useMemo(() => amorteringskravStatus(activeViewParts, activeViewPayments, valuations, settings), [activeViewParts, activeViewPayments, valuations, settings])
 
   const extra = Math.max(0, parseAmount(extraAmort) || 0)
@@ -441,6 +453,15 @@ export default function Bolanekoll() {
   // deliberately not copied); the card prompts for Lägg till räntevillkor until
   // every part has one, so the forecast never silently reads as 0 %.
   const missingRate = useMemo(() => partsMissingRateTerms(activeParts, periods), [activeParts, periods])
+  // Plan 126 §2 — the other half of that split: parts that DO have räntevillkor,
+  // but none covering `today` (a gap, a lapsed timeline, an all-future one, or
+  // two overlapping rows). Such a part has no current rate anywhere — no Nästa
+  // avisering, no group rate, catch-all placement — so it needs its own
+  // explanation. Disjoint from `missingRate` by construction, so the two prompts
+  // never both name the same part.
+  const missingCurrentRate = useMemo(
+    () => partsMissingCurrentRateTerms(activeParts, periods, today),
+    [activeParts, periods, today])
   // Plan 109c — Ångra bankbyte is offered only while the new (active) agreement
   // is still pristine: no payment references its parts (or itself as a partless
   // down payment) and no rate period touches its parts. Computed client-side for
@@ -770,10 +791,6 @@ export default function Bolanekoll() {
   }
 
   const handleLogPredicted = workspaceActions.payments.logPredicted
-
-  async function handleRefreshPredicted() {
-    await workspaceActions.payments.refreshPredicted(staleRows)
-  }
 
   async function clearPayments() {
     const scoped = paymentFilter === 'all' ? activeViewPayments : activeViewPayments.filter(p => p.loan_part_id === paymentFilter)
@@ -1390,6 +1407,26 @@ export default function Bolanekoll() {
               </span>
             </div>
           )}
+          {/* Plan 126 §2 — räntevillkor exist but none covers today (a gap, a
+              lapsed timeline, an all-future one, or overlapping rows). The part
+              has no current rate anywhere on the page, so say so and point at
+              the periods to correct. Distinct from the prompt above, which is
+              for parts with no villkor at all. */}
+          {activeMortgage && missingCurrentRate.length > 0 && (
+            <div className="missing-rate-prompt" role="status">
+              <span className="missing-rate-text">
+                <b>Räntevillkor saknas för idag.</b> Kontrollera perioderna för {swedishList(missingCurrentRate.map(m => m.label || 'lånedel'))}.
+              </span>
+              <span className="missing-rate-parts">
+                {missingCurrentRate.map(m => (
+                  <button key={m.loan_part_id} type="button" className="btn btn-ghost btn-sm"
+                    onClick={() => setPartDlg({ open: true, id: m.loan_part_id })}>
+                    Öppna {m.label || 'lånedel'}
+                  </button>
+                ))}
+              </span>
+            </div>
+          )}
           {!activeViewParts.length ? (
             <p className="empty">
               {activeMortgage
@@ -1429,7 +1466,9 @@ export default function Bolanekoll() {
                           {isExp && g.parts.map(p => {
                             const bal = partBalance(p, payments)
                             const share = shareBasis > 0 ? bal / shareBasis * 100 : 0
-                            const per = effectiveRatePeriod(p, periods)
+                            // Plan 126 §2 — the member badge shows the rate in
+                            // force TODAY, not the newest one entered.
+                            const per = effectiveRatePeriod(p, periods, today)
                             return (
                               <motion.tr key={p.id} className="ld-member">
                                 <td>
@@ -1552,18 +1591,18 @@ export default function Bolanekoll() {
               header and its controls sit further down, directly above the
               ledger they act on. Only parts NOT yet covered by a row for that
               month show — logging (or importing) makes a part drop out. */}
-          {/* Förväntade rows in the ledger that no longer match the current
-              forecast (logged with an older model). Refresh is an explicit
-              click — the app never rewrites ledger rows on visit. */}
+          {/* Plan 126 §5, the acceptance boundary — a row the owner approved is
+              frozen forever, so this banner is INFORMATIONAL only: it names the
+              drift and stops there. There is deliberately no refresh action.
+              Predicted provenance already makes the case self-healing: the next
+              real CSV import replaces the same loan_part_id + kind + month, so
+              reality supersedes a row computed under a worse model. Rewriting an
+              approved row from a better *model* is the one path that is not. */}
           {staleRows.length > 0 && (
-            <div className="reconcile-banner">
+            <div className="reconcile-banner" role="status">
               {staleRows.length === 1
-                ? '1 godkänd prognosrad beräknades med en äldre modell och stämmer inte längre med aktuell prognos.'
-                : staleRows.length + ' godkända prognosrader beräknades med en äldre modell och stämmer inte längre med aktuell prognos.'}
-              {' '}
-              <button type="button" className="btn btn-ghost" onClick={handleRefreshPredicted}>
-                Uppdatera godkända rader
-              </button>
+                ? '1 godkänd prognosrad beräknades med en äldre modell. Bankens nästa import ersätter den.'
+                : staleRows.length + ' godkända prognosrader beräknades med en äldre modell. Bankens nästa import ersätter dem.'}
             </div>
           )}
           {pendingEntries.length > 0 && (

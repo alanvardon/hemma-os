@@ -19,7 +19,7 @@ import {
   stalePredictedRows, makeLoanPart, effectiveDeclaredAmortization, declaredMonthlyAmortization,
   projectMilestones, profileYearBasis, makeBank,
   learnYearBasis, suggestBankProfile, bankProfileDrift, profileBilling, strictRatePeriodCoverage,
-  partsMissingRateTerms, intervalRateSegments,
+  partsMissingRateTerms, partsMissingCurrentRateTerms, intervalRateSegments,
 } from './mortgage'
 import type { LoanPart, Payment, RatePeriod, Bank, Mortgage } from './mortgage'
 
@@ -239,14 +239,26 @@ describe('expectedCharge', () => {
       period(),
       period({ id: 'r2', start_date: '2026-05-01', end_date: null, rate: 4.1 }),
     ], CLEAN)).toBeNull()
-    // The "Lägg till räntevillkor" prompt is driven by partsMissingRateTerms,
-    // which asks the BARE (existence) question — so it names the part that has
-    // no terms at all, and stays silent for a part whose terms simply do not
-    // reach the charge date. That second class is stage 4's separate
-    // "Räntevillkor saknas för idag" warning; pinned here so the split is
-    // deliberate rather than discovered.
+    // Two missing-terms messages, deliberately disjoint (plan 126 §2):
+    //
+    //   partsMissingRateTerms          — BARE existence question. Drives
+    //     "Lägg till räntevillkor". Names a part with NO villkor at all, and
+    //     stays silent for one whose villkor simply do not reach the date.
+    //   partsMissingCurrentRateTerms   — DATED coverage question. Drives
+    //     "Räntevillkor saknas för idag". Names exactly the second class, and
+    //     stays silent for the first so the page never shows both prompts for
+    //     the same part.
+    //
+    // Together they leave no part rateless without an explanation, which is the
+    // whole point of the split: expectedCharge above returns null for both
+    // classes, so neither shows a Nästa avisering.
+    const lapsedTerms = [period({ rate_type: 'bunden', end_date: '2026-07-01' })]
     expect(partsMissingRateTerms([part()], []).map(m => m.loan_part_id)).toEqual(['p1'])
-    expect(partsMissingRateTerms([part()], [period({ rate_type: 'bunden', end_date: '2026-07-01' })])).toEqual([])
+    expect(partsMissingRateTerms([part()], lapsedTerms)).toEqual([])
+    expect(partsMissingCurrentRateTerms([part()], [], '2026-07-27')).toEqual([])
+    expect(partsMissingCurrentRateTerms([part()], lapsedTerms, '2026-07-27').map(m => m.loan_part_id)).toEqual(['p1'])
+    // …and on a day the lapsed period still covered, neither message fires.
+    expect(partsMissingCurrentRateTerms([part()], lapsedTerms, '2026-07-01')).toEqual([])
   })
 
   it('a bunden part predicts on its contractual rate, not the lagging derived estimate', () => {

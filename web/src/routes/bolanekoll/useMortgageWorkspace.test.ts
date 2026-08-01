@@ -134,4 +134,21 @@ describe('useMortgageWorkspace', () => {
       bank_id: 'b2',
     }))
   })
+
+  // Plan 126 §5, the acceptance boundary. A row the owner approved
+  // (source: 'predicted', "Godkänd prognos") is frozen FOREVER — only the
+  // bank's next real import may replace it. The workspace used to expose
+  // `payments.refreshPredicted`, which rewrote exactly those rows from a newer
+  // model; it is removed rather than merely unwired, so the route cannot
+  // reintroduce the write by calling it. This pins the absence at the store
+  // layer, where the mutation lived.
+  it('exposes no predicted-row rewrite action — approved rows are frozen', async () => {
+    const { result } = renderHook(() => useMortgageWorkspace())
+    await waitFor(() => expect(result.current.state.loaded).toBe(true))
+
+    const payments = result.current.actions.payments as Record<string, unknown>
+    expect(payments).not.toHaveProperty('refreshPredicted')
+    expect(Object.keys(payments).sort())
+      .toEqual(['clear', 'copy', 'logPredicted', 'remove', 'save'])
+  })
 })

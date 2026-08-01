@@ -1153,6 +1153,12 @@ export function bindingStatus(part: LoanPart, periods: RatePeriod[], asOf?: stri
 // parts are excluded — they'd skew the balance/share aggregates. `rate` is the
 // balance-weighted average across the group's members; `rate_type` is the shared
 // type when uniform, else null (mixed).
+//
+// Plan 126: with an `asOf` every lookup below is the strict dated one, so
+// `expired` is unreachable — coverage requires asOf <= end_date, which makes
+// days_left non-negative by construction. A lapsed timeline no longer renders
+// an "utgången" group; it renders as a catch-all part with no current rate,
+// which the missing-current-terms warning explains.
 export interface LoanPartGroup {
   key: string; end_date: string | null; rate: number | null; rate_type: 'rörlig' | 'bunden' | null
   parts: LoanPart[]; total_balance: number; share_pct: number
@@ -1165,7 +1171,15 @@ export function groupLoanParts(parts: LoanPart[], periods: RatePeriod[], payment
   type Bucket = { end_date: string | null; parts: LoanPart[]; is_catchall: boolean }
   const byKey = new Map<string, Bucket>()
   for (const part of active) {
-    const period = effectiveRatePeriod(part, periods)
+    // Plan 126 §2 — the DATED lookup. Bucketing on the bare (latest-start)
+    // period made a period beginning tomorrow the grouping key the moment it
+    // was saved, so a part repriced ahead of its own villkorsändringsdag. With
+    // `asOf` the bucket is the period contractually governing that day; a part
+    // no period covers resolves null and falls into __catchall__, deliberately
+    // losing its rate, days_left and expiry rendering. The part stays visible
+    // with no current rate, and Bolånekoll names it in the
+    // "Räntevillkor saknas för idag" warning (partsMissingCurrentRateTerms).
+    const period = effectiveRatePeriod(part, periods, asOf)
     const complete = !!period && period.end_date != null
     const key = complete ? period!.end_date! : '__catchall__'
     let bucket = byKey.get(key)
@@ -1183,9 +1197,9 @@ export function groupLoanParts(parts: LoanPart[], periods: RatePeriod[], payment
     if (!b.is_catchall) {
       const bs = bindingStatus(b.parts[0], periods, asOf)
       days_left = bs.days_left; expired = bs.expired
-      const types = new Set(b.parts.map(p => effectiveRatePeriod(p, periods)?.rate_type).filter(Boolean) as ('rörlig' | 'bunden')[])
+      const types = new Set(b.parts.map(p => effectiveRatePeriod(p, periods, asOf)?.rate_type).filter(Boolean) as ('rörlig' | 'bunden')[])
       rate_type = types.size === 1 ? [...types][0] : null
-      const wa = weightedAvgRate(b.parts, periods, payments)
+      const wa = weightedAvgRate(b.parts, periods, payments, asOf)
       rate = wa > 0 ? wa : null
     }
     return {
@@ -1933,12 +1947,16 @@ export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payme
 }
 
 // Logged förväntad rows carry the amounts the model produced AT LOGGING TIME;
-// when the model improves they go stale, and by design nothing rewrites them
-// on visit (real imports supersede them). This surfaces the drift so the UI
-// can offer an explicit one-click refresh: each stale row is returned with the
-// CURRENT forecast's amount and post-charge saldo for its part + month + kind.
-// Rows inside the reconcile tolerance, real rows, and past months are left
-// alone; months after the base forecast are compared against the rolled charge.
+// when the model improves they go stale. Plan 126 §5 (the acceptance boundary):
+// an approved row is frozen FOREVER, so nothing — neither a visit nor a click —
+// ever rewrites one. This is purely a read-only signal driving an informational
+// banner; the self-healing path is the bank's next real import, which supersedes
+// the same loan_part_id + kind + month.
+//
+// Each drifting row is still returned with the CURRENT forecast's amount and
+// post-charge saldo so the banner could quantify the drift. Rows inside the
+// reconcile tolerance, real rows, and past months are left alone; months after
+// the base forecast are compared against the rolled charge.
 export function stalePredictedRows(parts: LoanPart[], periods: RatePeriod[], payments: Payment[], opts?: ForecastOpts):
   Array<{ payment: Payment; amount: number; balance_after: number }> {
   const out: Array<{ payment: Payment; amount: number; balance_after: number }> = []
@@ -2384,6 +2402,37 @@ export function lifetimeAmortized(parts: LoanPart[], payments: Payment[]): numbe
 export interface MissingRateTerms { loan_part_id: string; label: string }
 export function partsMissingRateTerms(parts: LoanPart[], periods: RatePeriod[]): MissingRateTerms[] {
   return (parts || []).filter(p => p && !p.archived && !effectiveRatePeriod(p, periods || []))
+    .map(p => ({ loan_part_id: p.id, label: p.label }))
+}
+
+// Plan 126 §2 — the SECOND missing-terms class, deliberately disjoint from
+// partsMissingRateTerms above:
+//
+//   partsMissingRateTerms(parts, periods)              → no rate period AT ALL.
+//       "Lägg till räntevillkor" — the state a part is in right after a bank
+//       change. Asks the BARE existence question.
+//   partsMissingCurrentRateTerms(parts, periods, asOf) → periods exist, but not
+//       one of them strictly covers `asOf` (a gap, an all-expired timeline, an
+//       all-future one, or two overlapping rows). "Räntevillkor saknas för
+//       idag" — the periods are there but need correcting, not creating.
+//
+// The `!!effectiveRatePeriod(p, periods)` guard is what keeps the two sets from
+// overlapping: a part with nothing entered belongs to the first message only,
+// so the page never shows both prompts for the same part.
+//
+// Without this second list a part whose timeline simply does not reach today
+// would be silently rateless: no Nästa avisering (expectedCharge returns null),
+// no group rate (it falls into __catchall__) and no explanation anywhere.
+export function partsMissingCurrentRateTerms(
+  parts: LoanPart[],
+  periods: RatePeriod[],
+  asOf: string,
+): MissingRateTerms[] {
+  const all = periods || []
+  return (parts || []).filter(p =>
+    p && !p.archived
+    && !!effectiveRatePeriod(p, all)
+    && !effectiveRatePeriod(p, all, asOf))
     .map(p => ({ loan_part_id: p.id, label: p.label }))
 }
 
