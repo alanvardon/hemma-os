@@ -853,7 +853,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 2rem;
+    /* svh: a fixed inset:0 box is the large viewport on mobile, so centring in
+       it hid the panel's bottom behind the browser chrome. */
+    height: 100svh;
+    padding: clamp(0.75rem, 4vw, 2rem);
     background: color-mix(in srgb, var(--ink) 55%, transparent);
     -webkit-backdrop-filter: blur(6px);
     backdrop-filter: blur(6px);
@@ -864,7 +867,10 @@
   .chart-overlay-inner {
     position: relative;
     width: min(900px, 100%);
-    height: min(80vh, 760px);
+    /* A fixed `height` cannot shrink, so on a short viewport the panel used to
+       overflow its backdrop rather than fit inside it — cap it too. */
+    height: min(80svh, 760px);
+    max-height: 100%;
     display: flex;
     flex-direction: column;
     background: var(--paper-card);
@@ -893,7 +899,10 @@
   dialog.hb-modal {
     width: min(440px, calc(100vw - 2rem));
     max-width: 100%;
-    max-height: min(88vh, 720px);
+    /* This selector out-specifies the global `dialog:modal` cap, so fold
+       --dialog-max-h in by hand — otherwise 88vh (large viewport) put the
+       footer's Spara button behind the phone's browser chrome. */
+    max-height: min(720px, var(--dialog-max-h));
     display: flex;
     flex-direction: column;
     padding: 0;
@@ -1165,10 +1174,8 @@
   .mobile-stat:last-child { text-align: right; }
 }
 
-/* Lock background scroll while a salary/history dialog is open (matters on the
-   mobile layout, where the page scrolls). showModal() inert-s the background
-   but doesn't stop it scrolling, so gate it on the open dialog itself. */
-html:has(dialog.hb-modal[open]) { overflow: hidden; }
+/* Background scroll while a dialog is open is locked globally now — see
+   `html:has(dialog:modal)` in global.css, which covers .hb-modal too. */
 
 @keyframes hb-rise-in {
   from { opacity: 0; transform: translateY(14px); }

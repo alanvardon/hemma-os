@@ -53,6 +53,22 @@
   --r-sm: 8px;
   --r-md: 12px;
   --r-lg: 16px;
+  /* Tallest a top-layer <dialog> may be and still land fully inside the part of
+     the viewport the user can actually see on a phone.
+
+     A modal <dialog> is sized and centred against the initial containing block,
+     which mobile browsers keep at the LARGE viewport (100lvh — the height with
+     the browser chrome retracted). The chrome is usually *not* retracted, so a
+     dialog capped at 100svh and centred in 100lvh still hangs (lvh − svh) / 2
+     past the bottom of the visible band — far enough on iOS Safari to hide the
+     Avbryt/Spara row, with no scrollbar to reveal it because the dialog fits its
+     own max-height. Solving (lvh + h) / 2 ≤ svh for h gives 2·svh − lvh; the
+     −2rem is breathing room. Identical to `100svh - 2rem` wherever the two
+     viewports agree (desktop, installed PWA), so nothing changes there.
+
+     Fixed-position overlays that are NOT in the top layer (.modal-backdrop,
+     .chart-overlay*) don't need this — they set their own `height: 100svh`. */
+  --dialog-max-h: calc(200svh - 100lvh - 2rem);
   --font-display: 'Instrument Serif', 'DM Serif Display', Georgia, serif;
   --font-ui: 'Inter', 'DM Sans', system-ui, sans-serif;
   /* Hex aliases for hero-canvas: getComputedStyle returns OKLCH strings verbatim,

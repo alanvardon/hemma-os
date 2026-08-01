@@ -28,6 +28,12 @@
 .modal-backdrop {
   position: fixed;
   inset: 0;
+  /* A fixed `inset: 0` box spans the LARGE viewport on mobile, so a modal
+     centred in it sits partly behind the browser chrome that is on screen.
+     Pinning the height to the small viewport (the top edge is already right)
+     centres the card in the band the user can actually see. `height` wins over
+     `bottom` when both are specified. No effect on desktop — svh == vh. */
+  height: 100svh;
   background: var(--modal-backdrop);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
@@ -45,7 +51,9 @@
   border-radius: var(--r-lg);
   width: 680px;
   max-width: calc(100vw - 2rem);
-  max-height: calc(100vh - 4rem);
+  /* svh, not vh: vh is the large viewport, which on a phone is taller than the
+     visible band and pushed the modal's footer behind the browser chrome. */
+  max-height: calc(100svh - 4rem);
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-lg);
@@ -102,6 +110,8 @@
   padding: 1.5rem;
   width: 380px;
   max-width: calc(100vw - 2rem);
+  max-height: calc(100svh - 4rem);
+  overflow-y: auto;
   box-shadow: var(--shadow-lg);
 }
 
