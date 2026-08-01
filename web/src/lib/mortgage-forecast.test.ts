@@ -553,6 +553,70 @@ describe('two-segment split at a rate boundary (plan 126 §4)', () => {
     expect(c.confidence).toBe('exact')
   })
 
+  it('rolled preview months carry the SUCCESSOR rate forward, not the blend', () => {
+    // Owner decision 2026-08-01. The day-weighted Sats describes one specific
+    // interval — 12 old days plus 18 new ones. The month AFTER it is governed
+    // in full by the successor, so the preview must show 4,25 %, not 4,01 %.
+    //   [0] 27 jun → 27 jul: the split charge, 4.01 % → 3 295.89 (asserted above)
+    //   [1] 27 jul → 27 aug = 31 d at 4.25 %:
+    //       1 000 000 × 4.25/100 × 31/365 = 42 500 × 31/365 = 3 609.589041 → 3 609.59
+    //       (the blend would have given 40 100 × 31/365 = 3 405.48 — 204 kr cold)
+    //   [2] 27 aug → 27 sep = 31 d at 4.25 % → 3 609.59 again (interest-only, balance flat)
+    const periods = [
+      period({ end_date: '2026-07-09' }),
+      period({ id: 'r2', start_date: '2026-07-10', end_date: null, rate: 4.25 }),
+    ]
+    const series = pendingChargeSeries(part(), periods, CLEAN, 3)
+    expect(series.map(c => c.next_date)).toEqual(['2026-07-27', '2026-08-27', '2026-09-27'])
+    expect(series[0].rate).toBeCloseTo(4.01, 10)   // the split interval keeps its blend
+    expect(series[0].interest).toBe(3295.89)
+    expect(series[1].rate).toBe(4.25)              // every full month ahead: the successor's rate
+    expect(series[1].interest).toBe(3609.59)
+    expect(series[2].rate).toBe(4.25)
+    expect(series[2].interest).toBe(3609.59)
+  })
+
+  it('the 12-month headline extrapolates the SUCCESSOR rate, not the split blend', () => {
+    // forecastInterest scales one charge across the horizon. Scaling the split
+    // charge itself would price all 12 months at 4,01 % — a rate that governed
+    // only 18 of the next 30 days.
+    //   the interval rebased on 4.25 %: 3 295.89 × (4.25 / 4.01) = 3 493.150125
+    //   × 12 = 41 917.8015 → 41 917.80
+    //   (the blend would have given 3 295.89 × 12 = 39 550.68 — 2 367 kr cold)
+    // The rebasing scales the ÖRE-ROUNDED charge, so it lands 1 öre under an
+    // exact 1 000 000 × 4.25/100 × 30/365 × 12 = 41 917.808219 → 41 917.81.
+    // Immaterial on a figure the UI labels an estimate, and not worth carrying
+    // an unrounded interest through ExpectedCharge to erase.
+    const periods = [
+      period({ end_date: '2026-07-09' }),
+      period({ id: 'r2', start_date: '2026-07-10', end_date: null, rate: 4.25 }),
+    ]
+    const f = forecastInterest([part()], periods, CLEAN, 12)
+    expect(f.interest).toBe(41917.8)
+  })
+
+  it('rolled preview months carry the successor rate on the FLAT-MONTHLY basis too', () => {
+    // Same decision on the basis that has no day count: the changeover month is
+    // apportioned, every month after it is a whole month at the successor's rate.
+    //   [0] 1 jun → 1 jul: 14 d at 3.61 % + 16 d at 4.20 % → 4 415.25 (asserted above)
+    //   [1] 1 jul → 1 aug: 1 350 000 × 4.20/100 / 12 = 56 700 / 12 = 4 725.00 exactly
+    const B = 1_350_000
+    const flat = [
+      interestRow('2026-03-01', 4061, { id: 'i1', balance_after: B }),
+      interestRow('2026-04-01', 4061, { id: 'i2', balance_after: B }),
+      interestRow('2026-05-01', 4061, { id: 'i3', balance_after: B }),
+      interestRow('2026-06-01', 4061, { id: 'i4', balance_after: B }),
+    ]
+    const periods = [
+      period({ end_date: '2026-06-15', rate: 3.61 }),
+      period({ id: 'r2', start_date: '2026-06-16', end_date: null, rate: 4.20 }),
+    ]
+    const series = pendingChargeSeries(part(), periods, flat, 2)
+    expect(series[0].interest).toBe(4415.25)
+    expect(series[1].rate).toBe(4.20)
+    expect(series[1].interest).toBe(4725)
+  })
+
   it('segment days sum EXACTLY to the interval length, across every calendar boundary', () => {
     // The invariant the split is built on, asserted directly on the resolver
     // (expectedCharge drops the charge outright if it ever fails). Each case's

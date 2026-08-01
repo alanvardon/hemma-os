@@ -1278,6 +1278,14 @@ export interface ExpectedCharge {
                                     // arithmetic consumed came from a declared lock or a
                                     // confident detection; 'assumed' = one fell through to the
                                     // catalogue or the generic default.
+  forward_rate: number | null // FORECAST MECHANICS, never rendered: the rate that governs a FULL
+                              // interval from here on — the covering period's listed rate. Equals
+                              // `rate` unless this interval split, in which case `rate` is the
+                              // day-weighted blend of two segments and this is the successor's
+                              // rate alone. Owner decision 2026-08-01: the blend describes one
+                              // specific interval, so rolled preview months must carry the
+                              // successor's rate forward, not the artefact. NOT the per-roll
+                              // repricing plan 126 §6 cut — no period is re-resolved per roll.
 }
 
 // next_date arithmetic: banks charge on a fixed day-of-month, so raw gaps
@@ -1814,6 +1822,7 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
     // shape (betalning = interest + declared), even when no paired month exists yet.
     betalning: (paired.length || (declaredMonthly != null && hasBetalning)) ? r2(interest + amortization) : null,
     charge_basis: basis, year_basis, confidence,
+    forward_rate: seg.succ_rate,
   }
 }
 
@@ -1868,6 +1877,13 @@ export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: P
 // One roll step: advance next_date by the cadence, step the balance down by
 // the predicted amortering, and reprice — the actual day count of the new
 // interval on the days basis, the balance ratio on the flat-monthly basis.
+//
+// The rate that rolls forward is `forward_rate`, not `rate`. They differ only
+// after a split interval, where `rate` is a day-weighted blend describing that
+// one interval; a full month ahead is governed by the successor's rate alone
+// (owner decision 2026-08-01). Both expressions below carry a `fwd / out.rate`
+// factor that is exactly 1 whenever nothing split, so unsplit rolls stay
+// byte-for-byte identical — including their rounding.
 function rollChargeOnce(part: LoanPart, out: ExpectedCharge): ExpectedCharge {
   const next_date = addMonthsAtDay(out.next_date, out.period_months, out.charge_day)
   const days = daysBetween(out.next_date, next_date) ?? 0
@@ -1879,11 +1895,14 @@ function rollChargeOnce(part: LoanPart, out: ExpectedCharge): ExpectedCharge {
   const amortization = declaredMonthly != null ? r2(declaredMonthly * out.period_months) : out.amortization
   const amortization_source = declaredMonthly != null ? 'declared' : out.amortization_source
   const balance = Math.max(0, r2(out.balance - amortization))
+  // 1 when nothing split (forward_rate === rate) or when the blend is degenerate.
+  const rateStep = out.forward_rate != null && out.rate ? out.forward_rate / out.rate : 1
+  const fwd = out.forward_rate ?? out.rate
   const interest = out.charge_basis === 'monthly'
-    ? (out.balance > 0 ? r2(out.interest * balance / out.balance) : out.interest)
-    : out.rate != null && days > 0 && balance > 0 ? r2(balance * out.rate / 100 * days / out.year_basis) : 0
+    ? (out.balance > 0 ? r2(out.interest * balance / out.balance * rateStep) : r2(out.interest * rateStep))
+    : fwd != null && days > 0 && balance > 0 ? r2(balance * fwd / 100 * days / out.year_basis) : 0
   return {
-    ...out, next_date, days, balance, interest, amortization, amortization_source,
+    ...out, next_date, days, balance, interest, amortization, amortization_source, rate: fwd,
     gross: r2(interest + amortization),
     betalning: out.betalning != null ? r2(interest + amortization) : null,
     // Plan 126 — confidence now describes the bank's conventions, which do not
@@ -1966,7 +1985,13 @@ export function expectedCharges(parts: LoanPart[], periods: RatePeriod[], paymen
 export function forecastInterest(parts: LoanPart[], periods: RatePeriod[], payments: Payment[], months = 12):
   { interest: number; deduction: number; net: number; assumed: boolean } {
   const { rows } = expectedCharges(parts, periods, payments)
-  const interest = r2(rows.reduce((s, r) => s + r.interest * (months / r.period_months), 0))
+  // Extrapolating a SPLIT charge would carry its day-weighted blend across the
+  // whole horizon, and that blend describes one interval only — the same
+  // artefact rollChargeOnce avoids. Rebase the interval onto the successor's
+  // rate before scaling it out. The factor is exactly 1 whenever nothing split.
+  const forwardScale = (r: ExpectedCharge) =>
+    r.forward_rate != null && r.rate ? r.forward_rate / r.rate : 1
+  const interest = r2(rows.reduce((s, r) => s + r.interest * forwardScale(r) * (months / r.period_months), 0))
   const deduction = ranteavdrag(interest)
   // `assumed` renders "(förutsatt oförändrade räntor)" — a statement about the
   // RATE holding for the horizon, which is exactly what a live binding
