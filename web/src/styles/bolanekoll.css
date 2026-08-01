@@ -390,7 +390,7 @@
   }
   .whatif-row { margin-top: 0.75rem; }
   /* Expected next charge (plan 23): total chip + per-part rows with the
-     confidence badge, the log button and the amber calibration diagnostic. */
+     convention-confidence badge and the log button. */
   .prognos-block { margin-bottom: 1.1rem; padding-bottom: 0.35rem; border-bottom: 1px solid var(--rule); }
   .prognos-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
   /* Expected-charge rows share the Betalningar table shell; the rate/grad
@@ -406,14 +406,8 @@
     border: 1px solid var(--rule); border-radius: 999px; padding: 1px 7px;
   }
   .conf-badge.is-exact { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
-  .conf-badge.is-unknown { color: var(--warn); background: var(--warn-faint); border-color: var(--warn-light); }
   .prognos-log-btn { font-size: 12px; padding: 0.25rem 0.7rem; white-space: nowrap; }
   .prognos-log-btn:disabled { opacity: 0.5; cursor: default; }
-  /* Calibration diagnostic: a warn-tinted detail row under its charge, the
-     amber note bleeding the full table width. */
-  .prognos-table tr.prognos-detail td {
-    padding-top: 0; font-size: 12px; color: var(--warn); border-bottom: 1px solid var(--rule);
-  }
   .prognos-more-btn { font-size: 12px; padding: 0.25rem 0.7rem; margin-top: 0.9rem; margin-bottom: 0.5rem; }
   /* Coming months are a read-only preview — dimmed so the loggable month owns
      the visual weight. */
@@ -902,8 +896,6 @@ dialog.bk-wizard, dialog.bk-history { width: min(680px, calc(100vw - 2rem)); }
     font-size: 1.45rem; letter-spacing: -0.01em; color: var(--ink);
   }
   .bk-root .prognos-table .col-act { grid-area: act; justify-self: end; align-self: center; }
-  /* the calibration note spans the whole card */
-  .bk-root .prognos-table tr.prognos-detail { display: block; padding: 0.1rem 0.8rem 0.7rem; }
 
   /* Lånedelar: the group row is a folder band (label line, sums line);
      member rows are indented cards under it */

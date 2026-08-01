@@ -128,6 +128,72 @@ describe('activeAgreementMonthlyCost', () => {
       .toMatchObject({ regularAmortization: 7_000, amortizationSource: 'observed' })
   })
 
+  // Plan 126 — strict dated resolution. Nuvarande bolån must report a missing
+  // rate rather than borrow one from a period that does not cover `asOf`.
+  it('a gapped timeline nulls the rate and interest instead of stretching the expired period', () => {
+    const parts = [part('a')]
+    const periods: RatePeriod[] = [
+      { ...period('lapsed', 'a', 3.93), start_date: '2026-01-01', end_date: '2026-06-30' },
+      { ...period('next', 'a', 3.54), start_date: '2026-08-01', end_date: null },
+    ]
+
+    expect(activeAgreementMonthlyCost([mortgage()], parts, periods, [], '2026-07-21')).toMatchObject({
+      balance: 1_000_000,
+      rate: null,
+      interest: null,
+      missingRatePartIds: ['a'],
+    })
+    // The same inputs one day into the successor resolve normally again.
+    expect(activeAgreementMonthlyCost([mortgage()], parts, periods, [], '2026-08-01')).toMatchObject({
+      rate: 3.54,
+      missingRatePartIds: [],
+    })
+  })
+
+  it('a future-only timeline nulls the rate and interest instead of promoting the future period', () => {
+    const parts = [part('a')]
+    const periods: RatePeriod[] = [
+      { ...period('future', 'a', 3.54), start_date: '2026-08-01', end_date: null },
+    ]
+
+    expect(activeAgreementMonthlyCost([mortgage()], parts, periods, [], '2026-07-21')).toMatchObject({
+      balance: 1_000_000,
+      rate: null,
+      interest: null,
+      missingRatePartIds: ['a'],
+    })
+  })
+
+  it('overlapping periods null the rate and interest rather than picking the later start', () => {
+    const parts = [part('a')]
+    const periods: RatePeriod[] = [
+      { ...period('old', 'a', 3.93), start_date: '2026-01-01', end_date: '2026-08-31' },
+      { ...period('new', 'a', 3.54), start_date: '2026-07-01', end_date: null },
+    ]
+
+    expect(activeAgreementMonthlyCost([mortgage()], parts, periods, [], '2026-07-21')).toMatchObject({
+      balance: 1_000_000,
+      rate: null,
+      interest: null,
+      missingRatePartIds: ['a'],
+    })
+  })
+
+  it('one uncovered part among several nulls the whole blended rate, not just its own leg', () => {
+    const parts = [part('a', { start_balance: 900_000, original_balance: 900_000 }), part('b')]
+    const periods: RatePeriod[] = [
+      period('ra', 'a', 3),
+      { ...period('rb', 'b', 4.1), start_date: '2026-09-01', end_date: null },
+    ]
+
+    expect(activeAgreementMonthlyCost([mortgage()], parts, periods, [], '2026-07-21')).toMatchObject({
+      balance: 1_900_000,
+      rate: null,
+      interest: null,
+      missingRatePartIds: ['b'],
+    })
+  })
+
   it('reports none for predicted-only amortisation and null cost for missing rate terms', () => {
     const parts = [part('a')]
     const result = activeAgreementMonthlyCost(
