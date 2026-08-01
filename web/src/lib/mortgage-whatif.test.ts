@@ -2,30 +2,146 @@ import { describe, it, expect } from 'vitest'
 import { mortgageMonthlyFigures, rateWhatIf } from './mortgage'
 import type { LoanPart, Payment, RatePeriod } from './mortgage'
 
-describe('mortgageMonthlyFigures', () => {
-  it('returns steady-state gross interest and observed monthly amortization', () => {
-    const parts: LoanPart[] = [{
-      id: 'part-1', created_at: '', label: 'Bolån', loan_number: '1',
-      start_balance: 3_003_000, start_date: '2026-01-01', archived: false,
-    }]
-    const periods: RatePeriod[] = [{
-      id: 'rate-1', created_at: '', loan_part_id: 'part-1',
-      start_date: '2026-01-01', end_date: null, rate: 3.42, rate_type: 'rörlig',
-    }]
-    const payments: Payment[] = [
-      { id: 'pay-1', created_at: '', loan_part_id: 'part-1', date: '2026-01-31', kind: 'amortization', description: '', amount: 3_000, balance_after: 3_003_000, paid_by: 'joint', source: '' },
-      { id: 'pay-2', created_at: '', loan_part_id: 'part-1', date: '2026-02-28', kind: 'amortization', description: '', amount: 3_000, balance_after: 3_000_000, paid_by: 'joint', source: '' },
-    ]
+// Plan 126 §7 — mortgageMonthlyFigures is now a THREE-way outcome, and every
+// input (balance, the balances the blended rate is weighted by, and the
+// amortisation history) is read at one `asOf`. The old single "null" conflated
+// "nothing to sync" with "we cannot price today", and swallowed a legitimately
+// covered 0 % period; both are separated here.
+function part(over: Partial<LoanPart> = {}): LoanPart {
+  return {
+    id: 'part-1', created_at: '', label: 'Bolån', loan_number: '1',
+    start_balance: 3_003_000, start_date: '2026-01-01', archived: false, ...over,
+  }
+}
+function period(over: Partial<RatePeriod> = {}): RatePeriod {
+  return {
+    id: 'rate-1', created_at: '', loan_part_id: 'part-1',
+    start_date: '2026-01-01', end_date: null, rate: 3.42, rate_type: 'rörlig', ...over,
+  }
+}
+function amortRow(id: string, date: string, amount: number, balance_after: number, loan_part_id = 'part-1'): Payment {
+  return {
+    id, created_at: '', loan_part_id, date, kind: 'amortization',
+    description: '', amount, balance_after, paid_by: 'joint', source: '',
+  }
+}
 
-    // Interest = 3 000 000 × 3.42/100 / 12 = 8 550 kr/month.
-    expect(mortgageMonthlyFigures(parts, periods, payments)).toEqual({ ranta: 8_550, amortering: 3_000 })
+describe('mortgageMonthlyFigures', () => {
+  // Saldo 3 003 000 on 2026-01-31, 3 000 000 on 2026-02-28.
+  const LEDGER = [
+    amortRow('pay-1', '2026-01-31', 3_000, 3_003_000),
+    amortRow('pay-2', '2026-02-28', 3_000, 3_000_000),
+  ]
+
+  it('ok: steady-state gross interest and observed monthly amortization at asOf', () => {
+    // Balance at 2026-03-15 = latest saldo 3 000 000 (no later rows).
+    // Interest  = 3 000 000 × 3.42/100 / 12 = 8 550 kr/mån.
+    // Amort     = timeline 2026-01 (3 003 000) → 2026-02 (3 000 000) over
+    //             1 month = 3 000 kr/mån.
+    expect(mortgageMonthlyFigures([part()], [period()], LEDGER, '2026-03-15'))
+      .toEqual({ status: 'ok', figures: { ranta: 8_550, amortering: 3_000 } })
   })
 
-  it('returns null when balance or blended rate is unavailable', () => {
-    const part: LoanPart = { id: 'p', created_at: '', label: '', loan_number: '', start_balance: 3_000_000, start_date: '', archived: false }
-    const period: RatePeriod = { id: 'r', created_at: '', loan_part_id: 'p', start_date: '', end_date: null, rate: 3.42, rate_type: 'rörlig' }
-    expect(mortgageMonthlyFigures([], [period], [])).toBeNull()
-    expect(mortgageMonthlyFigures([part], [], [])).toBeNull()
+  it('ok: a COVERED 0 % period is a real rate — 0 kr ränta, never "empty"', () => {
+    // The old `blended <= 0` gate treated this as broken data and wiped the
+    // synced rows. 0 % is contractual: the ränta row belongs in the budget at
+    // 0 kr, and the amortering row is untouched by it.
+    expect(mortgageMonthlyFigures([part()], [period({ rate: 0 })], LEDGER, '2026-03-15'))
+      .toEqual({ status: 'ok', figures: { ranta: 0, amortering: 3_000 } })
+  })
+
+  it('ok: the blended rate weights the SAME as-of balances the interest uses', () => {
+    // Two parts, 1 000 000 kr at 4 % and 3 000 000 kr at 2 % as of 2026-03-15.
+    // A 2026-06-30 saldo on the cheap part would flip the weighting if the
+    // as-of date leaked; it must not.
+    const parts: LoanPart[] = [
+      part({ id: 'a', start_balance: 1_000_000 }),
+      part({ id: 'b', start_balance: 3_000_000 }),
+    ]
+    const periods: RatePeriod[] = [
+      period({ id: 'ra', loan_part_id: 'a', rate: 4 }),
+      period({ id: 'rb', loan_part_id: 'b', rate: 2 }),
+    ]
+    const payments = [amortRow('future', '2026-06-30', 2_900_000, 100_000, 'b')]
+    // Blended = (4 × 1 000 000 + 2 × 3 000 000) / 4 000 000 = 2.5 %
+    // Interest = 4 000 000 × 2.5/100 / 12 = 8 333.33 kr/mån
+    const out = mortgageMonthlyFigures(parts, periods, payments, '2026-03-15')
+    expect(out).toEqual({ status: 'ok', figures: { ranta: 8_333.33, amortering: 0 } })
+  })
+
+  it('ok: amortisation history ignores ledger rows dated after asOf', () => {
+    const payments = [
+      amortRow('m1', '2026-01-31', 10_000, 990_000),
+      amortRow('m2', '2026-02-28', 10_000, 980_000),
+      amortRow('m3', '2026-03-31', 80_000, 900_000), // after asOf — invisible
+    ]
+    // As of 2026-02-28: balance 980 000, timeline 2026-01 (990 000) →
+    // 2026-02 (980 000) over 1 month = 10 000 kr/mån. Including the March row
+    // would read 45 000 kr/mån off a 2-month drop of 90 000.
+    // Interest = 980 000 × 3/100 / 12 = 2 450 kr/mån.
+    expect(mortgageMonthlyFigures(
+      [part({ start_balance: 1_000_000 })], [period({ rate: 3 })], payments, '2026-02-28',
+    )).toEqual({ status: 'ok', figures: { ranta: 2_450, amortering: 10_000 } })
+  })
+
+  it('empty: no active part carries a positive balance at asOf', () => {
+    expect(mortgageMonthlyFigures([], [period()], [], '2026-03-15')).toEqual({ status: 'empty' })
+    // Fully repaid before asOf.
+    expect(mortgageMonthlyFigures(
+      [part({ start_balance: 100_000 })], [period()],
+      [amortRow('done', '2026-02-01', 100_000, 0)], '2026-03-15',
+    )).toEqual({ status: 'empty' })
+    // Archived parts are not synced at all.
+    expect(mortgageMonthlyFigures([part({ archived: true })], [period()], LEDGER, '2026-03-15'))
+      .toEqual({ status: 'empty' })
+  })
+
+  it('missing-current-rate: a funded part with no rate period at all', () => {
+    expect(mortgageMonthlyFigures([part()], [], LEDGER, '2026-03-15'))
+      .toEqual({ status: 'missing-current-rate', loan_part_ids: ['part-1'] })
+  })
+
+  it('missing-current-rate: names exactly the uncovered funded parts', () => {
+    const parts: LoanPart[] = [
+      part({ id: 'covered', start_balance: 1_000_000 }),
+      part({ id: 'future', start_balance: 1_000_000 }),
+      part({ id: 'gapped', start_balance: 1_000_000 }),
+      part({ id: 'settled', start_balance: 0 }),
+      part({ id: 'archived', start_balance: 1_000_000, archived: true }),
+    ]
+    const periods: RatePeriod[] = [
+      period({ id: 'r-cov', loan_part_id: 'covered' }),
+      // Starts tomorrow — the reported defect. Never promoted to "today".
+      period({ id: 'r-fut', loan_part_id: 'future', start_date: '2026-03-16' }),
+      // A hole around asOf.
+      period({ id: 'r-gap-a', loan_part_id: 'gapped', start_date: '2026-01-01', end_date: '2026-02-28' }),
+      period({ id: 'r-gap-b', loan_part_id: 'gapped', start_date: '2026-04-01', end_date: null }),
+      // Uncovered, but settled / archived — must not block the sync.
+      period({ id: 'r-arch', loan_part_id: 'archived', start_date: '2026-09-01' }),
+    ]
+    expect(mortgageMonthlyFigures(parts, periods, [], '2026-03-15'))
+      .toEqual({ status: 'missing-current-rate', loan_part_ids: ['future', 'gapped'] })
+  })
+
+  it('missing-current-rate: overlapping periods are conflicting terms, not a rate', () => {
+    const periods = [
+      period({ id: 'r-a', start_date: '2026-01-01', end_date: null, rate: 3.42 }),
+      period({ id: 'r-b', start_date: '2026-02-01', end_date: null, rate: 3.9 }),
+    ]
+    expect(mortgageMonthlyFigures([part()], periods, LEDGER, '2026-03-15'))
+      .toEqual({ status: 'missing-current-rate', loan_part_ids: ['part-1'] })
+  })
+
+  it('a period ending today still covers today; its successor takes over tomorrow', () => {
+    const periods = [
+      period({ id: 'now', start_date: '2026-01-01', end_date: '2026-03-15', rate: 3.42 }),
+      period({ id: 'next', start_date: '2026-03-16', end_date: null, rate: 4.02 }),
+    ]
+    // 3 000 000 × 3.42/100 / 12 = 8 550 today; × 4.02/100 / 12 = 10 050 tomorrow.
+    expect(mortgageMonthlyFigures([part()], periods, LEDGER, '2026-03-15'))
+      .toEqual({ status: 'ok', figures: { ranta: 8_550, amortering: 3_000 } })
+    expect(mortgageMonthlyFigures([part()], periods, LEDGER, '2026-03-16'))
+      .toEqual({ status: 'ok', figures: { ranta: 10_050, amortering: 3_000 } })
   })
 })
 

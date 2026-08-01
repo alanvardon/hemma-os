@@ -25,12 +25,6 @@ import type { BankSelection } from './BankPicker'
 
 export type PendingChargeKind = 'interest' | 'payment' | 'amortization'
 
-export interface StalePredictedRow {
-  payment: Payment
-  amount: number
-  balance_after: number
-}
-
 interface WorkspaceState {
   banks: Bank[]
   catalogBanks: CatalogBank[]
@@ -413,26 +407,10 @@ export function useMortgageWorkspace() {
     }
   }
 
-  async function refreshPredicted(staleRows: StalePredictedRow[]): Promise<boolean> {
-    if (!staleRows.length) return false
-    try {
-      for (const stale of staleRows) {
-        await Store.updatePayment(stale.payment.id, {
-          amount: stale.amount,
-          balance_after: stale.balance_after,
-        })
-      }
-      await refresh()
-      flashSaved()
-      showToast(staleRows.length === 1
-        ? '1 godkänd prognosrad uppdaterad till aktuell prognos.'
-        : `${staleRows.length} godkända prognosrader uppdaterade till aktuell prognos.`)
-      return true
-    } catch (error) {
-      saveError(error)
-      return false
-    }
-  }
+  // Plan 126 §5 — there is deliberately NO refreshPredicted here. A row the
+  // owner approved (source: 'predicted', "Godkänd prognos") is frozen forever;
+  // the only thing that may replace it is the bank's next real import. Adding a
+  // model-driven rewrite back would breach the acceptance boundary.
 
   async function clearPayments(payments: Payment[]): Promise<boolean> {
     if (!payments.length) return false
@@ -457,7 +435,7 @@ export function useMortgageWorkspace() {
       parts: { save: savePart, remove: removePart, savePeriod, removePeriod },
       agreements: { saveBankProfile, create: createAgreement, changeBank, revertBankChange },
       valuations: { save: saveValuation, remove: removeValuation },
-      payments: { save: savePayment, remove: removePayment, copy: copyPayment, logPredicted, refreshPredicted, clear: clearPayments },
+      payments: { save: savePayment, remove: removePayment, copy: copyPayment, logPredicted, clear: clearPayments },
       settings: { save: saveSettings, enableContributionTracking },
     },
   }
