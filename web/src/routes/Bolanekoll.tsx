@@ -539,7 +539,8 @@ export default function Bolanekoll() {
     chargeEntries(r).filter(e => !hasChargeInMonth(payments, r.loan_part_id, r.next_date, e.kind))),
   [pendingCharges, payments])  // eslint-disable-line react-hooks/exhaustive-deps -- chargeEntries is pure
   // The months AFTER the loggable one — a read-only preview of the coming
-  // year's avier (rate held flat, balance stepping down each period).
+  // year's avier (each month at the rate of the period covering it, balance
+  // stepping down each period).
   const futureEntries = useMemo(() => pendingSeries.flatMap(s => s.slice(1))
     .flatMap(chargeEntries)
     .sort((a, b) => a.charge.next_date.localeCompare(b.charge.next_date)
@@ -1790,8 +1791,10 @@ export default function Bolanekoll() {
                         </Fragment>
                       )
                     })}
-                    {/* Read-only preview of the coming year's avier: rate held
-                        flat, balance stepping down by amorteringen each period.
+                    {/* Read-only preview of the coming year's avier: each month
+                        priced at the rate period covering it, balance stepping
+                        down by amorteringen each period. A villkorsändring the
+                        owner has entered shows up here from its Gäller från.
                         Nothing here is loggable — only the next month is due. */}
                     {showFuture && shownFuture.map(e => {
                       const r = e.charge
