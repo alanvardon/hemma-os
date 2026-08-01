@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   makeLoanPart, mortgageForPart, bankForPart, reconcileBalance,
-  totalAmortized, groupLoanParts,
+  totalAmortized, groupLoanParts, effectiveRatePeriod, strictRatePeriodCoverage,
+  learnYearBasis,
 } from './mortgage'
 import type { LoanPart, Payment, Bank, Mortgage, RatePeriod } from './mortgage'
 
@@ -116,6 +117,121 @@ describe('reconcileBalance — origination anchor', () => {
     const pays = [saldo('p1', '2024-01-01', 1000000)]
     expect(() => reconcileBalance([p], pays)).not.toThrow()
     expect(reconcileBalance([p], pays)[0].drift).toBeNull()
+  })
+})
+
+// ── Strict dated rate-period resolution (plan 126) ───────────────────────────
+describe('effectiveRatePeriod — strict dated coverage', () => {
+  const p = part({ id: 'p1' })
+  const rp = (over: Partial<RatePeriod> & { id: string }): RatePeriod => ({
+    created_at: 't', loan_part_id: 'p1', start_date: '2026-01-01', end_date: null,
+    rate: 3.6, rate_type: 'rörlig', ...over,
+  })
+
+  it('THE REPORTED BUG: a period ending today is still current when a successor starts tomorrow', () => {
+    // Owner report 2026-07-31 — saving the successor made it today's rate.
+    const current = rp({ id: 'now', start_date: '2026-01-01', end_date: '2026-07-31', rate: 3.93 })
+    const successor = rp({ id: 'next', start_date: '2026-08-01', end_date: null, rate: 3.54 })
+    const periods = [current, successor]
+    expect(effectiveRatePeriod(p, periods, '2026-07-31')?.id).toBe('now')
+    expect(effectiveRatePeriod(p, periods, '2026-07-31')?.rate).toBe(3.93)
+    expect(effectiveRatePeriod(p, periods, '2026-08-01')?.id).toBe('next')
+    expect(strictRatePeriodCoverage(p, periods, '2026-07-31')).toBe('covered')
+    expect(strictRatePeriodCoverage(p, periods, '2026-08-01')).toBe('covered')
+  })
+
+  it('a gap between two periods has no current rate', () => {
+    const periods = [
+      rp({ id: 'a', start_date: '2026-01-01', end_date: '2026-06-30' }),
+      rp({ id: 'b', start_date: '2026-08-01', end_date: null, rate: 4.1 }),
+    ]
+    expect(effectiveRatePeriod(p, periods, '2026-07-15')).toBeNull()
+    expect(strictRatePeriodCoverage(p, periods, '2026-07-15')).toBe('outside-known-terms')
+    // The days on either side of the gap are still covered.
+    expect(effectiveRatePeriod(p, periods, '2026-06-30')?.id).toBe('a')
+    expect(effectiveRatePeriod(p, periods, '2026-08-01')?.id).toBe('b')
+  })
+
+  it('overlapping periods return no rate rather than picking the later start', () => {
+    const periods = [
+      rp({ id: 'a', start_date: '2026-01-01', end_date: '2026-08-31', rate: 3.93 }),
+      rp({ id: 'b', start_date: '2026-07-01', end_date: null, rate: 3.54 }),
+    ]
+    expect(effectiveRatePeriod(p, periods, '2026-07-15')).toBeNull()
+    expect(strictRatePeriodCoverage(p, periods, '2026-07-15')).toBe('outside-known-terms')
+    // Days covered by exactly one of the two still resolve.
+    expect(effectiveRatePeriod(p, periods, '2026-06-30')?.id).toBe('a')
+    expect(effectiveRatePeriod(p, periods, '2026-09-01')?.id).toBe('b')
+  })
+
+  it('an all-future timeline is never promoted to today', () => {
+    const periods = [rp({ id: 'future', start_date: '2026-09-01', end_date: null })]
+    expect(effectiveRatePeriod(p, periods, '2026-07-31')).toBeNull()
+    expect(strictRatePeriodCoverage(p, periods, '2026-07-31')).toBe('outside-known-terms')
+  })
+
+  it('an all-expired timeline is never stretched to today', () => {
+    const periods = [
+      rp({ id: 'old', start_date: '2024-01-01', end_date: '2025-12-31' }),
+      rp({ id: 'older', start_date: '2023-01-01', end_date: '2023-12-31', rate: 1.5 }),
+    ]
+    expect(effectiveRatePeriod(p, periods, '2026-07-31')).toBeNull()
+    expect(strictRatePeriodCoverage(p, periods, '2026-07-31')).toBe('outside-known-terms')
+  })
+
+  it('an open-ended current period covers every day from its start onwards', () => {
+    const periods = [rp({ id: 'rorlig', start_date: '2026-03-01', end_date: null })]
+    expect(effectiveRatePeriod(p, periods, '2026-03-01')?.id).toBe('rorlig')
+    expect(effectiveRatePeriod(p, periods, '2030-12-31')?.id).toBe('rorlig')
+    expect(effectiveRatePeriod(p, periods, '2026-02-28')).toBeNull()
+  })
+
+  it('the bare call is unchanged: latest start wins, regardless of coverage', () => {
+    const periods = [
+      rp({ id: 'old', start_date: '2024-01-01', end_date: '2025-12-31', rate: 1.5 }),
+      rp({ id: 'future', start_date: '2026-09-01', end_date: null, rate: 3.54 }),
+    ]
+    expect(effectiveRatePeriod(p, periods)?.id).toBe('future')
+    // Periods with no rate, and other parts' periods, are still ignored.
+    expect(effectiveRatePeriod(p, [rp({ id: 'norate', rate: null })])).toBeNull()
+    expect(effectiveRatePeriod(p, [rp({ id: 'other', loan_part_id: 'p2' })])).toBeNull()
+    expect(effectiveRatePeriod(p, [])).toBeNull()
+  })
+
+  it('strictRatePeriodCoverage still separates "never configured" from "not for this day"', () => {
+    expect(strictRatePeriodCoverage(p, [], '2026-07-31')).toBe('unconfigured')
+    expect(strictRatePeriodCoverage(p, [rp({ id: 'norate', rate: null })], '2026-07-31')).toBe('unconfigured')
+    expect(strictRatePeriodCoverage(p, [rp({ id: 'other', loan_part_id: 'p2' })], '2026-07-31')).toBe('unconfigured')
+  })
+})
+
+// ── learnYearBasis no longer scores pairs outside the entered terms ──────────
+describe('learnYearBasis — strict resolution skips out-of-coverage pairs', () => {
+  const B = 1_200_000
+  const learner = part({ id: 'p1', mortgage_id: 'm1', start_balance: B, start_date: '2025-12-01' })
+  // 1 200 000 × 3,60 % / 360 = 120 kr/day → 30 whole /360 days per charge.
+  const interest = (date: string, amount: number): Payment => ({
+    id: 'i-' + date, created_at: 't', loan_part_id: 'p1', date, kind: 'interest',
+    description: 'Ränta', amount, balance_after: B, paid_by: 'joint', source: 'import',
+  })
+  const rows = [interest('2026-05-31', 3600), interest('2026-06-30', 3600)]
+  const terms = (end_date: string | null): RatePeriod[] => [
+    { id: 'w1', created_at: 't', loan_part_id: 'p1', start_date: '2026-01-01', end_date, rate: 3.6, rate_type: 'bunden' },
+  ]
+
+  it('scores a pair whose whole accrual sits inside one bunden period', () => {
+    const r = learnYearBasis([learner], terms('2026-12-31'), rows)
+    expect(r.used).toBe(1)
+    expect(r.windows).toBe(1)
+  })
+
+  it('REGRESSION: an expired period no longer swallows charges billed after it', () => {
+    // Both dates fall after 2026-03-31. The old fallback resolved both to the
+    // same latest period, so `rpPrev.id === rp.id` passed and the pair was
+    // scored against terms that had already lapsed.
+    const r = learnYearBasis([learner], terms('2026-03-31'), rows)
+    expect(r.used).toBe(0)
+    expect(r.windows).toBe(0)
   })
 })
 

@@ -819,6 +819,16 @@ function daysBetween(a: string, b: string): number | null {
   return Math.round((db.getTime() - da.getTime()) / 86400000)
 }
 
+// The calendar day before `iso`. Built on Date arithmetic so month, year and
+// leap boundaries fall out for free (2028-03-01 → 2028-02-29).
+function dayBefore(iso: string): string | null {
+  const d = new Date(iso + 'T00:00:00')
+  if (isNaN(d.getTime())) return null
+  d.setDate(d.getDate() - 1)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+}
+
 // ── Balance as-of date ─────────────────────────────────────────────────────
 
 function partBalanceAsOf(part: LoanPart, payments: Payment[], asOf?: string): number {
@@ -987,24 +997,43 @@ export function mortgageMonthlyFigures(parts: LoanPart[], periods: RatePeriod[],
   }
 }
 
+// Plan 126 — two distinct questions, never mixed:
+//
+//  • Bare call (no `asOf`): "does this part have rate terms at all, and what is
+//    the newest one?" — an existence/history lookup. Latest `start_date` wins.
+//  • Dated call (`asOf`): "which period contractually governs this day?" —
+//    STRICT coverage, `start_date <= asOf <= end_date` with `end_date == null`
+//    meaning open-ended. No period covering the date means there is no rate for
+//    it: never stretch an expired period, never promote a future one, never
+//    fall back to the latest.
+//
+// Overlapping coverage also returns null. Two rows claiming the same day are
+// conflicting contractual terms — corrupt or concurrently edited data — and
+// silently taking the later `start_date` would hide that behind a plausible
+// figure. Callers surface "räntevillkor saknas" instead, which is honest and
+// repairable; an invented rate is neither.
+//
+// `RatePeriod.start_date` is non-nullable, so no missing-start guard is needed.
 export function effectiveRatePeriod(part: LoanPart, periods: RatePeriod[], asOf?: string): RatePeriod | null {
   const mine = periods.filter(r => r?.loan_part_id === part?.id && r.rate != null)
   if (!mine.length) return null
   if (asOf) {
-    const cov = mine.filter(r => (!r.start_date || r.start_date <= asOf) && (r.end_date == null || asOf <= r.end_date))
-    if (cov.length) { cov.sort((a, b) => a.start_date.localeCompare(b.start_date)); return cov[cov.length - 1] }
+    const covered = mine.filter(r => r.start_date <= asOf && (r.end_date == null || asOf <= r.end_date))
+    return covered.length === 1 ? covered[0] : null
   }
-  const s = mine.slice().sort((a, b) => a.start_date.localeCompare(b.start_date))
-  return s[s.length - 1]
+  return mine.slice().sort((a, b) => a.start_date.localeCompare(b.start_date)).pop() ?? null
 }
 
 export type StrictRatePeriodCoverage = 'unconfigured' | 'covered' | 'outside-known-terms'
 
 // Whether a proposed charge date is strictly inside this part's configured
-// rate periods. Unlike effectiveRatePeriod(), this never falls back to the
-// latest or a future period: a gap and a date after the final end_date are
-// outside known terms. No usable part-linked period (non-null rate) remains a
-// separate state so derived-rate forecasts keep their existing behaviour.
+// rate periods, on exactly the same boundary as a dated effectiveRatePeriod():
+// EXACTLY ONE period must cover the date. A gap, a date after the final
+// end_date, an all-future timeline and overlapping periods are all outside
+// known terms — overlap because conflicting terms are no more usable than
+// absent ones (see effectiveRatePeriod). No usable part-linked period (non-null
+// rate) at all remains a separate state so callers can distinguish "never
+// configured" from "configured, but not for this day".
 export function strictRatePeriodCoverage(
   part: LoanPart,
   periods: RatePeriod[],
@@ -1012,11 +1041,98 @@ export function strictRatePeriodCoverage(
 ): StrictRatePeriodCoverage {
   const mine = (periods || []).filter(r => r?.loan_part_id === part?.id && r.rate != null)
   if (!mine.length) return 'unconfigured'
-  return mine.some(r =>
-    (!r.start_date || r.start_date <= chargeDate) &&
+  const covered = mine.filter(r =>
+    r.start_date <= chargeDate &&
     (r.end_date == null || chargeDate <= r.end_date))
-    ? 'covered'
-    : 'outside-known-terms'
+  return covered.length === 1 ? 'covered' : 'outside-known-terms'
+}
+
+// ── Two-segment split at a rate boundary (plan 126 §4) ─────────────────────
+
+// How the accrual interval (lastChargeDate, nextDate] — the `days` calendar
+// days lastChargeDate+1 … nextDate — was priced: one rate for the whole
+// interval, or two, split at the day a new period took effect.
+export interface IntervalRateSegments {
+  rate: number        // the SINGLE day-weighted rate actually charged over the interval (%).
+                      // Equals the covering period's listed rate verbatim when nothing splits,
+                      // so Sats and Belopp stay one consistent pair either way.
+  pred_rate: number   // predecessor period's listed rate (% ) — equals rate when nothing splits
+  succ_rate: number   // the covering period's listed rate (%)
+  pred_days: number   // days billed at pred_rate; 0 when nothing splits
+  succ_days: number   // days billed at succ_rate. pred_days + succ_days === days, always
+}
+
+// Plan 126, settled meaning 5: "An accrual interval crossing a start date
+// splits at that date: days before it use the predecessor, that day and later
+// use the successor." Gäller från is the FIRST accrual day at the new rate, so
+// the boundary day itself belongs to the successor.
+//
+// One balance and one year basis for the whole interval; only the rate is
+// segmented. The two segments are reported rather than pre-summed so the
+// caller can price them on whichever basis the bank uses, and `rate` collapses
+// them to the single day-weighted figure Sats displays.
+//
+// Deliberate limits (plan 126 §4) — each returns null, i.e. NO forecast row:
+//  • AT MOST ONE boundary per interval. A second start_date inside the same
+//    interval means the entered timeline is finer than the billing cadence;
+//    part-pricing it would require guessing how the bank compounds sub-periods,
+//    so the interval is treated as outside known terms instead.
+//  • The PREDECESSOR must exist and strictly cover the pre-boundary days.
+//    Reconstructing it from the ledger would be deriving a rate, which this
+//    plan forbids outright — an unknown rate must read as unknown.
+//  • A boundary that is not the covering period's own start_date means the
+//    timeline is malformed (a stray period opening and closing inside the
+//    interval), and a malformed timeline is not priceable either.
+//
+// No transition list, no "3,93 % → 3,54 %" rendering and no `ny-sats`
+// confidence value: all cut deliberately.
+export function intervalRateSegments(
+  part: LoanPart,
+  periods: RatePeriod[],
+  lastChargeDate: string,
+  nextDate: string,
+  days: number,
+  covering: RatePeriod,
+): IntervalRateSegments | null {
+  const succ_rate = Number(covering.rate)
+  if (!Number.isFinite(succ_rate)) return null
+  const uniform: IntervalRateSegments = {
+    // The listed rate is passed through VERBATIM here, never round-tripped
+    // through the weighted average: (r × d) / d is not exactly r in binary
+    // floating point, and Sats must show the number the owner entered.
+    rate: succ_rate, pred_rate: succ_rate, succ_rate, pred_days: 0, succ_days: Math.max(0, days),
+  }
+  if (days <= 0) return uniform
+
+  // Every start_date this part's timeline plants strictly inside the interval.
+  const starts = new Set((periods || [])
+    .filter(r => r?.loan_part_id === part?.id && r.rate != null)
+    .map(r => r.start_date)
+    .filter(d => d > lastChargeDate && d <= nextDate))
+  if (starts.size === 0) return uniform          // nothing takes effect mid-interval
+  if (starts.size > 1) return null               // two boundaries → stop, do not part-price
+  if (!starts.has(covering.start_date)) return null
+
+  const boundary = covering.start_date
+  const succ_days = (daysBetween(boundary, nextDate) ?? -1) + 1   // boundary … nextDate, inclusive
+  const pred_days = days - succ_days
+  // INVARIANT — the segments must partition the interval EXACTLY. Anything
+  // else is an arithmetic error in the day attribution above, and a silently
+  // mispriced ränta is worse than a missing one, so the charge is dropped
+  // rather than approximated.
+  if (succ_days <= 0 || pred_days < 0 || pred_days + succ_days !== days) return null
+  if (pred_days === 0) return uniform            // boundary is the interval's first day
+
+  const before = dayBefore(boundary)
+  const predecessor = before ? effectiveRatePeriod(part, periods, before) : null
+  if (!predecessor) return null
+  const pred_rate = Number(predecessor.rate)
+  if (!Number.isFinite(pred_rate)) return null
+
+  return {
+    rate: (pred_rate * pred_days + succ_rate * succ_days) / days,
+    pred_rate, succ_rate, pred_days, succ_days,
+  }
 }
 
 function effectiveRate(part: LoanPart, periods: RatePeriod[], asOf?: string): number | null {
@@ -1118,39 +1234,6 @@ export function derivedRate(part: LoanPart, payments: Payment[], opts?: { traili
   return den > 0 ? r2(num / den * 100) : null
 }
 
-// Which year the bank divides by when accruing the LISTED rate: the Swedish
-// convention is saldo × ränta × dagar/365, but Danske accrues over a 360-day
-// bankår (faktisk/360), which runs every charge 365/360 ≈ +1,4 % over the /365
-// arithmetic — at 1,2 Mkr × 3,93 % that's 4 061 kr vs 4 005 for a 31-day month.
-//
-// The charged rentedagar are NOT the elapsed days between postings: a /360 bank
-// prices ~360 days per 365-day year (the household ledger charged 359 across
-// 364), so a rate-level fit of Σcharge/Σ(saldo × elapsed days) lands BETWEEN
-// the two hypotheses and flips with the value-date noise of the window. What
-// does discriminate is the integer-day property: on a /360 bank every charge is
-// a whole number of days × saldo × ränta/360 (131,00 kr/day on the household's
-// parts — exact), while under /365 the implied day counts land ~0.4 off a whole
-// number, and vice versa for a genuine /365 bank. Score each basis by that
-// distance over the trailing charges; flip to 360 only on decisive evidence
-// (near-exact under /360 AND a clear miss under /365 — a history billed at some
-// other rate misses under both and stays on the Swedish default).
-function interestYearBasis(part: LoanPart, real: Payment[], intRows: Payment[], listed: number): 360 | 365 {
-  const t = intRows.slice(-7)                     // ≤ 6 trailing charges ≈ half a year,
-  let err360 = 0, err365 = 0, used = 0            // short enough to sit inside one rate period
-  for (let i = 1; i < t.length; i++) {
-    const bal = partBalanceAsOf(part, real, String(t[i - 1].date))  // accrual balance: after the PREVIOUS posting
-    const amt = Math.abs(Number(t[i].amount))
-    if (bal <= 0 || !(amt > 0)) continue
-    const d360 = amt / (bal * listed / 100 / 360) // implied rentedagar under each basis
-    const d365 = amt / (bal * listed / 100 / 365)
-    if (d360 < 1) continue                        // sub-day charge: integer distance is meaningless
-    err360 += Math.abs(d360 - Math.round(d360))
-    err365 += Math.abs(d365 - Math.round(d365))
-    used++
-  }
-  return used >= 3 && err360 < 0.05 * used && err365 > 0.2 * used ? 360 : 365
-}
-
 // ── Expected next charge (plan 23) ─────────────────────────────────────────
 // Forecast + reconcile for the near-identical monthly Ränta/Amortering entry:
 // arithmetic (balance × rate × days/year-basis) on stored data, never rate
@@ -1164,10 +1247,17 @@ export interface ExpectedCharge {
   charge_day: number          // the UNCLAMPED billing day — day 31 stays 31 even when next_date clamped to the 30th
   balance: number             // partBalanceAsOf(part, payments, last interest date)
   original_balance: number    // the loan's ORIGINAL size — amorteringskravets 1/2/3 % is a share of this, not of the current balance
-  rate: number | null         // the rate the prediction actually uses (%)
-  rate_source: 'derived' | 'listed' | null
+  rate: number | null         // the rate the interval was actually charged at (%) — plan 126:
+                              // contractual, never reverse-engineered from the ledger. Normally
+                              // the LISTED rate of the period covering next_date, verbatim; when
+                              // that period takes effect INSIDE the accrual interval it is the
+                              // single DAY-WEIGHTED figure across the two segments, which is what
+                              // Sats shows and what `interest` below reproduces.
   rate_type: 'rörlig' | 'bunden' | null
-  interest: number            // balance × rate/100 × days/365
+  interest: number            // days basis: balance × rate/100 × days/year_basis
+                              // monthly basis: balance × rate/100 / 12 × period_months
+                              // (days basis with a mid-interval boundary: the two segments priced
+                              // off the same balance and year basis, summed, rounded once)
   amortization: number        // observed monthly amortization × period (0 for interest-only)
   amortization_source: 'real' | 'declared' | 'paired' | 'timeline' | null
                               // which source the amortering came from: a real
@@ -1177,14 +1267,17 @@ export interface ExpectedCharge {
   gross: number               // interest + amortization
   betalning: number | null    // the bank's per-part TOTAL debit (ränta + amortering) when the
                               // ledger has kind-'payment' betalning rows; null for manual ledgers
-  charge_basis: 'days' | 'monthly'  // 'monthly' = flat 30/360 billing: ränta predicted from the
-                                    // last charge (balance-scaled), never from day-count arithmetic
-  year_basis: 360 | 365       // the year the bank divides by when accruing the LISTED rate —
-                              // 365 (Swedish convention) or a 360-day bankår (Danske). Only
-                              // fitted for a locked bunden part; the derived rate absorbs the
-                              // convention by construction, so everything else stays 365.
-  confidence: 'exact' | 'assumed' | 'unknown'
-  calibration_gap: number | null  // listed rate − derived rate (pp); diagnostic only
+  charge_basis: 'days' | 'monthly'  // 'monthly' = flat 30/360 billing: ränta is balance × rate/12
+                                    // per month and does NOT scale with the interval's day count
+  year_basis: 360 | 365       // the year the bank divides by when accruing the listed rate —
+                              // 365 (Swedish convention) or a 360-day bankår (Danske). Resolved
+                              // by effectiveBankProfile. Used ONLY on the days basis; the
+                              // monthly branch divides by 12 months and never by a year.
+  confidence: 'exact' | 'assumed'   // plan 126: how well the bank's CONVENTIONS are known, not
+                                    // whether a binding is live. 'exact' = every convention the
+                                    // arithmetic consumed came from a declared lock or a
+                                    // confident detection; 'assumed' = one fell through to the
+                                    // catalogue or the generic default.
 }
 
 // next_date arithmetic: banks charge on a fixed day-of-month, so raw gaps
@@ -1264,11 +1357,13 @@ function chargePeriodMonths(sortedDates: string[]): number {
 }
 
 // Plan 104 — optional entity context threaded into the forecast so it can read
-// the part's bank profile (part → mortgage → bank) and pool the year-basis
-// learner across all of that bank's parts. Backward-compatible: when omitted,
-// profileYearBasis returns null and the bank-pooled learner is not engaged, so
-// the forecast is byte-for-byte identical to before (single-part detection only).
-export interface ForecastOpts { banks?: Bank[]; mortgages?: Mortgage[]; parts?: LoanPart[] }
+// the part's bank profile (part → mortgage → bank) and pool the convention
+// learner across all of that bank's parts. Plan 126 adds `catalogBanks` so the
+// forecast resolves the SAME effectiveBankProfile the Bankvillkor UI displays
+// (declared lock > confident detection > catalogue > default) instead of a
+// parallel detector. Omitting the bag still works: no bank context resolves to
+// the generic Swedish defaults.
+export interface ForecastOpts { banks?: Bank[]; mortgages?: Mortgage[]; parts?: LoanPart[]; catalogBanks?: CatalogBank[] }
 
 // The declared day-count year for a part's bank, or null when there is no
 // declared lock. ONLY a `year_basis_source === 'declared'` value short-circuits
@@ -1351,15 +1446,19 @@ function sameBankParts(part: LoanPart, opts?: ForecastOpts): LoanPart[] {
   return pooled.length ? pooled : [part]
 }
 
-// The year-basis used for a locked-bunden charge: a declared lock wins; else the
-// bank-pooled learner IF entity context is present; else null so expectedCharge
-// falls back to the classic single-part detector (keeping no-context callers —
-// every existing #305 golden — byte-for-byte identical).
-function forecastYearBasis(part: LoanPart, periods: RatePeriod[], real: Payment[], opts?: ForecastOpts): 360 | 365 | null {
-  const declared = profileYearBasis(part, opts?.mortgages ?? [], opts?.banks ?? [])
-  if (declared != null) return declared
-  if (!opts?.parts || !opts.parts.length) return null // no bank context → classic detector
-  return learnYearBasis(sameBankParts(part, opts), periods, real).basis
+// Plan 126 — the conventions the forecast runs on, resolved exactly once and
+// exactly as the Bankvillkor UI resolves them (effectiveBankProfile: declared
+// lock > confident detection > catalogue > generic default). The forecast used
+// to run a parallel single-part day-count detector on the locked-bunden path
+// only; two resolvers for one question is how a displayed convention and a
+// billed convention drift apart. Ledger evidence is pooled across the bank's
+// parts (sameBankParts), so a thin part inherits its siblings' evidence.
+function forecastProfile(part: LoanPart, periods: RatePeriod[], real: Payment[], opts?: ForecastOpts): EffectiveBankProfile {
+  const bank = bankForPart(part, opts?.mortgages ?? [], opts?.banks ?? [])
+  const catalog = bank?.catalog_id
+    ? ((opts?.catalogBanks ?? []).find(c => c?.id === bank.catalog_id) ?? null)
+    : null
+  return effectiveBankProfile(bank, catalog, sameBankParts(part, opts), periods, real)
 }
 
 // Plan 104 (Phase 2) — the suggest→confirm payload for a bank's Bankvillkor UI.
@@ -1563,40 +1662,42 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   }
   const balance = partBalanceAsOf(part, real, lastDate)
 
-  const bs = bindingStatus(part, periods, next_date)
+  // Plan 126 — THE RATE IS CONTRACTUAL. It is the listed rate of the single
+  // period covering next_date, full stop: the forecast never derives a rate
+  // from the ledger and never chooses between the two. derivedRate stays
+  // exported as a ledger diagnostic (PartDialog), but no forecast figure
+  // depends on it any more.
+  //
+  // Why the derived rate had to go rather than be ranked lower: it is a
+  // trailing average of what the bank already billed, so it lags every
+  // villkorsändring by the length of its window. A rate the owner entered
+  // today — the entire point of Gäller från — could not reach Nästa avisering
+  // until the bank had billed at it for months, and on the flat-monthly branch
+  // it could not reach it at all.
+  //
+  // NO COVERING PERIOD ⇒ NO CHARGE. A gap, an overlap, an expired timeline or
+  // a purely future one leaves the contractual rate unknown, and an unknown
+  // rate must show as unknown rather than as a plausible number reconstructed
+  // from history. partsMissingRateTerms drives the "Lägg till räntevillkor"
+  // prompt that names exactly these parts.
+  const ratePeriod = effectiveRatePeriod(part, periods, next_date)
+  if (!ratePeriod) return null
+  const rate_type = ratePeriod.rate_type ?? null
 
-  // Rate selection. A part locked into a bunden rate: the contractual (listed)
-  // rate IS ground truth for the binding period, so use it directly. The
-  // auto-derived rate only estimates it and lags a step behind any recent
-  // change or a low-billed month still inside the averaging window (a uniform
-  // ~2 % undershoot on the household's parts). Otherwise predict with the
-  // trailing derived rate — it encodes what the bank actually bills, incl. its
-  // day-count convention (predicting listed on a 360-day-basis rörlig part would
-  // flag drift every single month); listed is the thin-history fallback. The
-  // gap between the two stays as a diagnostic.
-  const derived = derivedRate(part, real)
-  const listed = effectiveRate(part, periods, next_date)
-  const lockedBunden = bs.bound && !bs.expired && listed != null
-  const rate = lockedBunden ? listed : (derived ?? listed ?? null)
-  const rate_source: ExpectedCharge['rate_source'] =
-    lockedBunden ? 'listed' : derived != null ? 'derived' : listed != null ? 'listed' : null
-  const rate_type = effectiveRatePeriod(part, periods, next_date)?.rate_type ?? null
-  // The listed rate needs the bank's own day-count year; the derived rate
-  // already encodes it (reverse-engineered on the /365 fiction), so only the
-  // locked-bunden path fits a basis.
-  // A declared bank profile is authoritative for the locked-bunden path (plan
-  // 104): use it when present. Else, when entity context is supplied, the
-  // window-scoped bank-pooled learner (robust across a rolling villkorsändring);
-  // else the classic single-part trailing detector, so no-context callers (every
-  // existing #305 golden) stay byte-for-byte identical. Never pin a basis on the
-  // derived-rate path — it self-calibrates on the /365 fiction.
-  const year_basis: ExpectedCharge['year_basis'] =
-    lockedBunden
-      ? (forecastYearBasis(part, periods, real, opts) ?? interestYearBasis(part, real, intRows, listed))
-      : 365
+  // Plan 126 §4 — the covering period may TAKE EFFECT partway through the
+  // accrual interval, in which case the days before its Gäller från still
+  // belong to the predecessor. One balance, one year basis, two rates. When
+  // nothing splits this passes the listed rate straight through, so the
+  // no-boundary arithmetic below is bit-for-bit what it always was.
+  const seg = intervalRateSegments(part, periods, lastDate, next_date, days, ratePeriod)
+  if (!seg) return null
+  const rate = seg.rate
 
-  const confidence: ExpectedCharge['confidence'] =
-    bs.bound && !bs.expired ? 'exact' : rate_source === 'derived' ? 'assumed' : 'unknown'
+  // The bank's conventions, resolved once. year_basis is consumed ONLY by the
+  // days branch below — a flat-monthly bank divides by 12 months and never by
+  // a year, so its charge carries no day-count exposure at all.
+  const profile = forecastProfile(part, periods, real, opts)
+  const year_basis = profile.year_basis.value
 
   // Amortering, in priority order:
   // 1. Explicit real amortering rows — manual ledgers. Median of the trailing
@@ -1645,39 +1746,74 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
     : paired.length ? 'paired'
     : 'timeline'
 
-  // Flat-monthly billing (Danske-style 30/360): the ränta is balance × rate/12
-  // every month — it does NOT scale with the interval's day count, so two
-  // trailing intervals with different day counts carry (near-)identical
-  // charges. Predict from the LAST CHARGE, scaled only by the balance step
-  // from amorteringen. This is immune both to the ±3 % day-count wobble and
-  // to charge-day noise in the ledger (mixed billing days once stretched a
-  // 30-day month into a 56-day interval and inflated the ränta by 86 %).
-  // Charges that DO track the day count keep the classic days/365 model.
+  // Plan 126 — TWO BRANCHES, NO PRECEDENCE. Both price the entered rate; they
+  // differ only in what the bank holds constant across an interval:
+  //
+  //   'days'    → balance × rate/100 × days / year_basis   (Swedish actual/365,
+  //               or Danske's faktisk/360 bankår)
+  //   'monthly' → balance × rate/100 / 12 × period_months  (flat 30/360: the
+  //               charge does NOT scale with the interval's day count, so a
+  //               30-day and a 31-day month carry the same ränta — and no year
+  //               basis appears in the arithmetic at all)
+  //
+  // The monthly branch used to extrapolate from the LAST CHARGE scaled by the
+  // balance step, which made it rate-blind: an entered rate could never move
+  // it, and Sats had to be reverse-engineered back out of the amount. It is now
+  // rate-driven like the days branch, so `rate` is simply reported as listed.
+  // basis stays a LEDGER reading (chargeBasis looks only at days and amounts)
+  // until plan 128 makes it a stored profile field.
+  //
+  // Plan 126 §4 — a rate change INSIDE the interval:
+  //
+  //   'days'    → the two segments are priced separately off the one balance
+  //               and the one year basis, then summed and rounded once:
+  //               balance × (r_pred × d_pred + r_succ × d_succ) / 100 / year_basis.
+  //   'monthly' → a flat-monthly bank's formula contains no day count at all,
+  //               so "half the month at the old rate" has no direct expression
+  //               in it. The defensible reading: the bank charges ONE flat
+  //               month, and the only day-count-free way to honour both
+  //               contractual rates is to apportion that month by the share of
+  //               days each governed — i.e. apply the flat formula to the
+  //               day-weighted rate. That keeps Sats and Belopp one consistent
+  //               pair (Belopp is exactly what Sats produces), degenerates to
+  //               the single-rate case when nothing splits, and never invents a
+  //               day-count exposure the flat basis does not have.
+  //
+  // seg.pred_days is 0 when nothing splits, so the days branch reduces to the
+  // plain single-rate product term for term.
   const basis = chargeBasis(intRows)
-  const lastCharge = intRows.length ? Math.abs(Number(intRows[intRows.length - 1].amount)) : 0
-  let interest: number
-  let rateUsed = rate
-  if (basis === 'monthly' && lastCharge > 0) {
-    // The last charge accrued on the balance BEFORE this month's amortering.
-    interest = balance > 0 ? r2(lastCharge * balance / (balance + amortization)) : r2(lastCharge)
-    // Sats shows the bank's nominal monthly-basis rate, not a 365-day fiction.
-    if (balance + amortization > 0) rateUsed = r2(lastCharge * (12 / period_months) * 100 / (balance + amortization))
-  } else {
-    interest = rate != null && days > 0 && balance > 0 ? r2(balance * rate / 100 * days / year_basis) : 0
-  }
+  const interest = balance > 0
+    ? basis === 'monthly'
+      ? r2(balance * rate / 100 / 12 * period_months)
+      : days > 0
+        ? r2(balance * seg.pred_rate / 100 * seg.pred_days / year_basis
+           + balance * seg.succ_rate / 100 * seg.succ_days / year_basis)
+        : 0
+    : 0
+
+  // Plan 126 — confidence is now about the CONVENTIONS, not the binding: how
+  // well we know the arithmetic the bank applies, given that the rate itself is
+  // contractual either way. 'exact' only when every convention the branch above
+  // consumed came from a declared lock or a confident detection off the
+  // household's own ledger; 'assumed' when one fell through to the catalogue or
+  // the generic Swedish default. The monthly branch consumes no convention —
+  // rate/12 needs no year — so it is exact by construction (plan 126: exposure
+  // is ≤ 1,4 % on a days-basis bank and zero on a flat-monthly one).
+  const conventions: ConventionSource[] = basis === 'days' ? [profile.year_basis.source] : []
+  const confidence: ExpectedCharge['confidence'] =
+    conventions.every(s => s === 'declared' || s === 'detected') ? 'exact' : 'assumed'
 
   return {
     loan_part_id: part.id, next_date, days, period_months, charge_day: chargeDay, balance,
     original_balance: partOriginal(part, real),
-    rate: rateUsed, rate_source, rate_type, interest, amortization, amortization_source,
+    rate, rate_type, interest, amortization, amortization_source,
     gross: r2(interest + amortization),
     // A part with betalning history predicts the bank's total row; a ledger
     // without one renders the legacy separate amortering line instead. A declared
     // amortering on a part with betalning history keeps the bank's total-debit
     // shape (betalning = interest + declared), even when no paired month exists yet.
     betalning: (paired.length || (declaredMonthly != null && hasBetalning)) ? r2(interest + amortization) : null,
-    charge_basis: basis, year_basis,
-    confidence, calibration_gap: derived != null && listed != null && rateUsed != null ? r2(listed - rateUsed) : null,
+    charge_basis: basis, year_basis, confidence,
   }
 }
 
@@ -1722,7 +1858,7 @@ export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: P
       : (x.amortization <= 0 || hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'amortization')))
   let out = c
   for (let i = 0; i < 24 && covered(out); i++) {
-    const next = rollChargeOnce(part, periods, out)
+    const next = rollChargeOnce(part, out)
     if (strictRatePeriodCoverage(part, periods, next.next_date) === 'outside-known-terms') return null
     out = next
   }
@@ -1732,7 +1868,7 @@ export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: P
 // One roll step: advance next_date by the cadence, step the balance down by
 // the predicted amortering, and reprice — the actual day count of the new
 // interval on the days basis, the balance ratio on the flat-monthly basis.
-function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedCharge): ExpectedCharge {
+function rollChargeOnce(part: LoanPart, out: ExpectedCharge): ExpectedCharge {
   const next_date = addMonthsAtDay(out.next_date, out.period_months, out.charge_day)
   const days = daysBetween(out.next_date, next_date) ?? 0
   // Plan 105: a declared plan can change the amortering across a roll boundary
@@ -1746,13 +1882,13 @@ function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedChar
   const interest = out.charge_basis === 'monthly'
     ? (out.balance > 0 ? r2(out.interest * balance / out.balance) : out.interest)
     : out.rate != null && days > 0 && balance > 0 ? r2(balance * out.rate / 100 * days / out.year_basis) : 0
-  const bs = bindingStatus(part, periods, next_date)
   return {
     ...out, next_date, days, balance, interest, amortization, amortization_source,
     gross: r2(interest + amortization),
     betalning: out.betalning != null ? r2(interest + amortization) : null,
-    // A binding can lapse mid-roll: exact only while it still holds.
-    confidence: bs.bound && !bs.expired ? 'exact' : out.rate_source === 'derived' ? 'assumed' : 'unknown',
+    // Plan 126 — confidence now describes the bank's conventions, which do not
+    // change as the forecast rolls forward, so it is inherited from `out`
+    // rather than recomputed off the binding.
   }
 }
 
@@ -1769,7 +1905,7 @@ export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payme
   const out = [first]
   const n = Math.max(1, Math.round(months / first.period_months))
   for (let i = 1; i < n; i++) {
-    const next = rollChargeOnce(part, periods, out[out.length - 1])
+    const next = rollChargeOnce(part, out[out.length - 1])
     if (next.balance <= 0) break
     if (strictRatePeriodCoverage(part, periods, next.next_date) === 'outside-known-terms') break
     out.push(next)
@@ -1794,7 +1930,7 @@ export function stalePredictedRows(parts: LoanPart[], periods: RatePeriod[], pay
     if (!mine.length) continue
     const lastMk = mine.map(p => monthKey(p.date) as string).sort()[mine.length - 1]
     let c = expectedCharge(part, periods, payments, opts)
-    for (let i = 0; c && i < 24; i++, c = rollChargeOnce(part, periods, c)) {
+    for (let i = 0; c && i < 24; i++, c = rollChargeOnce(part, c)) {
       const mk = monthKey(c.next_date)
       if (!mk || mk > lastMk) break
       for (const p of mine) {
@@ -1832,7 +1968,18 @@ export function forecastInterest(parts: LoanPart[], periods: RatePeriod[], payme
   const { rows } = expectedCharges(parts, periods, payments)
   const interest = r2(rows.reduce((s, r) => s + r.interest * (months / r.period_months), 0))
   const deduction = ranteavdrag(interest)
-  return { interest, deduction, net: r2(interest - deduction), assumed: rows.some(r => r.confidence !== 'exact') }
+  // `assumed` renders "(förutsatt oförändrade räntor)" — a statement about the
+  // RATE holding for the horizon, which is exactly what a live binding
+  // guarantees. It used to piggyback on `confidence`; plan 126 repurposed that
+  // field to describe the bank's conventions instead, so the binding test moved
+  // here rather than changing what the caveat means.
+  const stillBound = (r: ExpectedCharge) => {
+    const p = (parts || []).find(x => x?.id === r.loan_part_id)
+    if (!p) return false
+    const bs = bindingStatus(p, periods, r.next_date)
+    return bs.bound && !bs.expired
+  }
+  return { interest, deduction, net: r2(interest - deduction), assumed: rows.some(r => !stillBound(r)) }
 }
 
 // Expected vs actual, tolerance max(50 kr, 1 %): inside it a real import

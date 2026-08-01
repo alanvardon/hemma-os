@@ -1,6 +1,17 @@
 // Plan 23 — expected next charge: forecast + reconcile + predicted-row matching.
 // Every expected number is hand-computed with the arithmetic shown in the
-// comment next to it (interest = balance × rate/100 × days/365).
+// comment next to it. Plan 126 replaced rate selection with two rate-driven
+// branches, so there are now exactly two formulas in this file:
+//
+//   charge_basis 'days'    → balance × rate/100 × days / year_basis
+//   charge_basis 'monthly' → balance × rate/100 / 12 × period_months
+//
+// `rate` is ALWAYS contractual — never derived from the ledger — and a charge
+// date no period covers produces no forecast row at all (expectedCharge returns
+// null). It is the listed rate of the single period covering next_date, except
+// when that period takes effect inside the accrual interval, where plan 126 §4
+// splits the interval in two and `rate` becomes the single day-weighted figure
+// (see the "two-segment split at a rate boundary" describe).
 import { describe, it, expect } from 'vitest'
 import {
   expectedCharge, expectedCharges, forecastInterest, reconcileCharge,
@@ -8,6 +19,7 @@ import {
   stalePredictedRows, makeLoanPart, effectiveDeclaredAmortization, declaredMonthlyAmortization,
   projectMilestones, profileYearBasis, makeBank,
   learnYearBasis, suggestBankProfile, bankProfileDrift, profileBilling, strictRatePeriodCoverage,
+  partsMissingRateTerms, intervalRateSegments,
 } from './mortgage'
 import type { LoanPart, Payment, RatePeriod, Bank, Mortgage } from './mortgage'
 
@@ -35,41 +47,107 @@ const CLEAN = [
   interestRow('2026-06-27', 3100),
 ]
 
+// A part wired to a bank (part → mortgage → bank), for the tests that need a
+// declared convention. Shared by several describes below.
+const LINKED_MORTGAGES: Mortgage[] = [{ id: 'm1', created_at: '', bank_id: 'b1', label: 'Bolån', start_date: null, archived: false }]
+const bankPart = (over: Partial<LoanPart> = {}) => part({ mortgage_id: 'm1', ...over })
+const declaredOpts = (over: Partial<Bank>) => ({ banks: [{ id: 'b1', created_at: '', label: 'Danske', ...over }], mortgages: LINKED_MORTGAGES })
+
 describe('expectedCharge', () => {
-  it('golden monthly case: derived rate, day-of-month cadence, interest to the öre', () => {
+  it('golden monthly case: the ENTERED rate, day-of-month cadence, interest to the öre', () => {
     const c = expectedCharge(part(), [period()], CLEAN)!
     expect(c).not.toBeNull()
     expect(c.next_date).toBe('2026-07-27')          // last date + 1 month at the mode day
     expect(c.days).toBe(30)                         // 27 jun → 27 jul
     expect(c.period_months).toBe(1)
     expect(c.balance).toBe(1_000_000)
-    expect(c.rate).toBe(3.65)
-    expect(c.rate_source).toBe('derived')
+    expect(c.rate).toBe(3.65)                       // the listed rate, verbatim
     expect(c.rate_type).toBe('rörlig')
     // 1 000 000 × 3.65/100 × 30/365 = 3 000 exactly
     expect(c.interest).toBe(3000)
     expect(c.amortization).toBe(0)                  // interest-only: balance flat
     expect(c.gross).toBe(3000)
-    expect(c.confidence).toBe('assumed')            // rörlig held flat
-    expect(c.calibration_gap).toBe(0)               // listed 3.65 − derived 3.65
+    // Plan 126: no declared/detected day-count convention for this bank, so the
+    // arithmetic ran on the generic Swedish 365 default → the CONVENTION is
+    // assumed (the rate is not).
+    expect(c.year_basis).toBe(365)
+    expect(c.confidence).toBe('assumed')
   })
 
-  it('absorbs a 360-day-basis bank via the derived rate; calibration_gap is the diagnostic', () => {
+  it('PLAN 126: a newly entered rate drives Sats AND Belopp from its Gäller från day (days basis)', () => {
+    // The reported defect. The ledger was billed at 3.65 % throughout, so the
+    // old derived rate read 3.65 and no entered rate could displace it. The
+    // owner enters 4.10 % with Gäller från on the accrual interval's first day
+    // (27 Jun, the last charge), so the whole 27 Jun → 27 Jul interval accrues
+    // at the new rate. (A Gäller från INSIDE the interval is the two-segment
+    // case — plan 126 stage 3, not priced here.)
+    const periods = [
+      period({ end_date: '2026-06-26' }),
+      period({ id: 'r2', start_date: '2026-06-27', end_date: null, rate: 4.10, rate_type: 'rörlig' }),
+    ]
+    const c = expectedCharge(part(), periods, CLEAN)!
+    expect(c.next_date).toBe('2026-07-27')
+    expect(c.rate).toBe(4.10)                       // Sats — NOT the derived 3.65
+    // Belopp: 1 000 000 × 4.10/100 × 30/365 = 41 000 × 30/365 = 3 369.863… → 3 369.86
+    expect(c.interest).toBe(3369.86)
+  })
+
+  it('PLAN 126: a newly entered rate drives Sats AND Belopp on the FLAT-MONTHLY basis too', () => {
+    // The flat-monthly branch used to extrapolate from the last charge, so it
+    // was rate-blind: entering a rate could not move it at all. 1 350 000 kr
+    // billed a flat 4 061 kr/month (≈ 3.61 %); the owner enters 4.20 % with
+    // Gäller från 1 Jun — the accrual interval's first day — so the whole
+    // interval, and the 1 Jul charge, sit at the new rate.
+    const B = 1_350_000
+    const flat = [
+      interestRow('2026-03-01', 4061, { id: 'i1', balance_after: B }),
+      interestRow('2026-04-01', 4061, { id: 'i2', balance_after: B }),   // 31-day interval
+      interestRow('2026-05-01', 4061, { id: 'i3', balance_after: B }),   // 30-day interval
+      interestRow('2026-06-01', 4061, { id: 'i4', balance_after: B }),   // 31-day interval
+    ]
+    const periods = [
+      period({ end_date: '2026-05-31', rate: 3.61 }),
+      period({ id: 'r2', start_date: '2026-06-01', end_date: null, rate: 4.20, rate_type: 'rörlig' }),
+    ]
+    const c = expectedCharge(part(), periods, flat)!
+    expect(c.charge_basis).toBe('monthly')
+    expect(c.next_date).toBe('2026-07-01')
+    expect(c.rate).toBe(4.20)                       // Sats — NOT reverse-engineered from 4 061 kr
+    // Belopp: 1 350 000 × 4.20/100 / 12 × 1 = 56 700 / 12 = 4 725 exactly.
+    // (The old rate-blind branch would still have predicted 4 061 kr.)
+    expect(c.interest).toBe(4725)
+    // No year basis appears in the monthly arithmetic, so no convention is
+    // assumed — the charge is exact by construction.
+    expect(c.confidence).toBe('exact')
+  })
+
+  it('PLAN 126 exposure: a /360 bank undershoots by 360/365 until its basis is declared', () => {
     // Bank bills listed 3.50 % on a 360-day basis: charge = 1 000 000 × 0.035 × days/360.
-    //   31 d → 3 013.89 · 30 d → 2 916.67 — implies 3.50 × 365/360 ≈ 3.5486 → r2 → 3.55 %.
+    //   31 d → 3 013.89 · 30 d → 2 916.67.
+    // The forecast no longer absorbs that convention into a derived rate. With
+    // no declared lock and too thin an evidence base to detect one confidently,
+    // it runs the listed rate on the Swedish 365 default and is ~1,4 % cold —
+    // the exposure plan 126 accepts and plan 128 closes. Declaring the basis
+    // recovers the bank's own number to the öre.
     const pays = [
       interestRow('2026-03-27', 3013.89),
       interestRow('2026-04-27', 3013.89),
       interestRow('2026-05-27', 2916.67),
       interestRow('2026-06-27', 3013.89),
     ]
-    const c = expectedCharge(part(), [period({ rate: 3.50 })], pays)!
-    expect(c.rate).toBe(3.55)
-    expect(c.rate_source).toBe('derived')
-    // Predicting with the listed 3.50 would run ~1.4 % cold and flag drift every
-    // month; the derived 3.55 matches the bank: 1 000 000 × 3.55/100 × 30/365 = 2 917.81.
-    expect(c.interest).toBe(2917.81)
-    expect(c.calibration_gap).toBe(-0.05)           // listed 3.50 − derived 3.55
+    const undeclared = expectedCharge(part(), [period({ rate: 3.50 })], pays)!
+    expect(undeclared.rate).toBe(3.50)              // the listed rate, not a derived 3.55
+    expect(undeclared.year_basis).toBe(365)
+    // 1 000 000 × 3.50/100 × 30/365 = 35 000 × 30/365 = 2 876.712… → 2 876.71
+    expect(undeclared.interest).toBe(2876.71)
+    expect(undeclared.confidence).toBe('assumed')
+
+    const declared = expectedCharge(bankPart(), [period({ rate: 3.50 })], pays,
+      declaredOpts({ year_basis: 360, year_basis_source: 'declared' }))!
+    expect(declared.year_basis).toBe(360)
+    // 1 000 000 × 3.50/100 × 30/360 = 35 000 / 12 = 2 916.666… → 2 916.67 — the bank's charge
+    expect(declared.interest).toBe(2916.67)
+    expect(declared.confidence).toBe('exact')
   })
 
   it('clamps the charge day to month end: billed on the 31st → 30 April', () => {
@@ -116,31 +194,59 @@ describe('expectedCharge', () => {
     expect(c.interest).toBe(9200)
   })
 
-  it('falls back to the listed rate with confidence unknown on thin history', () => {
-    // One interest row — derivedRate needs ≥ 2 rows, so listed 3.50 % is used.
+  it('thin history is no obstacle — the entered rate needs no calibration', () => {
+    // One interest row: the old derived rate needed ≥ 2 rows and fell back to
+    // the listed one. There is nothing to fall back FROM any more.
     const c = expectedCharge(part(), [period({ rate: 3.50 })], [interestRow('2026-06-27', 3100)])!
     expect(c.rate).toBe(3.50)
-    expect(c.rate_source).toBe('listed')
-    expect(c.confidence).toBe('unknown')
-    expect(c.calibration_gap).toBeNull()
+    expect(c.confidence).toBe('assumed')            // 365 default convention, not a rate doubt
     expect(c.next_date).toBe('2026-07-27')          // cold start: monthly, last row's day
     // 1 000 000 × 3.50/100 × 30/365 = 2 876.71
     expect(c.interest).toBe(2876.71)
   })
 
-  it('bunden inside its binding ⇒ exact; no rate period at all keeps assumed', () => {
+  it('PLAN 126: confidence tracks the CONVENTIONS, not the binding', () => {
+    // A live bunden binding used to read 'exact'. It no longer does: the rate
+    // was never in doubt (it is contractual either way) — what is in doubt is
+    // the day-count year, and this bank has neither a declared lock nor a
+    // confident detection (CLEAN reads as a clean /365 ledger, and 365 is the
+    // null hypothesis, never itself "confident").
     const bunden = period({ rate_type: 'bunden', end_date: '2027-12-31' })
-    expect(expectedCharge(part(), [bunden], CLEAN)!.confidence).toBe('exact')
-    // Derived history but no rate period: still predicts (derived), stays assumed.
-    const noPeriod = expectedCharge(part(), [], CLEAN)!
-    expect(noPeriod.confidence).toBe('assumed')
-    expect(noPeriod.rate).toBe(3.65)
-    expect(noPeriod.calibration_gap).toBeNull()
+    expect(expectedCharge(part(), [bunden], CLEAN)!.confidence).toBe('assumed')
+    // Declaring the convention — for a rörlig part, note — is what buys 'exact'.
+    const declared = expectedCharge(bankPart(), [period()], CLEAN,
+      declaredOpts({ year_basis: 365, year_basis_source: 'declared' }))!
+    expect(declared.confidence).toBe('exact')
+    expect(declared.interest).toBe(3000)            // 1 000 000 × 3.65/100 × 30/365
   })
 
-  it('bunden past its villkorsändringsdag drops back to assumed', () => {
-    const expired = period({ rate_type: 'bunden', end_date: '2026-07-01' }) // before next_date 2026-07-27
-    expect(expectedCharge(part(), [expired], CLEAN)!.confidence).toBe('assumed')
+  it('PLAN 126: no period covering the charge date ⇒ no forecast row', () => {
+    // Ledger evidence alone is no longer enough to price a charge: without a
+    // covering rate period the contractual rate is unknown, and an unknown rate
+    // must read as unknown rather than as a plausible number derived from
+    // history.
+    expect(expectedCharge(part(), [], CLEAN)).toBeNull()               // no periods at all
+    // Expired: bunden ends 2026-07-01, the charge falls 2026-07-27.
+    expect(expectedCharge(part(), [period({ rate_type: 'bunden', end_date: '2026-07-01' })], CLEAN)).toBeNull()
+    // A gap between two periods, and a purely future timeline.
+    expect(expectedCharge(part(), [
+      period({ end_date: '2026-06-30' }),
+      period({ id: 'r2', start_date: '2026-08-01', end_date: null, rate: 4.1 }),
+    ], CLEAN)).toBeNull()
+    expect(expectedCharge(part(), [period({ start_date: '2027-01-01' })], CLEAN)).toBeNull()
+    // …and overlapping periods: conflicting terms are no more usable than absent ones.
+    expect(expectedCharge(part(), [
+      period(),
+      period({ id: 'r2', start_date: '2026-05-01', end_date: null, rate: 4.1 }),
+    ], CLEAN)).toBeNull()
+    // The "Lägg till räntevillkor" prompt is driven by partsMissingRateTerms,
+    // which asks the BARE (existence) question — so it names the part that has
+    // no terms at all, and stays silent for a part whose terms simply do not
+    // reach the charge date. That second class is stage 4's separate
+    // "Räntevillkor saknas för idag" warning; pinned here so the split is
+    // deliberate rather than discovered.
+    expect(partsMissingRateTerms([part()], []).map(m => m.loan_part_id)).toEqual(['p1'])
+    expect(partsMissingRateTerms([part()], [period({ rate_type: 'bunden', end_date: '2026-07-01' })])).toEqual([])
   })
 
   it('a bunden part predicts on its contractual rate, not the lagging derived estimate', () => {
@@ -158,20 +264,18 @@ describe('expectedCharge', () => {
     const bunden = period({ rate: 3.93, rate_type: 'bunden', end_date: '2027-12-31' })
     const c = expectedCharge(part(), [bunden], lowBilled)!
     expect(c.charge_basis).toBe('days')
-    expect(c.rate).toBe(3.93)                             // the contractual rate…
-    expect(c.rate_source).toBe('listed')                 // …not the derived 3.50 %
-    expect(c.confidence).toBe('exact')
+    expect(c.rate).toBe(3.93)                             // the contractual rate, not the derived 3.50 %
     // 1 000 000 × 3.93 % × 30/365 = 3 230.14 — not the derived 2 876.71
     expect(c.interest).toBe(3230.14)
   })
 
-  it('returns null only when there is neither an interest row nor a rate period', () => {
+  it('returns null when there is nothing to forecast from', () => {
     expect(expectedCharge(part(), [], [])).toBeNull()
-    // Rate period but no history: cold start off today, listed rate, unknown.
+    // Rate period but no history: cold start off today at the listed rate.
     const c = expectedCharge(part({ start_balance: 500_000 }), [period({ rate: 3.50 })], [])!
     expect(c).not.toBeNull()
-    expect(c.rate_source).toBe('listed')
-    expect(c.confidence).toBe('unknown')
+    expect(c.rate).toBe(3.50)
+    expect(c.confidence).toBe('assumed')
     expect(c.period_months).toBe(1)
     expect(c.balance).toBe(500_000)
     expect(c.interest).toBeGreaterThan(0)
@@ -286,15 +390,274 @@ describe('expectedCharge', () => {
   })
 })
 
+// ── PLAN 126 §4 — two-segment split at the boundary ─────────────────────────
+// The accrual interval is (lastChargeDate, next_date]: the `days` calendar days
+// lastChargeDate+1 … next_date. When the period covering next_date takes effect
+// INSIDE that window, the days before its Gäller från still belong to the
+// predecessor (settled meaning 5: the boundary day itself is the first accrual
+// day at the new rate). One balance, one year basis, two rates, summed.
+//
+// Every golden below is hand-derived with the arithmetic shown. On a 1 000 000
+// kr balance at /365 the daily accrual is a round number, which keeps the
+// segment arithmetic checkable by eye: 3.65 % → 100.00 kr/day.
+describe('two-segment split at a rate boundary (plan 126 §4)', () => {
+  const dayCount = (a: string, b: string) =>
+    Math.round((new Date(b + 'T00:00:00').getTime() - new Date(a + 'T00:00:00').getTime()) / 86400000)
+  const prevDay = (iso: string) => {
+    const d = new Date(iso + 'T00:00:00')
+    d.setDate(d.getDate() - 1)
+    const p = (n: number) => String(n).padStart(2, '0')
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+  }
+  const round2 = (n: number) => Math.round(n * 100) / 100
+
+  it('splits inside a normal month: 12 days at the old rate, 18 at the new', () => {
+    // CLEAN bills the 27th, so the interval is 27 jun → 27 jul = 30 days.
+    // The successor takes effect 10 jul, mid-interval.
+    //   predecessor 3.65 %: 28 jun … 9 jul  → 3 + 9  = 12 d
+    //   successor   4.25 %: 10 jul … 27 jul →         18 d   (Σ = 30 = c.days)
+    //   1 000 000 × 3.65/100 × 12/365 = 36 500 × 12/365 = 1 200.000000
+    //   1 000 000 × 4.25/100 × 18/365 = 42 500 × 18/365 = 2 095.890411
+    //                                                 Σ = 3 295.890411 → 3 295.89
+    //   Sats = (3.65×12 + 4.25×18)/30 = (43.8 + 76.5)/30 = 120.3/30 = 4.01 exactly
+    const periods = [
+      period({ end_date: '2026-07-09' }),
+      period({ id: 'r2', start_date: '2026-07-10', end_date: null, rate: 4.25 }),
+    ]
+    const c = expectedCharge(part(), periods, CLEAN)!
+    expect(c.next_date).toBe('2026-07-27')
+    expect(c.days).toBe(30)
+    expect(c.charge_basis).toBe('days')
+    expect(c.rate).toBeCloseTo(4.01, 10)            // the day-weighted Sats, not 3.65 and not 4.25
+    expect(c.interest).toBe(3295.89)
+    // Sats and Belopp are one consistent pair: the reported rate reproduces the
+    // summed interest over the whole interval.
+    expect(round2(1_000_000 * c.rate! / 100 * c.days / c.year_basis)).toBe(c.interest)
+  })
+
+  it('splits across a MONTH END: 16 days in May, 15 in June', () => {
+    // Billed on the 15th; last charge 15 maj, next 15 jun = 31 days. The
+    // successor takes effect 1 jun, so the split falls on the month boundary.
+    //   predecessor 3.65 %: 16 maj … 31 maj → 16 d
+    //   successor   4.10 %:  1 jun … 15 jun → 15 d   (Σ = 31 = c.days)
+    //   1 000 000 × 3.65/100 × 16/365 = 36 500 × 16/365 = 1 600.000000
+    //   1 000 000 × 4.10/100 × 15/365 = 41 000 × 15/365 = 1 684.931507
+    //                                                 Σ = 3 284.931507 → 3 284.93
+    //   Sats = (3.65×16 + 4.10×15)/31 = (58.4 + 61.5)/31 = 119.9/31 = 3.867742 %
+    const ledger = [
+      interestRow('2026-02-15', 2800),              // seed
+      interestRow('2026-03-15', 2800),              // 28 d
+      interestRow('2026-04-15', 3100),              // 31 d
+      interestRow('2026-05-15', 3000),              // 30 d
+    ]
+    const periods = [
+      period({ end_date: '2026-05-31' }),
+      period({ id: 'r2', start_date: '2026-06-01', end_date: null, rate: 4.10 }),
+    ]
+    const c = expectedCharge(part(), periods, ledger)!
+    expect(c.next_date).toBe('2026-06-15')
+    expect(c.days).toBe(31)
+    expect(c.charge_basis).toBe('days')
+    expect(c.rate).toBeCloseTo(119.9 / 31, 10)
+    expect(c.interest).toBe(3284.93)
+  })
+
+  it('splits across a YEAR END: 11 days in December, 20 in January', () => {
+    // Billed on the 20th; last charge 20 dec 2025, next 20 jan 2026 = 31 days.
+    // The new rate takes effect 1 jan — a lower one, so the charge falls.
+    //   predecessor 4.45 %: 21 dec … 31 dec → 11 d
+    //   successor   3.95 %:  1 jan … 20 jan → 20 d   (Σ = 31 = c.days)
+    //   1 000 000 × 4.45/100 × 11/365 = 44 500 × 11/365 = 1 341.095890
+    //   1 000 000 × 3.95/100 × 20/365 = 39 500 × 20/365 = 2 164.383562
+    //                                                 Σ = 3 505.479452 → 3 505.48
+    //   Sats = (4.45×11 + 3.95×20)/31 = (48.95 + 79.0)/31 = 127.95/31 = 4.127419 %
+    const ledger = [
+      interestRow('2025-09-20', 3657.53),           // seed
+      interestRow('2025-10-20', 3657.53),           // 30 d at 4.45 %: 44 500 × 30/365
+      interestRow('2025-11-20', 3779.45),           // 31 d at 4.45 %: 44 500 × 31/365
+      interestRow('2025-12-20', 3657.53),           // 30 d
+    ]
+    const periods = [
+      period({ start_date: '2025-01-01', end_date: '2025-12-31', rate: 4.45 }),
+      period({ id: 'r2', start_date: '2026-01-01', end_date: null, rate: 3.95 }),
+    ]
+    const c = expectedCharge(part(), periods, ledger)!
+    expect(c.next_date).toBe('2026-01-20')
+    expect(c.days).toBe(31)
+    expect(c.charge_basis).toBe('days')
+    expect(c.rate).toBeCloseTo(127.95 / 31, 10)
+    expect(c.interest).toBe(3505.48)
+  })
+
+  it('splits ON THE LEAP DAY: 29 feb is the first day at the new rate', () => {
+    // Billed on the 10th of a leap year; 10 feb 2028 → 10 mar 2028 = 29 days.
+    // The successor takes effect 29 feb, which exists only in 2028 — and the
+    // predecessor lookup runs on 28 feb, the day before it.
+    //   predecessor 3.80 %: 11 feb … 28 feb → 18 d
+    //   successor   4.60 %: 29 feb … 10 mar → 11 d   (Σ = 29 = c.days)
+    //   1 000 000 × 3.80/100 × 18/365 = 38 000 × 18/365 = 1 873.972603
+    //   1 000 000 × 4.60/100 × 11/365 = 46 000 × 11/365 = 1 386.301370
+    //                                                 Σ = 3 260.273973 → 3 260.27
+    //   Sats = (3.80×18 + 4.60×11)/29 = (68.4 + 50.6)/29 = 119.0/29 = 4.103448 %
+    const ledger = [
+      interestRow('2027-11-10', 3123.29),           // seed
+      interestRow('2027-12-10', 3123.29),           // 30 d at 3.80 %: 38 000 × 30/365
+      interestRow('2028-01-10', 3227.40),           // 31 d at 3.80 %: 38 000 × 31/365
+      interestRow('2028-02-10', 3227.40),           // 31 d
+    ]
+    const periods = [
+      period({ start_date: '2027-01-01', end_date: '2028-02-28', rate: 3.80 }),
+      period({ id: 'r2', start_date: '2028-02-29', end_date: null, rate: 4.60 }),
+    ]
+    const c = expectedCharge(part(), periods, ledger)!
+    expect(c.next_date).toBe('2028-03-10')
+    expect(c.days).toBe(29)                         // 2028 is a leap year
+    expect(c.rate).toBeCloseTo(119.0 / 29, 10)
+    expect(c.interest).toBe(3260.27)
+  })
+
+  it('the FLAT-MONTHLY basis day-weights the rate into the one flat month', () => {
+    // A flat-monthly bank's formula (balance × rate/12) has no day count in it,
+    // so "half the month at the old rate" has no direct expression. The
+    // defensible reading: the bank charges ONE flat month, and the only
+    // day-count-free way to honour both contractual rates is to apportion that
+    // month by the share of days each governed. Sats and Belopp therefore stay
+    // one consistent pair, and the result lands exactly between the two
+    // single-rate months.
+    //   1 350 000 kr, billed the 1st; 1 jun → 1 jul = 30 days; new rate 16 jun.
+    //   predecessor 3.61 %:  2 jun … 15 jun → 14 d
+    //   successor   4.20 %: 16 jun …  1 jul → 16 d   (Σ = 30)
+    //   Sats = (3.61×14 + 4.20×16)/30 = (50.54 + 67.2)/30 = 117.74/30 = 3.924667 %
+    //   Belopp = 1 350 000 × 3.9246666…/100 / 12 = 52 983 / 12 = 4 415.25 exactly
+    //   Cross-check by interpolation between the two flat months:
+    //     3.61 % → 4 061.25 · 4.20 % → 4 725.00
+    //     4 061.25 + (4 725.00 − 4 061.25) × 16/30 = 4 061.25 + 354.00 = 4 415.25 ✓
+    const B = 1_350_000
+    const flat = [
+      interestRow('2026-03-01', 4061, { id: 'i1', balance_after: B }),
+      interestRow('2026-04-01', 4061, { id: 'i2', balance_after: B }),   // 31-day interval
+      interestRow('2026-05-01', 4061, { id: 'i3', balance_after: B }),   // 30-day interval
+      interestRow('2026-06-01', 4061, { id: 'i4', balance_after: B }),   // 31-day interval
+    ]
+    const periods = [
+      period({ end_date: '2026-06-15', rate: 3.61 }),
+      period({ id: 'r2', start_date: '2026-06-16', end_date: null, rate: 4.20 }),
+    ]
+    const c = expectedCharge(part(), periods, flat)!
+    expect(c.charge_basis).toBe('monthly')
+    expect(c.next_date).toBe('2026-07-01')
+    expect(c.days).toBe(30)
+    expect(c.rate).toBeCloseTo(117.74 / 30, 10)
+    expect(c.interest).toBe(4415.25)
+    // Still no year basis in the arithmetic, so no convention is assumed.
+    expect(c.confidence).toBe('exact')
+  })
+
+  it('segment days sum EXACTLY to the interval length, across every calendar boundary', () => {
+    // The invariant the split is built on, asserted directly on the resolver
+    // (expectedCharge drops the charge outright if it ever fails). Each case's
+    // succ_days is hand-counted in its comment.
+    const cases: Array<{ last: string; next: string; boundary: string; succ: number; why: string }> = [
+      // 28 jun … 9 jul = 12 d before | 10 jul … 27 jul = 18 d
+      { last: '2026-06-27', next: '2026-07-27', boundary: '2026-07-10', succ: 18, why: 'mid-month' },
+      // 16 maj … 31 maj = 16 d before | 1 jun … 15 jun = 15 d
+      { last: '2026-05-15', next: '2026-06-15', boundary: '2026-06-01', succ: 15, why: 'month end' },
+      // 21 dec … 31 dec = 11 d before | 1 jan … 20 jan = 20 d
+      { last: '2025-12-20', next: '2026-01-20', boundary: '2026-01-01', succ: 20, why: 'year end' },
+      // 11 feb … 28 feb = 18 d before | 29 feb … 10 mar = 11 d
+      { last: '2028-02-10', next: '2028-03-10', boundary: '2028-02-29', succ: 11, why: 'leap day' },
+      // nothing before the boundary: 1 feb … 29 feb = 29 d, the whole interval
+      { last: '2028-01-31', next: '2028-02-29', boundary: '2028-02-01', succ: 29, why: 'boundary on day one' },
+      // quarterly: 16 jan … 28 feb = 16 + 28 = 44 d before | 1 mar … 15 apr = 31 + 15 = 46 d
+      { last: '2026-01-15', next: '2026-04-15', boundary: '2026-03-01', succ: 46, why: 'quarterly cadence' },
+    ]
+    for (const { last, next, boundary, succ, why } of cases) {
+      const days = dayCount(last, next)
+      // The predecessor runs right up to, but not into, the boundary day.
+      const periods = [
+        period({ start_date: '2020-01-01', end_date: prevDay(boundary), rate: 3.00 }),
+        period({ id: 'r2', start_date: boundary, end_date: null, rate: 4.00 }),
+      ]
+      const seg = intervalRateSegments(part(), periods, last, next, days, periods[1])!
+      expect(seg, why).not.toBeNull()
+      expect(seg.pred_days + seg.succ_days, why).toBe(days)
+      expect(seg.succ_days, why).toBe(succ)
+      expect(seg.pred_days, why).toBe(days - succ)
+    }
+  })
+
+  it('TWO boundaries in one interval ⇒ no forecast row at all', () => {
+    // The entered timeline is finer than the billing cadence. Part-pricing it
+    // would mean guessing how the bank compounds sub-periods, so the interval
+    // is treated as outside known terms and the charge is dropped.
+    const periods = [
+      period({ end_date: '2026-06-30' }),
+      period({ id: 'r2', start_date: '2026-07-01', end_date: '2026-07-14', rate: 4.10 }),
+      period({ id: 'r3', start_date: '2026-07-15', end_date: null, rate: 4.40 }),
+    ]
+    // 27 jul IS covered — by r3 — so this is not a coverage failure; it is the
+    // deliberate one-boundary limit.
+    expect(strictRatePeriodCoverage(part(), periods, '2026-07-27')).toBe('covered')
+    expect(expectedCharge(part(), periods, CLEAN)).toBeNull()
+    expect(pendingCharge(part(), periods, CLEAN)).toBeNull()
+    expect(pendingChargeSeries(part(), periods, CLEAN)).toEqual([])
+  })
+
+  it('a MISSING PREDECESSOR ⇒ no forecast row (the forecast never derives a rate)', () => {
+    // Days 28–30 jun need the predecessor's rate. Reconstructing it from the
+    // ledger is exactly the derivation plan 126 removed, so an incomplete
+    // interval is priced not at all rather than partly.
+    const orphan = [period({ id: 'r2', start_date: '2026-07-01', end_date: null, rate: 4.10 })]
+    expect(expectedCharge(part(), orphan, CLEAN)).toBeNull()
+    // …and a predecessor that stops short of the boundary leaves the same hole
+    // (29–30 jun uncovered), so it is no better than none.
+    const gapped = [
+      period({ end_date: '2026-06-28' }),
+      period({ id: 'r2', start_date: '2026-07-01', end_date: null, rate: 4.10 }),
+    ]
+    expect(expectedCharge(part(), gapped, CLEAN)).toBeNull()
+  })
+
+  it('REGRESSION: no boundary in the interval leaves the arithmetic untouched', () => {
+    // The single-rate goldens must not move: the resolver passes the listed
+    // rate through verbatim rather than round-tripping it through a weighted
+    // average, so `rate` stays exactly the number the owner entered.
+    const plain = expectedCharge(part(), [period()], CLEAN)!
+    expect(plain.rate).toBe(3.65)                   // exactly, not 3.6500000000000004
+    expect(plain.interest).toBe(3000)               // 1 000 000 × 3.65/100 × 30/365
+
+    // Gäller från ON the last charge date: the whole interval is the successor's.
+    const onLastCharge = expectedCharge(part(), [
+      period({ end_date: '2026-06-26' }),
+      period({ id: 'r2', start_date: '2026-06-27', end_date: null, rate: 4.10 }),
+    ], CLEAN)!
+    expect(onLastCharge.rate).toBe(4.10)
+    expect(onLastCharge.interest).toBe(3369.86)     // 41 000 × 30/365
+
+    // Gäller från on the interval's FIRST ACCRUAL DAY (28 jun): still no
+    // predecessor days, so still the listed rate verbatim and the same amount.
+    const onFirstAccrualDay = expectedCharge(part(), [
+      period({ end_date: '2026-06-27' }),
+      period({ id: 'r2', start_date: '2026-06-28', end_date: null, rate: 4.10 }),
+    ], CLEAN)!
+    expect(onFirstAccrualDay.rate).toBe(4.10)
+    expect(onFirstAccrualDay.interest).toBe(3369.86)
+  })
+})
+
 describe('flat-monthly billing (30/360 banks)', () => {
   // Danske-style: ränta = balance × rate/12 every month — the charge does NOT
   // scale with the interval's day count (4 061 kr in a 30-day month AND a
   // 31-day month). The days/365 model would wobble ±3 % month to month and,
   // worse, amplify any charge-day noise in the ledger (a 56-day interval →
-  // +86 %). Detection: trailing intervals whose charges stay flat while day
-  // counts differ → predict from the LAST CHARGE, scaled only by the balance
-  // step from amorteringen.
+  // +86 %). Detection is unchanged (trailing intervals whose charges stay flat
+  // while day counts differ); plan 126 changed what happens next: instead of
+  // extrapolating the LAST CHARGE scaled by the balance step, the branch prices
+  // the entered rate — balance × rate/100 / 12 × period_months. The two agree
+  // to the rounding of the listed rate (4 061,25 vs the billed 4 061 at 3,61 %).
   const B = 1_350_000
+  // 4 061 × 12 / 1 350 000 = 3,6098 % → the owner enters 3,61 %.
+  const listed = () => period({ rate: 3.61 })
   function flatRows(): Payment[] {
     return [
       interestRow('2026-03-01', 4061, { id: 'i1', balance_after: B }),
@@ -306,15 +669,18 @@ describe('flat-monthly billing (30/360 banks)', () => {
     ]
   }
 
-  it('an interest-only part predicts EXACTLY the last charge — no day-count wobble', () => {
-    const c = expectedCharge(part(), [], flatRows())!
+  it('an interest-only part prices rate/12 flat — no day-count wobble', () => {
+    const c = expectedCharge(part(), [listed()], flatRows())!
     expect(c.charge_basis).toBe('monthly')
     expect(c.next_date).toBe('2026-07-01')
-    expect(c.interest).toBe(4061)                   // NOT 4 061 × 30/31
-    expect(c.betalning).toBe(4061)
+    // 1 350 000 × 3.61/100 / 12 × 1 = 48 735 / 12 = 4 061,25 — NOT 4 061 × 30/31.
+    // (Was 4 061,00: the old branch echoed the last charge. The 25 öre is the
+    // listed rate's own rounding, well inside the reconcile tolerance.)
+    expect(c.interest).toBe(4061.25)
+    expect(c.betalning).toBe(4061.25)
     expect(c.amortization).toBe(0)
-    // Sats shows the bank's nominal monthly-basis rate: 4 061 × 12 / 1 350 000.
-    expect(c.rate).toBe(3.61)
+    expect(c.rate).toBe(3.61)                       // Sats is the listed rate, reported as-is
+    expect(c.confidence).toBe('exact')              // no year basis is used on this branch
   })
 
   it('rak amortering: the charge steps down with the balance, golden to the öre', () => {
@@ -329,16 +695,19 @@ describe('flat-monthly billing (30/360 banks)', () => {
       pays.push(interestRow(d, charges[i], { id: 'i' + i, balance_after: bal }))
       pays.push(interestRow(d, charges[i] + 8000, { id: 'b' + i, kind: 'payment', description: 'Betalning', balance_after: bal }))
     })
-    const c = expectedCharge(part(), [], pays)!
+    const c = expectedCharge(part(), [period({ rate: 3.60 })], pays)!
     expect(c.charge_basis).toBe('monthly')
     expect(c.balance).toBe(1_168_000)
     expect(c.amortization).toBe(8000)
-    expect(c.interest).toBe(3504)                   // 3 528 × 1 168 000 / 1 176 000 = 1 168 000 × 0,3 %
+    // 1 168 000 × 3.60/100 / 12 × 1 = 42 048 / 12 = 3 504 exactly — the same
+    // number the old last-charge extrapolation produced (3 528 × 1 168/1 176),
+    // because the ledger was billed at exactly the listed 3,60 %.
+    expect(c.interest).toBe(3504)
     expect(c.betalning).toBe(11_504)
-    expect(c.rate).toBe(3.6)                        // 3 528 × 12 / 1 176 000
+    expect(c.rate).toBe(3.6)
 
     // Rolling holds the pattern: each month −8 000 kr saldo, ränta × B'/B.
-    const s = pendingChargeSeries(part(), [], pays)
+    const s = pendingChargeSeries(part(), [period({ rate: 3.60 })], pays)
     expect(s[1].balance).toBe(1_160_000)
     expect(s[1].interest).toBe(3480)                // 3 504 × 1 160 / 1 168
     expect(s[1].betalning).toBe(11_480)
@@ -358,11 +727,13 @@ describe('flat-monthly billing (30/360 banks)', () => {
       interestRow('2026-05-01', 4061, { id: 'n1', balance_after: B }),
       interestRow('2026-06-01', 4061, { id: 'n2', balance_after: B }),
     ]
-    const c = expectedCharge(part(), [], noisy)!
+    const c = expectedCharge(part(), [listed()], noisy)!
     expect(c.next_date).toBe('2026-07-01')          // anchored to where the bank now bills
     expect(c.days).toBe(30)                         // one month — the phantom 56-day interval is gone
     expect(c.charge_basis).toBe('monthly')
-    expect(c.interest).toBe(4061)                   // the amount is immune either way
+    // 1 350 000 × 3.61/100 / 12 = 4 061,25 — and the monthly branch reads no
+    // day count at all, so date noise cannot scale it (was 4 061,00).
+    expect(c.interest).toBe(4061.25)
   })
 
   it('a bank whose charges track the day count keeps the days/365 model', () => {
@@ -475,8 +846,18 @@ describe('360-day bankår (Danske faktisk/360)', () => {
   // integer-day property discriminates: charge ÷ (saldo × ränta/360) is a whole
   // number of days on a /360 bank and never on a /365 one. These fixtures are
   // the REAL household ledger, value-date noise included.
+  //
+  // PLAN 126: the forecast no longer runs its own single-part day-count
+  // detector. The convention comes from effectiveBankProfile — a declared lock,
+  // else a CONFIDENT detection (≥ 2 bunden windows), else the catalogue, else
+  // 365. These fixtures sit inside ONE rate period, so their detection is
+  // deliberately not confident and only the declared lock reaches /360. Getting
+  // the bank's own number therefore now requires declaring the bankår, which is
+  // the plan's accepted exposure until plan 128 fits and persists the profile.
   const B = 1_200_000
   const bunden = () => period({ rate: 3.93, rate_type: 'bunden', end_date: '2027-12-31' })
+  const danskePart = () => bankPart()
+  const danske360 = () => declaredOpts({ year_basis: 360, year_basis_source: 'declared' })
   // A flat (interest-only) part: the bank's actual postings, month-end billed
   // and weekend/holiday-rolled. Comments show the charged days (× 131 kr).
   const danske = [
@@ -495,22 +876,36 @@ describe('360-day bankår (Danske faktisk/360)', () => {
     interestRow('2026-06-01', 4061, { id: 'g12', balance_after: B }),  // 31 d (maj, rolled Sun→Mon; 32 d elapsed)
   ]
 
-  it('golden household case: bunden 3,93 % on 360 basis lands the bank amount to the öre', () => {
-    const c = expectedCharge(part(), [bunden()], danske)!
+  it('golden household case: bunden 3,93 % on a DECLARED 360 basis lands the bank amount to the öre', () => {
+    const c = expectedCharge(danskePart(), [bunden()], danske, danske360())!
     expect(c.charge_basis).toBe('days')
     expect(c.year_basis).toBe(360)
     expect(c.next_date).toBe('2026-06-30')          // end-of-month biller, anchored one true month past 1 jun
     expect(c.days).toBe(29)
     expect(c.rate).toBe(3.93)
-    expect(c.rate_source).toBe('listed')
-    // 1 200 000 × 3.93 % / 360 = 131,00 kr/day × 29 = 3 799 — NOT /365's 3 746.96.
+    // 1 200 000 × 3.93 % / 360 = 131,00 kr/day × 29 = 3 799,00 — the bank's own row.
     expect(c.interest).toBe(3799)
+    expect(c.confidence).toBe('exact')              // the convention is declared
+  })
+
+  it('PLAN 126 exposure: the SAME ledger undeclared prices on 365 and runs 1,4 % cold', () => {
+    // The single-part trailing detector that used to read /360 off this ledger
+    // is gone; one rate period is one window, which is below the confidence
+    // gate. Until the bankår is declared (or plan 128 fits it), the forecast is
+    // honest about running the Swedish default rather than quietly guessing.
+    const c = expectedCharge(part(), [bunden()], danske)!
+    expect(c.year_basis).toBe(365)
+    expect(c.days).toBe(29)
+    // 1 200 000 × 3.93 % / 365 = 129,205479… kr/day × 29 = 3 746,9589… → 3 746,96
+    // (was 3 799,00 — the difference is exactly 360/365, i.e. −1,37 %).
+    expect(c.interest).toBe(3746.96)
+    expect(c.confidence).toBe('assumed')
   })
 
   it('juni is covered by the 1 juni posting, so the pending series leads with juli = 4 061', () => {
     // THE prod regression: the rate-level fit read this exact ledger as /365
     // and showed 4 005,37 kr for juli. The bank's own forecast is 4 061.
-    const s = pendingChargeSeries(part(), [bunden()], danske)
+    const s = pendingChargeSeries(danskePart(), [bunden()], danske, 12, danske360())
     expect(s[0].next_date).toBe('2026-07-31')
     expect(s[0].days).toBe(31)
     expect(s[0].interest).toBe(4061)                // 31 d × 131 kr
@@ -547,25 +942,25 @@ describe('360-day bankår (Danske faktisk/360)', () => {
       paymentRow('2026-04-30', 11292, 1_032_000),
       paymentRow('2026-06-01', 11492, 1_024_000),
     ]
-    const c = expectedCharge(part(), [bunden()], amortising)!
+    const c = expectedCharge(danskePart(), [bunden()], amortising, danske360())!
     expect(c.next_date).toBe('2026-06-30')
     expect(c.balance).toBe(1_024_000)
     expect(c.amortization).toBe(8000)
-    // 1 024 000 × 3.93 % × 29/360 = 3 241.81
+    // 1 024 000 × 3.93 % × 29/360 = 40 243,20 / 360 = 111,786667 kr/day × 29 = 3 241,81
     expect(c.interest).toBe(3241.81)
     // Juli, after juni's amortering: 1 016 000 × 3.93 % × 31/360 = 3 438.31 —
     // exactly the bank's own kommande-betalning forecast (betalning 11 438.31).
-    const s = pendingChargeSeries(part(), [bunden()], amortising)
+    const s = pendingChargeSeries(danskePart(), [bunden()], amortising, 12, danske360())
     expect(s[0].next_date).toBe('2026-07-31')
     expect(s[0].interest).toBe(3438.31)
     expect(s[0].betalning).toBe(11438.31)
   })
 
   it('a 365-basis bunden bank keeps the Swedish convention', () => {
-    // CLEAN charges are exactly listed/365 (100 kr × days at 3.65 %) — whole
-    // days under /365, fractional under /360 — so the basis must stay 365.
+    // CLEAN charges are exactly listed/365 (100 kr × days at 3.65 %), and 365 is
+    // also the fallback — nothing here can move the basis off it.
     const c = expectedCharge(part(), [period({ rate_type: 'bunden', end_date: '2027-12-31' })], CLEAN)!
-    expect(c.rate_source).toBe('listed')
+    expect(c.year_basis).toBe(365)
     expect(c.interest).toBe(3000)                   // 1 000 000 × 3.65 % × 30/365
   })
 
@@ -604,7 +999,7 @@ describe('bank profile: declared year-basis lock (plan 104, phase 1)', () => {
   // A part wired to a bank via mortgage (part → mortgage → bank). CLEAN is a
   // clean /365-shaped ledger at 3,65 %, so ledger detection reads it as 365 —
   // a declared 360 must therefore override, proving the lock (not the ledger)
-  // decides. bunden so lockedBunden is true (the only path that pins a basis).
+  // decides.
   const bunden = () => period({ rate_type: 'bunden', end_date: '2027-12-31' })
   const linkedPart = () => part({ mortgage_id: 'm1' })
   const mortgages = (): Mortgage[] => [{ id: 'm1', created_at: '', bank_id: 'b1', label: 'Bolån', start_date: null, archived: false }]
@@ -623,9 +1018,10 @@ describe('bank profile: declared year-basis lock (plan 104, phase 1)', () => {
     expect(profileYearBasis(linkedPart(), [], [])).toBeNull()
   })
 
-  it('a declared 360 overrides ledger detection on the locked-bunden path', () => {
+  it('a declared 360 overrides ledger detection', () => {
     // CLEAN detects as 365; the declared lock forces 360.
-    // 1 000 000 × 3,65 % × 30/360 = 3 041,67 (vs /365's 3 000).
+    // 1 000 000 × 3,65 % × 30/360 = 36 500 / 360 = 101,388889 × 30 = 3 041,666… → 3 041,67
+    // (vs /365's 3 000).
     const c = expectedCharge(linkedPart(), [bunden()], CLEAN, opts({ year_basis: 360, year_basis_source: 'declared' }))!
     expect(c.year_basis).toBe(360)
     expect(c.interest).toBe(3041.67)
@@ -653,10 +1049,16 @@ describe('bank profile: declared year-basis lock (plan 104, phase 1)', () => {
     expect(golden.year_basis).toBe(365)
   })
 
-  it('the derived/rörlig path ignores a declared 360 and stays 365', () => {
-    // rörlig → lockedBunden is false → the basis is never pinned.
+  it('PLAN 126: a declared 360 now applies to a RÖRLIG part too', () => {
+    // The old rule pinned the basis only on the locked-bunden path, because the
+    // derived rate absorbed the day-count convention on every other path. With
+    // the derived rate gone, the day-count year is simply the bank's — a
+    // property of the lender, not of this part's binding.
+    // 1 000 000 × 3,65 % × 30/360 = 3 041,67 (was 3 000 on the forced 365).
     const c = expectedCharge(linkedPart(), [period()], CLEAN, opts({ year_basis: 360, year_basis_source: 'declared' }))!
-    expect(c.year_basis).toBe(365)
+    expect(c.year_basis).toBe(360)
+    expect(c.interest).toBe(3041.67)
+    expect(c.rate_type).toBe('rörlig')
   })
 
   it('makeBank clamps a malformed year_basis to null (→ detection)', () => {
@@ -711,14 +1113,18 @@ describe('bank profile: window-scoped bank-pooled learner + billing pin (plan 10
     expect(r.confident).toBe(false)
   })
 
-  it('the trailing-6 detector reverts to 365 across the rolling reset (documents the bug); the learner holds 360', () => {
-    // No entity context → expectedCharge falls back to the classic trailing-6
-    // detector, whose window straddles 3,60 %/4,20 %/3,93 % charges and reverts.
-    const buggy = expectedCharge(linkedPart(), periods(), rolling)!
-    expect(buggy.year_basis).toBe(365)
-    // With bank context the window-scoped bank-pooled learner stays 360.
-    const fixed = expectedCharge(linkedPart(), periods(), rolling, learnerOpts())!
-    expect(fixed.year_basis).toBe(360)
+  it('PLAN 126: the window-scoped learner now drives the forecast with OR without bank context', () => {
+    // Before, a no-context call fell back to the classic trailing-6 detector,
+    // whose window straddled the 3,60 %/4,20 %/3,93 % charges and reverted to
+    // 365 (the documented bug). That parallel detector is gone: the forecast
+    // resolves effectiveBankProfile, which pools the window-scoped learner over
+    // the part itself when no sibling parts are supplied. Three windows clear
+    // the confidence gate either way, so both readings are a DETECTED 360.
+    const noContext = expectedCharge(linkedPart(), periods(), rolling)!
+    expect(noContext.year_basis).toBe(360)          // was 365
+    expect(noContext.confidence).toBe('exact')      // detected off the household's own ledger
+    const withContext = expectedCharge(linkedPart(), periods(), rolling, learnerOpts())!
+    expect(withContext.year_basis).toBe(360)
   })
 
   it('a declared 360 is correct across the reset regardless of the learner', () => {
@@ -901,10 +1307,11 @@ describe('pending charge known-terms boundary', () => {
   })
 
   it('suppresses the first calculated charge when it is already after the end date', () => {
+    // PLAN 126: expectedCharge itself now returns null rather than a diagnostic
+    // row priced on a rate that has expired. pendingCharge/Series were already
+    // suppressing it; the base call has simply stopped inventing it.
     const periods = [period({ end_date: '2026-07-26' })]
-    const diagnostic = expectedCharge(part(), periods, CLEAN)
-    expect(diagnostic?.next_date).toBe('2026-07-27')
-    expect(diagnostic?.interest).toBe(3000)
+    expect(expectedCharge(part(), periods, CLEAN)).toBeNull()
     expect(pendingCharge(part(), periods, CLEAN)).toBeNull()
     expect(pendingChargeSeries(part(), periods, CLEAN)).toEqual([])
   })
@@ -915,18 +1322,31 @@ describe('pending charge known-terms boundary', () => {
       interestRow('2026-03-27', 9000),
       interestRow('2026-06-27', 9200),
     ]
-    expect(expectedCharge(part(), [period({ end_date: '2026-08-31' })], quarterly)?.next_date).toBe('2026-09-27')
+    // The 27 Sep charge sits past the 31 Aug end date — no covering period, so
+    // no charge at all (was: a 2026-09-27 diagnostic row).
+    expect(expectedCharge(part(), [period({ end_date: '2026-08-31' })], quarterly)).toBeNull()
     expect(pendingCharge(part(), [period({ end_date: '2026-08-31' })], quarterly)).toBeNull()
   })
 
-  it('keeps a charge covered by a successor period', () => {
+  it('keeps a charge covered by a successor period — SPLIT at its Gäller från', () => {
+    // PLAN 126 STAGE 3, re-derived golden. The successor starts 1 Jul, i.e.
+    // INSIDE the 27 Jun → 27 Jul accrual interval, so this fixture straddles a
+    // boundary and its old single-rate figure (3 369.86 = the whole interval at
+    // 4.10 %) was charging three June days at a July rate.
+    //   predecessor 3.65 %: 28, 29, 30 jun                    →  3 d
+    //   successor   4.10 %:  1 jul … 27 jul                   → 27 d   (Σ = 30 = c.days)
+    //   1 000 000 × 3.65/100 ×  3/365 =  36 500 ×  3/365 =   300.000000
+    //   1 000 000 × 4.10/100 × 27/365 =  41 000 × 27/365 = 3 032.876712
+    //                                                    Σ = 3 332.876712 → 3 332.88
     const periods = [
       period({ end_date: '2026-06-30' }),
       period({ id: 'r2', start_date: '2026-07-01', end_date: '2027-06-30', rate: 4.1 }),
     ]
     const charge = pendingCharge(part(), periods, CLEAN)
     expect(charge?.next_date).toBe('2026-07-27')
-    expect(charge?.interest).toBe(3369.86)
+    expect(charge?.interest).toBe(3332.88)
+    // Sats is the single day-weighted figure: (3.65×3 + 4.10×27)/30 = 121.65/30 = 4.055
+    expect(charge?.rate).toBeCloseTo(4.055, 10)
   })
 
   it('suppresses a charge in the gap before a later successor starts', () => {
@@ -938,10 +1358,14 @@ describe('pending charge known-terms boundary', () => {
     expect(pendingChargeSeries(part(), periods, CLEAN)).toEqual([])
   })
 
-  it('preserves the existing derived-rate forecast when no usable terms are configured', () => {
-    const charge = pendingCharge(part(), [], CLEAN)
-    expect(charge?.next_date).toBe('2026-07-27')
-    expect(charge?.interest).toBe(3000)
+  it('PLAN 126: no usable terms means no forecast, not a derived-rate one', () => {
+    // This is the headline behavioural change. A part with a rich ledger but no
+    // rate period used to be forecast from the derived rate (2026-07-27,
+    // 3 000 kr); it now shows nothing and appears in the
+    // "Lägg till räntevillkor" prompt instead.
+    expect(pendingCharge(part(), [], CLEAN)).toBeNull()
+    expect(pendingChargeSeries(part(), [], CLEAN)).toEqual([])
+    expect(partsMissingRateTerms([part()], []).map(m => m.label)).toEqual(['Del 1'])
   })
 })
 
@@ -979,7 +1403,9 @@ describe('pendingChargeSeries (coming-months preview)', () => {
     const bunden = period({ rate_type: 'bunden', end_date: '2026-08-31' })
     const s = pendingChargeSeries(part(), [bunden], CLEAN)
     expect(s.map(c => c.next_date)).toEqual(['2026-07-27', '2026-08-27'])
-    expect(s.every(c => c.confidence === 'exact')).toBe(true)
+    // PLAN 126: the binding no longer sets confidence — the undeclared bank's
+    // day-count convention does, and it is the 365 default here (was 'exact').
+    expect(s.every(c => c.confidence === 'assumed')).toBe(true)
   })
 
   it('a bunden rate followed by an open rörlig period keeps the full horizon', () => {
@@ -1171,6 +1597,10 @@ describe('stalePredictedRows (logged forecasts vs the current model)', () => {
   // 30/360 fix), those rows go stale — nothing rewrites them automatically
   // (real imports supersede them), so the UI offers a one-click refresh.
   const B = 1_350_000
+  // PLAN 126: the forecast needs a covering rate period to price anything at
+  // all, so the fixture now carries the rate the ledger was billed at
+  // (4 061 × 12 / 1 350 000 = 3,6098 % → 3,61 %).
+  const listed = [{ id: 'r1', created_at: '', loan_part_id: 'p1', start_date: '2026-01-01', end_date: null, rate: 3.61, rate_type: 'rörlig' as const }]
   const flat: Payment[] = [
     { id: 'i1', created_at: '', loan_part_id: 'p1', date: '2026-03-01', kind: 'interest', description: 'Ränta', amount: 4061, balance_after: B, paid_by: 'joint', source: 'import:bank.csv' },
     { id: 'i2', created_at: '', loan_part_id: 'p1', date: '2026-04-01', kind: 'interest', description: 'Ränta', amount: 4061, balance_after: B, paid_by: 'joint', source: 'import:bank.csv' },
@@ -1191,17 +1621,19 @@ describe('stalePredictedRows (logged forecasts vs the current model)', () => {
       predRow({ id: 'sr', kind: 'interest', amount: 7565 }),
       predRow({ id: 'sb', kind: 'payment', amount: 7565 }),
     ]
-    const out = stalePredictedRows([part()], [], [...flat, ...stale])
+    const out = stalePredictedRows([part()], listed, [...flat, ...stale])
+    // 1 350 000 × 3.61/100 / 12 = 48 735 / 12 = 4 061,25 (was 4 061,00, echoed
+    // straight off the last charge).
     expect(out.map(s => [s.payment.id, s.amount, s.balance_after])).toEqual([
-      ['sr', 4061, B],   // interest refreshed to the flat-monthly prediction
-      ['sb', 4061, B],   // betalning likewise; interest-only part → saldo unchanged
+      ['sr', 4061.25, B],   // interest refreshed to the flat-monthly prediction
+      ['sb', 4061.25, B],   // betalning likewise; interest-only part → saldo unchanged
     ])
   })
 
   it('leaves rows inside the reconcile tolerance alone, and never touches real rows', () => {
     const fine = predRow({ id: 'ok', amount: 4062 })                       // drift 1 kr — fine
     const realRow = { ...predRow({ id: 'real', amount: 9999 }), source: 'import:bank.csv' }
-    expect(stalePredictedRows([part()], [], [...flat, fine, realRow])).toEqual([])
+    expect(stalePredictedRows([part()], listed, [...flat, fine, realRow])).toEqual([])
   })
 
   it('compares rows in LATER months against the rolled forecast', () => {
@@ -1210,8 +1642,8 @@ describe('stalePredictedRows (logged forecasts vs the current model)', () => {
       predRow({ id: 'jb', kind: 'payment', amount: 4061 }),
     ]
     const augustStale = predRow({ id: 'ar', date: '2026-08-01', amount: 8000 })
-    const out = stalePredictedRows([part()], [], [...flat, ...julyOk, augustStale])
-    expect(out.map(s => [s.payment.id, s.amount])).toEqual([['ar', 4061]])  // flat part: same charge rolled
+    const out = stalePredictedRows([part()], listed, [...flat, ...julyOk, augustStale])
+    expect(out.map(s => [s.payment.id, s.amount])).toEqual([['ar', 4061.25]])  // flat part: same charge rolled
   })
 })
 

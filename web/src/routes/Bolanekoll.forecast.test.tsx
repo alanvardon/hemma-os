@@ -235,10 +235,13 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Godkänn alla rader' }))
 
+    // Plan 126: the ränta is the LISTED 3,65 % on the current saldo —
+    // 991 000 × 3.65/100 × 30/365 = 2 973,00 (was 2 981,15, priced on the
+    // trailing derived 3,66 % this ledger's roundings implied).
     expect(Store.addPayments).toHaveBeenCalledTimes(1)
     expect(Store.addPayments).toHaveBeenCalledWith([
-      expect.objectContaining({ kind: 'interest', date: '2026-07-27', amount: 2981.15, source: 'predicted', balance_after: 988_000 }),
-      expect.objectContaining({ kind: 'payment', date: '2026-07-27', amount: 5981.15, source: 'predicted', balance_after: 988_000 }),
+      expect.objectContaining({ kind: 'interest', date: '2026-07-27', amount: 2973, source: 'predicted', balance_after: 988_000 }),
+      expect.objectContaining({ kind: 'payment', date: '2026-07-27', amount: 5973, source: 'predicted', balance_after: 988_000 }),
     ])
   })
 
@@ -259,7 +262,8 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
       flatRow('2026-07-01', 'interest', 7565, { id: 'stale-i', source: 'predicted', description: 'Förväntad avi' }),
       flatRow('2026-07-01', 'payment', 7565, { id: 'stale-b', source: 'predicted', description: 'Förväntad avi' }),
     ]
-    seedStore(ledger)
+    // The listed rate this flat ledger was billed at: 4 061 × 12 / 1 350 000 = 3,61 %.
+    seedStore(ledger, PART, [{ ...PERIOD, rate: 3.61 }])
     vi.mocked(Store.updatePayment).mockImplementation(async (id, patch) =>
       ({ ...ledger.find(p => p.id === id)!, ...patch } as Payment))
     const user = userEvent.setup()
@@ -268,9 +272,11 @@ describe('Bolånekoll forecast — confirm-to-log (plan 23 phase C)', () => {
     expect(await screen.findByText(/godkända prognosrader beräknades med en äldre modell/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Uppdatera godkända rader' }))
 
+    // 1 350 000 × 3.61/100 / 12 = 4 061,25 (was 4 061,00 — the old branch echoed
+    // the last charge instead of pricing the entered rate).
     expect(Store.updatePayment).toHaveBeenCalledTimes(2)
-    expect(Store.updatePayment).toHaveBeenCalledWith('stale-i', { amount: 4061, balance_after: B })
-    expect(Store.updatePayment).toHaveBeenCalledWith('stale-b', { amount: 4061, balance_after: B })
+    expect(Store.updatePayment).toHaveBeenCalledWith('stale-i', { amount: 4061.25, balance_after: B })
+    expect(Store.updatePayment).toHaveBeenCalledWith('stale-b', { amount: 4061.25, balance_after: B })
     expect(await screen.findByText(/godkända prognosrader uppdaterade till aktuell prognos/)).toBeInTheDocument()
   })
 

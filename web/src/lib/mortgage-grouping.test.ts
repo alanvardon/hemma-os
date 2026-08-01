@@ -77,11 +77,19 @@ describe('groupLoanParts', () => {
     expect(order).toEqual(['part-6', 'part-1+part-2+part-3', 'catchall'])
   })
 
-  it('flags the expired group as expired and the future groups as not', () => {
+  // Plan 126 — strict dated resolution. part-6's only period ended 2025-06-01,
+  // so nothing covers ASOF (2026-01-01): bindingStatus reports NO current
+  // binding rather than stretching the lapsed period far enough to call it
+  // `expired`. A lapsed timeline is therefore surfaced as missing current
+  // terms, not as an expiry countdown computed from terms that no longer apply.
+  // `expired` is unreachable on any dated call by construction — coverage means
+  // asOf <= end_date, so days_left is never negative.
+  it('reports no current binding for a lapsed-only timeline and keeps the countdown on a covered group', () => {
     const groups = groupLoanParts(parts, periods, [], ASOF)
-    const expiredGroup = groups.find(g => g.parts.some(p => p.id === 'part-6'))!
+    const lapsedGroup = groups.find(g => g.parts.some(p => p.id === 'part-6'))!
     const futureGroup = groups.find(g => g.parts.some(p => p.id === 'part-1'))!
-    expect(expiredGroup.expired).toBe(true)
+    expect(lapsedGroup.expired).toBe(false)
+    expect(lapsedGroup.days_left).toBeNull()
     expect(futureGroup.expired).toBe(false)
     expect(futureGroup.days_left).toBeGreaterThan(0)
   })

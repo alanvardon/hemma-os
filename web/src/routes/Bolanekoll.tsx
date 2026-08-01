@@ -406,8 +406,12 @@ export default function Bolanekoll() {
   // here; writes happen only via the explicit log button / import supersede.
   // Plan 104 — thread the bank entities (and the full part list) into the
   // forecast so a declared lock overrides detection AND the year-basis learner
-  // can pool evidence across all of a bank's parts (phase 2).
-  const forecastOpts = useMemo(() => ({ banks, mortgages, parts: activeViewParts }), [banks, mortgages, activeViewParts])
+  // can pool evidence across all of a bank's parts (phase 2). Plan 126 adds the
+  // catalogue rows so the forecast resolves the SAME effectiveBankProfile the
+  // Bankvillkor panel displays — without them a curated catalogue convention
+  // would be shown in the UI but silently ignored when pricing the charge.
+  const forecastOpts = useMemo(() => ({ banks, mortgages, parts: activeViewParts, catalogBanks }),
+    [banks, mortgages, activeViewParts, catalogBanks])
   const prognos = useMemo(() => expectedCharges(activeViewParts, periods, activeViewPayments, forecastOpts), [activeViewParts, periods, activeViewPayments, forecastOpts])
   // Plan 104 (phase 2) — the parts on the active bank, the learner's suggestion
   // for them, and any drift between a declared lock and the fresh evidence.
@@ -1606,7 +1610,6 @@ export default function Bolanekoll() {
                     {shownPending.map(e => {
                       const r = e.charge
                       const isInterest = e.kind === 'interest'
-                      const miscalibrated = isInterest && r.calibration_gap != null && Math.abs(r.calibration_gap) > 0.1
                       // Amorteringsgrad: annualized amortering as % of the loan's
                       // ORIGINAL size — amorteringskravets bas. Dividing by the
                       // current balance would drift the 1/2/3 % tiers upward as
@@ -1625,8 +1628,13 @@ export default function Bolanekoll() {
                             <td className="num col-amount">~{fmtMoney(e.amount)}</td>
                             <td className="col-status">
                               {isInterest ? (
-                                <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : r.confidence === 'unknown' ? ' is-unknown' : '')}>
-                                  {r.confidence === 'exact' ? '≈ exakt' : r.confidence === 'assumed' ? '≈ est.' : '≈ okalibrerad'}
+                                // Plan 126 — the rate is always the entered one; the badge now
+                                // reports how well the bank's day-count conventions are known.
+                                <span className={'conf-badge' + (r.confidence === 'exact' ? ' is-exact' : '')}
+                                  title={r.confidence === 'exact'
+                                    ? 'Bankens villkor (dagbasis) är kända — beloppet följer avtalet exakt'
+                                    : 'Bankens dagbasis är antagen (svensk standard 365) — beloppet kan avvika något'}>
+                                  {r.confidence === 'exact' ? '≈ exakt' : '≈ est.'}
                                 </span>
                               ) : r.amortization_source === 'declared' && (
                                 <span className="conf-badge is-exact" title="Planerad amortering — deklarerad, inte framräknad ur historiken">deklarerad</span>
@@ -1638,13 +1646,11 @@ export default function Bolanekoll() {
                               </button>
                             </td>
                           </tr>
-                          {miscalibrated && (
-                            <tr className="prognos-detail">
-                              <td colSpan={7}>
-                                listad {fmtPct(r.rate! + r.calibration_gap!)} vs debiterad {fmtPct(r.rate!)} — day-count eller ologgad ränteändring
-                              </td>
-                            </tr>
-                          )}
+                          {/* Plan 126 removed the "listad X vs debiterad Y" row: with `rate`
+                              BEING the listed rate the gap is identically zero, and the row
+                              reconstructed the listed rate as rate + calibration_gap, which is
+                              wrong the moment the entered rate moves. The honest calibration
+                              check is predicted vs actual at import (reconcileCharge). */}
                         </Fragment>
                       )
                     })}
