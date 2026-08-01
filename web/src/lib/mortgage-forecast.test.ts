@@ -1484,15 +1484,27 @@ describe('pendingChargeSeries (coming-months preview)', () => {
     expect(s.every(c => c.confidence === 'assumed')).toBe(true)
   })
 
-  it('a bunden rate followed by an open rörlig period keeps the full horizon', () => {
+  it('a bunden rate followed by an open rörlig period keeps the full horizon, AT THE SUCCESSOR RATE', () => {
     // Knowledge does NOT end at the binding when a later period covers the
-    // dates after it — the preview continues (rate held flat, ≈ est.).
+    // dates after it — the preview continues, and from the villkorsändringsdag
+    // it continues at the SUCCESSOR's rate, not the expiring one.
     const periods = [
       period({ rate_type: 'bunden', end_date: '2026-08-31' }),
       period({ id: 'r2', start_date: '2026-09-01', rate: 4.1, rate_type: 'rörlig' }),
     ]
     const s = pendingChargeSeries(part(), periods, CLEAN)
     expect(s).toHaveLength(12)
+    expect(s[0].rate).toBe(3.65)                    // 27 jun → 27 jul: wholly inside the binding
+    expect(s[1].rate).toBe(3.65)                    // 27 jul → 27 aug: likewise
+    // 27 aug → 27 sep straddles 1 sep: 4 days at 3,65 % + 27 at 4,10 %.
+    // (3,65 × 4 + 4,10 × 27) / 31 = 125,3 / 31
+    expect(s[2].rate).toBeCloseTo(4.0419354838, 9)
+    expect(s[2].rate_type).toBe('rörlig')
+    // 1 000 000 × 3,65/100 × 4/365 + 1 000 000 × 4,10/100 × 27/365
+    //   = 400 + 3 032,876712… = 3 432,88
+    expect(s[2].interest).toBe(3432.88)
+    expect(s[3].rate).toBe(4.1)                     // 27 sep → 27 oct: wholly the successor
+    expect(s[3].interest).toBe(3369.86)             // 1 000 000 × 4,10/100 × 30/365
   })
 
   it('stops before a gap even when a later successor exists', () => {
@@ -1512,6 +1524,121 @@ describe('pendingChargeSeries (coming-months preview)', () => {
     const s = pendingChargeSeries(part(), [period()], quarterly)
     expect(s).toHaveLength(4)
     expect(s.map(c => c.next_date)).toEqual(['2026-09-27', '2026-12-27', '2027-03-27', '2027-06-27'])
+  })
+})
+
+// Owner report 2026-08-01, after plan 126 merged: a three-month rate period
+// entered at a NEW rate produced the right number of predicted transactions and
+// priced every one of them at the OLD rate.
+//
+// Plan 126 fixed rate selection for the FIRST charge only and deliberately left
+// the rolls holding it flat (§6). `forward_rate` carries the successor's rate
+// exactly one interval, and only when the changeover fell inside that first
+// interval — so a period starting AFTER the next avisering never reached any
+// row. The series still ran, because the new period covers those dates and
+// nothing stopped it; it simply ran at the superseded rate.
+//
+// Every roll now re-resolves the covering period, so the entered rate reaches
+// every unapproved month. Approved rows are persisted and frozen (§5) and never
+// come near this code.
+describe('a rate period starting AFTER the next avisering (owner report 2026-08-01)', () => {
+  // 3,93 % through 31 aug 2026, then a three-month period at 3,54 %.
+  const OLD_THEN_NEW: RatePeriod[] = [
+    period({ id: 'old', start_date: '2025-01-01', end_date: '2026-08-31', rate: 3.93 }),
+    period({ id: 'new', start_date: '2026-09-01', end_date: '2026-11-30', rate: 3.54 }),
+  ]
+
+  it('prices each preview month at the period covering it, and stops with that period', () => {
+    const s = pendingChargeSeries(part(), OLD_THEN_NEW, CLEAN)
+    // The three-month period bounds the horizon: nothing covers 27 dec 2026.
+    expect(s.map(c => c.next_date)).toEqual(
+      ['2026-07-27', '2026-08-27', '2026-09-27', '2026-10-27', '2026-11-27'])
+    expect(s.map(c => c.rate)).toEqual([
+      3.93,                                         // 27 jun → 27 jul, old period
+      3.93,                                         // 27 jul → 27 aug, old period
+      (3.93 * 4 + 3.54 * 27) / 31,                  // 27 aug → 27 sep straddles 1 sep
+      3.54,                                         // 27 sep → 27 oct, new period
+      3.54,                                         // 27 oct → 27 nov, new period
+    ])
+    // 1 000 000 kr interest-only on a 365-day basis:
+    expect(s.map(c => c.interest)).toEqual([
+      3230.14,   // 39 300 × 30/365 = 3 230,136986…
+      3337.81,   // 39 300 × 31/365 = 3 337,808219…
+      3049.32,   // 39 300 × 4/365 + 35 400 × 27/365 = 1 113 000/365 = 3 049,315068…
+      2909.59,   // 35 400 × 30/365 = 2 909,589041…
+      3006.58,   // 35 400 × 31/365 = 3 006,575342…
+    ])
+  })
+
+  it('the LOGGABLE row picks the new rate up too, once the month before it is logged', () => {
+    // The reported shape: the July avi is already a godkänd prognos, so the
+    // pending charge rolls past it into the new period. The rolled row is the
+    // one the owner is offered to approve — it must not carry the old rate.
+    const periods: RatePeriod[] = [
+      period({ id: 'old', start_date: '2025-01-01', end_date: '2026-07-31', rate: 3.93 }),
+      period({ id: 'new', start_date: '2026-08-01', end_date: '2026-10-31', rate: 3.54 }),
+    ]
+    const logged: Payment[] = [...CLEAN,
+      interestRow('2026-07-27', 3230.14, { source: 'predicted' })]
+    const c = pendingCharge(part(), periods, logged)!
+    expect(c.next_date).toBe('2026-08-27')
+    // 27 jul → 27 aug straddles 1 aug: 4 days at 3,93 % + 27 at 3,54 %.
+    expect(c.rate).toBeCloseTo((3.93 * 4 + 3.54 * 27) / 31, 9)
+    expect(c.interest).toBe(3049.32)
+    expect(c.forward_rate).toBe(3.54)               // a full month ahead is all new period
+  })
+
+  it('a flat-monthly bank picks it up as well — the branch that was rate-blind before', () => {
+    // Danske-style 30/360: the charge carries no day count, so before plan 126
+    // it echoed the last charge and NO entered rate could move it. The roll now
+    // reprices balance × rate/100 / 12 like the first charge does.
+    const B = 1_350_000
+    const flat: Payment[] = [
+      interestRow('2026-03-01', 4061, { id: 'i1', balance_after: B }),
+      interestRow('2026-04-01', 4061, { id: 'i2', balance_after: B }),   // 31-day interval
+      interestRow('2026-05-01', 4061, { id: 'i3', balance_after: B }),   // 30-day interval
+      interestRow('2026-06-01', 4061, { id: 'i4', balance_after: B }),   // 31-day interval
+    ]
+    // The successor starts the day AFTER the 1 aug avi, so no interval splits:
+    // each month is wholly governed by one rate.
+    const periods: RatePeriod[] = [
+      period({ id: 'old', start_date: '2025-01-01', end_date: '2026-08-01', rate: 3.61 }),
+      period({ id: 'new', start_date: '2026-08-02', end_date: null, rate: 3.10 }),
+    ]
+    const s = pendingChargeSeries(part({ start_balance: B }), periods, flat)
+    expect(s[0].charge_basis).toBe('monthly')
+    expect(s[0].next_date).toBe('2026-07-01')
+    expect(s[0].interest).toBe(4061.25)             // 1 350 000 × 3.61/100 / 12
+    expect(s[1].next_date).toBe('2026-08-01')
+    expect(s[1].rate).toBe(3.61)
+    expect(s[1].interest).toBe(4061.25)
+    expect(s[2].next_date).toBe('2026-09-01')
+    expect(s[2].rate).toBe(3.1)
+    expect(s[2].interest).toBe(3487.5)              // 1 350 000 × 3.10/100 / 12 = 41 850/12
+    expect(s[3].interest).toBe(3487.5)              // and it holds, month after month
+  })
+
+  it('two changeovers inside one rolled interval stop the preview rather than part-price it', () => {
+    // The same limit expectedCharge applies to the first interval (plan 126 §4):
+    // a timeline finer than the billing cadence is not priceable, and a silently
+    // mispriced ränta is worse than a missing one.
+    const periods: RatePeriod[] = [
+      period({ id: 'a', start_date: '2025-01-01', end_date: '2026-08-10', rate: 3.93 }),
+      period({ id: 'b', start_date: '2026-08-11', end_date: '2026-08-20', rate: 4.1 }),
+      period({ id: 'c', start_date: '2026-08-21', end_date: null, rate: 3.54 }),
+    ]
+    const s = pendingChargeSeries(part(), periods, CLEAN)
+    expect(s.map(c => c.next_date)).toEqual(['2026-07-27'])
+    expect(s[0].rate).toBe(3.93)
+  })
+
+  it('a gap opened by the new period stops the preview at the last covered month', () => {
+    const periods: RatePeriod[] = [
+      period({ id: 'old', start_date: '2025-01-01', end_date: '2026-08-31', rate: 3.93 }),
+      period({ id: 'new', start_date: '2026-10-01', end_date: null, rate: 3.54 }),
+    ]
+    const s = pendingChargeSeries(part(), periods, CLEAN)
+    expect(s.map(c => c.next_date)).toEqual(['2026-07-27', '2026-08-27'])
   })
 })
 

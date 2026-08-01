@@ -1916,8 +1916,9 @@ function chargeBasis(intRows: Payment[]): ExpectedCharge['charge_basis'] {
 // The next charge NOT yet in the ledger: expectedCharge rolled forward past
 // months whose interest is already covered (predicted or real), so logging a
 // month makes the block advance to the following one instead of going quiet.
-// Each roll holds the rate flat, steps the balance down by the predicted
-// amortering, and reprices the actual day count of the new interval.
+// Each roll re-resolves the rate against the period covering the new month,
+// steps the balance down by the predicted amortering, and reprices the actual
+// day count of the new interval.
 export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: Payment[], opts?: ForecastOpts): ExpectedCharge | null {
   const c = expectedCharge(part, periods, payments, opts)
   if (!c) return null
@@ -1933,42 +1934,70 @@ export function pendingCharge(part: LoanPart, periods: RatePeriod[], payments: P
       : (x.amortization <= 0 || hasChargeInMonth(payments, x.loan_part_id, x.next_date, 'amortization')))
   let out = c
   for (let i = 0; i < 24 && covered(out); i++) {
-    const next = rollChargeOnce(part, out)
-    if (strictRatePeriodCoverage(part, periods, next.next_date) === 'outside-known-terms') return null
+    const next = rollChargeOnce(part, periods, out)
+    if (!next) return null
     out = next
   }
   return out
 }
 
 // One roll step: advance next_date by the cadence, step the balance down by
-// the predicted amortering, and reprice — the actual day count of the new
-// interval on the days basis, the balance ratio on the flat-monthly basis.
+// the predicted amortering, and reprice the new interval.
 //
-// The rate that rolls forward is `forward_rate`, not `rate`. They differ only
-// after a split interval, where `rate` is a day-weighted blend describing that
-// one interval; a full month ahead is governed by the successor's rate alone
-// (owner decision 2026-08-01). Both expressions below carry a `fwd / out.rate`
-// factor that is exactly 1 whenever nothing split, so unsplit rolls stay
-// byte-for-byte identical — including their rounding.
-function rollChargeOnce(part: LoanPart, out: ExpectedCharge): ExpectedCharge {
+// THE RATE IS RE-RESOLVED EVERY ROLL, exactly as expectedCharge resolves it for
+// the first charge: the listed rate of the single period covering the rolled
+// next_date, split at a Gäller från that lands inside the interval. Plan 126 §6
+// held the rate flat across the horizon and carried `forward_rate` instead,
+// which is only ever the successor's rate when the changeover fell inside the
+// FIRST interval. A period entered to start after the next avisering therefore
+// never reached any forecast row: the series kept producing months (the new
+// period covers their dates, so nothing stopped it) and priced every one of
+// them at the superseded rate. Owner report 2026-08-01: a three-month period at
+// a new rate produced three predicted transactions, all at the old rate.
+//
+// Holding the rate flat was only ever right while the entered timeline was
+// flat, so this replaces that assumption rather than refining it — the rate a
+// roll uses is now contractual on every month, not just the first.
+//
+// Returns null on the same terms as expectedCharge: no single covering period,
+// two boundaries in one interval, or a missing predecessor for a split means
+// the contractual rate for that month is unknown, and an unknown rate ends the
+// forecast rather than being approximated. Callers stop there.
+//
+// Only unapproved rows reach this code. A godkänd prognos is a persisted
+// payment (source 'predicted') and is frozen forever — plan 126 §5, the
+// acceptance boundary — so repricing here can never rewrite one.
+function rollChargeOnce(part: LoanPart, periods: RatePeriod[], out: ExpectedCharge): ExpectedCharge | null {
   const next_date = addMonthsAtDay(out.next_date, out.period_months, out.charge_day)
   const days = daysBetween(out.next_date, next_date) ?? 0
   // Plan 105: a declared plan can change the amortering across a roll boundary
   // (a future start date, or a dated step-down). Re-resolve it at the new
-  // next_date — same pattern as the binding check below; when present it drives
-  // the amortering and the balance step-down, else the prior amount holds flat.
+  // next_date — same pattern as the rate above; when present it drives the
+  // amortering and the balance step-down, else the prior amount holds flat.
   const declaredMonthly = effectiveDeclaredAmortization(part, next_date)
   const amortization = declaredMonthly != null ? r2(declaredMonthly * out.period_months) : out.amortization
   const amortization_source = declaredMonthly != null ? 'declared' : out.amortization_source
   const balance = Math.max(0, r2(out.balance - amortization))
-  // 1 when nothing split (forward_rate === rate) or when the blend is degenerate.
-  const rateStep = out.forward_rate != null && out.rate ? out.forward_rate / out.rate : 1
-  const fwd = out.forward_rate ?? out.rate
-  const interest = out.charge_basis === 'monthly'
-    ? (out.balance > 0 ? r2(out.interest * balance / out.balance * rateStep) : r2(out.interest * rateStep))
-    : fwd != null && days > 0 && balance > 0 ? r2(balance * fwd / 100 * days / out.year_basis) : 0
+
+  const ratePeriod = effectiveRatePeriod(part, periods, next_date)
+  if (!ratePeriod) return null
+  const seg = intervalRateSegments(part, periods, out.next_date, next_date, days, ratePeriod)
+  if (!seg) return null
+
+  // The same two branches expectedCharge uses, on the same conventions —
+  // year_basis and charge_basis describe the bank, not the month, so they are
+  // inherited rather than re-detected.
+  const interest = balance > 0
+    ? out.charge_basis === 'monthly'
+      ? r2(balance * seg.rate / 100 / 12 * out.period_months)
+      : days > 0
+        ? r2(balance * seg.pred_rate / 100 * seg.pred_days / out.year_basis
+           + balance * seg.succ_rate / 100 * seg.succ_days / out.year_basis)
+        : 0
+    : 0
   return {
-    ...out, next_date, days, balance, interest, amortization, amortization_source, rate: fwd,
+    ...out, next_date, days, balance, interest, amortization, amortization_source,
+    rate: seg.rate, rate_type: ratePeriod.rate_type ?? null, forward_rate: seg.succ_rate,
     gross: r2(interest + amortization),
     betalning: out.betalning != null ? r2(interest + amortization) : null,
     // Plan 126 — confidence now describes the bank's conventions, which do not
@@ -1977,22 +2006,22 @@ function rollChargeOnce(part: LoanPart, out: ExpectedCharge): ExpectedCharge {
   }
 }
 
-// The pending charge plus the avier after it: months ahead projected with the
-// rate held flat and the balance stepping down by the amortering each period.
-// [0] is pendingCharge (loggable); the rest are a read-only preview. Stops
-// early when the loan is paid off — a 0 kr avi is noise, not information —
-// and at the last strictly covered rate-period date. A successor continues
-// the preview only on dates it covers; gaps and dates after the last known
-// period are never shown.
+// The pending charge plus the avier after it: months ahead projected at the
+// rate of the period covering each one, with the balance stepping down by the
+// amortering each period. [0] is pendingCharge (loggable); the rest are a
+// read-only preview. Stops early when the loan is paid off — a 0 kr avi is
+// noise, not information — and at the last strictly covered rate-period date.
+// A successor continues the preview only on dates it covers, AT ITS OWN RATE;
+// gaps and dates after the last known period are never shown.
 export function pendingChargeSeries(part: LoanPart, periods: RatePeriod[], payments: Payment[], months = 12, opts?: ForecastOpts): ExpectedCharge[] {
   const first = pendingCharge(part, periods, payments, opts)
   if (!first) return []
   const out = [first]
   const n = Math.max(1, Math.round(months / first.period_months))
   for (let i = 1; i < n; i++) {
-    const next = rollChargeOnce(part, out[out.length - 1])
+    const next = rollChargeOnce(part, periods, out[out.length - 1])
+    if (!next) break
     if (next.balance <= 0) break
-    if (strictRatePeriodCoverage(part, periods, next.next_date) === 'outside-known-terms') break
     out.push(next)
   }
   return out
@@ -2019,7 +2048,7 @@ export function stalePredictedRows(parts: LoanPart[], periods: RatePeriod[], pay
     if (!mine.length) continue
     const lastMk = mine.map(p => monthKey(p.date) as string).sort()[mine.length - 1]
     let c = expectedCharge(part, periods, payments, opts)
-    for (let i = 0; c && i < 24; i++, c = rollChargeOnce(part, c)) {
+    for (let i = 0; c && i < 24; i++, c = rollChargeOnce(part, periods, c)) {
       const mk = monthKey(c.next_date)
       if (!mk || mk > lastMk) break
       for (const p of mine) {
