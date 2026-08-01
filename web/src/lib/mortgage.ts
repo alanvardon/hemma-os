@@ -853,8 +853,17 @@ export function equityBridge(parts: LoanPart[], payments: Payment[], valuations:
 
 // ── Projection ─────────────────────────────────────────────────────────────
 
-export function monthlyAmortizationRate(parts: LoanPart[], payments: Payment[]): number {
-  const tl = balanceTimeline(parts, payments)
+// The observed monthly balance reduction, read off the balance timeline.
+//
+// Plan 126 §7 — the optional `asOf` makes it strictly historical: ledger rows
+// dated after `asOf` are dropped and the timeline is truncated to `asOf`'s
+// month, so a future-dated amortisation row can never raise the "current"
+// monthly figure. Bare calls keep the whole-ledger behaviour.
+export function monthlyAmortizationRate(parts: LoanPart[], payments: Payment[], asOf?: string): number {
+  const history = asOf ? (payments || []).filter(p => !(p?.date && p.date > asOf)) : payments
+  const all = balanceTimeline(parts, history)
+  const mk = asOf ? monthKey(asOf) : ''
+  const tl = mk ? all.filter(row => row.month <= mk) : all
   if (tl.length < 2) return 0
   const drop = tl[0].balance - tl[tl.length - 1].balance
   return drop > 0 ? r2(drop / (tl.length - 1)) : 0
@@ -987,13 +996,56 @@ export function rateWhatIf(balance: number, baseRate: number, rate: number, amor
 // Steady-state monthly figures synced into Hushållsbudget. Interest uses the
 // same balance × rate/100 / 12 convention as rateWhatIf; amortization is the
 // observed monthly balance reduction.
-export function mortgageMonthlyFigures(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]): { ranta: number; amortering: number } | null {
-  const balance = totalBalance(parts, payments)
-  const blended = weightedAvgRate(parts, periods, payments)
-  if (balance <= 0 || blended <= 0) return null
+//
+// Plan 126 §7 — the result is a three-way outcome rather than "figures or
+// null", because the caller writes to the budget on load and the two null
+// reasons demand opposite handling:
+//
+//   'ok'                   → persist these figures.
+//   'empty'                → nothing to sync (no active part carries a positive
+//                            balance at `asOf`); the caller removes obsolete
+//                            synced rows.
+//   'missing-current-rate' → at least one funded part has no rate period
+//                            covering `asOf`, so no honest current figure
+//                            exists. The caller retains the previous rows,
+//                            warns, and writes NOTHING.
+//
+// The old code collapsed the last two into `blended <= 0`, which also swallowed
+// a legitimately covered 0 % period — a real, contractual "no interest this
+// month" was treated as broken data and wiped the synced rows. A covered 0 %
+// now returns status 'ok' with ranta: 0.
+//
+// Settled meaning 6: every input uses the SAME `asOf` — the balance, the
+// balances the blended rate is weighted by, and the amortisation history.
+export type MortgageMonthlyFiguresResult =
+  | { status: 'ok'; figures: { ranta: number; amortering: number } }
+  | { status: 'empty' }
+  | { status: 'missing-current-rate'; loan_part_ids: string[] }
+
+export function mortgageMonthlyFigures(
+  parts: LoanPart[],
+  periods: RatePeriod[],
+  payments: Payment[],
+  asOf: string,
+): MortgageMonthlyFiguresResult {
+  const active = (parts || []).filter(p => p && !p.archived)
+  // Only parts still carrying debt at `asOf` can contribute a cost, so only
+  // they need current terms: a settled or not-yet-drawn part without a covering
+  // period must not block the whole sync.
+  const funded = active.filter(p => partBalanceAsOf(p, payments, asOf) > 0)
+  if (!funded.length) return { status: 'empty' }
+
+  const missing = funded.filter(p => effectiveRatePeriod(p, periods || [], asOf) == null)
+  if (missing.length) return { status: 'missing-current-rate', loan_part_ids: missing.map(p => p.id) }
+
+  const balance = totalBalanceAsOf(active, payments, asOf)
+  const blended = weightedAvgRate(active, periods, payments, asOf)
   return {
-    ranta: r2(balance * blended / 100 / 12),
-    amortering: monthlyAmortizationRate(parts, payments),
+    status: 'ok',
+    figures: {
+      ranta: r2(balance * blended / 100 / 12),
+      amortering: monthlyAmortizationRate(active, payments, asOf),
+    },
   }
 }
 

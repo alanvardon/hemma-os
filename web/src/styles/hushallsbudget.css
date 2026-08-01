@@ -392,7 +392,8 @@
   .link-btn:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 3px; border-radius: 2px; }
   .bolan-off { font-size: 11.5px; color: var(--ink-soft); }
   .bolan-ghost,
-  .bolan-hint {
+  .bolan-hint,
+  .bolan-warn {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -410,8 +411,20 @@
     border-color: color-mix(in srgb, var(--accent) 25%, var(--rule));
     background: var(--paper-warm);
   }
+  /* Plan 126 §7 — the synced bolån figures could not be refreshed. Same warn
+     treatment as Bolånekoll's .missing-rate-prompt so the two pages read as one
+     signal; wrapping keeps the link on its own line on a 320 px screen. */
+  .bolan-warn {
+    flex-wrap: wrap;
+    border-style: solid;
+    border-color: var(--warn-light);
+    background: var(--warn-faint);
+    color: var(--ink-mid);
+  }
+  .bolan-warn b { color: var(--ink); }
   .bolan-ghost .link-btn,
-  .bolan-hint .link-btn { flex-shrink: 0; font-size: 12px; }
+  .bolan-hint .link-btn,
+  .bolan-warn .link-btn { flex-shrink: 0; font-size: 12px; }
 
   .cat-head {
     display: flex;

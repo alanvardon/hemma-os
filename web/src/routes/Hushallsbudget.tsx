@@ -9,6 +9,7 @@ import { loadBudget, saveBudget } from '../lib/hushallsbudget-store'
 import { reportPersistenceError } from '../lib/persistence-error'
 import { mortgageMonthlyFigures } from '../lib/mortgage'
 import { loadMortgageSyncSnapshot } from '../lib/mortgage-store'
+import { todayISO } from '../lib/date'
 import * as salaryStore from '../lib/salary-store'
 import { Money, Percent } from '../components/AnimatedNumber'
 import BudgetDonutChart, { type DonutSegment } from '../components/charts/BudgetDonutChart'
@@ -507,6 +508,10 @@ export default function Hushallsbudget() {
   const [historyRows, setHistoryRows] = useState<SalarySubmission[]>([])
   const [chartOpen, setChartOpen] = useState(false)
   const mortgageFiguresRef = useRef<{ ranta: number; amortering: number } | null>(null)
+  // Plan 126 §7 — how many funded lånedelar had no räntevillkor covering the
+  // day we synced on. > 0 means the sync was deliberately skipped, so the user
+  // must be told the Bolån rows below are the previous ones, not today's.
+  const [mortgageRateGapParts, setMortgageRateGapParts] = useState(0)
 
   // Load the persisted budget once on mount (now async — localStorage today,
   // cloud after the swap). `loadedRef` holds the exact object we hydrated with
@@ -515,20 +520,33 @@ export default function Hushallsbudget() {
   const loadedRef = useRef<BudgetState | null>(null)
   useEffect(() => {
     let alive = true
+    // Plan 126 §7 — ONE captured day for the whole sync, so the balance, the
+    // blended rate and the amortisation history can never be read on two sides
+    // of midnight.
+    const asOf = todayISO()
     Promise.all([
       loadBudget(),
       loadMortgageSyncSnapshot().catch(() => null),
     ]).then(([loaded, mortgageSnapshot]) => {
       if (!alive) return
+      const sync = mortgageSnapshot
+        ? mortgageMonthlyFigures(mortgageSnapshot.parts, mortgageSnapshot.periods, mortgageSnapshot.payments, asOf)
+        : null
+      mortgageFiguresRef.current = sync?.status === 'ok' ? sync.figures : null
+      setMortgageRateGapParts(sync?.status === 'missing-current-rate' ? sync.loan_part_ids.length : 0)
       setState((prev) => {
         const base = (loadedRef.current = loaded ?? prev)
-        // null snapshot means the live read failed: retain any previously
-        // synced rows. A successful snapshot may legitimately compute null,
-        // which means the mortgage gate failed and synced rows must be removed.
-        if (!mortgageSnapshot) return base
-        const figures = mortgageMonthlyFigures(mortgageSnapshot.parts, mortgageSnapshot.periods, mortgageSnapshot.payments)
-        mortgageFiguresRef.current = figures
-        return applyMortgageSync(base, figures)
+        // Two no-write outcomes, both of which must return `base` ITSELF: a null
+        // snapshot (the live read failed) and 'missing-current-rate' (no rate
+        // period covers today, so no honest figure exists). The debounced save
+        // effect below fires on `state !== loadedRef.current`, so returning a
+        // structurally equal clone here would persist on mere navigation —
+        // exactly the write this stage exists to prevent.
+        if (!sync || sync.status === 'missing-current-rate') return base
+        // 'empty' means the mortgage genuinely has nothing to sync, so obsolete
+        // synced rows are removed; applyMortgageSync itself returns `base`
+        // unchanged when there were none.
+        return applyMortgageSync(base, sync.status === 'ok' ? sync.figures : null)
       })
     })
     return () => { alive = false }
@@ -835,6 +853,20 @@ export default function Hushallsbudget() {
             </p>
 
             <p className="owner-split-label">Joint costs <span className="owner-block-tag">split 50/50</span></p>
+            {/* Plan 126 §7 — the synk was skipped because no ränteperiod covers
+                today for at least one funded lånedel. Say what did NOT happen
+                and that the figures below are the previous ones, so nobody
+                budgets on them believing they are current. Silent when the user
+                has switched the synk off: nothing was going to update anyway. */}
+            {mortgageRateGapParts > 0 && !state.mortgageSyncOff && (
+              <div className="bolan-warn" role="status">
+                <span>
+                  <b>Bolånesiffrorna kunde inte uppdateras.</b>{' '}
+                  {mortgageRateGapParts === 1 ? 'En lånedel' : mortgageRateGapParts + ' lånedelar'} saknar räntevillkor för idag — tidigare värden behålls.
+                </span>
+                <a className="link-btn" href="#/bolanekoll">Öppna Bolånekoll</a>
+              </div>
+            )}
             {state.costs.some((row) => row.source === 'bolanekoll') && (
               <div className="cat-card bolan-card">
                 <div className="cat-head">
