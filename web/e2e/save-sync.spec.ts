@@ -313,14 +313,14 @@ function trackPageErrors(page: Page): Error[] {
 }
 
 // Every tool dialog is a <dialog class="bk-dialog"> in the DOM — [open]
-// selects the one showModal() actually opened. Plan 109c can have two native
-// <dialog>s open at once (e.g. editing an archived part from inside Tidigare
-// avtal opens PartDialog on top of the still-open history dialog, or adding a
-// rate period from inside the part dialog), so a plain hasText filter is
-// unreliable — e.g. PartDialog's own "+ Add rate period" trigger button text
-// also matches a hasText filter meant for the nested PeriodDialog. Filter by
-// the dialog's <h3 class="dialog-title"> HEADING instead — exactly one per
-// dialog, so a substring match against just that element is unambiguous.
+// selects the one showModal() actually opened. Plan 109c can still have two
+// native <dialog>s open at once (editing an archived part from inside Tidigare
+// avtal opens PartDialog on top of the still-open history dialog), so a plain
+// hasText filter is unreliable — a trigger button's own text can match a filter
+// meant for the dialog it opens. Filter by the dialog's <h3 class="dialog-title">
+// HEADING instead — exactly one per dialog, so a substring match against just
+// that element is unambiguous. (Plan 127 removed the rate-period case: the rate
+// actions now close PartDialog and open the one standalone PeriodDialog.)
 function dialogWithHeading(page: Page, heading: string) {
   return page.locator('dialog.bk-dialog[open]').filter({ has: page.locator('.dialog-title', { hasText: heading }) })
 }
@@ -741,13 +741,15 @@ test('archived rate periods and transactions stay editable and attached to the a
   const row = page.locator('tr.ld-member', { hasText: 'Ursprunglig del' })
   await row.getByRole('button', { name: 'Edit' }).click()
   const partDialog = dialogWithHeading(page, 'Edit loan part')
-  await partDialog.getByRole('button', { name: '+ Add rate period' }).click()
-  const periodDialog = dialogWithHeading(page, 'Add rate period')
-  await periodDialog.getByLabel('Interest rate %').fill('3.5')
-  await periodDialog.getByRole('button', { name: 'Save' }).click()
-  await expect(periodDialog).not.toBeVisible()
-  await partDialog.getByRole('button', { name: 'Cancel' }).click()
+  // Plan 127 — the rate section no longer nests a dialog inside PartDialog:
+  // choosing a rate action CLOSES PartDialog and opens the one standalone
+  // PeriodDialog, so there is never a dialog stacked on another.
+  await partDialog.getByRole('button', { name: '+ Lägg till ränteperiod' }).click()
   await expect(partDialog).not.toBeVisible()
+  const periodDialog = dialogWithHeading(page, 'Ny räntesats')
+  await periodDialog.getByLabel('Räntesats %').fill('3.5')
+  await periodDialog.getByRole('button', { name: 'Spara' }).click()
+  await expect(periodDialog).not.toBeVisible()
 
   const paymentCard = page.locator('#betalningar').locator('..')
   await paymentCard.getByRole('button', { name: '+ Lägg till' }).click()
