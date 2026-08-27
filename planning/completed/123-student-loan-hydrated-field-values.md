@@ -1,6 +1,6 @@
 # Plan 123 — Show hydrated Student Loan field values immediately
 
-**Status:** complete · **Priority:** Medium · **Depends on:** —; land before Plan
+**Status:** plan · **Priority:** Medium · **Depends on:** —; land before Plan
 102 touches the same route/input model · **Effort:** S · **Owner model:**
 GPT-5.6 Terra · **Source:** owner report 2026-07-20: saved Student Loan values
 only appear correctly after double-clicking a field · **Touches:**
@@ -64,7 +64,7 @@ state and edit buffer agree visibly.
 
 ## Execution
 
-- [x] **Stage 1 · [GPT-5.6 Terra]** — Add delayed-load component coverage, then
+- [ ] **Stage 1 · [GPT-5.6 Terra]** — Add delayed-load component coverage, then
   implement the hydrated/controlled input contract and verify the full route.
   Gate: focused component test, then `npm run lint`, `npm run test` and
   `npm run build` from `web/`, plus local browser verification.
