@@ -2074,10 +2074,28 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   let chargeDay: number
   let next_date: string
   let days: number
-  // A declared billing pin (plan 104 Phase 2) overrides ledger detection of the
-  // cadence; otherwise detect month-end billing from the history as before.
-  const billingPin = profileBilling(part, opts?.mortgages ?? [], opts?.banks ?? [])
-  const monthEndBilling = billingPin ? billingPin === 'month-end' : isMonthEndBilling(ints)
+
+  // The bank's conventions, resolved ONCE for the whole charge (declared lock >
+  // stored fit > fresh proven fit > catalogue > default), pooled across the
+  // bank's parts. Resolved here rather than further down because the cadence
+  // below consumes it too. year_basis is read at the interest branch; it is
+  // consumed ONLY there — a flat-monthly bank divides by 12 months and never by
+  // a year, so its charge carries no day-count exposure at all.
+  const profile = forecastProfile(part, periods, real, opts)
+
+  // Plan 128 — the CADENCE comes from that same resolved profile, so a stored
+  // convention pins Nästa avisering exactly as it pins the amount. It used to
+  // read a declared pin (plan 104 Phase 2) and otherwise re-derive the pattern
+  // from this one part's own dates on every call, which left a fitted-and-stored
+  // 'detected' billing visible in Bankprofil but absent from the forecast — the
+  // one place decision 2's stable stored value did not hold. `isMonthEndBilling`
+  // survives only for a bank whose profile says nothing at all: a 'default'
+  // resolution means nothing is known, and the ledger's own shape is still the
+  // best available reading. (A declared pin now arrives as source 'declared',
+  // so the old profileBilling call would be unreachable here.)
+  const monthEndBilling = profile.billing.source === 'default'
+    ? isMonthEndBilling(ints)
+    : profile.billing.value === 'month-end'
   if (monthEndBilling) {
     // Bill lands on each month's last day (charge_day 31 makes addMonthsAtDay
     // clamp to the real length: Jul→31, Sep→30, Feb→28/29). Anchor on the last
@@ -2137,10 +2155,6 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   if (!seg) return null
   const rate = seg.rate
 
-  // The bank's conventions, resolved once. year_basis is consumed ONLY by the
-  // days branch below — a flat-monthly bank divides by 12 months and never by
-  // a year, so its charge carries no day-count exposure at all.
-  const profile = forecastProfile(part, periods, real, opts)
   const year_basis = profile.year_basis.value
 
   // Amortering, in priority order:

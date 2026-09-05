@@ -1354,6 +1354,35 @@ describe('bank profile: window-scoped bank-pooled learner + billing pin (plan 10
     expect(profileBilling(linkedPart(), mortgages(), banks({ billing: 'month-end', billing_source: 'detected' }))).toBeNull()
   })
 
+  // ── The STORED cadence pins Nästa avisering too (plan 128) ────────────────
+  // The cadence used to come from a declared-only pin, else a fresh
+  // isMonthEndBilling read of THIS part's own dates — so a fitted-and-persisted
+  // 'detected' billing showed in Bankprofil and drove drift, but not the date.
+  // It does now: the same resolved profile decides the amount and the date.
+  it('PLAN 128: a STORED detected cadence pins next_date over this part’s own date pattern', () => {
+    const bunden = () => period({ rate_type: 'bunden', end_date: '2027-12-31' })
+    const stored = (billing: string) => ({ banks: banks({ billing, billing_source: 'detected' }), mortgages: mortgages() })
+
+    // CLEAN bills on the 27th, so a fresh per-part re-derivation reads 'fixed'
+    // and predicts 2026-07-27 — the behaviour with no profile at all.
+    expect(expectedCharge(linkedPart(), [bunden()], CLEAN)!.next_date).toBe('2026-07-27')
+    // With 'month-end' stored (written by autoFitBankProfiles off the BANK's
+    // pooled evidence, which this thin part need not show on its own), the
+    // forecast anchors to the month's last day instead.
+    expect(expectedCharge(linkedPart(), [bunden()], CLEAN, stored('month-end'))!.next_date).toBe('2026-07-31')
+
+    // And the mirror image: a month-end-shaped ledger with 'fixed' stored keeps
+    // the day-of-month cadence (mode 30 — 30 and 31 tie, most recent wins).
+    const monthEnd = [
+      interestRow('2026-03-31', 3100, { id: 'me0' }),
+      interestRow('2026-04-30', 3000, { id: 'me1' }),   // 30 d
+      interestRow('2026-05-31', 3100, { id: 'me2' }),   // 31 d
+      interestRow('2026-06-30', 3000, { id: 'me3' }),   // 30 d
+    ]
+    expect(expectedCharge(linkedPart(), [bunden()], monthEnd)!.next_date).toBe('2026-07-31')
+    expect(expectedCharge(linkedPart(), [bunden()], monthEnd, stored('fixed'))!.next_date).toBe('2026-07-30')
+  })
+
   it('undeclared / no-context still reproduces the existing behaviour byte-for-byte', () => {
     const golden = expectedCharge(part(), [period({ rate_type: 'bunden', end_date: '2027-12-31' })], CLEAN)!
     expect(expectedCharge(part(), [period({ rate_type: 'bunden', end_date: '2027-12-31' })], CLEAN, {})).toEqual(golden)
