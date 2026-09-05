@@ -24,15 +24,30 @@ const SOURCE_LABELS: Record<ConventionSource, string> = {
   default: 'Standard',
 }
 
+const CONVENTION_VALUE_LABELS: Record<ConventionDriftWarning['held'], string> = {
+  360: 'faktisk/360', 365: '365',
+  'month-end': 'månadsslut', fixed: 'fast dag',
+  days: 'ränta per dag', monthly: 'fast månadsränta',
+}
 function conventionValueLabel(v: ConventionDriftWarning['held']): string {
-  return v === 360 ? 'faktisk/360' : v === 365 ? '365' : v === 'month-end' ? 'månadsslut' : 'fast dag'
+  return CONVENTION_VALUE_LABELS[v]
+}
+
+const DRIFT_FIELD_LABELS: Record<ConventionDriftWarning['field'], string> = {
+  year_basis: 'Bankår', billing: 'Avisering', charge_basis: 'Räntemodell',
+}
+// Which profile the fresh evidence contradicts. 'detected' is a value a
+// previous load FITTED AND STORED (plan 128) — it is the household's own
+// record, not the catalogue's, and must not be attributed to the catalogue.
+const DRIFT_SOURCE_LABELS: Record<ConventionDriftWarning['against'], string> = {
+  declared: 'ditt lås', detected: 'den fastställda profilen', catalog: 'katalogvärdet',
 }
 
 function driftLabel(d: ConventionDriftWarning): string {
-  const field = d.field === 'year_basis' ? 'Bankår' : 'Avisering'
+  const field = DRIFT_FIELD_LABELS[d.field]
   const held = conventionValueLabel(d.held)
   const observed = conventionValueLabel(d.observed)
-  const source = d.against === 'declared' ? 'ditt lås' : 'katalogvärdet'
+  const source = DRIFT_SOURCE_LABELS[d.against]
   return `${field}: ${source} anger ${held}, men din historik tyder tydligt på ${observed}. Prognosen använder ${conventionValueLabel(d.effective)}.`
 }
 

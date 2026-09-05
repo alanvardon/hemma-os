@@ -103,14 +103,23 @@ describe('Bolanekoll — agreement card (plan 109c Stage 1)', () => {
 
   it('shows the drift badge when detection contradicts a locked value, and opens the profile modal', async () => {
     const lockedBank: Bank = { ...bank, year_basis: 365, year_basis_source: 'declared' }
+    // Plan 128 — drift is raised by the REPLAY fitter, not the old threshold
+    // learner, so the ledger has to actually reproduce a /360 bank: 1 000 000 kr
+    // at 3,60 % is exactly 100 kr/day under /360 (98,63 under /365), and the
+    // five month-end charges below replay to a 0 kr residual over 4 intervals —
+    // the fitter's proof — while the lock says 365.
     const periods: RatePeriod[] = [
-      { id: 'r1', created_at: '2026-01-01', loan_part_id: 'p1', start_date: '2024-03-01', end_date: '2025-02-28', rate: 3.0, rate_type: 'bunden' },
-      { id: 'r2', created_at: '2026-01-01', loan_part_id: 'p1', start_date: '2025-03-01', end_date: '2026-02-28', rate: 3.0, rate_type: 'bunden' },
+      { id: 'r1', created_at: '2026-01-01', loan_part_id: 'p1', start_date: '2024-03-01', end_date: '2025-02-28', rate: 3.6, rate_type: 'bunden' },
+      { id: 'r2', created_at: '2026-01-01', loan_part_id: 'p1', start_date: '2025-03-01', end_date: '2026-02-28', rate: 3.6, rate_type: 'bunden' },
     ]
-    const dates = ['2024-04-30', '2024-05-31', '2024-06-30', '2025-04-30', '2025-05-31', '2025-06-30']
-    const payments: Payment[] = dates.map((d, i) => ({
+    const charges: Array<[string, number]> = [
+      ['2024-04-30', 3000],                     // no preceding row — not replayed
+      ['2024-05-31', 3100], ['2024-06-30', 3000], // 31 d · 30 d
+      ['2024-07-31', 3100], ['2024-08-31', 3100], // 31 d · 31 d
+    ]
+    const payments: Payment[] = charges.map(([d, amount], i) => ({
       id: 'int' + i, created_at: d, loan_part_id: 'p1', date: d, kind: 'interest',
-      description: 'Ränta', amount: 2500, balance_after: null, paid_by: 'joint', source: 'import', is_insats: false,
+      description: 'Ränta', amount, balance_after: 1_000_000, paid_by: 'joint', source: 'import', is_insats: false,
     }))
     vi.mocked(Store.cachedSnapshot).mockReturnValue({
       version: 6, banks: [lockedBank], mortgages: [agreement],

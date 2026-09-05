@@ -137,14 +137,45 @@ describe('effectiveBankProfile — precedence lock > confident detection > catal
     expect(r.billing).toEqual({ value: 'fixed', source: 'default' })
   })
 
-  it('stored detected/suggested provenance never short-circuits — detection is recomputed fresh', () => {
-    // A stale stored year_basis: 360/source detected, but the fresh ledger is
-    // thin → resolution must NOT trust the stored value (plan-104 phase-1 rule:
-    // only declared short-circuits) and lands on the catalogue/default.
+  it('a STORED detected value short-circuits — the fit is not recomputed over it (plan 128 decision 2)', () => {
+    // Plan 128 reverses the plan-104 phase-1 rule. Before, nothing but a
+    // 'declared' value was ever written, so a stored 'detected' value was
+    // ignored and detection ran fresh on every call. Now autoFitBankProfiles
+    // WRITES the proven fit with source 'detected', and that stored value is
+    // read back as stable input: a thin ledger cannot pull the bank back off it,
+    // and neither can a later import nudging the fitter.
     const r = effectiveBankProfile(
       bank({ year_basis: 360, year_basis_source: 'detected' }),
       null, parts(), learnerPeriods(), thinLedger())
-    expect(r.year_basis).toEqual({ value: 365, source: 'default' })
+    expect(r.year_basis).toEqual({ value: 360, source: 'detected' })
+    expect(r.drift).toEqual([])
+  })
+
+  it("'suggested' and a bare value are NOT stored — those still resolve from fresh evidence", () => {
+    // 'suggested' means "offered, not accepted" and nothing writes it; a value
+    // with no source at all was never a decision either. Both fall through, so
+    // the confident ledger below still decides.
+    for (const source of ['suggested', null] as const) {
+      const r = effectiveBankProfile(
+        bank({ year_basis: 365, year_basis_source: source }),
+        null, parts(), learnerPeriods(), confidentLedger())
+      expect(r.year_basis).toEqual({ value: 360, source: 'detected' })
+    }
+    // …and with no fresh proof either, a bare stored value stays void.
+    const thin = effectiveBankProfile(
+      bank({ year_basis: 360, year_basis_source: null }),
+      null, parts(), learnerPeriods(), thinLedger())
+    expect(thin.year_basis).toEqual({ value: 365, source: 'default' })
+  })
+
+  it('a malformed STORED value voids the lock whatever its provenance says', () => {
+    // 400 is not a year basis. A valid source string does not rescue it, so
+    // resolution falls through to the fresh proven fit exactly as it does for a
+    // malformed declared value.
+    const r = effectiveBankProfile(
+      bank({ year_basis: 400, year_basis_source: 'detected' }),
+      null, parts(), learnerPeriods(), confidentLedger())
+    expect(r.year_basis).toEqual({ value: 360, source: 'detected' })
   })
 
   it('a custom bank with no rules starts on Auto: pure detection, no catalogue', () => {
@@ -170,37 +201,128 @@ describe('effectiveBankProfile — precedence lock > confident detection > catal
   })
 })
 
-describe('effectiveBankProfile — billing convention', () => {
-  // Month-end-shaped ledger: 4 dated charges, all at a month boundary (03-31,
-  // 04-30, 06-01 = rolled 05-31, 06-30), ≥ 2 genuinely late → the plan-104
-  // suggest criterion reads a confident 'month-end'.
-  const monthEndLedger = () => [
-    interestRow('2026-03-31', 3100), interestRow('2026-04-30', 3000),
-    interestRow('2026-06-01', 3100), interestRow('2026-06-30', 2900),
-  ]
-  // Fixed mid-month biller (the 27th): never confident — 'fixed' is the
-  // unremarkable default with no promotable criterion.
-  const fixedLedger = () => [
-    interestRow('2026-03-27', 3100), interestRow('2026-04-27', 3100),
-    interestRow('2026-05-27', 3000), interestRow('2026-06-27', 3100),
-  ]
+// ── Drift against a STORED fitted value (plan 128 §4) ────────────────────────
+// The write-once profile's safety valve. A stored value is never re-fitted, so
+// contradicting evidence has to be visible instead: the effective figure stays
+// exactly what is stored, and the disagreement is reported as drift for the
+// owner to accept or reject. `against` names which profile the fresh proof
+// contradicts — now 'detected' as well as 'declared'.
+describe('effectiveBankProfile — drift against a stored fitted value', () => {
+  const parts = () => [part()]
 
-  it('confident month-end detection outranks a catalogue fixed value, with drift', () => {
-    const r = effectiveBankProfile(bank(), catalog({ billing: 'fixed' }), [part()], [], monthEndLedger())
+  it('a stored detected year_basis the fresh fit contradicts: the STORED value stands, drift is raised', () => {
+    // Stored 365/detected; the confident /360 ledger replays exactly (residual
+    // 0 kr over 6 covered intervals). Nothing is auto-corrected.
+    const r = effectiveBankProfile(
+      bank({ year_basis: 365, year_basis_source: 'detected' }),
+      null, parts(), learnerPeriods(), confidentLedger())
+    expect(r.year_basis).toEqual({ value: 365, source: 'detected' })
+    expect(r.drift).toContainEqual({ field: 'year_basis', against: 'detected', held: 365, observed: 360, effective: 365 })
+  })
+
+  it('a stored detected charge_basis the fresh fit contradicts behaves identically', () => {
+    const r = effectiveBankProfile(
+      bank({ charge_basis: 'monthly', charge_basis_source: 'detected' }),
+      null, parts(), learnerPeriods(), confidentLedger())
+    expect(r.charge_basis).toEqual({ value: 'monthly', source: 'detected' })
+    expect(r.drift).toContainEqual({ field: 'charge_basis', against: 'detected', held: 'monthly', observed: 'days', effective: 'monthly' })
+  })
+
+  it('a stored detected billing the fresh fit contradicts behaves identically', () => {
+    // confidentLedger bills at every month's end, so the fit reads 'month-end'.
+    const r = effectiveBankProfile(
+      bank({ billing: 'fixed', billing_source: 'detected' }),
+      null, parts(), learnerPeriods(), confidentLedger())
+    expect(r.billing).toEqual({ value: 'fixed', source: 'detected' })
+    expect(r.drift).toContainEqual({ field: 'billing', against: 'detected', held: 'fixed', observed: 'month-end', effective: 'fixed' })
+  })
+
+  it('a stored profile the fresh fit AGREES with is silent — no drift, nothing moves', () => {
+    const stored = bank({
+      year_basis: 360, year_basis_source: 'detected',
+      billing: 'month-end', billing_source: 'detected',
+      charge_basis: 'days', charge_basis_source: 'detected',
+    })
+    const r = effectiveBankProfile(stored, null, parts(), learnerPeriods(), confidentLedger())
+    expect(r.year_basis).toEqual({ value: 360, source: 'detected' })
+    expect(r.billing).toEqual({ value: 'month-end', source: 'detected' })
+    expect(r.charge_basis).toEqual({ value: 'days', source: 'detected' })
+    expect(r.drift).toEqual([])
+  })
+
+  it('an UNPROVEN fresh fit raises no drift at all — only a replayed proof may contradict a profile', () => {
+    // The stored 365 disagrees with what a thin two-row ledger would suggest,
+    // but that ledger proves nothing, so there is nothing to tell the owner.
+    const r = effectiveBankProfile(
+      bank({ year_basis: 365, year_basis_source: 'detected' }),
+      catalog({ year_basis: 360 }), parts(), learnerPeriods(), thinLedger())
+    expect(r.year_basis).toEqual({ value: 365, source: 'detected' })
+    expect(r.drift).toEqual([])
+  })
+
+  it('the resolution is a pure read of (bank, catalogue, ledger) — repeating it changes nothing', () => {
+    // Write-once means the same inputs always yield the same profile, however
+    // often the page re-renders. Drift is reported, never applied.
+    const stored = bank({ year_basis: 365, year_basis_source: 'detected' })
+    const first = effectiveBankProfile(stored, null, parts(), learnerPeriods(), confidentLedger())
+    const second = effectiveBankProfile(stored, null, parts(), learnerPeriods(), confidentLedger())
+    expect(second).toEqual(first)
+    expect(stored.year_basis).toBe(365)
+  })
+})
+
+describe('effectiveBankProfile — billing convention', () => {
+  // Plan 128 — billing is fitted by the same replay fitter as the amount
+  // conventions, so a promotable reading now needs a PROVEN fit (≥ 4 covered
+  // intervals reproducing the bank's charges), not the old plan-104 clustering
+  // threshold. Both ledgers below therefore sit on w3 of learnerPeriods
+  // (2026-09-01 → 2027-12-31 @ 3,60 % on B = 1 200 000 → 120 kr/day under /360)
+  // and replay to a 0 kr residual; they differ only in their DATE pattern.
+  //
+  // Month-end biller: 30-09, 31-10, 30-11, 31-12, 31-01, 28-02 — 5 covered
+  // intervals of 31/30/31/31/28 days → 3 720 / 3 600 / 3 720 / 3 720 / 3 360.
+  const monthEndLedger = () => [
+    learnerRow('2026-09-30', 3600), learnerRow('2026-10-31', 3720),
+    learnerRow('2026-11-30', 3600), learnerRow('2026-12-31', 3720),
+    learnerRow('2027-01-31', 3720), learnerRow('2027-02-28', 3360),
+  ]
+  // The same bank billing on a FIXED day (the 15th): 30/31/30/31/31 days →
+  // 3 600 / 3 720 / 3 600 / 3 720 / 3 720. Same proof, different cadence.
+  const fixedLedger = () => [
+    learnerRow('2026-09-15', 3600), learnerRow('2026-10-15', 3600),
+    learnerRow('2026-11-15', 3720), learnerRow('2026-12-15', 3600),
+    learnerRow('2027-01-15', 3720), learnerRow('2027-02-15', 3720),
+  ]
+  // Two rows is one interval — below the replay proof, whatever the dates say.
+  const thinMonthEndLedger = () => [learnerRow('2026-09-30', 3600), learnerRow('2026-10-31', 3720)]
+
+  it('a proven month-end fit outranks a catalogue fixed value, with drift', () => {
+    const r = effectiveBankProfile(bank(), catalog({ billing: 'fixed' }), [part()], learnerPeriods(), monthEndLedger())
     expect(r.billing).toEqual({ value: 'month-end', source: 'detected' })
     expect(r.drift).toEqual([{ field: 'billing', against: 'catalog', held: 'fixed', observed: 'month-end', effective: 'month-end' }])
   })
 
-  it('a declared fixed lock outranks confident month-end detection, surfacing drift', () => {
-    const r = effectiveBankProfile(bank({ billing: 'fixed', billing_source: 'declared' }), null, [part()], [], monthEndLedger())
+  it('a declared fixed lock outranks a proven month-end fit, surfacing drift', () => {
+    const r = effectiveBankProfile(bank({ billing: 'fixed', billing_source: 'declared' }), null, [part()], learnerPeriods(), monthEndLedger())
     expect(r.billing).toEqual({ value: 'fixed', source: 'declared' })
     expect(r.drift).toEqual([{ field: 'billing', against: 'declared', held: 'fixed', observed: 'month-end', effective: 'fixed' }])
   })
 
-  it('a fixed-day ledger is never confident: the catalogue month-end wins without drift', () => {
-    // 'fixed' has no promotable confident criterion (plan 104), so detection
-    // can never outrank — or contradict — a month-end catalogue value.
-    const r = effectiveBankProfile(bank(), catalog({ billing: 'month-end' }), [part()], [], fixedLedger())
+  it('a proven FIXED-day fit is promotable too, and outranks a catalogue month-end', () => {
+    // The behaviour change plan 128 brings: `suggestBankProfile` could only ever
+    // promote 'month-end' ('fixed' was the unremarkable default with no
+    // confidence criterion), so a fixed-day ledger could never outrank the
+    // catalogue. The replay proof stands behind both readings equally — and it
+    // must, because autoFitBankProfiles PERSISTS whichever one it fitted.
+    const r = effectiveBankProfile(bank(), catalog({ billing: 'month-end' }), [part()], learnerPeriods(), fixedLedger())
+    expect(r.billing).toEqual({ value: 'fixed', source: 'detected' })
+    expect(r.drift).toContainEqual({ field: 'billing', against: 'catalog', held: 'month-end', observed: 'fixed', effective: 'fixed' })
+  })
+
+  it('an unproven ledger leaves the catalogue value in place, without drift', () => {
+    // The surviving half of the old rule: below the gate, the ledger's date
+    // pattern decides nothing and contradicts nothing.
+    const r = effectiveBankProfile(bank(), catalog({ billing: 'month-end' }), [part()], learnerPeriods(), thinMonthEndLedger())
     expect(r.billing).toEqual({ value: 'month-end', source: 'catalog' })
     expect(r.drift).toEqual([])
   })
