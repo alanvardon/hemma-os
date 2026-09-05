@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createSupabaseMock } from './testSupabaseMock'
-import type { LoanPart, Payment, Bank, Mortgage } from './mortgage'
+import type { LoanPart, Payment, Bank, Mortgage, RatePeriod } from './mortgage'
 
 // vi.mock factories run eagerly at the hoisted call site, before any of this
 // file's own top-level statements — so the factory can't assign into a plain
@@ -814,6 +814,153 @@ describe('banks & mortgages CRUD (plan 103)', () => {
     expect(mock().tables.mortgages).toHaveLength(0)
     expect(mock().tables.mortgage_banks).toHaveLength(0)
     expect((cache().mortgages as unknown[])).toHaveLength(0)
+  })
+})
+
+// ── Plan 128 §3 — auto-persist the fitted bank profile, write-once ───────────
+// The conventions used to be re-derived on every read, so the same figure could
+// move because an import nudged a detector across its threshold. Once the ledger
+// PROVES a profile by replay it is written once, with source 'detected', and
+// read back as stored truth. These pin the three promises that make that safe:
+// a second load writes nothing, a 'declared' field is never overwritten, and a
+// failed write is neither reported as a determined profile nor allowed to stop
+// the pass (or the page).
+describe('autoFitBankProfiles (plan 128 §3)', () => {
+  beforeEach(() => { mem.set(IMPORT_FLAG, '1') })
+
+  // 1 200 000 kr at 3,60 % on a 360-day bankår = 120 kr/dag, billed month-end.
+  // Five replayable intervals, residual 0 — a proven faktisk/360 days profile.
+  const B = 1_200_000
+  const fitPart = (over: Partial<LoanPart> = {}): LoanPart => ({
+    id: 'p1', created_at: CREATED, label: 'Del 1', loan_number: '1',
+    start_balance: B, start_date: '2025-12-31', archived: false, mortgage_id: 'm1', ...over,
+  })
+  const fitMortgage: Mortgage = {
+    id: 'm1', created_at: CREATED, bank_id: 'b1', label: 'Bolån',
+    start_date: '2025-12-31', archived: false, end_date: null,
+  }
+  const fitPeriod: RatePeriod = {
+    id: 'r1', created_at: CREATED, loan_part_id: 'p1',
+    start_date: '2025-01-01', end_date: '2027-12-31', rate: 3.60, rate_type: 'bunden',
+  }
+  const interest = (date: string, amount: number): Payment => ({
+    id: 'i' + date, created_at: CREATED, loan_part_id: 'p1', date, kind: 'interest',
+    description: 'Ränta', amount, balance_after: B, paid_by: 'joint', source: 'import:bank.csv',
+  })
+  const ledger: Payment[] = [
+    interest('2026-01-31', 3720), // opener — interval start only
+    interest('2026-02-28', 3360), // 28 d × 120
+    interest('2026-03-31', 3720), // 31 d × 120
+    interest('2026-04-30', 3600), // 30 d × 120
+    interest('2026-05-31', 3720), // 31 d × 120
+    interest('2026-06-30', 3600), // 30 d × 120
+  ]
+
+  // Load through the sync layer first, exactly as the page does: that both
+  // seeds the cache updateBank patches and registers b1's revision (an update
+  // against an unknown revision conflicts).
+  async function loadBanks(over: Record<string, unknown> = {}): Promise<Bank[]> {
+    mock().tables.mortgage_banks = [bankRow('b1', { revision: 1, ...over })]
+    return store.listBanks()
+  }
+
+  it('writes all three missing conventions in ONE update, with source detected', async () => {
+    const banks = await loadBanks()
+    const written = await store.autoFitBankProfiles(banks, [fitMortgage], [fitPart()], [fitPeriod], ledger)
+
+    expect(written).toHaveLength(1)
+    expect(written[0].written).toEqual({ year_basis: 360, billing: 'month-end', charge_basis: 'days' })
+    expect(written[0].fit).toMatchObject({ covered: 5, residual: 0, proven: true })
+    // The returned bank is the POST-write row, so the caller can patch state.
+    expect(written[0].bank).toMatchObject({ id: 'b1', year_basis: 360, charge_basis: 'days', billing: 'month-end' })
+
+    const row = mock().tables.mortgage_banks[0]
+    expect(row).toMatchObject({
+      year_basis: 360, year_basis_source: 'detected',
+      billing: 'month-end', billing_source: 'detected',
+      charge_basis: 'days', charge_basis_source: 'detected',
+    })
+    // One bank update, not one per field: the row carries a single revision bump.
+    expect(row.revision).toBe(2)
+  })
+
+  it('write-once: the second load writes nothing at all', async () => {
+    const banks = await loadBanks()
+    expect(await store.autoFitBankProfiles(banks, [fitMortgage], [fitPart()], [fitPeriod], ledger)).toHaveLength(1)
+    const revisionAfterFirst = mock().tables.mortgage_banks[0].revision
+
+    // A second page load re-reads the bank — now carrying stored conventions.
+    const reloaded = await store.listBanks()
+    expect(await store.autoFitBankProfiles(reloaded, [fitMortgage], [fitPart()], [fitPeriod], ledger)).toEqual([])
+    expect(mock().tables.mortgage_banks[0].revision).toBe(revisionAfterFirst)
+  })
+
+  it('never overwrites a declared field, even when the fit disagrees with it', async () => {
+    // The owner declared 365; the ledger proves 360. The declaration wins and
+    // is not even part of the patch — only the two unstored fields are written.
+    const banks = await loadBanks({ year_basis: 365, year_basis_source: 'declared' })
+    const written = await store.autoFitBankProfiles(banks, [fitMortgage], [fitPart()], [fitPeriod], ledger)
+
+    expect(written[0].written).toEqual({ billing: 'month-end', charge_basis: 'days' })
+    expect(written[0].written).not.toHaveProperty('year_basis')
+    const row = mock().tables.mortgage_banks[0]
+    expect(row.year_basis).toBe(365)
+    expect(row.year_basis_source).toBe('declared')
+    expect(row.charge_basis).toBe('days')
+  })
+
+  it('treats an already-detected field as stored too — a detected value is never re-fitted', async () => {
+    const banks = await loadBanks({ charge_basis: 'monthly', charge_basis_source: 'detected' })
+    const written = await store.autoFitBankProfiles(banks, [fitMortgage], [fitPart()], [fitPeriod], ledger)
+
+    expect(written[0].written).toEqual({ year_basis: 360, billing: 'month-end' })
+    expect(mock().tables.mortgage_banks[0].charge_basis).toBe('monthly')
+  })
+
+  it('a failed write neither throws, nor reports a determined profile, nor corrupts the cloud row', async () => {
+    const banks = await loadBanks()
+    mock().control.failing.add('mortgage_banks')
+
+    // No rejection reaches the page, and nothing is reported as written.
+    expect(await store.autoFitBankProfiles(banks, [fitMortgage], [fitPart()], [fitPeriod], ledger)).toEqual([])
+    // The cloud row is untouched — no partial profile, no bumped revision.
+    expect(mock().tables.mortgage_banks[0]).toMatchObject({ id: 'b1', revision: 1 })
+    expect(mock().tables.mortgage_banks[0].year_basis ?? null).toBeNull()
+    expect(mock().tables.mortgage_banks[0].charge_basis ?? null).toBeNull()
+
+    // The write rides the ordinary durable outbox, so it is retried on replay
+    // rather than lost — the next load would write it anyway if it did not.
+    mock().control.failing.delete('mortgage_banks')
+    await sync.syncCoordinator.replay()
+    expect(mock().tables.mortgage_banks[0].charge_basis_source).toBe('detected')
+  })
+
+  it('writes nothing for a bank whose parts are all archived', async () => {
+    const banks = await loadBanks()
+    const written = await store.autoFitBankProfiles(
+      banks, [fitMortgage], [fitPart({ archived: true })], [fitPeriod], ledger,
+    )
+    expect(written).toEqual([])
+    expect(mock().tables.mortgage_banks[0]).toMatchObject({ revision: 1 })
+    expect(mock().tables.mortgage_banks[0].charge_basis ?? null).toBeNull()
+  })
+
+  it('writes nothing when the evidence is too thin to prove a profile', async () => {
+    const banks = await loadBanks()
+    // Two charges → one replayable interval; `proven` needs at least four.
+    const written = await store.autoFitBankProfiles(
+      banks, [fitMortgage], [fitPart()], [fitPeriod], ledger.slice(0, 2),
+    )
+    expect(written).toEqual([])
+    expect(mock().tables.mortgage_banks[0]).toMatchObject({ revision: 1 })
+  })
+
+  it('writes nothing when no rate period covers the charges (fit returns null)', async () => {
+    const banks = await loadBanks()
+    const written = await store.autoFitBankProfiles(banks, [fitMortgage], [fitPart()], [], ledger)
+    expect(written).toEqual([])
+    expect(mock().tables.mortgage_banks[0]).toMatchObject({ revision: 1 })
+    expect(mock().tables.mortgage_banks[0].year_basis ?? null).toBeNull()
   })
 })
 

@@ -13,8 +13,8 @@
      cache is what makes the first-login import safe.
    - CACHE_KEY   — the write-through offline cache mirroring the whole envelope. */
 
-import { defaultSettings, legacyContributionPayment, makeRatePeriod, migrateOwnershipSettings } from './mortgage'
-import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage, CatalogBank } from './mortgage'
+import { bankForPart, defaultSettings, fitBankProfile, legacyContributionPayment, makeRatePeriod, migrateOwnershipSettings } from './mortgage'
+import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage, CatalogBank, ProfileFit } from './mortgage'
 import { supabase } from './supabase'
 import { makeImportOnce, materializeImport, stamp } from './store-helpers'
 import type { MutationInput } from './sync-coordinator'
@@ -837,6 +837,103 @@ export async function removeBank(id: string): Promise<number> {
   let n = 0
   await queueTableDelete(RESOURCES.banks, [id], () => _patchCache(e => { e.banks = e.banks.filter(b => b?.id !== id); n = e.banks.length }))
   return n
+}
+
+// ── Auto-persisted bank profile (plan 128 §3) ────────────────────────────────
+// The conventions used to be re-derived at read time on every call, so the same
+// figure could move because an import nudged a detector across its threshold.
+// Once the ledger PROVES a profile by replay (fitBankProfile), it is written to
+// the bank once, with source 'detected', and read back as stored truth.
+//
+// Write-once, deliberately: a stored value is never re-fitted here, no matter
+// what later evidence says. Contradicting evidence is the drift prompt's job
+// (plan 128 §4) and only the owner changes a stored value — a profile that
+// silently re-fits is persistence without determinism.
+export interface BankProfileAutoFit {
+  /** The bank AFTER the write, so callers can patch their own state with it. */
+  bank: Bank
+  /** Only the fields this call actually wrote — never the ones already stored. */
+  written: {
+    year_basis?: 360 | 365
+    billing?: 'month-end' | 'fixed'
+    charge_basis?: 'days' | 'monthly'
+  }
+  /** The proving evidence, for the one-time message to the owner. */
+  fit: ProfileFit
+}
+
+// A convention counts as STORED only once it carries a real provenance. The
+// enum also allows 'suggested', which nothing in this codebase ever writes; it
+// would mean "offered, not accepted", so it is treated as still missing.
+function isStoredConvention(source: string | null | undefined): boolean {
+  return source === 'declared' || source === 'detected'
+}
+
+/**
+ * Fit and persist the missing conventions of every bank that has enough ledger
+ * evidence to prove them. Pure orchestration over already-loaded rows plus
+ * `updateBank`; it reads nothing else and returns only the banks it ACTUALLY
+ * wrote, so an empty array is the normal steady state once every bank is fitted.
+ *
+ * Safe to lose by construction: one bank's failed write is swallowed (the row
+ * stays missing, so the next load simply retries) and never stops the pass over
+ * the remaining banks or reaches the caller as a rejection.
+ */
+export async function autoFitBankProfiles(
+  banks: Bank[], mortgages: Mortgage[], parts: LoanPart[], periods: RatePeriod[], payments: Payment[],
+): Promise<BankProfileAutoFit[]> {
+  const results: BankProfileAutoFit[] = []
+  for (const bank of banks || []) {
+    if (!bank) continue
+    // Evidence is pooled across the bank's active parts, exactly as the
+    // forecast pools it — a thin part inherits its siblings' charges.
+    const bankParts = (parts || []).filter(
+      part => part && !part.archived && bankForPart(part, mortgages || [], banks || [])?.id === bank.id,
+    )
+    if (!bankParts.length) continue
+
+    const missing = {
+      year_basis: !isStoredConvention(bank.year_basis_source),
+      billing: !isStoredConvention(bank.billing_source),
+      charge_basis: !isStoredConvention(bank.charge_basis_source),
+    }
+    if (!missing.year_basis && !missing.billing && !missing.charge_basis) continue
+
+    const fit = fitBankProfile(bankParts, periods || [], payments || [])
+    if (!fit || !fit.proven) continue
+
+    // One update for the whole bank, not one per field, and never a field that
+    // already carries a stored provenance — a 'declared' value the owner set
+    // stays untouched even when the fit disagrees with it.
+    const patch: Partial<Bank> = {}
+    const written: BankProfileAutoFit['written'] = {}
+    if (missing.year_basis) {
+      // On a flat-monthly win the fitted year basis is the inert 365
+      // placeholder (the monthly formula never consumes it). It is still
+      // written, so all three conventions are stored together and the forecast
+      // reads one stable profile; should the bank ever start charging per day,
+      // that is a contradiction for the drift prompt, not a silent re-fit.
+      patch.year_basis = fit.year_basis; patch.year_basis_source = 'detected'
+      written.year_basis = fit.year_basis
+    }
+    if (missing.billing) {
+      patch.billing = fit.billing; patch.billing_source = 'detected'
+      written.billing = fit.billing
+    }
+    if (missing.charge_basis) {
+      patch.charge_basis = fit.charge_basis; patch.charge_basis_source = 'detected'
+      written.charge_basis = fit.charge_basis
+    }
+
+    try {
+      const updated = await updateBank(bank.id, patch)
+      if (updated) results.push({ bank: updated, written, fit })
+    } catch {
+      // Offline or rejected. Nothing is reported as written, so the caller
+      // cannot tell the owner a profile was determined when it was not.
+    }
+  }
+  return results
 }
 
 // ── Shared bank catalogue (plan 109a; read-only) ─────────────────────────────

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSaveFlash } from '../../components/useSaveFlash'
 import { useToast } from '../../components/useToast'
+import { money } from '../../lib/format'
 import { persistenceErrorMessage } from '../../lib/persistence-error'
 import {
   hasChargeInMonth,
@@ -32,6 +33,23 @@ import {
 } from './ratePeriodCopy'
 
 export type PendingChargeKind = 'interest' | 'payment' | 'amortization'
+
+// Plan 128 §3 — the one-time, non-modal account of an auto-persisted bank
+// profile. It states ONLY the conventions this write actually determined (a
+// field the owner already declared is untouched and must not be re-announced)
+// and the replay evidence it was proven on, so the owner can see both what
+// changed and why it was trusted.
+const CHARGE_BASIS_PHRASE = { days: 'ränta per dag', monthly: 'fast månadsränta' } as const
+const BILLING_PHRASE = { 'month-end': 'avisering månadsslut', fixed: 'avisering fast dag' } as const
+
+function autoFitMessage(fitted: Store.BankProfileAutoFit): string {
+  const determined: string[] = []
+  if (fitted.written.year_basis) determined.push(`bankår ${fitted.written.year_basis}`)
+  if (fitted.written.charge_basis) determined.push(CHARGE_BASIS_PHRASE[fitted.written.charge_basis])
+  if (fitted.written.billing) determined.push(BILLING_PHRASE[fitted.written.billing])
+  return `Bankprofil för ${fitted.bank.label} fastställd: ${determined.join(', ')}. `
+    + `Återskapar bankens ${fitted.fit.covered} senaste debiteringar inom ${money(fitted.fit.residual)}.`
+}
 
 /**
  * A save that the caller must be able to act on: the rate-period dialog stays
@@ -104,13 +122,33 @@ export function useMortgageWorkspace() {
       contributions,
       settings,
     }))
+    // Plan 128 §3 — auto-persist any bank profile the ledger now proves. This
+    // is a background write the owner did not ask for, so it is fire-and-forget
+    // like the catalogue read below: it must not delay the page, and a failure
+    // is safe to lose (nothing was stored, so the next load simply retries).
+    // Deliberately NOT flashSaved() — that pulse means "your save landed", and
+    // firing it on load, when the owner did nothing, would misreport the write.
+    Promise.resolve()
+      .then(() => Store.autoFitBankProfiles(banks, mortgages, parts, periods, payments))
+      .then(fitted => {
+        if (!fitted?.length) return
+        // Patch the freshly-written banks into state so the profile the UI
+        // reads is the stored one immediately, without a second refresh.
+        setWorkspace(current => ({
+          ...current,
+          banks: current.banks.map(bank => fitted.find(result => result.bank.id === bank.id)?.bank ?? bank),
+        }))
+        // One toast holds one message, so several banks share one string.
+        showToast(fitted.map(autoFitMessage).join(' '))
+      })
+      .catch(() => { /* nothing was written; the next load retries */ })
     // The shared catalogue is best-effort and never blocks the household
     // workspace. Its store keeps a defensive cache of the last good result.
     Store.listCatalogBanks()
       .then(catalogBanks => setWorkspace(current => ({ ...current, catalogBanks })))
       .catch(() => setWorkspace(current => ({ ...current, catalogBanks: [] })))
     setLoaded(true)
-  }, [])
+  }, [showToast])
 
   useEffect(() => { refresh() }, [refresh])
 
