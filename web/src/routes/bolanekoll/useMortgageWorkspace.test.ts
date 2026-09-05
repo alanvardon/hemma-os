@@ -60,6 +60,9 @@ function seedReads(parts: LoanPart[] | Promise<LoanPart[]> = [cloudPart], period
   vi.mocked(Store.listBanks).mockResolvedValue([oldBank, newBank])
   vi.mocked(Store.listMortgages).mockResolvedValue([activeMortgage])
   vi.mocked(Store.listCatalogBanks).mockResolvedValue([])
+  // Plan 128 §3 — the load-time profile write. Nothing proven by default: the
+  // steady state, once every bank is fitted, is an empty result.
+  vi.mocked(Store.autoFitBankProfiles).mockResolvedValue([])
 }
 
 beforeEach(() => {
@@ -150,6 +153,104 @@ describe('useMortgageWorkspace', () => {
     expect(payments).not.toHaveProperty('refreshPredicted')
     expect(Object.keys(payments).sort())
       .toEqual(['clear', 'copy', 'logPredicted', 'remove', 'save'])
+  })
+})
+
+// ── Plan 128 §3 — the auto-persisted bank profile ────────────────────────────
+// A background write the owner did not ask for. It must reach the rendered
+// workspace immediately (the UI has to read the STORED profile, not a re-derived
+// one), be accounted for exactly once in Swedish, state only the conventions it
+// actually determined, and stay silent when nothing was written.
+function autoFit(over: Partial<Store.BankProfileAutoFit> = {}): Store.BankProfileAutoFit {
+  return {
+    bank: {
+      ...oldBank,
+      year_basis: 360, year_basis_source: 'detected',
+      billing: 'month-end', billing_source: 'detected',
+      charge_basis: 'days', charge_basis_source: 'detected',
+    },
+    written: { year_basis: 360, billing: 'month-end', charge_basis: 'days' },
+    fit: {
+      year_basis: 360, charge_basis: 'days', billing: 'month-end',
+      covered: 7, residual: 2, runner_up_residual: 300, proven: true,
+    },
+    ...over,
+  }
+}
+
+describe('useMortgageWorkspace — auto-persisted bank profile', () => {
+  it('patches the written bank into the workspace and accounts for it once, in Swedish', async () => {
+    vi.mocked(Store.autoFitBankProfiles).mockResolvedValue([autoFit()])
+    const result = await mountWorkspace()
+
+    await waitFor(() => expect(result.current.state.banks[0].year_basis).toBe(360))
+    // The stored profile is visible without a second refresh…
+    expect(result.current.state.banks[0]).toMatchObject({
+      id: 'b1', year_basis_source: 'detected', billing: 'month-end', charge_basis: 'days',
+    })
+    // …and the untouched bank is left exactly as the cloud returned it.
+    expect(result.current.state.banks[1]).toEqual(newBank)
+    expect(result.current.feedback.toast).toEqual({
+      msg: 'Bankprofil för Old bank fastställd: bankår 360, ränta per dag, avisering månadsslut. '
+        + 'Återskapar bankens 7 senaste debiteringar inom 2 kr.',
+      show: true,
+    })
+    expect(Store.autoFitBankProfiles).toHaveBeenCalledWith([oldBank, newBank], [activeMortgage], [cloudPart], [], [])
+  })
+
+  it('names only the conventions it actually wrote, never a field the owner already declared', async () => {
+    vi.mocked(Store.autoFitBankProfiles).mockResolvedValue([autoFit({
+      bank: { ...oldBank, year_basis: 365, year_basis_source: 'declared', charge_basis: 'days', charge_basis_source: 'detected' },
+      written: { charge_basis: 'days' },
+    })])
+    const result = await mountWorkspace()
+
+    await waitFor(() => expect(result.current.feedback.toast.show).toBe(true))
+    expect(result.current.feedback.toast.msg).toBe(
+      'Bankprofil för Old bank fastställd: ränta per dag. '
+      + 'Återskapar bankens 7 senaste debiteringar inom 2 kr.',
+    )
+    // The declared year basis is neither re-announced nor implied.
+    expect(result.current.feedback.toast.msg).not.toContain('bankår')
+  })
+
+  it('combines several fitted banks into the one toast the route can show', async () => {
+    vi.mocked(Store.autoFitBankProfiles).mockResolvedValue([
+      autoFit(),
+      autoFit({
+        bank: { ...newBank, charge_basis: 'monthly', charge_basis_source: 'detected' },
+        written: { charge_basis: 'monthly' },
+        fit: { year_basis: 365, charge_basis: 'monthly', billing: 'fixed', covered: 5, residual: 0, runner_up_residual: 400, proven: true },
+      }),
+    ])
+    const result = await mountWorkspace()
+
+    await waitFor(() => expect(result.current.feedback.toast.show).toBe(true))
+    expect(result.current.feedback.toast.msg).toContain('Bankprofil för Old bank fastställd')
+    expect(result.current.feedback.toast.msg).toContain(
+      'Bankprofil för New bank fastställd: fast månadsränta. Återskapar bankens 5 senaste debiteringar inom 0 kr.',
+    )
+    await waitFor(() => expect(result.current.state.banks[1].charge_basis).toBe('monthly'))
+  })
+
+  it('says nothing and flashes no save when nothing was written', async () => {
+    const result = await mountWorkspace()
+
+    expect(Store.autoFitBankProfiles).toHaveBeenCalled()
+    expect(result.current.feedback.toast).toEqual({ msg: '', show: false })
+    // The "saved" pulse means "your save landed"; the owner saved nothing here.
+    expect(result.current.feedback.saved).toBe(false)
+    expect(result.current.state.banks).toEqual([oldBank, newBank])
+  })
+
+  it('never lets a failed profile write reach the page', async () => {
+    vi.mocked(Store.autoFitBankProfiles).mockRejectedValue(new Error('offline'))
+    const result = await mountWorkspace()
+
+    expect(result.current.state.loaded).toBe(true)
+    expect(result.current.state.banks).toEqual([oldBank, newBank])
+    // Nothing was stored, so the owner is told nothing — not even an error.
+    expect(result.current.feedback.toast).toEqual({ msg: '', show: false })
   })
 })
 

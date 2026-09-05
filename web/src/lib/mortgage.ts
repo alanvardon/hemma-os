@@ -50,6 +50,13 @@ export interface Bank {
   // pins the cadence; null/detected/suggested fall back to detection.
   billing?: string | null
   billing_source?: string | null
+  // Plan 128 — the bank's räntemodell. 'days' = the charge scales with the day
+  // count (the ordinary Swedish convention); 'monthly' = a flat 30/360 month;
+  // null = detect from the ledger (fitBankProfile). Only a 'declared'
+  // charge_basis_source pins the model; null/detected/suggested fall back to
+  // detection.
+  charge_basis?: string | null
+  charge_basis_source?: string | null
   // Plan 109a — optional link to the shared read-only bank catalogue
   // (mortgage_bank_catalog). Null = private custom bank / legacy row. The
   // catalogue label is denormalised into `label` on attach, so rendering never
@@ -63,12 +70,16 @@ export const YEAR_BASES = [360, 365] as const
 export const YEAR_BASIS_SOURCES = ['detected', 'suggested', 'declared'] as const
 export const BILLING_MODES = ['month-end', 'fixed'] as const
 export const BILLING_SOURCES = YEAR_BASIS_SOURCES
+// Plan 128 — the third convention, clamped the same way.
+export const CHARGE_BASIS_MODES = ['days', 'monthly'] as const
+export const CHARGE_BASIS_SOURCES = YEAR_BASIS_SOURCES
 
 // Normalise a Bank record: default the profile columns to null, clamp
 // `year_basis` to exactly 360 | 365 (anything else → null → detection),
-// `billing` to the allowed cadence set, and each `*_source` to the allowed
-// provenance set (else null). A malformed profile therefore reads as "no lock"
-// and the forecast falls back to detection, never to a garbage convention.
+// `billing` to the allowed cadence set, `charge_basis` to the allowed
+// räntemodell set, and each `*_source` to the allowed provenance set (else
+// null). A malformed profile therefore reads as "no lock" and the forecast
+// falls back to detection, never to a garbage convention.
 export function makeBank(b: Partial<Bank>): Omit<Bank, 'id' | 'created_at'> {
   const yb = Number(b.year_basis)
   const year_basis = yb === 360 ? 360 : yb === 365 ? 365 : null
@@ -79,6 +90,8 @@ export function makeBank(b: Partial<Bank>): Omit<Bank, 'id' | 'created_at'> {
     year_basis_source: inSet(b.year_basis_source, YEAR_BASIS_SOURCES),
     billing: inSet(b.billing, BILLING_MODES),
     billing_source: inSet(b.billing_source, BILLING_SOURCES),
+    charge_basis: inSet(b.charge_basis, CHARGE_BASIS_MODES),
+    charge_basis_source: inSet(b.charge_basis_source, CHARGE_BASIS_SOURCES),
     catalog_id: typeof b.catalog_id === 'string' && b.catalog_id ? b.catalog_id : null,
   }
 }
@@ -1737,6 +1750,103 @@ export function learnYearBasis(bankParts: LoanPart[], periods: RatePeriod[], pay
   return { basis, confident, used, windows: windows.size }
 }
 
+// Plan 128 §1 — ONE replay fitter, replacing three independent guesses.
+// `learnYearBasis`, `chargeBasis` and `isMonthEndBilling` each answer one
+// question with its own threshold, and none of them proves the resulting
+// profile reproduces what the bank actually charged. This replays every
+// historical interest charge from the balance at interval start, the listed
+// rate covering that interval and the observed dates, scores each candidate
+// model by its absolute kronor residual, and only calls the answer `proven`
+// when the winner both reproduces the ledger within tolerance AND beats the
+// runner-up by a wide margin. An ambiguous history proves nothing, so nothing
+// is persisted from it.
+//
+// Amount candidates are THREE, not four: `year_basis` does not appear in the
+// flat-monthly formula at all (see the branch comment in expectedCharge), so
+// (360, monthly) and (365, monthly) are the same model — carrying both would
+// make the runner-up trivially equal the winner and void the uniqueness proof.
+// A monthly win reports the inert generic default 365 as its year basis.
+//
+// Date conventions (billing) never move a replayed amount, only the prediction
+// of the next date, so `billing` is fitted straight from the date pattern.
+export interface ProfileFit {
+  year_basis: 360 | 365
+  charge_basis: 'days' | 'monthly'
+  billing: 'month-end' | 'fixed'
+  /** Charges replayed — only intervals with both a charge and a covering rate. */
+  covered: number
+  /** Total absolute kronor error across the replayed charges, for the winner. */
+  residual: number
+  /** Residual of the next-best DISTINCT model; the margin proves uniqueness. */
+  runner_up_residual: number
+  proven: boolean
+}
+
+interface ReplayInterval { balance: number; rate: number; days: number; amount: number; period_months: number }
+
+export function fitBankProfile(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]): ProfileFit | null {
+  const real = (payments || []).filter(p => p?.source !== 'predicted')
+  const intervals: ReplayInterval[] = []
+  const allDates: string[] = []
+  for (const part of parts || []) {
+    if (!part) continue
+    const intRows = real
+      .filter(p => p?.loan_part_id === part.id && p.kind === 'interest' && p.date && Math.abs(Number(p.amount)) > 0)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    const dates = intRows.map(r => String(r.date))
+    allDates.push(...dates)
+    // The flat-monthly multiplier production uses, read off this part's own
+    // cadence — a bank's parts may bill monthly and kvartalsvis side by side.
+    const period_months = chargePeriodMonths(dates)
+    for (let i = 1; i < intRows.length; i++) {
+      const prevDate = dates[i - 1], date = dates[i]
+      // The whole accrual must sit inside ONE rate period (constant listed
+      // rate) — a pair straddling a villkorsändring is not replayable against
+      // a single rate, so it is skipped rather than mispriced.
+      const rp = effectiveRatePeriod(part, periods, date)
+      const rpPrev = effectiveRatePeriod(part, periods, prevDate)
+      if (!rp || !rpPrev || rpPrev.id !== rp.id) continue
+      const rate = rp.rate == null ? null : Number(rp.rate)
+      if (rate == null || !(rate > 0)) continue
+      const days = daysBetween(prevDate, date)
+      if (days == null || days <= 0) continue
+      const balance = partBalanceAsOf(part, real, prevDate)
+      const amount = Math.abs(Number(intRows[i].amount))
+      if (balance <= 0 || !(amount > 0)) continue
+      intervals.push({ balance, rate, days, amount, period_months })
+    }
+  }
+  // No interval has both a charge and a single covering rate → nothing to fit.
+  // Returning null is honest; a guessed year basis is not.
+  if (!intervals.length) return null
+
+  // Every candidate replays the SAME interval set, so `covered` is one number.
+  // Each prediction is rounded to öre exactly as expectedCharge rounds it.
+  const residualOf = (predict: (iv: ReplayInterval) => number) =>
+    intervals.reduce((sum, iv) => sum + Math.abs(iv.amount - r2(predict(iv))), 0)
+  const candidates: Array<{ year_basis: 360 | 365; charge_basis: 'days' | 'monthly'; residual: number }> = [
+    { year_basis: 360, charge_basis: 'days', residual: residualOf(iv => iv.balance * iv.rate / 100 * iv.days / 360) },
+    { year_basis: 365, charge_basis: 'days', residual: residualOf(iv => iv.balance * iv.rate / 100 * iv.days / 365) },
+    { year_basis: 365, charge_basis: 'monthly', residual: residualOf(iv => iv.balance * iv.rate / 100 / 12 * iv.period_months) },
+  ]
+  const ranked = candidates.slice().sort((a, b) => a.residual - b.residual)
+  const winner = ranked[0]
+  // Reported and decided-on figures are the same rounded kronor, so the
+  // evidence line the owner reads is exactly what `proven` was judged on.
+  const residual = r2(winner.residual)
+  const runner_up_residual = r2(ranked[1].residual)
+  const charged = intervals.reduce((sum, iv) => sum + iv.amount, 0)
+  const covered = intervals.length
+  const proven = covered >= 4
+    && residual <= Math.max(5, 0.005 * charged)
+    && runner_up_residual >= 4 * residual
+  return {
+    year_basis: winner.year_basis, charge_basis: winner.charge_basis,
+    billing: isMonthEndBilling(allDates.slice().sort((a, b) => a.localeCompare(b))) ? 'month-end' : 'fixed',
+    covered, residual, runner_up_residual, proven,
+  }
+}
+
 // The parts sharing `part`'s bank (for pooling the learner). Falls back to just
 // `part` when there is no bank context or the part has no resolvable bank.
 function sameBankParts(part: LoanPart, opts?: ForecastOpts): LoanPart[] {
@@ -1788,47 +1898,41 @@ export function suggestBankProfile(parts: LoanPart[], periods: RatePeriod[], pay
   }
 }
 
-// Plan 104 (Phase 2) — drift safety valve: a declared lock must not hide a real
-// change. Returns the mismatch when the learner now confidently disagrees with a
-// declared value, so the UI can surface the #298-style stale banner. null when
-// there is no declared lock, or the fresh evidence still agrees / is inconclusive.
-export interface ProfileDrift { field: 'year_basis'; declared: 360 | 365; learned: 360 | 365 }
-export function bankProfileDrift(bank: Bank | null | undefined, parts: LoanPart[], periods: RatePeriod[], payments: Payment[]): ProfileDrift | null {
-  if (!bank || bank.year_basis_source !== 'declared') return null
-  const declared = bank.year_basis === 360 ? 360 : bank.year_basis === 365 ? 365 : null
-  if (declared == null) return null
-  const learned = learnYearBasis(parts || [], periods, payments)
-  if (learned.confident && learned.basis !== declared) return { field: 'year_basis', declared, learned: learned.basis }
-  return null
-}
-
 // ── Effective bank profile (plan 109b) ───────────────────────────────────────
 // Resolves the convention values the UI presents (and 109c wires into the
 // forecast context) with the owner-confirmed precedence (2026-07-16):
 //
 //   1. household-declared lock        (the owner's stated contract fact)
-//   2. confident household detection  (the household's own ledger is direct
-//                                      evidence of the actual contract)
-//   3. curated catalogue value        (a generic default for the bank)
-//   4. generic fallback               (365 / fixed — the Swedish conventions)
+//   2. stored fitted value            (proven by replay and PERSISTED, plan 128)
+//   3. fresh proven fit               (the household's own ledger is direct
+//                                      evidence, not yet written down)
+//   4. curated catalogue value        (a generic default for the bank)
+//   5. generic fallback               (365 / fixed / days — the Swedish
+//                                      conventions)
 //
-// CONFIDENCE THRESHOLD — a financial-correctness parameter, anchored on the
-// plan-104 promotion criterion (the same rule that offers "Lås detta?"):
-//   • year_basis: `learnYearBasis` — confident only on a clear /360 signal
-//     pooled from ≥ 2 bunden rate-period windows with ≥ 3 usable charge pairs,
-//     where the implied rentedagar are near-integral under /360
-//     (err360 < 0.05·n) AND clearly not under /365 (err365 > 0.2·n). 365 is
-//     the null-hypothesis default and is never itself "confident".
-//   • billing: `suggestBankProfile` — confident only for 'month-end', when
-//     ≥ 70 % of ≥ 4 dated charges cluster at a month boundary with ≥ 2
-//     genuinely late-month dates. 'fixed' is the unremarkable default and has
-//     no promotable criterion, so a fixed-day reading never outranks a lock
-//     or catalogue value.
-// Detection is recomputed fresh from the ledger on every resolution; a stored
-// 'detected'/'suggested' provenance value never short-circuits (plan-104
-// phase-1 rule: only 'declared' locks).
+// Tiers 1 and 2 are the same code path: a STORED value short-circuits, whatever
+// its provenance. Plan 128 decision 2 — "a stored profile is write-once; a
+// profile that silently re-fits is persistence without determinism". Before
+// plan 128 nothing but a 'declared' value was ever written, so only a lock could
+// short-circuit and detection was recomputed on every call (the plan-104 phase-1
+// rule); now that `autoFitBankProfiles` persists a proven fit with source
+// 'detected', that stored value is read back as stable input. Same inputs, same
+// Nästa avisering — a later import nudging the fitter cannot move a figure
+// behind the owner's back.
 //
-// A conflict between a lock/catalogue value and fresh confident evidence is
+// EVIDENCE THRESHOLD — one gate for all three conventions, and a
+// financial-correctness parameter: `fitBankProfile` replays the bank's own
+// historical charges and only reports `proven` when the winning model
+// reproduces them within tolerance AND beats the runner-up by a wide margin
+// (≥ 4 covered intervals; see its own comment). An unproven fit contributes
+// nothing to any field — the three plan-104 threshold detectors
+// (`learnYearBasis`, `isMonthEndBilling`, `chargeBasis`) are no longer
+// *decision* functions here. Note the consequence for billing: a fixed-day
+// reading IS now promotable evidence, because the replay proof stands behind
+// it, where the old `suggestBankProfile` criterion could only ever promote
+// 'month-end'.
+//
+// A conflict between a stored/catalogue value and fresh proven evidence is
 // returned as typed DRIFT — the resolution never silently rewrites either
 // profile. Profiles carry parameters, not algorithms: no `if (bank === ...)`.
 
@@ -1840,76 +1944,114 @@ export interface CatalogBank {
   label: string
   year_basis?: number | null
   billing?: string | null
+  // Plan 128 — the curated räntemodell. Null until verified against the bank's
+  // own documentation; a household's fitted value is never promoted here.
+  charge_basis?: string | null
 }
 
 export type ConventionSource = 'declared' | 'detected' | 'catalog' | 'default'
 export interface EffectiveConvention<T> { value: T; source: ConventionSource }
 
-type ConventionValue = 360 | 365 | 'month-end' | 'fixed'
+type ConventionValue = 360 | 365 | 'month-end' | 'fixed' | 'days' | 'monthly'
 export interface ConventionDriftWarning {
-  field: 'year_basis' | 'billing'
-  /** Which profile the confident ledger evidence contradicts. */
-  against: 'declared' | 'catalog'
+  field: 'year_basis' | 'billing' | 'charge_basis'
+  /**
+   * Which profile the fresh proven evidence contradicts: the owner's own lock,
+   * the value a previous load fitted and stored, or the curated catalogue.
+   */
+  against: 'declared' | 'detected' | 'catalog'
   /** The value that profile holds. */
   held: ConventionValue
-  /** What the household's own ledger confidently reads. */
+  /** What a fresh proven replay of the household's own ledger reads. */
   observed: ConventionValue
-  /** The value the resolution actually uses (the lock when against 'declared'; the detection when against 'catalog'). */
+  /** The value the resolution actually uses (the stored value when against 'declared'/'detected'; the fresh fit when against 'catalog'). */
   effective: ConventionValue
 }
 
 export interface EffectiveBankProfile {
   year_basis: EffectiveConvention<360 | 365>
   billing: EffectiveConvention<'month-end' | 'fixed'>
+  charge_basis: EffectiveConvention<'days' | 'monthly'>
   drift: ConventionDriftWarning[]
 }
 
-// One field's precedence walk. A drift entry is appended when confident
-// evidence contradicts the winning lock, or the catalogue value the detection
-// outranked — the two "would have used a different number" cases the owner
-// must see (plan 109 adversarial review, 2026-07-16).
+// One field's precedence walk. `persisted` is what the bank row holds and
+// `persistedSource` its provenance — either 'declared' (the owner stated it) or
+// 'detected' (a previous load fitted and wrote it); both short-circuit, so the
+// stored profile is the resolution's stable input. `fresh` is a proven replay
+// fit that has not been written down yet.
+//
+// A drift entry is appended when fresh proven evidence contradicts the stored
+// value it lost to, or the catalogue value it outranked — the "would have used
+// a different number" cases the owner must see (plan 109 adversarial review
+// 2026-07-16, extended to stored 'detected' values by plan 128 §4). Nothing is
+// ever auto-corrected here: a stored profile changes only when the owner does.
 function resolveConvention<T extends ConventionValue>(
   field: ConventionDriftWarning['field'],
-  declared: T | null, detected: T | null, catalogValue: T | null, fallback: T,
+  persisted: T | null, persistedSource: 'declared' | 'detected' | null,
+  fresh: T | null, catalogValue: T | null, fallback: T,
   drift: ConventionDriftWarning[],
 ): EffectiveConvention<T> {
-  if (declared != null) {
-    if (detected != null && detected !== declared)
-      drift.push({ field, against: 'declared', held: declared, observed: detected, effective: declared })
-    return { value: declared, source: 'declared' }
+  if (persisted != null && persistedSource != null) {
+    if (fresh != null && fresh !== persisted)
+      drift.push({ field, against: persistedSource, held: persisted, observed: fresh, effective: persisted })
+    return { value: persisted, source: persistedSource }
   }
-  if (detected != null) {
-    if (catalogValue != null && catalogValue !== detected)
-      drift.push({ field, against: 'catalog', held: catalogValue, observed: detected, effective: detected })
-    return { value: detected, source: 'detected' }
+  if (fresh != null) {
+    if (catalogValue != null && catalogValue !== fresh)
+      drift.push({ field, against: 'catalog', held: catalogValue, observed: fresh, effective: fresh })
+    return { value: fresh, source: 'detected' }
   }
   if (catalogValue != null) return { value: catalogValue, source: 'catalog' }
   return { value: fallback, source: 'default' }
 }
 
+// A stored provenance, or null when the field has never been written. The
+// persisted enum also allows 'suggested' — "offered, not accepted", which
+// nothing in this codebase writes — so it does not count as stored, exactly as
+// `autoFitBankProfiles` treats it.
+function storedConventionSource(source: string | null | undefined): 'declared' | 'detected' | null {
+  return source === 'declared' ? 'declared' : source === 'detected' ? 'detected' : null
+}
+
 // `parts` are the bank's parts (pool the ledger evidence across them, exactly
-// as suggestBankProfile does). Malformed lock/catalogue values (a year_basis
-// of 400, a billing of 'weird') are void — they fall through the precedence
-// rather than becoming a garbage convention.
+// as the forecast and `autoFitBankProfiles` pool them). Malformed stored or
+// catalogue values (a year_basis of 400, a billing of 'weird') are void — they
+// fall through the precedence rather than becoming a garbage convention, and a
+// valid provenance string does not rescue them.
 export function effectiveBankProfile(
   bank: Bank | null | undefined,
   catalog: CatalogBank | null | undefined,
   parts: LoanPart[], periods: RatePeriod[], payments: Payment[],
 ): EffectiveBankProfile {
-  const suggestion = suggestBankProfile(parts || [], periods || [], payments || [])
+  // Plan 128 — ONE fresh-evidence source for all three conventions: the replay
+  // fitter, whose single `proven` flag covers year_basis, charge_basis and
+  // billing together. It replaces the three plan-104 threshold detectors as
+  // decision functions, so a convention is only ever detected from evidence
+  // that actually reproduced the bank's own charges.
+  const fit = fitBankProfile(parts || [], periods || [], payments || [])
+  const proven = fit?.proven ? fit : null
   const drift: ConventionDriftWarning[] = []
   const asYearBasis = (v: unknown): 360 | 365 | null => v === 360 ? 360 : v === 365 ? 365 : null
   const asBilling = (v: unknown): 'month-end' | 'fixed' | null =>
     v === 'month-end' ? 'month-end' : v === 'fixed' ? 'fixed' : null
+  const asChargeBasis = (v: unknown): 'days' | 'monthly' | null =>
+    v === 'days' ? 'days' : v === 'monthly' ? 'monthly' : null
   return {
     year_basis: resolveConvention('year_basis',
-      bank?.year_basis_source === 'declared' ? asYearBasis(bank.year_basis) : null,
-      suggestion.year_basis.confident ? suggestion.year_basis.value : null,
+      asYearBasis(bank?.year_basis), storedConventionSource(bank?.year_basis_source),
+      proven ? proven.year_basis : null,
       asYearBasis(catalog?.year_basis), 365, drift),
     billing: resolveConvention('billing',
-      bank?.billing_source === 'declared' ? asBilling(bank.billing) : null,
-      suggestion.billing.confident ? suggestion.billing.value : null,
+      asBilling(bank?.billing), storedConventionSource(bank?.billing_source),
+      proven ? proven.billing : null,
       asBilling(catalog?.billing), 'fixed', drift),
+    // 'days' is the generic Swedish fallback (charges scale with the day
+    // count); 'monthly' is the flat 30/360 exception, never assumed.
+    charge_basis: resolveConvention('charge_basis',
+      asChargeBasis(bank?.charge_basis), storedConventionSource(bank?.charge_basis_source),
+      proven ? proven.charge_basis : null,
+      asChargeBasis(catalog?.charge_basis), 'days', drift),
     drift,
   }
 }
@@ -1932,10 +2074,28 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   let chargeDay: number
   let next_date: string
   let days: number
-  // A declared billing pin (plan 104 Phase 2) overrides ledger detection of the
-  // cadence; otherwise detect month-end billing from the history as before.
-  const billingPin = profileBilling(part, opts?.mortgages ?? [], opts?.banks ?? [])
-  const monthEndBilling = billingPin ? billingPin === 'month-end' : isMonthEndBilling(ints)
+
+  // The bank's conventions, resolved ONCE for the whole charge (declared lock >
+  // stored fit > fresh proven fit > catalogue > default), pooled across the
+  // bank's parts. Resolved here rather than further down because the cadence
+  // below consumes it too. year_basis is read at the interest branch; it is
+  // consumed ONLY there — a flat-monthly bank divides by 12 months and never by
+  // a year, so its charge carries no day-count exposure at all.
+  const profile = forecastProfile(part, periods, real, opts)
+
+  // Plan 128 — the CADENCE comes from that same resolved profile, so a stored
+  // convention pins Nästa avisering exactly as it pins the amount. It used to
+  // read a declared pin (plan 104 Phase 2) and otherwise re-derive the pattern
+  // from this one part's own dates on every call, which left a fitted-and-stored
+  // 'detected' billing visible in Bankprofil but absent from the forecast — the
+  // one place decision 2's stable stored value did not hold. `isMonthEndBilling`
+  // survives only for a bank whose profile says nothing at all: a 'default'
+  // resolution means nothing is known, and the ledger's own shape is still the
+  // best available reading. (A declared pin now arrives as source 'declared',
+  // so the old profileBilling call would be unreachable here.)
+  const monthEndBilling = profile.billing.source === 'default'
+    ? isMonthEndBilling(ints)
+    : profile.billing.value === 'month-end'
   if (monthEndBilling) {
     // Bill lands on each month's last day (charge_day 31 makes addMonthsAtDay
     // clamp to the real length: Jul→31, Sep→30, Feb→28/29). Anchor on the last
@@ -1995,10 +2155,6 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   if (!seg) return null
   const rate = seg.rate
 
-  // The bank's conventions, resolved once. year_basis is consumed ONLY by the
-  // days branch below — a flat-monthly bank divides by 12 months and never by
-  // a year, so its charge carries no day-count exposure at all.
-  const profile = forecastProfile(part, periods, real, opts)
   const year_basis = profile.year_basis.value
 
   // Amortering, in priority order:
@@ -2062,8 +2218,13 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   // balance step, which made it rate-blind: an entered rate could never move
   // it, and Sats had to be reverse-engineered back out of the amount. It is now
   // rate-driven like the days branch, so `rate` is simply reported as listed.
-  // basis stays a LEDGER reading (chargeBasis looks only at days and amounts)
-  // until plan 128 makes it a stored profile field.
+  //
+  // Plan 128 — the basis is the RESOLVED profile value (declared lock > stored
+  // fit > fresh proven fit > catalogue), the same one Bankprofil displays. The
+  // per-ledger `chargeBasis` heuristic survives only as plan 126's interim
+  // source, for a bank whose profile has none of those — a 'default' resolution
+  // means nothing is known about this bank, and reading the last two intervals
+  // is still better than assuming days.
   //
   // Plan 126 §4 — a rate change INSIDE the interval:
   //
@@ -2083,7 +2244,7 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   //
   // seg.pred_days is 0 when nothing splits, so the days branch reduces to the
   // plain single-rate product term for term.
-  const basis = chargeBasis(intRows)
+  const basis = profile.charge_basis.source === 'default' ? chargeBasis(intRows) : profile.charge_basis.value
   const interest = balance > 0
     ? basis === 'monthly'
       ? r2(balance * rate / 100 / 12 * period_months)
@@ -2098,10 +2259,18 @@ export function expectedCharge(part: LoanPart, periods: RatePeriod[], payments: 
   // contractual either way. 'exact' only when every convention the branch above
   // consumed came from a declared lock or a confident detection off the
   // household's own ledger; 'assumed' when one fell through to the catalogue or
-  // the generic Swedish default. The monthly branch consumes no convention —
-  // rate/12 needs no year — so it is exact by construction (plan 126: exposure
-  // is ≤ 1,4 % on a days-basis bank and zero on a flat-monthly one).
-  const conventions: ConventionSource[] = basis === 'days' ? [profile.year_basis.source] : []
+  // the generic Swedish default. The monthly FORMULA consumes no year basis —
+  // rate/12 needs no year — so year_basis is scored on the days branch only
+  // (plan 126: exposure is ≤ 1,4 % on a days-basis bank and zero on a
+  // flat-monthly one).
+  //
+  // Plan 128 — the CHOICE of branch is itself a convention, and it moves the
+  // number more than 360-vs-365 does, so its provenance counts on both
+  // branches. A basis that came from the interim per-ledger heuristic resolves
+  // as 'default' and must not read as 'exact'.
+  const conventions: ConventionSource[] = basis === 'days'
+    ? [profile.year_basis.source, profile.charge_basis.source]
+    : [profile.charge_basis.source]
   const confidence: ExpectedCharge['confidence'] =
     conventions.every(s => s === 'declared' || s === 'detected') ? 'exact' : 'assumed'
 

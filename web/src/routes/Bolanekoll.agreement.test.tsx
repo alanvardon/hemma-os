@@ -103,14 +103,23 @@ describe('Bolanekoll — agreement card (plan 109c Stage 1)', () => {
 
   it('shows the drift badge when detection contradicts a locked value, and opens the profile modal', async () => {
     const lockedBank: Bank = { ...bank, year_basis: 365, year_basis_source: 'declared' }
+    // Plan 128 — drift is raised by the REPLAY fitter, not the old threshold
+    // learner, so the ledger has to actually reproduce a /360 bank: 1 000 000 kr
+    // at 3,60 % is exactly 100 kr/day under /360 (98,63 under /365), and the
+    // five month-end charges below replay to a 0 kr residual over 4 intervals —
+    // the fitter's proof — while the lock says 365.
     const periods: RatePeriod[] = [
-      { id: 'r1', created_at: '2026-01-01', loan_part_id: 'p1', start_date: '2024-03-01', end_date: '2025-02-28', rate: 3.0, rate_type: 'bunden' },
-      { id: 'r2', created_at: '2026-01-01', loan_part_id: 'p1', start_date: '2025-03-01', end_date: '2026-02-28', rate: 3.0, rate_type: 'bunden' },
+      { id: 'r1', created_at: '2026-01-01', loan_part_id: 'p1', start_date: '2024-03-01', end_date: '2025-02-28', rate: 3.6, rate_type: 'bunden' },
+      { id: 'r2', created_at: '2026-01-01', loan_part_id: 'p1', start_date: '2025-03-01', end_date: '2026-02-28', rate: 3.6, rate_type: 'bunden' },
     ]
-    const dates = ['2024-04-30', '2024-05-31', '2024-06-30', '2025-04-30', '2025-05-31', '2025-06-30']
-    const payments: Payment[] = dates.map((d, i) => ({
+    const charges: Array<[string, number]> = [
+      ['2024-04-30', 3000],                     // no preceding row — not replayed
+      ['2024-05-31', 3100], ['2024-06-30', 3000], // 31 d · 30 d
+      ['2024-07-31', 3100], ['2024-08-31', 3100], // 31 d · 31 d
+    ]
+    const payments: Payment[] = charges.map(([d, amount], i) => ({
       id: 'int' + i, created_at: d, loan_part_id: 'p1', date: d, kind: 'interest',
-      description: 'Ränta', amount: 2500, balance_after: null, paid_by: 'joint', source: 'import', is_insats: false,
+      description: 'Ränta', amount, balance_after: 1_000_000, paid_by: 'joint', source: 'import', is_insats: false,
     }))
     vi.mocked(Store.cachedSnapshot).mockReturnValue({
       version: 6, banks: [lockedBank], mortgages: [agreement],
@@ -129,6 +138,9 @@ describe('Bolanekoll — agreement card (plan 109c Stage 1)', () => {
     const dialog = screen.getByRole('dialog', { name: 'Bankprofil' })
     expect(within(dialog).getByRole('heading', { name: /Bankprofil/ })).toBeInTheDocument()
     expect(within(dialog).getByText(/tyder tydligt på/)).toBeInTheDocument()
+    // Plan 128 Stage 5 — the replay evidence behind the drift is visible in the
+    // same modal, wired all the way from Bolanekoll.tsx's fitBankProfile memo.
+    expect(within(dialog).getByText(/Modellen återskapar bankens 4 senaste debiteringar inom 0 kr\./)).toBeInTheDocument()
   })
 })
 
@@ -206,6 +218,53 @@ describe('Bolanekoll — bank profile modal save (plan 109c Stage 1)', () => {
       year_basis: 365, year_basis_source: 'declared',
     }))
     expect(dialog.open).toBe(false)
+  })
+
+  it('submits a charge_basis lock alongside the other conventions when saving', async () => {
+    // Plan 128 Stage 5 — the third control writes 'declared' exactly like
+    // year_basis/billing, through the same submit payload.
+    vi.mocked(Store.updateBank).mockResolvedValueOnce({ ...bank, charge_basis: 'monthly', charge_basis_source: 'declared' })
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Bankprofil' }))
+    const dialog = screen.getByRole('dialog', { name: 'Bankprofil' }) as HTMLDialogElement
+    await user.click(within(dialog).getByRole('radio', { name: 'Fast månad' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Spara' }))
+
+    expect(await screen.findByText('Bankprofil sparad.')).toBeInTheDocument()
+    expect(Store.updateBank).toHaveBeenCalledWith('b1', expect.objectContaining({
+      charge_basis: 'monthly', charge_basis_source: 'declared',
+    }))
+    expect(dialog.open).toBe(false)
+  })
+
+  it('locking one field never nulls out a sibling field the owner did not touch (plan 128 write-once, Stage 6 finding)', async () => {
+    // billing/charge_basis already hold an undeclared 'detected' value (a
+    // prior auto-fit) — both controls open on Auto since only 'declared'
+    // pre-selects a segment. Locking ONLY year_basis must not resend billing/
+    // charge_basis as null: found live in the dev environment, where saving
+    // any one field silently erased the other two's auto-fitted provenance.
+    const fittedBank: Bank = {
+      ...bank, billing: 'month-end', billing_source: 'detected', charge_basis: 'days', charge_basis_source: 'detected',
+    }
+    vi.mocked(Store.listBanks).mockResolvedValue([fittedBank])
+    vi.mocked(Store.updateBank).mockClear() // isolate from earlier tests' accumulated calls on this shared mock
+    vi.mocked(Store.updateBank).mockResolvedValueOnce({ ...fittedBank, year_basis: 365, year_basis_source: 'declared' })
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Bankprofil' }))
+    const dialog = screen.getByRole('dialog', { name: 'Bankprofil' }) as HTMLDialogElement
+    await user.click(within(dialog).getByRole('radio', { name: '365' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Spara' }))
+
+    expect(await screen.findByText('Bankprofil sparad.')).toBeInTheDocument()
+    expect(Store.updateBank).toHaveBeenCalledTimes(1)
+    const patch = vi.mocked(Store.updateBank).mock.calls[0][1]
+    expect(patch).toEqual({ year_basis: 365, year_basis_source: 'declared' })
+    expect(patch).not.toHaveProperty('billing')
+    expect(patch).not.toHaveProperty('charge_basis')
   })
 })
 
