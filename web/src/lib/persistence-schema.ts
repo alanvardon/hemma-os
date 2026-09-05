@@ -1,6 +1,6 @@
 import { DEFAULT_CONSTANTS, DEFAULT_INPUTS, type Constants, type Inputs } from './calc'
 import type { Bank, Contribution, LoanPart, Mortgage, MortgageSettings, Payment as MortgagePayment, RatePeriod, Valuation } from './mortgage'
-import { BILLING_MODES, BILLING_SOURCES, defaultSettings as defaultMortgageSettings, migrateOwnershipSettings } from './mortgage'
+import { BILLING_MODES, BILLING_SOURCES, CHARGE_BASIS_MODES, CHARGE_BASIS_SOURCES, defaultSettings as defaultMortgageSettings, migrateOwnershipSettings } from './mortgage'
 import type { Item, MonthEndSettings, Payment as MonthEndPayment, PersonalEntry } from './manadsavslut'
 import { defaultSettings as defaultMonthEndSettings } from './manadsavslut'
 import type { SalarySubmission } from './hushallsbudget'
@@ -510,11 +510,14 @@ function parseBank(raw: unknown): ParseResult<Bank> {
   const year_basis_source = raw.year_basis_source === null || raw.year_basis_source === undefined ? success<string | null>(null) : parseEnum(raw.year_basis_source, ['detected', 'suggested', 'declared'] as const, 'year_basis_source')
   const billing = raw.billing === null || raw.billing === undefined ? success<string | null>(null) : parseEnum(raw.billing, BILLING_MODES, 'billing')
   const billing_source = raw.billing_source === null || raw.billing_source === undefined ? success<string | null>(null) : parseEnum(raw.billing_source, BILLING_SOURCES, 'billing_source')
+  // Plan 128 — räntemodell. Absent on pre-128 rows, which parse to null = detect.
+  const charge_basis = raw.charge_basis === null || raw.charge_basis === undefined ? success<string | null>(null) : parseEnum(raw.charge_basis, CHARGE_BASIS_MODES, 'charge_basis')
+  const charge_basis_source = raw.charge_basis_source === null || raw.charge_basis_source === undefined ? success<string | null>(null) : parseEnum(raw.charge_basis_source, CHARGE_BASIS_SOURCES, 'charge_basis_source')
   // Plan 109a — catalogue link. Nullable and absent on pre-109a data.
   const catalog_id = nullable(raw.catalog_id, (v) => id(v, 'catalog_id', (x) => parseOpaqueId<'CatalogBankId'>(x, 'catalog_id')))
-  const all = [...fields, year_basis, year_basis_source, billing, billing_source, catalog_id]
+  const all = [...fields, year_basis, year_basis_source, billing, billing_source, charge_basis, charge_basis_source, catalog_id]
   if (issueList(all).length) return { ok: false, issues: issueList(all) }
-  return success({ id: fieldValue(fields[0]) as string, created_at: fieldValue(fields[1]) as string, label: fieldValue(fields[2]) as string, year_basis: valueOf(year_basis), year_basis_source: valueOf(year_basis_source), billing: valueOf(billing), billing_source: valueOf(billing_source), catalog_id: valueOf(catalog_id) })
+  return success({ id: fieldValue(fields[0]) as string, created_at: fieldValue(fields[1]) as string, label: fieldValue(fields[2]) as string, year_basis: valueOf(year_basis), year_basis_source: valueOf(year_basis_source), billing: valueOf(billing), billing_source: valueOf(billing_source), charge_basis: valueOf(charge_basis), charge_basis_source: valueOf(charge_basis_source), catalog_id: valueOf(catalog_id) })
 }
 
 function parseMortgage(raw: unknown): ParseResult<Mortgage> {

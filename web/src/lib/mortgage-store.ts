@@ -71,7 +71,7 @@ const AGREEMENT_RESOURCES = [BANK_CHANGE_RESOURCE, BANK_REVERT_RESOURCE]
 // `household_id` (column default) + `updated_at` (trigger) are never sent. Field
 // names already match column names 1:1 (both snake_case), so a plain pick works.
 const COLS = {
-  banks: ['label', 'year_basis', 'year_basis_source', 'billing', 'billing_source', 'catalog_id'],
+  banks: ['label', 'year_basis', 'year_basis_source', 'billing', 'billing_source', 'catalog_id', 'charge_basis', 'charge_basis_source'],
   mortgages: ['bank_id', 'label', 'start_date', 'archived', 'end_date'],
   parts: ['label', 'loan_number', 'start_balance', 'start_date', 'archived', 'mortgage_id', 'original_balance', 'original_date', 'planned_amortization', 'planned_amortization_start', 'planned_amortization_end'],
   periods: ['loan_part_id', 'start_date', 'end_date', 'rate', 'rate_type'],
@@ -192,7 +192,7 @@ const NOT_NULL_DEFAULTS: Record<string, unknown> = {
 const NULLABLE_EXPLICIT: Partial<Record<keyof typeof COLS, ReadonlySet<string>>> = {
   // The bank profile locks must be clearable back to auto; the catalogue link
   // must be detachable back to a private custom bank.
-  banks: new Set(['year_basis', 'year_basis_source', 'billing', 'billing_source', 'catalog_id']),
+  banks: new Set(['year_basis', 'year_basis_source', 'billing', 'billing_source', 'catalog_id', 'charge_basis', 'charge_basis_source']),
   // Un-archiving an agreement must clear end_date in the same write, or the
   // database consistency CHECK ((end_date is null) = (not archived)) rejects it.
   mortgages: new Set(['end_date']),
@@ -375,7 +375,7 @@ function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): Le
   } catch { warning('säkerhetskopian'); return { status: 'invalid' } }
   const candidate = materializeImport('mortgage-legacy', raw, () => {
     const env = _envelope(data as unknown as Record<string, unknown>, true)
-    env.banks = env.banks.map(r => stamp({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null, catalog_id: null, ...(r as unknown as Record<string, unknown>) }, 'bank') as Bank)
+    env.banks = env.banks.map(r => stamp({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null, charge_basis: null, charge_basis_source: null, catalog_id: null, ...(r as unknown as Record<string, unknown>) }, 'bank') as Bank)
     env.mortgages = env.mortgages.map(r => stamp({ bank_id: null, label: '', start_date: null, archived: false, end_date: null, ...(r as unknown as Record<string, unknown>) }, 'mortgage') as Mortgage)
     env.loan_parts = env.loan_parts.map(r => stamp(r, 'part') as LoanPart)
     env.payments = env.payments.map(r => stamp(r, 'pay') as Payment)
@@ -855,6 +855,7 @@ function normalizeCatalogBank(row: unknown): CatalogBank | null {
     label: r.label,
     year_basis: yb === 360 ? 360 : yb === 365 ? 365 : null,
     billing: r.billing === 'month-end' || r.billing === 'fixed' ? r.billing : null,
+    charge_basis: r.charge_basis === 'days' || r.charge_basis === 'monthly' ? r.charge_basis : null,
   }
 }
 
@@ -872,7 +873,7 @@ export async function listCatalogBanks(): Promise<CatalogBank[]> {
   if (!scope.isActive()) return _readCatalogCache(scope)
   const { data, error } = await supabase
     .from('mortgage_bank_catalog')
-    .select('id,slug,label,year_basis,billing')
+    .select('id,slug,label,year_basis,billing,charge_basis')
     .order('label', { ascending: true })
   if (!scope.isActive() || error || !data) return _readCatalogCache(scope)
   const rows = (data as unknown[]).map(normalizeCatalogBank).filter((b): b is CatalogBank => b != null)

@@ -23,10 +23,10 @@ function part(over: Partial<LoanPart> = {}): LoanPart {
   }
 }
 function bank(over: Partial<Bank> = {}): Bank {
-  return { id: 'b1', created_at: '', label: 'Banken', year_basis: null, year_basis_source: null, billing: null, billing_source: null, catalog_id: null, ...over }
+  return { id: 'b1', created_at: '', label: 'Banken', year_basis: null, year_basis_source: null, billing: null, billing_source: null, charge_basis: null, charge_basis_source: null, catalog_id: null, ...over }
 }
 function catalog(over: Partial<CatalogBank> = {}): CatalogBank {
-  return { id: 'cat1', slug: 'banken', label: 'Banken', year_basis: null, billing: null, ...over }
+  return { id: 'cat1', slug: 'banken', label: 'Banken', year_basis: null, billing: null, charge_basis: null, ...over }
 }
 function mortgage(over: Partial<Mortgage> = {}): Mortgage {
   return { id: 'm1', created_at: '', bank_id: 'b1', label: 'Bolån', start_date: '2021-09-01', archived: false, end_date: null, ...over }
@@ -203,6 +203,65 @@ describe('effectiveBankProfile — billing convention', () => {
     const r = effectiveBankProfile(bank(), catalog({ billing: 'month-end' }), [part()], [], fixedLedger())
     expect(r.billing).toEqual({ value: 'month-end', source: 'catalog' })
     expect(r.drift).toEqual([])
+  })
+})
+
+// ── charge_basis / räntemodell (plan 128 stage 2) ────────────────────────────
+// The third convention is the only one resolved by the REPLAY fitter: its
+// "detected" input counts only when fitBankProfile reproduced the bank's own
+// charges (`proven`). An unproven fit is worth nothing and must fall through.
+describe('effectiveBankProfile — charge_basis convention', () => {
+  const parts = () => [part()]
+  // A flat-monthly biller on w3 (2026-09-01 → 2027-12-31 @ 3,60 %):
+  // B × 3,60 % / 12 = 3 600 kr EVERY month, whatever the day count — where a
+  // days basis would read 120 kr/day (31 d → 3 720). 4 replayable pairs, exact.
+  const monthlyLedger = () => [
+    learnerRow('2026-09-30', 3600), learnerRow('2026-10-31', 3600),
+    learnerRow('2026-11-30', 3600), learnerRow('2026-12-31', 3600),
+    learnerRow('2027-01-31', 3600),
+  ]
+
+  it('a proven flat-monthly fit is the detected räntemodell', () => {
+    const r = effectiveBankProfile(bank(), null, parts(), learnerPeriods(), monthlyLedger())
+    expect(r.charge_basis).toEqual({ value: 'monthly', source: 'detected' })
+  })
+
+  it('a proven per-day fit reads days, and outranks a contradicting catalogue value with drift', () => {
+    const r = effectiveBankProfile(bank(), catalog({ charge_basis: 'monthly' }), parts(), learnerPeriods(), confidentLedger())
+    expect(r.charge_basis).toEqual({ value: 'days', source: 'detected' })
+    expect(r.drift).toContainEqual({ field: 'charge_basis', against: 'catalog', held: 'monthly', observed: 'days', effective: 'days' })
+  })
+
+  it('an UNPROVEN fit is discarded: the catalogue value wins', () => {
+    // One thin pair — below the replay proof (covered ≥ 4), so nothing is detected.
+    const r = effectiveBankProfile(bank(), catalog({ charge_basis: 'monthly' }), parts(), learnerPeriods(), thinLedger())
+    expect(r.charge_basis).toEqual({ value: 'monthly', source: 'catalog' })
+    expect(r.drift).toEqual([])
+  })
+
+  it('no proof and no catalogue → the generic Swedish default (days)', () => {
+    // 'days' is the ordinary convention; flat 30/360 is the exception and is
+    // never assumed without evidence.
+    const r = effectiveBankProfile(bank(), null, parts(), learnerPeriods(), thinLedger())
+    expect(r.charge_basis).toEqual({ value: 'days', source: 'default' })
+    const cold = effectiveBankProfile(bank(), null, parts(), [], [])
+    expect(cold.charge_basis).toEqual({ value: 'days', source: 'default' })
+  })
+
+  it('a declared räntemodell always wins over the fitter, surfacing drift', () => {
+    const r = effectiveBankProfile(
+      bank({ charge_basis: 'monthly', charge_basis_source: 'declared' }),
+      catalog({ charge_basis: 'days' }),
+      parts(), learnerPeriods(), confidentLedger())
+    expect(r.charge_basis).toEqual({ value: 'monthly', source: 'declared' })
+    expect(r.drift).toContainEqual({ field: 'charge_basis', against: 'declared', held: 'monthly', observed: 'days', effective: 'monthly' })
+  })
+
+  it('a malformed declared räntemodell is NOT a lock — resolution falls through', () => {
+    const r = effectiveBankProfile(
+      bank({ charge_basis: 'weekly', charge_basis_source: 'declared' }),
+      null, parts(), learnerPeriods(), confidentLedger())
+    expect(r.charge_basis).toEqual({ value: 'days', source: 'detected' })
   })
 })
 

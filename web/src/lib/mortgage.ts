@@ -50,6 +50,13 @@ export interface Bank {
   // pins the cadence; null/detected/suggested fall back to detection.
   billing?: string | null
   billing_source?: string | null
+  // Plan 128 — the bank's räntemodell. 'days' = the charge scales with the day
+  // count (the ordinary Swedish convention); 'monthly' = a flat 30/360 month;
+  // null = detect from the ledger (fitBankProfile). Only a 'declared'
+  // charge_basis_source pins the model; null/detected/suggested fall back to
+  // detection.
+  charge_basis?: string | null
+  charge_basis_source?: string | null
   // Plan 109a — optional link to the shared read-only bank catalogue
   // (mortgage_bank_catalog). Null = private custom bank / legacy row. The
   // catalogue label is denormalised into `label` on attach, so rendering never
@@ -63,12 +70,16 @@ export const YEAR_BASES = [360, 365] as const
 export const YEAR_BASIS_SOURCES = ['detected', 'suggested', 'declared'] as const
 export const BILLING_MODES = ['month-end', 'fixed'] as const
 export const BILLING_SOURCES = YEAR_BASIS_SOURCES
+// Plan 128 — the third convention, clamped the same way.
+export const CHARGE_BASIS_MODES = ['days', 'monthly'] as const
+export const CHARGE_BASIS_SOURCES = YEAR_BASIS_SOURCES
 
 // Normalise a Bank record: default the profile columns to null, clamp
 // `year_basis` to exactly 360 | 365 (anything else → null → detection),
-// `billing` to the allowed cadence set, and each `*_source` to the allowed
-// provenance set (else null). A malformed profile therefore reads as "no lock"
-// and the forecast falls back to detection, never to a garbage convention.
+// `billing` to the allowed cadence set, `charge_basis` to the allowed
+// räntemodell set, and each `*_source` to the allowed provenance set (else
+// null). A malformed profile therefore reads as "no lock" and the forecast
+// falls back to detection, never to a garbage convention.
 export function makeBank(b: Partial<Bank>): Omit<Bank, 'id' | 'created_at'> {
   const yb = Number(b.year_basis)
   const year_basis = yb === 360 ? 360 : yb === 365 ? 365 : null
@@ -79,6 +90,8 @@ export function makeBank(b: Partial<Bank>): Omit<Bank, 'id' | 'created_at'> {
     year_basis_source: inSet(b.year_basis_source, YEAR_BASIS_SOURCES),
     billing: inSet(b.billing, BILLING_MODES),
     billing_source: inSet(b.billing_source, BILLING_SOURCES),
+    charge_basis: inSet(b.charge_basis, CHARGE_BASIS_MODES),
+    charge_basis_source: inSet(b.charge_basis_source, CHARGE_BASIS_SOURCES),
     catalog_id: typeof b.catalog_id === 'string' && b.catalog_id ? b.catalog_id : null,
   }
 }
@@ -1937,14 +1950,17 @@ export interface CatalogBank {
   label: string
   year_basis?: number | null
   billing?: string | null
+  // Plan 128 — the curated räntemodell. Null until verified against the bank's
+  // own documentation; a household's fitted value is never promoted here.
+  charge_basis?: string | null
 }
 
 export type ConventionSource = 'declared' | 'detected' | 'catalog' | 'default'
 export interface EffectiveConvention<T> { value: T; source: ConventionSource }
 
-type ConventionValue = 360 | 365 | 'month-end' | 'fixed'
+type ConventionValue = 360 | 365 | 'month-end' | 'fixed' | 'days' | 'monthly'
 export interface ConventionDriftWarning {
-  field: 'year_basis' | 'billing'
+  field: 'year_basis' | 'billing' | 'charge_basis'
   /** Which profile the confident ledger evidence contradicts. */
   against: 'declared' | 'catalog'
   /** The value that profile holds. */
@@ -1958,6 +1974,7 @@ export interface ConventionDriftWarning {
 export interface EffectiveBankProfile {
   year_basis: EffectiveConvention<360 | 365>
   billing: EffectiveConvention<'month-end' | 'fixed'>
+  charge_basis: EffectiveConvention<'days' | 'monthly'>
   drift: ConventionDriftWarning[]
 }
 
@@ -1994,10 +2011,18 @@ export function effectiveBankProfile(
   parts: LoanPart[], periods: RatePeriod[], payments: Payment[],
 ): EffectiveBankProfile {
   const suggestion = suggestBankProfile(parts || [], periods || [], payments || [])
+  // Plan 128 — charge_basis is the one convention resolved by the replay fitter
+  // rather than a threshold detector: its "detected" input counts only when the
+  // fit reproduced the bank's own charges (`proven`). year_basis and billing
+  // keep their plan-104 detectors here; moving them onto the fitter belongs
+  // with the persisted-profile stage.
+  const fit = fitBankProfile(parts || [], periods || [], payments || [])
   const drift: ConventionDriftWarning[] = []
   const asYearBasis = (v: unknown): 360 | 365 | null => v === 360 ? 360 : v === 365 ? 365 : null
   const asBilling = (v: unknown): 'month-end' | 'fixed' | null =>
     v === 'month-end' ? 'month-end' : v === 'fixed' ? 'fixed' : null
+  const asChargeBasis = (v: unknown): 'days' | 'monthly' | null =>
+    v === 'days' ? 'days' : v === 'monthly' ? 'monthly' : null
   return {
     year_basis: resolveConvention('year_basis',
       bank?.year_basis_source === 'declared' ? asYearBasis(bank.year_basis) : null,
@@ -2007,6 +2032,12 @@ export function effectiveBankProfile(
       bank?.billing_source === 'declared' ? asBilling(bank.billing) : null,
       suggestion.billing.confident ? suggestion.billing.value : null,
       asBilling(catalog?.billing), 'fixed', drift),
+    // 'days' is the generic Swedish fallback (charges scale with the day
+    // count); 'monthly' is the flat 30/360 exception, never assumed.
+    charge_basis: resolveConvention('charge_basis',
+      bank?.charge_basis_source === 'declared' ? asChargeBasis(bank.charge_basis) : null,
+      fit?.proven ? fit.charge_basis : null,
+      asChargeBasis(catalog?.charge_basis), 'days', drift),
     drift,
   }
 }

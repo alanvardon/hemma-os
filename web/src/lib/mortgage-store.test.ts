@@ -727,6 +727,47 @@ describe('banks & mortgages CRUD (plan 103)', () => {
     expect(mock().tables.mortgage_banks[0].billing_source).toBeNull()
   })
 
+  // Plan 128 — the räntemodell columns must ride the same allowlist path: a
+  // charge_basis missing from COLS.banks is silently dropped, and one missing
+  // from NULLABLE_EXPLICIT can never be cleared back to auto.
+  it('addBank: persists charge_basis + charge_basis_source and round-trips via list', async () => {
+    const saved = await store.addBank({ label: 'Danske', charge_basis: 'monthly', charge_basis_source: 'detected' })
+    const row = mock().tables.mortgage_banks[0]
+    expect(row.charge_basis).toBe('monthly')              // reached the DB column, not dropped by COLS.banks
+    expect(row.charge_basis_source).toBe('detected')
+    const listed = await store.listBanks()
+    expect(listed[0].charge_basis).toBe('monthly')        // read back out of the cloud
+    expect(listed[0].charge_basis_source).toBe('detected')
+    expect((cache().banks as Bank[])[0].charge_basis).toBe('monthly')
+    expect(saved.charge_basis).toBe('monthly')
+  })
+
+  it('updateBank: sets the räntemodell, then clears it back to auto (NULLABLE_EXPLICIT)', async () => {
+    mock().tables.mortgage_banks = [bankRow('b1', { revision: 1 })]
+    await store.listBanks()
+    const updated = await store.updateBank('b1', { charge_basis: 'days', charge_basis_source: 'declared' })
+    expect(updated?.charge_basis).toBe('days')
+    expect(mock().tables.mortgage_banks[0].charge_basis).toBe('days')
+    expect(mock().tables.mortgage_banks[0].charge_basis_source).toBe('declared')
+    expect((cache().banks as Bank[])[0].charge_basis).toBe('days')
+
+    await store.updateBank('b1', { charge_basis: null, charge_basis_source: null })
+    expect(mock().tables.mortgage_banks[0].charge_basis).toBeNull()
+    expect(mock().tables.mortgage_banks[0].charge_basis_source).toBeNull()
+  })
+
+  it('addBank: a cloud error keeps the räntemodell dirty for replay', async () => {
+    mock().control.failing.add('mortgage_banks')
+    await expect(store.addBank({ label: 'Danske', charge_basis: 'monthly', charge_basis_source: 'detected' })).rejects.toBeTruthy()
+    // Durable sync keeps the optimistic row cached + dirty; the value must survive to reach the DB on replay.
+    expect((cache().banks as Bank[])[0].charge_basis).toBe('monthly')
+    mock().control.failing.delete('mortgage_banks')
+    await sync.syncCoordinator.replay()
+    expect(mock().tables.mortgage_banks[0].charge_basis).toBe('monthly')
+    expect(mock().tables.mortgage_banks[0].charge_basis_source).toBe('detected')
+    expect(sync.syncCoordinator.isDirty('mortgage_banks')).toBe(false)
+  })
+
   it('addBank: a cloud error keeps the year-basis lock dirty for replay', async () => {
     mock().control.failing.add('mortgage_banks')
     await expect(store.addBank({ label: 'Danske', year_basis: 360, year_basis_source: 'declared' })).rejects.toBeTruthy()
@@ -747,6 +788,22 @@ describe('banks & mortgages CRUD (plan 103)', () => {
     expect(bank.label).toBe('Danske')
     expect(bank.year_basis).toBeNull()
     expect(bank.year_basis_source).toBeNull()
+    expect(bank.charge_basis).toBeNull()
+    expect(bank.charge_basis_source).toBeNull()
+  })
+
+  // Plan 128 — the catalogue's curated räntemodell must survive the select
+  // column list and the normaliser (a missing column reads as "unverified").
+  it('listCatalogBanks: round-trips the curated charge_basis and voids a garbage value', async () => {
+    mock().tables.mortgage_bank_catalog = [
+      { id: 'catalog-danske', slug: 'danske', label: 'Danske', year_basis: 360, billing: 'month-end', charge_basis: 'monthly' },
+      { id: 'catalog-legacy', slug: 'legacy', label: 'Legacy' },
+      { id: 'catalog-broken', slug: 'broken', label: 'Broken', charge_basis: 'weekly' },
+    ]
+    const rows = await store.listCatalogBanks()
+    expect(rows.find(r => r.id === 'catalog-danske')?.charge_basis).toBe('monthly')
+    expect(rows.find(r => r.id === 'catalog-legacy')?.charge_basis).toBeNull()
+    expect(rows.find(r => r.id === 'catalog-broken')?.charge_basis).toBeNull()
   })
 
   it('removeMortgage/removeBank: success prunes the cache', async () => {

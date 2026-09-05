@@ -248,7 +248,7 @@ describe('Mortgage and month-end persistence schemas', () => {
     const legacy = { ...mortgageBackup, banks: [{ id: 'bank-1', created_at: '2026-07-15T10:00:00.000Z', label: 'Bank' }] }
     const parsed = parseMortgageEnvelope(legacy)
     expect(parsed).toMatchObject({ ok: true })
-    if (parsed.ok) expect(parsed.value.banks[0]).toMatchObject({ year_basis: null, year_basis_source: null })
+    if (parsed.ok) expect(parsed.value.banks[0]).toMatchObject({ year_basis: null, year_basis_source: null, charge_basis: null, charge_basis_source: null })
     expect(parseMortgageEnvelope({ ...legacy, banks: [{ ...legacy.banks[0], year_basis: 999 }] }).ok).toBe(false)
   })
 
@@ -283,6 +283,18 @@ describe('Mortgage and month-end persistence schemas', () => {
     expect(parsed).toMatchObject({ ok: true })
     if (parsed.ok) expect(parseMortgageEnvelope(parsed.value)).toEqual(parsed)
     expect(parseMortgageEnvelope({ ...current, banks: [{ ...current.banks[0], billing: 'weekly' }] }).ok).toBe(false)
+  })
+
+  it('round-trips Plan 128 charge-basis profiles and rejects malformed values', () => {
+    const current = { ...mortgageBackup, banks: [{ ...mortgageBackup.banks[0], charge_basis: 'monthly', charge_basis_source: 'detected' }] }
+    const parsed = parseMortgageEnvelope(current)
+    expect(parsed).toMatchObject({ ok: true })
+    if (parsed.ok) {
+      expect(parsed.value.banks[0]).toMatchObject({ charge_basis: 'monthly', charge_basis_source: 'detected' })
+      expect(parseMortgageEnvelope(parsed.value)).toEqual(parsed)
+    }
+    expect(parseMortgageEnvelope({ ...current, banks: [{ ...current.banks[0], charge_basis: 'daily' }] }).ok).toBe(false)
+    expect(parseMortgageEnvelope({ ...current, banks: [{ ...current.banks[0], charge_basis_source: 'guessed' }] }).ok).toBe(false)
   })
 
   it('rejects mortgage duplicates, enum/numeric mistakes, and wrong child references', () => {
