@@ -229,7 +229,7 @@ describe('Bolanekoll — bank profile modal save (plan 109c Stage 1)', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Bankprofil' }))
     const dialog = screen.getByRole('dialog', { name: 'Bankprofil' }) as HTMLDialogElement
-    await user.click(within(dialog).getByRole('radio', { name: 'Fast månadsränta' }))
+    await user.click(within(dialog).getByRole('radio', { name: 'Fast månad' }))
     await user.click(within(dialog).getByRole('button', { name: 'Spara' }))
 
     expect(await screen.findByText('Bankprofil sparad.')).toBeInTheDocument()
@@ -237,6 +237,34 @@ describe('Bolanekoll — bank profile modal save (plan 109c Stage 1)', () => {
       charge_basis: 'monthly', charge_basis_source: 'declared',
     }))
     expect(dialog.open).toBe(false)
+  })
+
+  it('locking one field never nulls out a sibling field the owner did not touch (plan 128 write-once, Stage 6 finding)', async () => {
+    // billing/charge_basis already hold an undeclared 'detected' value (a
+    // prior auto-fit) — both controls open on Auto since only 'declared'
+    // pre-selects a segment. Locking ONLY year_basis must not resend billing/
+    // charge_basis as null: found live in the dev environment, where saving
+    // any one field silently erased the other two's auto-fitted provenance.
+    const fittedBank: Bank = {
+      ...bank, billing: 'month-end', billing_source: 'detected', charge_basis: 'days', charge_basis_source: 'detected',
+    }
+    vi.mocked(Store.listBanks).mockResolvedValue([fittedBank])
+    vi.mocked(Store.updateBank).mockClear() // isolate from earlier tests' accumulated calls on this shared mock
+    vi.mocked(Store.updateBank).mockResolvedValueOnce({ ...fittedBank, year_basis: 365, year_basis_source: 'declared' })
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Bankprofil' }))
+    const dialog = screen.getByRole('dialog', { name: 'Bankprofil' }) as HTMLDialogElement
+    await user.click(within(dialog).getByRole('radio', { name: '365' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Spara' }))
+
+    expect(await screen.findByText('Bankprofil sparad.')).toBeInTheDocument()
+    expect(Store.updateBank).toHaveBeenCalledTimes(1)
+    const patch = vi.mocked(Store.updateBank).mock.calls[0][1]
+    expect(patch).toEqual({ year_basis: 365, year_basis_source: 'declared' })
+    expect(patch).not.toHaveProperty('billing')
+    expect(patch).not.toHaveProperty('charge_basis')
   })
 })
 

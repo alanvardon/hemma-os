@@ -71,18 +71,18 @@ describe('BankProfileDialog — Räntemodell control (plan 128 Stage 5)', () => 
     expect(within(section as HTMLElement).getByText(label)).toBeInTheDocument()
   })
 
-  it('renders the Auto/Ränta per dag/Fast månadsränta options', () => {
+  it('renders the Auto/Ränta per dag/Fast månad options', () => {
     renderDialog()
     const group = screen.getByRole('radiogroup', { name: 'Räntemodell' })
     expect(within(group).getByRole('radio', { name: 'Auto' })).toBeInTheDocument()
     expect(within(group).getByRole('radio', { name: 'Ränta per dag' })).toBeInTheDocument()
-    expect(within(group).getByRole('radio', { name: 'Fast månadsränta' })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: 'Fast månad' })).toBeInTheDocument()
   })
 
   it('pre-selects the declared value when opening on a bank with a declared charge_basis', () => {
     renderDialog({ bank: { ...bank, charge_basis: 'monthly', charge_basis_source: 'declared' } })
     const group = screen.getByRole('radiogroup', { name: 'Räntemodell' })
-    expect(within(group).getByRole('radio', { name: 'Fast månadsränta' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(group).getByRole('radio', { name: 'Fast månad' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('pre-selects the declared 360 year_basis and month-end billing exactly as before (regression)', () => {
@@ -97,15 +97,36 @@ describe('BankProfileDialog — Räntemodell control (plan 128 Stage 5)', () => 
     renderDialog({ bank: { ...bank, charge_basis: 'monthly', charge_basis_source: 'detected' } })
     const group = screen.getByRole('radiogroup', { name: 'Räntemodell' })
     expect(within(group).getByRole('radio', { name: 'Auto' })).toHaveAttribute('aria-checked', 'true')
-    expect(within(group).getByRole('radio', { name: 'Fast månadsränta' })).toHaveAttribute('aria-checked', 'false')
+    expect(within(group).getByRole('radio', { name: 'Fast månad' })).toHaveAttribute('aria-checked', 'false')
   })
 
-  it('submits charge_basis: null when left on Auto, alongside the other two fields (regression)', async () => {
+  it('touching nothing omits all three fields — an untouched Auto must not erase a sibling undeclared value (plan 128 write-once)', async () => {
+    // A control renders Auto both when nothing is declared AND when the bank
+    // already holds an undeclared 'detected' value (Stage 6 finding: the
+    // dialog cannot tell those apart from the choice alone). Submitting every
+    // field unconditionally would silently null out a 'detected' sibling the
+    // owner never touched, undoing plan 128's write-once guarantee the moment
+    // any one field on the same bank is saved. Only a touched field may appear.
     const user = userEvent.setup()
     const { onSave } = renderDialog()
     await user.click(within(dialog()).getByRole('button', { name: 'Spara' }))
     expect(onSave).toHaveBeenCalledTimes(1)
-    expect(onSave.mock.calls[0][0]).toMatchObject({ year_basis: null, billing: null, charge_basis: null })
+    const input = onSave.mock.calls[0][0]
+    expect(input).not.toHaveProperty('year_basis')
+    expect(input).not.toHaveProperty('billing')
+    expect(input).not.toHaveProperty('charge_basis')
+  })
+
+  it('touching only Räntemodell submits charge_basis alone, leaving year_basis/billing untouched', async () => {
+    const user = userEvent.setup()
+    const { onSave } = renderDialog()
+    await user.click(within(dialog()).getByRole('radio', { name: 'Ränta per dag' }))
+    await user.click(within(dialog()).getByRole('button', { name: 'Spara' }))
+    expect(onSave).toHaveBeenCalledTimes(1)
+    const input = onSave.mock.calls[0][0]
+    expect(input.charge_basis).toBe('days')
+    expect(input).not.toHaveProperty('year_basis')
+    expect(input).not.toHaveProperty('billing')
   })
 
   it('submits the selected charge_basis, and year_basis/billing still submit correctly (regression)', async () => {

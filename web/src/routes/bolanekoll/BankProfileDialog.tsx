@@ -9,11 +9,18 @@ import BankPicker, { type BankSelection } from './BankPicker'
 // What a profile save intends: which bank the agreement points at (null = keep
 // the current one) and the household's convention locks. Opening the modal never
 // saves — the parent commits this on the explicit Spara press.
+// A field is present only when the owner actually touched its control this
+// session — see the touched-vs-initial diff in `submit` below. Omitting an
+// untouched field (rather than sending its Auto-mapped null) matters the
+// moment a control shows Auto because the stored value is merely 'detected',
+// not 'declared': a save that resent every field unconditionally would erase
+// that undeclared-but-fitted value back to null, silently undoing plan 128's
+// write-once guarantee for the two fields the owner never meant to touch.
 export interface BankProfileSaveInput {
   selection: BankSelection
-  year_basis: 360 | 365 | null
-  billing: 'month-end' | 'fixed' | null
-  charge_basis: 'days' | 'monthly' | null
+  year_basis?: 360 | 365 | null
+  billing?: 'month-end' | 'fixed' | null
+  charge_basis?: 'days' | 'monthly' | null
 }
 
 type YearBasisChoice = 'auto' | '360' | '365'
@@ -77,6 +84,12 @@ export default function BankProfileDialog({
   const [yearBasis, setYearBasis] = useState<YearBasisChoice>('auto')
   const [billing, setBilling] = useState<BillingChoice>('auto')
   const [chargeBasis, setChargeBasis] = useState<ChargeBasisChoice>('auto')
+  // The choice each control opened on, so `submit` can tell an owner EDIT
+  // apart from a field that merely rendered as Auto because it holds an
+  // undeclared 'detected'/'catalog'/'default' value — see BankProfileSaveInput.
+  const [initialYearBasis, setInitialYearBasis] = useState<YearBasisChoice>('auto')
+  const [initialBilling, setInitialBilling] = useState<BillingChoice>('auto')
+  const [initialChargeBasis, setInitialChargeBasis] = useState<ChargeBasisChoice>('auto')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -86,12 +99,15 @@ export default function BankProfileDialog({
     if (!open) return
     setSelection(bank ? { kind: 'existing', bankId: bank.id } : null)
     setCustomLabel('')
-    setYearBasis(bank?.year_basis_source === 'declared' && (bank.year_basis === 360 || bank.year_basis === 365)
-      ? (String(bank.year_basis) as YearBasisChoice) : 'auto')
-    setBilling(bank?.billing_source === 'declared' && (bank.billing === 'month-end' || bank.billing === 'fixed')
-      ? bank.billing : 'auto')
-    setChargeBasis(bank?.charge_basis_source === 'declared' && (bank.charge_basis === 'days' || bank.charge_basis === 'monthly')
-      ? bank.charge_basis : 'auto')
+    const yb = bank?.year_basis_source === 'declared' && (bank.year_basis === 360 || bank.year_basis === 365)
+      ? (String(bank.year_basis) as YearBasisChoice) : 'auto'
+    const bi = bank?.billing_source === 'declared' && (bank.billing === 'month-end' || bank.billing === 'fixed')
+      ? bank.billing : 'auto'
+    const cb = bank?.charge_basis_source === 'declared' && (bank.charge_basis === 'days' || bank.charge_basis === 'monthly')
+      ? bank.charge_basis : 'auto'
+    setYearBasis(yb); setInitialYearBasis(yb)
+    setBilling(bi); setInitialBilling(bi)
+    setChargeBasis(cb); setInitialChargeBasis(cb)
     setSaving(false)
     setError(null)
   }, [open, bank])
@@ -101,12 +117,11 @@ export default function BankProfileDialog({
     setSaving(true)
     setError(null)
     try {
-      await onSave({
-        selection,
-        year_basis: yearBasis === 'auto' ? null : (Number(yearBasis) as 360 | 365),
-        billing: billing === 'auto' ? null : billing,
-        charge_basis: chargeBasis === 'auto' ? null : chargeBasis,
-      })
+      const input: BankProfileSaveInput = { selection }
+      if (yearBasis !== initialYearBasis) input.year_basis = yearBasis === 'auto' ? null : (Number(yearBasis) as 360 | 365)
+      if (billing !== initialBilling) input.billing = billing === 'auto' ? null : billing
+      if (chargeBasis !== initialChargeBasis) input.charge_basis = chargeBasis === 'auto' ? null : chargeBasis
+      await onSave(input)
       onClose()
     } catch (err) {
       // The modal STAYS OPEN and shows the failure — a throwing store is not
@@ -191,7 +206,7 @@ export default function BankProfileDialog({
             options={[
               { v: 'auto', label: 'Auto' },
               { v: 'days', label: 'Ränta per dag' },
-              { v: 'monthly', label: 'Fast månadsränta' },
+              { v: 'monthly', label: 'Fast månad' },
             ]}
           />
         </div>

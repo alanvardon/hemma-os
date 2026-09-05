@@ -221,14 +221,16 @@ export function useMortgageWorkspace() {
     }
     const targetBankId = bankId ?? activeBank?.id ?? null
     if (targetBankId) {
-      await Store.updateBank(targetBankId, {
-        year_basis: input.year_basis,
-        year_basis_source: input.year_basis == null ? null : 'declared',
-        billing: input.billing,
-        billing_source: input.billing == null ? null : 'declared',
-        charge_basis: input.charge_basis,
-        charge_basis_source: input.charge_basis == null ? null : 'declared',
-      })
+      // Only a field the owner actually touched appears on `input` at all
+      // (BankProfileDialog diffs against what each control opened on) — an
+      // absent key must stay absent from the patch, not become an explicit
+      // null, or this save would erase a sibling field's undeclared 'detected'
+      // value the owner never meant to touch (plan 128 write-once).
+      const patch: Partial<Bank> = {}
+      if ('year_basis' in input) { patch.year_basis = input.year_basis; patch.year_basis_source = input.year_basis == null ? null : 'declared' }
+      if ('billing' in input) { patch.billing = input.billing; patch.billing_source = input.billing == null ? null : 'declared' }
+      if ('charge_basis' in input) { patch.charge_basis = input.charge_basis; patch.charge_basis_source = input.charge_basis == null ? null : 'declared' }
+      if (Object.keys(patch).length) await Store.updateBank(targetBankId, patch)
     }
     await refresh()
     flashSaved()
