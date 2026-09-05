@@ -1737,6 +1737,103 @@ export function learnYearBasis(bankParts: LoanPart[], periods: RatePeriod[], pay
   return { basis, confident, used, windows: windows.size }
 }
 
+// Plan 128 §1 — ONE replay fitter, replacing three independent guesses.
+// `learnYearBasis`, `chargeBasis` and `isMonthEndBilling` each answer one
+// question with its own threshold, and none of them proves the resulting
+// profile reproduces what the bank actually charged. This replays every
+// historical interest charge from the balance at interval start, the listed
+// rate covering that interval and the observed dates, scores each candidate
+// model by its absolute kronor residual, and only calls the answer `proven`
+// when the winner both reproduces the ledger within tolerance AND beats the
+// runner-up by a wide margin. An ambiguous history proves nothing, so nothing
+// is persisted from it.
+//
+// Amount candidates are THREE, not four: `year_basis` does not appear in the
+// flat-monthly formula at all (see the branch comment in expectedCharge), so
+// (360, monthly) and (365, monthly) are the same model — carrying both would
+// make the runner-up trivially equal the winner and void the uniqueness proof.
+// A monthly win reports the inert generic default 365 as its year basis.
+//
+// Date conventions (billing) never move a replayed amount, only the prediction
+// of the next date, so `billing` is fitted straight from the date pattern.
+export interface ProfileFit {
+  year_basis: 360 | 365
+  charge_basis: 'days' | 'monthly'
+  billing: 'month-end' | 'fixed'
+  /** Charges replayed — only intervals with both a charge and a covering rate. */
+  covered: number
+  /** Total absolute kronor error across the replayed charges, for the winner. */
+  residual: number
+  /** Residual of the next-best DISTINCT model; the margin proves uniqueness. */
+  runner_up_residual: number
+  proven: boolean
+}
+
+interface ReplayInterval { balance: number; rate: number; days: number; amount: number; period_months: number }
+
+export function fitBankProfile(parts: LoanPart[], periods: RatePeriod[], payments: Payment[]): ProfileFit | null {
+  const real = (payments || []).filter(p => p?.source !== 'predicted')
+  const intervals: ReplayInterval[] = []
+  const allDates: string[] = []
+  for (const part of parts || []) {
+    if (!part) continue
+    const intRows = real
+      .filter(p => p?.loan_part_id === part.id && p.kind === 'interest' && p.date && Math.abs(Number(p.amount)) > 0)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    const dates = intRows.map(r => String(r.date))
+    allDates.push(...dates)
+    // The flat-monthly multiplier production uses, read off this part's own
+    // cadence — a bank's parts may bill monthly and kvartalsvis side by side.
+    const period_months = chargePeriodMonths(dates)
+    for (let i = 1; i < intRows.length; i++) {
+      const prevDate = dates[i - 1], date = dates[i]
+      // The whole accrual must sit inside ONE rate period (constant listed
+      // rate) — a pair straddling a villkorsändring is not replayable against
+      // a single rate, so it is skipped rather than mispriced.
+      const rp = effectiveRatePeriod(part, periods, date)
+      const rpPrev = effectiveRatePeriod(part, periods, prevDate)
+      if (!rp || !rpPrev || rpPrev.id !== rp.id) continue
+      const rate = rp.rate == null ? null : Number(rp.rate)
+      if (rate == null || !(rate > 0)) continue
+      const days = daysBetween(prevDate, date)
+      if (days == null || days <= 0) continue
+      const balance = partBalanceAsOf(part, real, prevDate)
+      const amount = Math.abs(Number(intRows[i].amount))
+      if (balance <= 0 || !(amount > 0)) continue
+      intervals.push({ balance, rate, days, amount, period_months })
+    }
+  }
+  // No interval has both a charge and a single covering rate → nothing to fit.
+  // Returning null is honest; a guessed year basis is not.
+  if (!intervals.length) return null
+
+  // Every candidate replays the SAME interval set, so `covered` is one number.
+  // Each prediction is rounded to öre exactly as expectedCharge rounds it.
+  const residualOf = (predict: (iv: ReplayInterval) => number) =>
+    intervals.reduce((sum, iv) => sum + Math.abs(iv.amount - r2(predict(iv))), 0)
+  const candidates: Array<{ year_basis: 360 | 365; charge_basis: 'days' | 'monthly'; residual: number }> = [
+    { year_basis: 360, charge_basis: 'days', residual: residualOf(iv => iv.balance * iv.rate / 100 * iv.days / 360) },
+    { year_basis: 365, charge_basis: 'days', residual: residualOf(iv => iv.balance * iv.rate / 100 * iv.days / 365) },
+    { year_basis: 365, charge_basis: 'monthly', residual: residualOf(iv => iv.balance * iv.rate / 100 / 12 * iv.period_months) },
+  ]
+  const ranked = candidates.slice().sort((a, b) => a.residual - b.residual)
+  const winner = ranked[0]
+  // Reported and decided-on figures are the same rounded kronor, so the
+  // evidence line the owner reads is exactly what `proven` was judged on.
+  const residual = r2(winner.residual)
+  const runner_up_residual = r2(ranked[1].residual)
+  const charged = intervals.reduce((sum, iv) => sum + iv.amount, 0)
+  const covered = intervals.length
+  const proven = covered >= 4
+    && residual <= Math.max(5, 0.005 * charged)
+    && runner_up_residual >= 4 * residual
+  return {
+    year_basis: winner.year_basis, charge_basis: winner.charge_basis,
+    billing: isMonthEndBilling(allDates.slice().sort((a, b) => a.localeCompare(b))) ? 'month-end' : 'fixed',
+    covered, residual, runner_up_residual, proven,
+  }
+}
+
 // The parts sharing `part`'s bank (for pooling the learner). Falls back to just
 // `part` when there is no bank context or the part has no resolvable bank.
 function sameBankParts(part: LoanPart, opts?: ForecastOpts): LoanPart[] {
