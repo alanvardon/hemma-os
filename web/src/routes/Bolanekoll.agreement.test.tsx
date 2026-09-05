@@ -138,6 +138,9 @@ describe('Bolanekoll — agreement card (plan 109c Stage 1)', () => {
     const dialog = screen.getByRole('dialog', { name: 'Bankprofil' })
     expect(within(dialog).getByRole('heading', { name: /Bankprofil/ })).toBeInTheDocument()
     expect(within(dialog).getByText(/tyder tydligt på/)).toBeInTheDocument()
+    // Plan 128 Stage 5 — the replay evidence behind the drift is visible in the
+    // same modal, wired all the way from Bolanekoll.tsx's fitBankProfile memo.
+    expect(within(dialog).getByText(/Modellen återskapar bankens 4 senaste debiteringar inom 0 kr\./)).toBeInTheDocument()
   })
 })
 
@@ -213,6 +216,25 @@ describe('Bolanekoll — bank profile modal save (plan 109c Stage 1)', () => {
     // The lock is persisted with source 'declared' (source shows the household lock).
     expect(Store.updateBank).toHaveBeenCalledWith('b1', expect.objectContaining({
       year_basis: 365, year_basis_source: 'declared',
+    }))
+    expect(dialog.open).toBe(false)
+  })
+
+  it('submits a charge_basis lock alongside the other conventions when saving', async () => {
+    // Plan 128 Stage 5 — the third control writes 'declared' exactly like
+    // year_basis/billing, through the same submit payload.
+    vi.mocked(Store.updateBank).mockResolvedValueOnce({ ...bank, charge_basis: 'monthly', charge_basis_source: 'declared' })
+    const user = userEvent.setup()
+    renderBolanekoll()
+
+    await user.click(await screen.findByRole('button', { name: 'Bankprofil' }))
+    const dialog = screen.getByRole('dialog', { name: 'Bankprofil' }) as HTMLDialogElement
+    await user.click(within(dialog).getByRole('radio', { name: 'Fast månadsränta' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Spara' }))
+
+    expect(await screen.findByText('Bankprofil sparad.')).toBeInTheDocument()
+    expect(Store.updateBank).toHaveBeenCalledWith('b1', expect.objectContaining({
+      charge_basis: 'monthly', charge_basis_source: 'declared',
     }))
     expect(dialog.open).toBe(false)
   })

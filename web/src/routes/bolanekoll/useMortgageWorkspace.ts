@@ -226,6 +226,8 @@ export function useMortgageWorkspace() {
         year_basis_source: input.year_basis == null ? null : 'declared',
         billing: input.billing,
         billing_source: input.billing == null ? null : 'declared',
+        charge_basis: input.charge_basis,
+        charge_basis_source: input.charge_basis == null ? null : 'declared',
       })
     }
     await refresh()

@@ -716,6 +716,9 @@ dialog.bk-dialog {
   display: inline-flex; align-items: baseline; gap: 0.4rem; flex-wrap: wrap;
   margin-top: 0.5rem; font-size: 12.5px; color: var(--ink-soft);
 }
+.bk-dialog .bankprofil-evidence {
+  margin-top: 0.5rem; font-size: 12.5px; color: var(--ink-soft);
+}
 .bk-dialog .bankprofil-drift {
   margin-top: 1rem; padding: 0.6rem 0.8rem; border-radius: 8px;
   background: var(--paper-warm); border: 1px solid var(--warn, #b8860b);

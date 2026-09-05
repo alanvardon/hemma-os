@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import DialogShell from '../../components/DialogShell'
 import Segmented from '../../components/Segmented'
 import { persistenceErrorMessage } from '../../lib/persistence-error'
-import type { Bank, CatalogBank, EffectiveBankProfile, BankProfileSuggestion, ConventionSource, ConventionDriftWarning } from '../../lib/mortgage'
+import { money } from '../../lib/format'
+import type { Bank, CatalogBank, EffectiveBankProfile, BankProfileSuggestion, ConventionSource, ConventionDriftWarning, ProfileFit } from '../../lib/mortgage'
 import BankPicker, { type BankSelection } from './BankPicker'
 
 // What a profile save intends: which bank the agreement points at (null = keep
@@ -12,10 +13,12 @@ export interface BankProfileSaveInput {
   selection: BankSelection
   year_basis: 360 | 365 | null
   billing: 'month-end' | 'fixed' | null
+  charge_basis: 'days' | 'monthly' | null
 }
 
 type YearBasisChoice = 'auto' | '360' | '365'
 type BillingChoice = 'auto' | 'month-end' | 'fixed'
+type ChargeBasisChoice = 'auto' | 'days' | 'monthly'
 
 const SOURCE_LABELS: Record<ConventionSource, string> = {
   declared: 'Hushållslås',
@@ -56,7 +59,7 @@ function driftLabel(d: ConventionDriftWarning): string {
 // controls. Drift (fresh evidence contradicting a lock or the catalogue value)
 // is explained here in full — the card only badges it.
 export default function BankProfileDialog({
-  open, bank, banks, catalogBanks, effective, suggestion, agreementCount, onSave, onClose,
+  open, bank, banks, catalogBanks, effective, suggestion, agreementCount, fit, onSave, onClose,
 }: {
   open: boolean
   bank: Bank | null
@@ -65,6 +68,7 @@ export default function BankProfileDialog({
   effective: EffectiveBankProfile | null
   suggestion: BankProfileSuggestion | null
   agreementCount: number
+  fit: ProfileFit | null
   onSave: (input: BankProfileSaveInput) => Promise<void>
   onClose: () => void
 }) {
@@ -72,6 +76,7 @@ export default function BankProfileDialog({
   const [customLabel, setCustomLabel] = useState('')
   const [yearBasis, setYearBasis] = useState<YearBasisChoice>('auto')
   const [billing, setBilling] = useState<BillingChoice>('auto')
+  const [chargeBasis, setChargeBasis] = useState<ChargeBasisChoice>('auto')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -85,6 +90,8 @@ export default function BankProfileDialog({
       ? (String(bank.year_basis) as YearBasisChoice) : 'auto')
     setBilling(bank?.billing_source === 'declared' && (bank.billing === 'month-end' || bank.billing === 'fixed')
       ? bank.billing : 'auto')
+    setChargeBasis(bank?.charge_basis_source === 'declared' && (bank.charge_basis === 'days' || bank.charge_basis === 'monthly')
+      ? bank.charge_basis : 'auto')
     setSaving(false)
     setError(null)
   }, [open, bank])
@@ -98,6 +105,7 @@ export default function BankProfileDialog({
         selection,
         year_basis: yearBasis === 'auto' ? null : (Number(yearBasis) as 360 | 365),
         billing: billing === 'auto' ? null : billing,
+        charge_basis: chargeBasis === 'auto' ? null : chargeBasis,
       })
       onClose()
     } catch (err) {
@@ -170,6 +178,31 @@ export default function BankProfileDialog({
             ]}
           />
         </div>
+
+        <div className="bankprofil-section">
+          <div className="bankprofil-row-head">
+            <span className="bankprofil-label">Räntemodell <span className="card-en">· Charge basis</span></span>
+            {effective && <span className="bankprofil-source">{SOURCE_LABELS[effective.charge_basis.source]}</span>}
+          </div>
+          <Segmented<ChargeBasisChoice>
+            value={chargeBasis}
+            ariaLabel="Räntemodell"
+            onChange={setChargeBasis}
+            options={[
+              { v: 'auto', label: 'Auto' },
+              { v: 'days', label: 'Ränta per dag' },
+              { v: 'monthly', label: 'Fast månadsränta' },
+            ]}
+          />
+        </div>
+
+        {fit && (
+          <p className="bankprofil-evidence">
+            {fit.proven
+              ? `Modellen återskapar bankens ${fit.covered} senaste debiteringar inom ${money(fit.residual)}.`
+              : `${fit.covered} debiteringar i historiken, ${money(fit.residual)} avvikelse — inte tillräckligt för att fastställas automatiskt.`}
+          </p>
+        )}
 
         {effective && effective.drift.length > 0 && (
           <div className="bankprofil-drift" role="status">
