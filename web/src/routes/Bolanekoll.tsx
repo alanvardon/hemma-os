@@ -29,7 +29,7 @@ import {
   expectedCharges, forecastInterest, reconcileCharge, matchPredictedRows, hasChargeInMonth, pendingChargeSeries, monthKey, stalePredictedRows,
   paymentsToCsv, headerSignature, mappingToNames, applyPreset, reconcileBalance,
   todayISO,
-  bankForPart, suggestBankProfile, effectiveBankProfile,
+  bankForPart, suggestBankProfile, effectiveBankProfile, fitBankProfile,
   isExtraAmortering, extraAmorteringAllocation,
   upcomingRatePeriods,
 } from '../lib/mortgage'
@@ -472,6 +472,12 @@ export default function Bolanekoll() {
   const effectiveProfile = useMemo<EffectiveBankProfile | null>(
     () => activeBank ? effectiveBankProfile(activeBank, activeCatalog, activeBankParts, periods, payments) : null,
     [activeBank, activeCatalog, activeBankParts, periods, payments])
+  // Plan 128 Stage 5 — the replay evidence behind the resolved profile, shown
+  // in the Bankprofil modal so the residual is visible whether or not the fit
+  // has actually been persisted.
+  const activeBankFit = useMemo(
+    () => activeBank ? fitBankProfile(activeBankParts, periods, payments) : null,
+    [activeBank, activeBankParts, periods, payments])
   // How many agreements point at the active bank profile — so the modal can make
   // its household-wide reuse clear when a lock would affect several avtal.
   const agreementCount = useMemo(
@@ -2079,7 +2085,7 @@ export default function Bolanekoll() {
         onExportJSON={handleExportJSON} onExportCSV={handleExportCSV} onImportJSON={handleImportJSON} />
 
       <BankProfileDialog open={profileDlg} bank={activeBank} banks={banks} catalogBanks={catalogBanks}
-        effective={effectiveProfile} suggestion={bankSuggestion} agreementCount={agreementCount}
+        effective={effectiveProfile} suggestion={bankSuggestion} agreementCount={agreementCount} fit={activeBankFit}
         onSave={handleSaveBankProfile} onClose={() => setProfileDlg(false)} />
 
       <AgreementDialog open={createDlg} banks={banks} catalogBanks={catalogBanks}

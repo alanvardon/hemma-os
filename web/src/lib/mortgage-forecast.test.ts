@@ -18,7 +18,7 @@ import {
   matchPredictedRows, hasChargeInMonth, pendingCharge, pendingChargeSeries, partBalance,
   stalePredictedRows, makeLoanPart, effectiveDeclaredAmortization, declaredMonthlyAmortization,
   projectMilestones, profileYearBasis, makeBank,
-  learnYearBasis, suggestBankProfile, bankProfileDrift, profileBilling, strictRatePeriodCoverage,
+  learnYearBasis, suggestBankProfile, effectiveBankProfile, profileBilling, strictRatePeriodCoverage,
   partsMissingRateTerms, partsMissingCurrentRateTerms, intervalRateSegments,
 } from './mortgage'
 import type { LoanPart, Payment, RatePeriod, Bank, Mortgage } from './mortgage'
@@ -116,9 +116,18 @@ describe('expectedCharge', () => {
     // Belopp: 1 350 000 × 4.20/100 / 12 × 1 = 56 700 / 12 = 4 725 exactly.
     // (The old rate-blind branch would still have predicted 4 061 kr.)
     expect(c.interest).toBe(4725)
-    // No year basis appears in the monthly arithmetic, so no convention is
-    // assumed — the charge is exact by construction.
-    expect(c.confidence).toBe('exact')
+    // No year basis appears in the monthly arithmetic — but plan 128 counts the
+    // CHOICE of the flat-monthly branch as a convention in its own right, and
+    // this bank has no profile at all: the basis came from the interim
+    // per-ledger heuristic, which resolves as 'default'.
+    expect(c.confidence).toBe('assumed')
+    // Storing the räntemodell is what buys 'exact' — same arithmetic, known
+    // convention.
+    const known = expectedCharge(bankPart(), periods, flat,
+      declaredOpts({ charge_basis: 'monthly', charge_basis_source: 'declared' }))!
+    expect(known.charge_basis).toBe('monthly')
+    expect(known.interest).toBe(4725)
+    expect(known.confidence).toBe('exact')
   })
 
   it('PLAN 126 exposure: a /360 bank undershoots by 360/365 until its basis is declared', () => {
@@ -147,7 +156,13 @@ describe('expectedCharge', () => {
     expect(declared.year_basis).toBe(360)
     // 1 000 000 × 3.50/100 × 30/360 = 35 000 / 12 = 2 916.666… → 2 916.67 — the bank's charge
     expect(declared.interest).toBe(2916.67)
-    expect(declared.confidence).toBe('exact')
+    // The AMOUNT is now the bank's own, but plan 128 scores both day-count
+    // conventions: the räntemodell is still only the interim ledger reading.
+    expect(declared.confidence).toBe('assumed')
+    const fullyDeclared = expectedCharge(bankPart(), [period({ rate: 3.50 })], pays,
+      declaredOpts({ year_basis: 360, year_basis_source: 'declared', charge_basis: 'days', charge_basis_source: 'declared' }))!
+    expect(fullyDeclared.interest).toBe(2916.67)
+    expect(fullyDeclared.confidence).toBe('exact')
   })
 
   it('clamps the charge day to month end: billed on the 31st → 30 April', () => {
@@ -213,9 +228,14 @@ describe('expectedCharge', () => {
     // null hypothesis, never itself "confident").
     const bunden = period({ rate_type: 'bunden', end_date: '2027-12-31' })
     expect(expectedCharge(part(), [bunden], CLEAN)!.confidence).toBe('assumed')
-    // Declaring the convention — for a rörlig part, note — is what buys 'exact'.
-    const declared = expectedCharge(bankPart(), [period()], CLEAN,
+    // Declaring the conventions — for a rörlig part, note — is what buys
+    // 'exact'. Plan 128: BOTH day-count conventions must be known, since the
+    // räntemodell moves the number more than 360-vs-365 does.
+    const halfDeclared = expectedCharge(bankPart(), [period()], CLEAN,
       declaredOpts({ year_basis: 365, year_basis_source: 'declared' }))!
+    expect(halfDeclared.confidence).toBe('assumed')
+    const declared = expectedCharge(bankPart(), [period()], CLEAN,
+      declaredOpts({ year_basis: 365, year_basis_source: 'declared', charge_basis: 'days', charge_basis_source: 'declared' }))!
     expect(declared.confidence).toBe('exact')
     expect(declared.interest).toBe(3000)            // 1 000 000 × 3.65/100 × 30/365
   })
@@ -561,8 +581,9 @@ describe('two-segment split at a rate boundary (plan 126 §4)', () => {
     expect(c.days).toBe(30)
     expect(c.rate).toBeCloseTo(117.74 / 30, 10)
     expect(c.interest).toBe(4415.25)
-    // Still no year basis in the arithmetic, so no convention is assumed.
-    expect(c.confidence).toBe('exact')
+    // Still no year basis in the arithmetic — but the räntemodell itself is
+    // only the interim ledger reading on this profile-less bank (plan 128).
+    expect(c.confidence).toBe('assumed')
   })
 
   it('rolled preview months carry the SUCCESSOR rate forward, not the blend', () => {
@@ -756,7 +777,15 @@ describe('flat-monthly billing (30/360 banks)', () => {
     expect(c.betalning).toBe(4061.25)
     expect(c.amortization).toBe(0)
     expect(c.rate).toBe(3.61)                       // Sats is the listed rate, reported as-is
-    expect(c.confidence).toBe('exact')              // no year basis is used on this branch
+    // No year basis is used on this branch, but the branch itself was chosen by
+    // the interim ledger heuristic — an unknown convention (plan 128).
+    expect(c.confidence).toBe('assumed')
+    // With the räntemodell stored, the same flat month reads exact.
+    const known = expectedCharge(bankPart(), [listed()], flatRows(),
+      declaredOpts({ charge_basis: 'monthly', charge_basis_source: 'detected' }))!
+    expect(known.charge_basis).toBe('monthly')
+    expect(known.interest).toBe(4061.25)
+    expect(known.confidence).toBe('exact')
   })
 
   it('rak amortering: the charge steps down with the balance, golden to the öre', () => {
@@ -818,6 +847,70 @@ describe('flat-monthly billing (30/360 banks)', () => {
     const c = expectedCharge(part(), [period()], CLEAN)!
     expect(c.charge_basis).toBe('days')
     expect(c.interest).toBe(3000)
+  })
+
+  // ── The STORED räntemodell outranks the ledger heuristic (plan 128) ────────
+  // `chargeBasis` reads the last few intervals and asks "did the charge move
+  // with the day count?". That is plan 126's interim source and survives only
+  // for a bank whose profile says nothing. Once the räntemodell is stored —
+  // declared by the owner or fitted and persisted by autoFitBankProfiles — the
+  // forecast runs the bank's actual model, whatever this ledger's trailing
+  // intervals happen to look like.
+  describe('the stored räntemodell outranks the ledger heuristic', () => {
+    it('a stored monthly basis prices a day-count-shaped ledger as a flat month', () => {
+      // CLEAN reads as 'days' to the heuristic (100 kr × days, exactly). The
+      // bank's stored profile says otherwise and wins.
+      expect(expectedCharge(part(), [period()], CLEAN)!.charge_basis).toBe('days')
+      const c = expectedCharge(bankPart(), [period()], CLEAN,
+        declaredOpts({ charge_basis: 'monthly', charge_basis_source: 'detected' }))!
+      expect(c.charge_basis).toBe('monthly')
+      expect(c.next_date).toBe('2026-07-27')
+      // 1 000 000 × 3.65/100 / 12 × 1 = 36 500 / 12 = 3 041,666… → 3 041,67
+      // (the days model would have priced the 30-day interval at 3 000).
+      expect(c.interest).toBe(3041.67)
+      // The monthly formula consumes no year basis, and the one convention it
+      // does consume is stored → exact.
+      expect(c.confidence).toBe('exact')
+    })
+
+    it('a stored days basis prices a flat-looking ledger per day', () => {
+      // The mirror image: flatRows reads as 'monthly' to the heuristic.
+      expect(expectedCharge(part(), [listed()], flatRows())!.charge_basis).toBe('monthly')
+      const c = expectedCharge(bankPart(), [listed()], flatRows(),
+        declaredOpts({ charge_basis: 'days', charge_basis_source: 'declared' }))!
+      expect(c.charge_basis).toBe('days')
+      expect(c.days).toBe(30)
+      // 1 350 000 × 3.61/100 × 30/365 = 48 735 × 30/365 = 4 005,6164… → 4 005,62
+      expect(c.interest).toBe(4005.62)
+      // …but the bankår is still unknown on this bank, and the days branch
+      // consumes it, so the charge is honest about being assumed.
+      expect(c.confidence).toBe('assumed')
+      expect(expectedCharge(bankPart(), [listed()], flatRows(), declaredOpts({
+        charge_basis: 'days', charge_basis_source: 'declared',
+        year_basis: 365, year_basis_source: 'detected',
+      }))!.confidence).toBe('exact')
+    })
+
+    it('every rolled month inherits the stored basis, not a fresh reading per roll', () => {
+      const s = pendingChargeSeries(bankPart(), [period()], CLEAN, 6,
+        declaredOpts({ charge_basis: 'monthly', charge_basis_source: 'detected' }))
+      expect(s.length).toBeGreaterThan(2)
+      expect(s.every(r => r.charge_basis === 'monthly')).toBe(true)
+      expect(s.every(r => r.interest === 3041.67)).toBe(true)   // flat: no day-count wobble
+    })
+
+    it('a catalogue räntemodell also outranks the heuristic; only a profile-less bank falls back to it', () => {
+      const catalogued = expectedCharge(bankPart(), [period()], CLEAN, {
+        ...declaredOpts({ catalog_id: 'cat-x' }),
+        catalogBanks: [{ id: 'cat-x', label: 'Katalogbanken', charge_basis: 'monthly' }],
+      })!
+      expect(catalogued.charge_basis).toBe('monthly')
+      // A catalogue value is a generic default for the bank, not the
+      // household's own evidence, so the charge stays 'assumed'.
+      expect(catalogued.confidence).toBe('assumed')
+      // Nothing stored, nothing catalogued → plan 126's interim ledger reading.
+      expect(expectedCharge(bankPart(), [period()], CLEAN, declaredOpts({}))!.charge_basis).toBe('days')
+    })
   })
 })
 
@@ -961,7 +1054,15 @@ describe('360-day bankår (Danske faktisk/360)', () => {
     expect(c.rate).toBe(3.93)
     // 1 200 000 × 3.93 % / 360 = 131,00 kr/day × 29 = 3 799,00 — the bank's own row.
     expect(c.interest).toBe(3799)
-    expect(c.confidence).toBe('exact')              // the convention is declared
+    // The bankår is declared, but the räntemodell is not: these rolled postings
+    // do not replay cleanly enough to prove one (the flat-monthly candidate is
+    // the closest fit here, well outside tolerance), so the basis is still the
+    // interim ledger reading and the charge reads 'assumed' (plan 128).
+    expect(c.confidence).toBe('assumed')
+    const bothDeclared = expectedCharge(danskePart(), [bunden()], danske,
+      declaredOpts({ year_basis: 360, year_basis_source: 'declared', charge_basis: 'days', charge_basis_source: 'declared' }))!
+    expect(bothDeclared.interest).toBe(3799)        // identical arithmetic…
+    expect(bothDeclared.confidence).toBe('exact')   // …now with both conventions known
   })
 
   it('PLAN 126 exposure: the SAME ledger undeclared prices on 365 and runs 1,4 % cold', () => {
@@ -1109,8 +1210,17 @@ describe('bank profile: declared year-basis lock (plan 104, phase 1)', () => {
     expect(s.every(r => r.year_basis === 360)).toBe(true)
   })
 
-  it('detected / suggested / null provenance falls back to detection (365 here)', () => {
-    for (const source of ['detected', 'suggested', null] as const) {
+  it('PLAN 128: a stored DETECTED basis now pins the forecast too; suggested / null still do not', () => {
+    // Phase 1 ignored every provenance but 'declared', because nothing else was
+    // ever written. Plan 128 auto-persists the proven fit as 'detected', so the
+    // forecast reads that stored value back — same inputs, same Nästa avisering.
+    const stored = expectedCharge(linkedPart(), [bunden()], CLEAN, opts({ year_basis: 360, year_basis_source: 'detected' }))!
+    expect(stored.year_basis).toBe(360)
+    expect(stored.interest).toBe(3041.67)           // 1 000 000 × 3,65 % × 30/360
+    // 'suggested' means offered-not-accepted and nothing writes it; a bare
+    // value was never a decision. Both still fall through to the fit, and CLEAN
+    // (3 covered intervals) proves nothing → the Swedish default.
+    for (const source of ['suggested', null] as const) {
       const c = expectedCharge(linkedPart(), [bunden()], CLEAN, opts({ year_basis: 360, year_basis_source: source }))!
       expect(c.year_basis).toBe(365)
       expect(c.interest).toBe(3000)                 // 1 000 000 × 3,65 % × 30/365
@@ -1138,9 +1248,9 @@ describe('bank profile: declared year-basis lock (plan 104, phase 1)', () => {
   })
 
   it('makeBank clamps a malformed year_basis to null (→ detection)', () => {
-    expect(makeBank({ label: 'X', year_basis: 400, year_basis_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: 'declared', billing: null, billing_source: null, catalog_id: null })
-    expect(makeBank({ label: 'X', year_basis: 360, year_basis_source: 'garbage' })).toEqual({ label: 'X', year_basis: 360, year_basis_source: null, billing: null, billing_source: null, catalog_id: null })
-    expect(makeBank({})).toEqual({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null, catalog_id: null })
+    expect(makeBank({ label: 'X', year_basis: 400, year_basis_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: 'declared', billing: null, billing_source: null, charge_basis: null, charge_basis_source: null, catalog_id: null })
+    expect(makeBank({ label: 'X', year_basis: 360, year_basis_source: 'garbage' })).toEqual({ label: 'X', year_basis: 360, year_basis_source: null, billing: null, billing_source: null, charge_basis: null, charge_basis_source: null, catalog_id: null })
+    expect(makeBank({})).toEqual({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null, charge_basis: null, charge_basis_source: null, catalog_id: null })
     // a declared but malformed basis therefore does not override — detection wins
     const bad = expectedCharge(linkedPart(), [bunden()], CLEAN, { banks: [{ id: 'b1', created_at: '', label: 'X', year_basis: 400, year_basis_source: 'declared' }], mortgages: mortgages() })!
     expect(bad.year_basis).toBe(365)
@@ -1214,14 +1324,21 @@ describe('bank profile: window-scoped bank-pooled learner + billing pin (plan 10
     expect(suggestBankProfile([linkedPart()], periods(), oneWindow).year_basis.confident).toBe(false)
   })
 
-  it('bankProfileDrift flags a declared lock the fresh evidence now contradicts', () => {
-    // Declared 365, but the ledger reads a confident 360 → drift surfaced.
-    const drift = bankProfileDrift(banks({ year_basis: 365, year_basis_source: 'declared' })[0], [linkedPart()], periods(), rolling)
-    expect(drift).toEqual({ field: 'year_basis', declared: 365, learned: 360 })
-    // Declared 360 that matches → no drift.
-    expect(bankProfileDrift(banks({ year_basis: 360, year_basis_source: 'declared' })[0], [linkedPart()], periods(), rolling)).toBeNull()
-    // No declared lock → nothing to drift against.
-    expect(bankProfileDrift(banks({ year_basis: 360, year_basis_source: 'detected' })[0], [linkedPart()], periods(), rolling)).toBeNull()
+  it('PLAN 128: a lock the fresh PROVEN fit contradicts is surfaced as drift by the resolution itself', () => {
+    // The plan-104 `bankProfileDrift` helper is gone: it answered for
+    // year_basis only, off the old threshold learner, and nothing rendered it.
+    // The live drift the owner sees is EffectiveBankProfile.drift, which now
+    // covers all three conventions and stored 'detected' values too.
+    const declared365 = effectiveBankProfile(banks({ year_basis: 365, year_basis_source: 'declared' })[0], null, [linkedPart()], periods(), rolling)
+    expect(declared365.year_basis).toEqual({ value: 365, source: 'declared' })
+    expect(declared365.drift).toContainEqual({ field: 'year_basis', against: 'declared', held: 365, observed: 360, effective: 365 })
+    // A lock that matches the fit → no drift.
+    const declared360 = effectiveBankProfile(banks({ year_basis: 360, year_basis_source: 'declared' })[0], null, [linkedPart()], periods(), rolling)
+    expect(declared360.drift).toEqual([])
+    // A STORED fitted value is now held and defended exactly like a lock.
+    const detected365 = effectiveBankProfile(banks({ year_basis: 365, year_basis_source: 'detected' })[0], null, [linkedPart()], periods(), rolling)
+    expect(detected365.year_basis).toEqual({ value: 365, source: 'detected' })
+    expect(detected365.drift).toContainEqual({ field: 'year_basis', against: 'detected', held: 365, observed: 360, effective: 365 })
   })
 
   it('the billing pin overrides ledger cadence detection both ways', () => {
@@ -1237,14 +1354,50 @@ describe('bank profile: window-scoped bank-pooled learner + billing pin (plan 10
     expect(profileBilling(linkedPart(), mortgages(), banks({ billing: 'month-end', billing_source: 'detected' }))).toBeNull()
   })
 
+  // ── The STORED cadence pins Nästa avisering too (plan 128) ────────────────
+  // The cadence used to come from a declared-only pin, else a fresh
+  // isMonthEndBilling read of THIS part's own dates — so a fitted-and-persisted
+  // 'detected' billing showed in Bankprofil and drove drift, but not the date.
+  // It does now: the same resolved profile decides the amount and the date.
+  it('PLAN 128: a STORED detected cadence pins next_date over this part’s own date pattern', () => {
+    const bunden = () => period({ rate_type: 'bunden', end_date: '2027-12-31' })
+    const stored = (billing: string) => ({ banks: banks({ billing, billing_source: 'detected' }), mortgages: mortgages() })
+
+    // CLEAN bills on the 27th, so a fresh per-part re-derivation reads 'fixed'
+    // and predicts 2026-07-27 — the behaviour with no profile at all.
+    expect(expectedCharge(linkedPart(), [bunden()], CLEAN)!.next_date).toBe('2026-07-27')
+    // With 'month-end' stored (written by autoFitBankProfiles off the BANK's
+    // pooled evidence, which this thin part need not show on its own), the
+    // forecast anchors to the month's last day instead.
+    expect(expectedCharge(linkedPart(), [bunden()], CLEAN, stored('month-end'))!.next_date).toBe('2026-07-31')
+
+    // And the mirror image: a month-end-shaped ledger with 'fixed' stored keeps
+    // the day-of-month cadence (mode 30 — 30 and 31 tie, most recent wins).
+    const monthEnd = [
+      interestRow('2026-03-31', 3100, { id: 'me0' }),
+      interestRow('2026-04-30', 3000, { id: 'me1' }),   // 30 d
+      interestRow('2026-05-31', 3100, { id: 'me2' }),   // 31 d
+      interestRow('2026-06-30', 3000, { id: 'me3' }),   // 30 d
+    ]
+    expect(expectedCharge(linkedPart(), [bunden()], monthEnd)!.next_date).toBe('2026-07-31')
+    expect(expectedCharge(linkedPart(), [bunden()], monthEnd, stored('fixed'))!.next_date).toBe('2026-07-30')
+  })
+
   it('undeclared / no-context still reproduces the existing behaviour byte-for-byte', () => {
     const golden = expectedCharge(part(), [period({ rate_type: 'bunden', end_date: '2027-12-31' })], CLEAN)!
     expect(expectedCharge(part(), [period({ rate_type: 'bunden', end_date: '2027-12-31' })], CLEAN, {})).toEqual(golden)
   })
 
   it('makeBank clamps a malformed billing convention to null (→ detection)', () => {
-    expect(makeBank({ label: 'X', billing: 'weird', billing_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: null, billing_source: 'declared', catalog_id: null })
-    expect(makeBank({ label: 'X', billing: 'month-end', billing_source: 'garbage' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: 'month-end', billing_source: null, catalog_id: null })
+    expect(makeBank({ label: 'X', billing: 'weird', billing_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: null, billing_source: 'declared', charge_basis: null, charge_basis_source: null, catalog_id: null })
+    expect(makeBank({ label: 'X', billing: 'month-end', billing_source: 'garbage' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: 'month-end', billing_source: null, charge_basis: null, charge_basis_source: null, catalog_id: null })
+  })
+
+  // Plan 128 — the räntemodell clamps exactly like the other two conventions.
+  it('makeBank clamps a malformed charge_basis to null (→ detection)', () => {
+    expect(makeBank({ label: 'X', charge_basis: 'weekly', charge_basis_source: 'declared' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: null, billing_source: null, charge_basis: null, charge_basis_source: 'declared', catalog_id: null })
+    expect(makeBank({ label: 'X', charge_basis: 'monthly', charge_basis_source: 'garbage' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: null, billing_source: null, charge_basis: 'monthly', charge_basis_source: null, catalog_id: null })
+    expect(makeBank({ label: 'X', charge_basis: 'days', charge_basis_source: 'detected' })).toEqual({ label: 'X', year_basis: null, year_basis_source: null, billing: null, billing_source: null, charge_basis: 'days', charge_basis_source: 'detected', catalog_id: null })
   })
 })
 

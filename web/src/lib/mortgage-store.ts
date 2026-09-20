@@ -13,8 +13,8 @@
      cache is what makes the first-login import safe.
    - CACHE_KEY   — the write-through offline cache mirroring the whole envelope. */
 
-import { defaultSettings, legacyContributionPayment, makeRatePeriod, migrateOwnershipSettings } from './mortgage'
-import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage, CatalogBank } from './mortgage'
+import { bankForPart, defaultSettings, fitBankProfile, legacyContributionPayment, makeRatePeriod, migrateOwnershipSettings } from './mortgage'
+import type { LoanPart, RatePeriod, Payment, Valuation, Contribution, MortgageSettings, ColNameMapping, Bank, Mortgage, CatalogBank, ProfileFit } from './mortgage'
 import { supabase } from './supabase'
 import { makeImportOnce, materializeImport, stamp } from './store-helpers'
 import type { MutationInput } from './sync-coordinator'
@@ -71,7 +71,7 @@ const AGREEMENT_RESOURCES = [BANK_CHANGE_RESOURCE, BANK_REVERT_RESOURCE]
 // `household_id` (column default) + `updated_at` (trigger) are never sent. Field
 // names already match column names 1:1 (both snake_case), so a plain pick works.
 const COLS = {
-  banks: ['label', 'year_basis', 'year_basis_source', 'billing', 'billing_source', 'catalog_id'],
+  banks: ['label', 'year_basis', 'year_basis_source', 'billing', 'billing_source', 'catalog_id', 'charge_basis', 'charge_basis_source'],
   mortgages: ['bank_id', 'label', 'start_date', 'archived', 'end_date'],
   parts: ['label', 'loan_number', 'start_balance', 'start_date', 'archived', 'mortgage_id', 'original_balance', 'original_date', 'planned_amortization', 'planned_amortization_start', 'planned_amortization_end'],
   periods: ['loan_part_id', 'start_date', 'end_date', 'rate', 'rate_type'],
@@ -192,7 +192,7 @@ const NOT_NULL_DEFAULTS: Record<string, unknown> = {
 const NULLABLE_EXPLICIT: Partial<Record<keyof typeof COLS, ReadonlySet<string>>> = {
   // The bank profile locks must be clearable back to auto; the catalogue link
   // must be detachable back to a private custom bank.
-  banks: new Set(['year_basis', 'year_basis_source', 'billing', 'billing_source', 'catalog_id']),
+  banks: new Set(['year_basis', 'year_basis_source', 'billing', 'billing_source', 'catalog_id', 'charge_basis', 'charge_basis_source']),
   // Un-archiving an agreement must clear end_date in the same write, or the
   // database consistency CHECK ((end_date is null) = (not archived)) rejects it.
   mortgages: new Set(['end_date']),
@@ -375,7 +375,7 @@ function _readLegacy(scope: ReturnType<typeof syncCoordinator.captureScope>): Le
   } catch { warning('säkerhetskopian'); return { status: 'invalid' } }
   const candidate = materializeImport('mortgage-legacy', raw, () => {
     const env = _envelope(data as unknown as Record<string, unknown>, true)
-    env.banks = env.banks.map(r => stamp({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null, catalog_id: null, ...(r as unknown as Record<string, unknown>) }, 'bank') as Bank)
+    env.banks = env.banks.map(r => stamp({ label: '', year_basis: null, year_basis_source: null, billing: null, billing_source: null, charge_basis: null, charge_basis_source: null, catalog_id: null, ...(r as unknown as Record<string, unknown>) }, 'bank') as Bank)
     env.mortgages = env.mortgages.map(r => stamp({ bank_id: null, label: '', start_date: null, archived: false, end_date: null, ...(r as unknown as Record<string, unknown>) }, 'mortgage') as Mortgage)
     env.loan_parts = env.loan_parts.map(r => stamp(r, 'part') as LoanPart)
     env.payments = env.payments.map(r => stamp(r, 'pay') as Payment)
@@ -839,6 +839,103 @@ export async function removeBank(id: string): Promise<number> {
   return n
 }
 
+// ── Auto-persisted bank profile (plan 128 §3) ────────────────────────────────
+// The conventions used to be re-derived at read time on every call, so the same
+// figure could move because an import nudged a detector across its threshold.
+// Once the ledger PROVES a profile by replay (fitBankProfile), it is written to
+// the bank once, with source 'detected', and read back as stored truth.
+//
+// Write-once, deliberately: a stored value is never re-fitted here, no matter
+// what later evidence says. Contradicting evidence is the drift prompt's job
+// (plan 128 §4) and only the owner changes a stored value — a profile that
+// silently re-fits is persistence without determinism.
+export interface BankProfileAutoFit {
+  /** The bank AFTER the write, so callers can patch their own state with it. */
+  bank: Bank
+  /** Only the fields this call actually wrote — never the ones already stored. */
+  written: {
+    year_basis?: 360 | 365
+    billing?: 'month-end' | 'fixed'
+    charge_basis?: 'days' | 'monthly'
+  }
+  /** The proving evidence, for the one-time message to the owner. */
+  fit: ProfileFit
+}
+
+// A convention counts as STORED only once it carries a real provenance. The
+// enum also allows 'suggested', which nothing in this codebase ever writes; it
+// would mean "offered, not accepted", so it is treated as still missing.
+function isStoredConvention(source: string | null | undefined): boolean {
+  return source === 'declared' || source === 'detected'
+}
+
+/**
+ * Fit and persist the missing conventions of every bank that has enough ledger
+ * evidence to prove them. Pure orchestration over already-loaded rows plus
+ * `updateBank`; it reads nothing else and returns only the banks it ACTUALLY
+ * wrote, so an empty array is the normal steady state once every bank is fitted.
+ *
+ * Safe to lose by construction: one bank's failed write is swallowed (the row
+ * stays missing, so the next load simply retries) and never stops the pass over
+ * the remaining banks or reaches the caller as a rejection.
+ */
+export async function autoFitBankProfiles(
+  banks: Bank[], mortgages: Mortgage[], parts: LoanPart[], periods: RatePeriod[], payments: Payment[],
+): Promise<BankProfileAutoFit[]> {
+  const results: BankProfileAutoFit[] = []
+  for (const bank of banks || []) {
+    if (!bank) continue
+    // Evidence is pooled across the bank's active parts, exactly as the
+    // forecast pools it — a thin part inherits its siblings' charges.
+    const bankParts = (parts || []).filter(
+      part => part && !part.archived && bankForPart(part, mortgages || [], banks || [])?.id === bank.id,
+    )
+    if (!bankParts.length) continue
+
+    const missing = {
+      year_basis: !isStoredConvention(bank.year_basis_source),
+      billing: !isStoredConvention(bank.billing_source),
+      charge_basis: !isStoredConvention(bank.charge_basis_source),
+    }
+    if (!missing.year_basis && !missing.billing && !missing.charge_basis) continue
+
+    const fit = fitBankProfile(bankParts, periods || [], payments || [])
+    if (!fit || !fit.proven) continue
+
+    // One update for the whole bank, not one per field, and never a field that
+    // already carries a stored provenance — a 'declared' value the owner set
+    // stays untouched even when the fit disagrees with it.
+    const patch: Partial<Bank> = {}
+    const written: BankProfileAutoFit['written'] = {}
+    if (missing.year_basis) {
+      // On a flat-monthly win the fitted year basis is the inert 365
+      // placeholder (the monthly formula never consumes it). It is still
+      // written, so all three conventions are stored together and the forecast
+      // reads one stable profile; should the bank ever start charging per day,
+      // that is a contradiction for the drift prompt, not a silent re-fit.
+      patch.year_basis = fit.year_basis; patch.year_basis_source = 'detected'
+      written.year_basis = fit.year_basis
+    }
+    if (missing.billing) {
+      patch.billing = fit.billing; patch.billing_source = 'detected'
+      written.billing = fit.billing
+    }
+    if (missing.charge_basis) {
+      patch.charge_basis = fit.charge_basis; patch.charge_basis_source = 'detected'
+      written.charge_basis = fit.charge_basis
+    }
+
+    try {
+      const updated = await updateBank(bank.id, patch)
+      if (updated) results.push({ bank: updated, written, fit })
+    } catch {
+      // Offline or rejected. Nothing is reported as written, so the caller
+      // cannot tell the owner a profile was determined when it was not.
+    }
+  }
+  return results
+}
+
 // ── Shared bank catalogue (plan 109a; read-only) ─────────────────────────────
 // Authenticated clients may SELECT `mortgage_bank_catalog` but never write it
 // (writes go through reviewed migrations). It is not household-scoped, so it is
@@ -855,6 +952,7 @@ function normalizeCatalogBank(row: unknown): CatalogBank | null {
     label: r.label,
     year_basis: yb === 360 ? 360 : yb === 365 ? 365 : null,
     billing: r.billing === 'month-end' || r.billing === 'fixed' ? r.billing : null,
+    charge_basis: r.charge_basis === 'days' || r.charge_basis === 'monthly' ? r.charge_basis : null,
   }
 }
 
@@ -872,7 +970,7 @@ export async function listCatalogBanks(): Promise<CatalogBank[]> {
   if (!scope.isActive()) return _readCatalogCache(scope)
   const { data, error } = await supabase
     .from('mortgage_bank_catalog')
-    .select('id,slug,label,year_basis,billing')
+    .select('id,slug,label,year_basis,billing,charge_basis')
     .order('label', { ascending: true })
   if (!scope.isActive() || error || !data) return _readCatalogCache(scope)
   const rows = (data as unknown[]).map(normalizeCatalogBank).filter((b): b is CatalogBank => b != null)
