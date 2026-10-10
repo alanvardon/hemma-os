@@ -25,7 +25,6 @@ import {
 
 const SERIES = 'SECBREPOEFF'
 const SWEA_BASE = 'https://api.riksbank.se/swea/v1'
-const APP_URL = 'https://hemma-os.se/bolanekoll' // owner-facing link in the email body; update if the prod domain changes
 
 function stockholmToday(): string {
   // en-CA formats as YYYY-MM-DD, which is exactly what the decision calendar
@@ -77,6 +76,15 @@ Deno.serve(async (_req: Request) => {
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
     if (!supabaseUrl || !serviceRoleKey) throw new Error('SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set')
 
+    // Owner-facing link in the email body (plan 130). Read at call time
+    // rather than hard-coded, since the prod origin moved once already
+    // (plan 130) and plan 132 reuses the same secret. Fail loud rather than
+    // silently linking somewhere wrong.
+    const appOriginRaw = Deno.env.get('APP_ORIGIN')
+    if (!appOriginRaw) throw new Error('APP_ORIGIN is not set')
+    const appOrigin = appOriginRaw.replace(/\/$/, '')
+    const appUrl = `${appOrigin}/#/bolanekoll`
+
     const current = await fetchLatestRate()
     const supabase = createClient(supabaseUrl, serviceRoleKey)
 
@@ -124,7 +132,7 @@ Deno.serve(async (_req: Request) => {
 
       try {
         const previous = parsePoint(stored)
-        const email = buildNotificationEmail(previous, current, APP_URL)
+        const email = buildNotificationEmail(previous, current, appUrl)
         await sendEmail(recipients, email)
 
         const { error: upsertError } = await supabase
