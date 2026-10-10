@@ -1,0 +1,47 @@
+<!doctype html>
+<!--
+  Legacy GitHub Pages redirect stub (plan 130, Stage 4).
+
+  This file is NOT wired into any deploy yet. It is added now so it exists
+  in the repo, but the GitHub Pages job still publishes the app (`_site/`)
+  until the separate cutover PR (plan 130, step 6) switches that job to
+  publish this directory instead.
+
+  Once published at the old origin (https://alanvardon.github.io/hemma-os/),
+  it sends old bookmarks and home-screen icons to the new origin
+  (https://vardon-family.se/), carrying over only the URL hash: the app uses
+  hash-based routing, so the hash is the only part of the old URL that still
+  means anything on the new origin. The old `/hemma-os/` path prefix and any
+  query string are deliberately dropped — they were artifacts of the GitHub
+  Pages project-site layout and have no equivalent on the new domain.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Hemma OS has moved</title>
+<style>
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    min-height: 100vh;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 0 16px;
+    margin: 0;
+  }
+  p {
+    font-size: 16px;
+    line-height: 1.5;
+  }
+</style>
+<script>
+  location.replace('https://vardon-family.se/' + location.hash);
+</script>
+</head>
+<body>
+<p>Hemma OS has moved to <a href="https://vardon-family.se/">https://vardon-family.se/</a>.</p>
+</body>
+</html>
