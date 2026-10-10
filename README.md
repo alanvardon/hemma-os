@@ -2,7 +2,7 @@
 
 A local-first family operating system. The React SPA is the hub (`/`) linking out to all household tools — calculators, trackers, and shared utilities — as hash routes.
 
-Live at **https://vardon-family.se/**.
+Live at **https://www.vardon-family.se/**.
 
 Tools: Bostadskalkyl · Hushållsbudget · Konsultkalkyl · Månadsavslut · Bolånekoll · Löneväxling
 

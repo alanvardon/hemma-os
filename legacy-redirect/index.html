@@ -9,7 +9,7 @@
 
   Once published at the old origin (https://alanvardon.github.io/hemma-os/),
   it sends old bookmarks and home-screen icons to the new origin
-  (https://vardon-family.se/), carrying over only the URL hash: the app uses
+  (https://www.vardon-family.se/), carrying over only the URL hash: the app uses
   hash-based routing, so the hash is the only part of the old URL that still
   means anything on the new origin. The old `/hemma-os/` path prefix and any
   query string are deliberately dropped — they were artifacts of the GitHub
@@ -38,10 +38,10 @@
   }
 </style>
 <script>
-  location.replace('https://vardon-family.se/' + location.hash);
+  location.replace('https://www.vardon-family.se/' + location.hash);
 </script>
 </head>
 <body>
-<p>Hemma OS has moved to <a href="https://vardon-family.se/">https://vardon-family.se/</a>.</p>
+<p>Hemma OS has moved to <a href="https://www.vardon-family.se/">https://www.vardon-family.se/</a>.</p>
 </body>
 </html>

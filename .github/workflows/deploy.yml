@@ -2,7 +2,7 @@ name: Deploy Hemma·OS
 
 # Builds the React SPA (web/) once and publishes the Hemma·OS site to BOTH
 # Cloudflare (Workers static assets, the production target at
-# https://vardon-family.se/) and GitHub Pages, on every push to main. Plan 130
+# https://www.vardon-family.se/) and GitHub Pages, on every push to main. Plan 130
 # moves hosting to Cloudflare for real security response headers (frame-ancestors,
 # HSTS) and the owner's own domain; GitHub Pages keeps serving the same build
 # in parallel until the plan-130 cutover retires it (see the plan's cutover

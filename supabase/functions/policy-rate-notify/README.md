@@ -21,7 +21,7 @@ supabase functions deploy policy-rate-notify
 ## 2. Set secrets
 
 ```sh
-supabase secrets set RESEND_API_KEY=re_xxx RESEND_FROM="Hemma OS <styrranta@your-verified-domain>" APP_ORIGIN=https://vardon-family.se
+supabase secrets set RESEND_API_KEY=re_xxx RESEND_FROM="Hemma OS <styrranta@your-verified-domain>" APP_ORIGIN=https://www.vardon-family.se
 ```
 
 Resend requires a **verified sending domain** (or their shared onboarding
