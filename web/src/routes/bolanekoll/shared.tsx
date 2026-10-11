@@ -3,7 +3,8 @@ import { motion } from 'motion/react'
 import { Money, Percent } from '../../components/AnimatedNumber'
 import { CURRENCY_SUFFIX } from '../../lib/format'
 import { monthKey, monthLabel } from '../../lib/mortgage'
-import type { Payment, CsvResult, ColMapping } from '../../lib/mortgage'
+import type { Payment, ColMapping } from '../../lib/mortgage'
+import type { TabularResult } from '../../lib/tabular'
 
 // A <tr> can't animate its own height, so revealed rows animate it inside each
 // cell instead: the td keeps zero vertical padding (see .cell-pad in CSS) and
@@ -88,7 +89,7 @@ export interface TriageRow {
   recon: { drift: number; ok: boolean; predicted: boolean } | null
 }
 export interface ImportCfg {
-  file: File; parsed: CsvResult; mapping: ColMapping; importPart: string
+  file: File; parsed: TabularResult; mapping: ColMapping; importPart: string
   triage: TriageRow[]; queue: File[]; qIdx: number
 }
 
