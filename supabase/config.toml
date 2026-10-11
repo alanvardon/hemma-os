@@ -376,9 +376,16 @@ allow_dynamic_registration = false
 
 # Plan 132: the public, token-checked salary submission endpoint behind the
 # emailed `#/lon/<token>` page. The link token in the request body is the only
-# credential (validated inside the function), so the gateway JWT check is off
-# for THIS function only. Every other function keeps the default verify_jwt = true.
+# credential (validated inside the function), so the gateway JWT check is off.
 [functions.salary-reminder]
+verify_jwt = false
+
+# salary-reminder-send is called by pg_cron with a secret key (`sb_secret_…`) in
+# the apikey header, which the gateway's JWT check would reject. The function
+# authenticates the caller itself (isTrustedServerCaller: project secret keys or
+# the legacy service_role key; anon/publishable get 403). Every other function
+# keeps the default verify_jwt = true.
+[functions.salary-reminder-send]
 verify_jwt = false
 
 [edge_runtime]

@@ -4,7 +4,7 @@ Two Edge Functions back the monthly salary emails:
 
 | Function | Caller | Auth |
 |---|---|---|
-| `salary-reminder-send` | prod-only pg_cron, once a day | gateway JWT check **and** an in-function check that the bearer is exactly the service-role key (the anon key is a valid JWT too, so the gateway alone isn't enough) — anything else gets `403` |
+| `salary-reminder-send` | prod-only pg_cron, once a day | **none at the gateway** (`verify_jwt = false`); the function itself requires one of the project's **secret keys** (`sb_secret_…`) in the `apikey` header (or as `Authorization: Bearer`), or the legacy `service_role` key. Anon/publishable keys and anything else get `403` |
 | `salary-reminder` | the public `#/lon/<token>` page in the browser | **none at the gateway** (`verify_jwt = false` for this function only, in `supabase/config.toml`); the link token in the request body is the credential |
 
 None of this is deployed or scheduled by CI or by an agent. The owner runs
@@ -18,14 +18,14 @@ below are prod-only, and none of it belongs in `supabase/migrations/`.
 ## 1. Deploy
 
 ```sh
-supabase functions deploy salary-reminder-send
+supabase functions deploy salary-reminder-send --no-verify-jwt
 supabase functions deploy salary-reminder --no-verify-jwt
 ```
 
-`config.toml` already sets `verify_jwt = false` for `salary-reminder`, which a
-plain `deploy` honours. `--no-verify-jwt` is passed as well so the public
-function can't come up with the gateway check turned on (the page would then
-get `401`s). **Never** pass `--no-verify-jwt` for `salary-reminder-send`.
+`config.toml` already sets `verify_jwt = false` for both, which a plain
+`deploy` honours; the flag is passed as well so neither can come up with the
+gateway check on. With it on, the public page would get `401`s, and the cron's
+`sb_secret_…` key would be rejected before the function's own check runs.
 
 Afterwards, check in the dashboard (Edge Functions → each function → Details)
 that "Enforce JWT verification" is **off** for `salary-reminder` and **on** for
@@ -47,7 +47,9 @@ Confirm with `supabase secrets list` that these names exist:
 tokens and records `notification_state`, but sends nothing, so that month's
 emails would silently never go out.
 
-`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
+`SUPABASE_URL`, `SUPABASE_SECRET_KEYS` and the legacy `SUPABASE_SERVICE_ROLE_KEY`
+are injected automatically. Both functions use the `default` secret key for
+their database client, falling back to the legacy key.
 
 ## 3. Schedule: one daily pg_cron
 
@@ -57,14 +59,15 @@ CET or 09:00 CEST. Same Vault pattern as policy-rate-notify (the job body is
 readable by anyone who can query `cron.job`, so the key is never inlined).
 `pg_cron`/`pg_net` are already enabled by plan 72's runbook.
 
-The bearer stored in Vault must be the **legacy service-role JWT**: the exact
-value the function sees as `SUPABASE_SERVICE_ROLE_KEY` (Dashboard → Project
-Settings → API Keys → Legacy API keys → `service_role`). An `sb_secret_…` key
-or the anon key gets `403`.
+Store a **secret key** in Vault: Dashboard → Project Settings → API Keys →
+**Publishable and secret API keys** → Secret keys → `default` (or create a
+dedicated one, e.g. `cron`, so it can be rotated on its own) → Reveal → copy.
+It starts with `sb_secret_`. It's sent in the `apikey` header. The anon or
+publishable key gets `403`.
 
 ```sql
 select vault.create_secret('https://<project-ref>.supabase.co/functions/v1/salary-reminder-send', 'salary_reminder_send_url');
-select vault.create_secret('<legacy service_role JWT>', 'salary_reminder_send_key');
+select vault.create_secret('<sb_secret_… key>', 'salary_reminder_send_key');
 
 select cron.schedule(
   'salary-reminder-send',
@@ -73,7 +76,7 @@ select cron.schedule(
   select net.http_post(
     url := (select decrypted_secret from vault.decrypted_secrets where name = 'salary_reminder_send_url'),
     headers := jsonb_build_object(
-      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'salary_reminder_send_key'),
+      'apikey', (select decrypted_secret from vault.decrypted_secrets where name = 'salary_reminder_send_key'),
       'Content-Type', 'application/json'
     ),
     body := '{}'::jsonb
@@ -82,8 +85,8 @@ select cron.schedule(
 );
 ```
 
-(You can reuse plan 72's `policy_rate_notify_key` secret instead of creating
-a second copy of the same key.)
+(Don't reuse plan 72's `policy_rate_notify_key`: that function still expects a
+JWT bearer behind the gateway check.)
 
 ## What a run does
 
@@ -111,10 +114,12 @@ with the rest (fail loud, plan 44).
 
 - Temporarily set a test household's send day to today in the app
   (Hushållsbudget → salary reminder row), or wait for the 25th.
-- Invoke once:
+- Invoke once, without the key reaching shell history:
   ```sh
+  read -rs SK    # paste the sb_secret_… key, press Enter
   curl -X POST "https://<project-ref>.supabase.co/functions/v1/salary-reminder-send" \
-    -H "Authorization: Bearer <legacy service_role JWT>"
+    -H "apikey: $SK"
+  unset SK
   ```
   Expect `{"ok":true,…,"sent":N}`, with one email per member-assigned slot.
   Invoke it again and expect `sent: 0`.
@@ -162,8 +167,8 @@ emails, optionally add a `tool_state` `hushallsbudget` row with
 Stockholm day. Then:
 
 ```sh
-SR=<SERVICE_ROLE_KEY from `supabase status`>
-curl -X POST http://127.0.0.1:54321/functions/v1/salary-reminder-send -H "Authorization: Bearer $SR"
+SK=<SECRET_KEY (sb_secret_…) or SERVICE_ROLE_KEY from `supabase status`>
+curl -X POST http://127.0.0.1:54321/functions/v1/salary-reminder-send -H "apikey: $SK"
 curl -X POST http://127.0.0.1:54321/functions/v1/salary-reminder \
   -H 'Content-Type: application/json' -d '{"action":"context","token":"<token from the log>"}'
 curl -X POST http://127.0.0.1:54321/functions/v1/salary-reminder \
