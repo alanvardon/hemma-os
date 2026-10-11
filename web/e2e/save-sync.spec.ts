@@ -12,6 +12,7 @@
  * supabase-js session into localStorage — getSession() restores it without a
  * network call — plus a mocked claim_household RPC.
  */
+import { fileURLToPath } from 'node:url'
 import { test, expect, type Page } from '@playwright/test'
 
 const SUPABASE = 'http://localhost:54321'
@@ -89,12 +90,14 @@ async function mockBackend(page: Page): Promise<Backend> {
   const banks: Record<string, unknown>[] = []
   const mortgages: Record<string, unknown>[] = []
   const periods: Record<string, unknown>[] = []
+  const monthendItems: Record<string, unknown>[] = []
   const resources: Record<string, Record<string, unknown>[]> = {
     mortgage_loan_parts: parts,
     mortgage_payments: payments,
     mortgage_banks: banks,
     mortgages,
     mortgage_rate_periods: periods,
+    monthend_items: monthendItems,
   }
   const receipts = new Map<string, unknown>()
   const PERSON_A = '11111111-1111-4111-8111-111111111111'
@@ -799,5 +802,49 @@ test('archived rate periods and transactions stay editable and attached to the a
   await expect(historyAfterReload.locator('.history-payments')).toContainText(/10\s*000 kr/)
   await expect(page.locator('.agreement-name')).toHaveText('Bolån hos Andra banken')
 
+  expect(errors).toEqual([])
+})
+
+// ── Plan 129 — .xlsx statement import (Månadsavslut) ─────────────────────────
+
+test('an .xlsx statement import survives reload, and the lazy parser chunk loads under the production CSP', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  // The preview serves the production bundle with its CSP <meta>; the xlsx
+  // reader is a lazy chunk, so a script/connect policy gap would only show up
+  // when it loads. Record both the DOM event and any CSP console error.
+  const cspViolations: string[] = []
+  await page.exposeFunction('__reportCsp', (v: string) => cspViolations.push(v))
+  await page.addInitScript(() => {
+    document.addEventListener('securitypolicyviolation', (e) => {
+      void (window as unknown as { __reportCsp: (v: string) => void })
+        .__reportCsp(`${e.violatedDirective} ${e.blockedURI}`)
+    })
+  })
+  page.on('console', (m) => {
+    if (m.type() === 'error' && /Content[- ]Security[- ]Policy/i.test(m.text())) cspViolations.push(m.text())
+  })
+  await mockBackend(page)
+  await page.goto('/#/manadsavslut')
+
+  await expect(page.getByRole('heading', { name: /Importera kontoutdrag/ })).toBeVisible()
+  await page.locator('input[type="file"][accept*=".xlsx"]').setInputFiles(
+    fileURLToPath(new URL('../src/lib/__fixtures__/statement-preamble.xlsx', import.meta.url)),
+  )
+  await expect(page.locator('.file-pill')).toHaveText(
+    'statement-preamble.xlsx · 4 rows · Kontoutdrag · rubrik på rad 4',
+  )
+  await page.getByRole('button', { name: /^Add \d+ items?$/ }).click()
+
+  const imported = ['Nyårsmiddag', 'Taxi Stockholm', 'Apotek Hjärtat', 'Biltvätt']
+  const itemRow = (description: string) => page.locator('table.items-table td.col-desc', { hasText: description })
+  for (const description of imported) await expect(itemRow(description)).toBeVisible()
+  await expect(page.locator('table.items-table td.col-date', { hasText: '2025-12-31' })).toBeVisible()
+
+  // page.reload(), NOT a same-hash page.goto — see project_web_landmines.md.
+  await page.reload()
+  for (const description of imported) await expect(itemRow(description)).toBeVisible()
+  await expect(page.locator('table.items-table td.col-date', { hasText: '2026-03-01' })).toBeVisible()
+
+  expect(cspViolations).toEqual([])
   expect(errors).toEqual([])
 })
