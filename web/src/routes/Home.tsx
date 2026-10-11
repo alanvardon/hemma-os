@@ -67,7 +67,7 @@ interface ToolDef {
 const BOLANEKOLL: ToolDef = {
   path: '/bolanekoll',
   name: 'Bolånekoll',
-  desc: "Track your mortgage — import the bank's payment CSV, follow each loan part down and watch your equity grow against the bank.",
+  desc: "Track your mortgage — import the bank's payment file, follow each loan part down and watch your equity grow against the bank.",
   icon: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M3 10.5 12 3l9 7.5" pathLength="1"/>

@@ -33,6 +33,8 @@ import {
   isExtraAmortering, extraAmorteringAllocation,
   upcomingRatePeriods,
 } from '../lib/mortgage'
+import { IMPORT_ACCEPT, isImportableFile, readTabular, UnsupportedFileError } from '../lib/tabular'
+import { importSource, sourceLabel } from '../lib/import-source'
 import type { LoanPart, LoanPartGroup, Payment, CsvResult, ColMapping, Owner, ExpectedCharge, Mortgage, CatalogBank, EffectiveBankProfile } from '../lib/mortgage'
 import {
   fetchPolicyRate, nextDecision, lastDecision, decisionOutcome,
@@ -114,6 +116,21 @@ const RATE_CHANGE_NEWS_DAYS = 60
 
 // ── Main component ─────────────────────────────────────────────────────────
 
+// How well a candidate row reads as a statement header (plan 129): the number of
+// columns autoMapColumns recognises. Only the xlsx branch uses it; CSV's header
+// stays row 0.
+//
+// Known limitation: a loan number typed into Excel as a NUMBER (12345) has lost
+// any leading zeros the part is stored with (0012345), so loanPartByNumber will
+// not match it. This degrades safely: assignPaymentsToPart falls back to the
+// selected loan part and marks the row partMatched:false, which the triage
+// table already surfaces. Matching is deliberately NOT loosened here — doing so
+// would change financial routing.
+function scoreHeaderRow(headers: string[]): number {
+  const m = autoMapColumns(headers)
+  return [m.date, m.specification, m.amount, m.balance, m.loan_number].filter(v => v != null).length
+}
+
 export default function Bolanekoll() {
   const active = useToolPageActive('/bolanekoll')
   useLayoutEffect(() => { document.documentElement.classList.remove('calc-layout') }, [])
@@ -141,6 +158,8 @@ export default function Bolanekoll() {
   const [payMonthsShown, setPayMonthsShown] = useState<number | 'all'>(1)
   const [isDragging, setIsDragging] = useState(false)
   const [importCfg, setImportCfg] = useState<ImportCfg | null>(null)
+  // Bumped per read so a slow earlier read can never overwrite a later one.
+  const readSeq = useRef(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const whatIfRateRef = useRef<HTMLInputElement>(null)
   const savedScenarioRateRef = useRef<number | null>(settings.what_if_rate_pct)
@@ -676,21 +695,54 @@ export default function Bolanekoll() {
       return { ...c, recon, duplicate: !!dups[i], classification: (dups[i] || !c.hasAmount ? 'skip' : 'include') as 'include' | 'skip' }
     })
   }
-  async function loadFile(file: File): Promise<ImportCfg> {
-    const text = await file.text()
-    const parsed = parseCsv(text)
+  async function loadFile(file: File, sheet?: string): Promise<ImportCfg> {
+    const parsed = await readTabular(file, { parseCsvText: text => parseCsv(text), scoreHeaderRow, sheet })
     let mapping = autoMapColumns(parsed.headers)
     const sig = headerSignature(parsed.headers)
     if (settings.import_presets[sig]) mapping = applyPreset(parsed.headers, settings.import_presets[sig])
     const importPart = mapping.loan_number != null ? '__auto__' : (activeParts[0]?.id || '')
     return { file, parsed, mapping, importPart, triage: buildTriage(parsed, mapping, importPart), queue: [], qIdx: 0 }
   }
+  // A failed read closes any import in progress (no half-open config) and
+  // clears the picker so the same file can be chosen again.
+  function failRead(err: unknown) {
+    readSeq.current++
+    setImportCfg(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+    showToast(err instanceof UnsupportedFileError ? err.message : 'Kunde inte läsa filen.')
+  }
   async function handleFiles(files: FileList | File[]) {
-    const arr = Array.from(files).filter(f => f.name.endsWith('.csv') || f.type.includes('csv') || f.type.includes('text'))
-    if (!arr.length) return
+    const dropped = Array.from(files)
+    let arr = dropped.filter(isImportableFile)
+    if (!arr.length) {
+      // A lone legacy .xls gets readTabular's specific "save it as .xlsx" toast
+      // rather than the generic one; anything else is simply not importable.
+      const xls = dropped.find(f => f.name.toLowerCase().endsWith('.xls'))
+      if (!xls) { showToast('Bara .csv och .xlsx kan importeras.'); return }
+      arr = [xls]
+    }
     if (!activeParts.length) { showToast('Add a loan part first, then import.'); return }
-    const cfg = await loadFile(arr[0])
-    setImportCfg({ ...cfg, queue: arr.slice(1), qIdx: 0 })
+    const seq = ++readSeq.current
+    try {
+      const cfg = await loadFile(arr[0])
+      if (seq !== readSeq.current) return
+      setImportCfg({ ...cfg, queue: arr.slice(1), qIdx: 0 })
+    } catch (err) {
+      if (seq === readSeq.current) failRead(err)
+    }
+  }
+  // Re-read a multi-sheet workbook on another sheet; the queue is untouched.
+  async function switchSheet(sheet: string) {
+    if (!importCfg) return
+    const { file, queue, qIdx } = importCfg
+    const seq = ++readSeq.current
+    try {
+      const cfg = await loadFile(file, sheet)
+      if (seq !== readSeq.current) return
+      setImportCfg({ ...cfg, queue, qIdx })
+    } catch (err) {
+      if (seq === readSeq.current) failRead(err)
+    }
   }
   function reTriage(patch: Partial<Pick<ImportCfg, 'mapping' | 'importPart'>>) {
     setImportCfg(p => {
@@ -706,7 +758,7 @@ export default function Bolanekoll() {
       .filter(t => t.hasAmount && t.classification === 'include')
       .map((t, i) => {
         const row = importCfg.parsed.rows[importCfg.triage.indexOf(t)] || importCfg.parsed.rows[i]
-        return makePayment({ loan_part_id: t.loan_part_id, date: (importCfg.mapping.date != null ? row[importCfg.mapping.date] : '')?.trim() || '', kind: t.kind, description: t.specText, amount: t.amount, balance_after: t.balance_after, source: 'import:' + importCfg.file.name })
+        return makePayment({ loan_part_id: t.loan_part_id, date: (importCfg.mapping.date != null ? row[importCfg.mapping.date] : '')?.trim() || '', kind: t.kind, description: t.specText, amount: t.amount, balance_after: t.balance_after, source: importSource(importCfg.file.name, importCfg.parsed) })
       })
     if (!drafts.length) { showToast('Nothing selected to add.'); return }
     // Supersede (plan 23): actuals always win. A predicted row matched within
@@ -735,9 +787,16 @@ export default function Bolanekoll() {
       showToast('Added ' + savedRows.length + ' row' + (savedRows.length === 1 ? '' : 's')
         + (predictedIds.length ? ' · replaced ' + predictedIds.length + ' predicted row' + (predictedIds.length === 1 ? '' : 's') : '')
         + ' from “' + importCfg.file.name + '”.')
-      if (importCfg.queue.length) { const cfg = await loadFile(importCfg.queue[0]); setImportCfg({ ...cfg, queue: importCfg.queue.slice(1), qIdx: importCfg.qIdx + 1 }) }
-      else setImportCfg(null)
-    } catch (err) { saveErr(err) }
+    } catch (err) { saveErr(err); return }
+    // The save succeeded; a queued file that cannot be read must not be
+    // reported as a save error.
+    if (importCfg.queue.length) {
+      const seq = ++readSeq.current
+      try {
+        const cfg = await loadFile(importCfg.queue[0])
+        if (seq === readSeq.current) setImportCfg({ ...cfg, queue: importCfg.queue.slice(1), qIdx: importCfg.qIdx + 1 })
+      } catch (err) { if (seq === readSeq.current) failRead(err) }
+    } else setImportCfg(null)
   }
   const triageSummary = useMemo(() => {
     if (!importCfg) return ''
@@ -1302,27 +1361,36 @@ export default function Bolanekoll() {
           <div className="card-head"><h2>Importera betalningar <span className="card-en">· Import payments</span></h2></div>
           {!parts.length ? (
             <div className="import-guard">
-              <p>Add a loan part first — then import its payment CSV.</p>
+              <p>Add a loan part first — then import its payment file.</p>
               <button type="button" className="btn btn-primary" onClick={() => setPartDlg({ open: true, id: null })}>+ Add loan part</button>
             </div>
           ) : !importCfg ? (
             <FileDropzone isDragging={isDragging} onDragChange={setIsDragging} inputRef={fileInputRef}
-              onFiles={handleFiles} accept=".csv,text/csv,text/plain" multiple>
-              <p className="dropzone-lead">Drop one or more mortgage <strong>.csv</strong> files here, or <span className="link-btn">browse</span>.</p>
+              onFiles={handleFiles} accept={IMPORT_ACCEPT} multiple>
+              <p className="dropzone-lead">Drop one or more mortgage <strong>.csv</strong> or <strong>.xlsx</strong> files here, or <span className="link-btn">browse</span>.</p>
               <p className="dropzone-hint">One file per loan part · we map the columns and step through them one at a time.</p>
             </FileDropzone>
           ) : (
             <div className="import-config">
               <div className="import-filebar">
-                <span className="file-pill">{importCfg.file.name} · {importCfg.parsed.rows.length} rows</span>
+                <span className="file-pill">{importCfg.file.name} · {importCfg.parsed.rows.length} rows · {sourceLabel(importCfg.parsed)}</span>
                 {importCfg.queue.length > 0 && <span className="queue-info">+{importCfg.queue.length} file{importCfg.queue.length === 1 ? '' : 's'} queued</span>}
-                <button type="button" className="link-btn" onClick={() => { setImportCfg(null); if (fileInputRef.current) fileInputRef.current.value = '' }}>Choose other files</button>
+                <button type="button" className="link-btn" onClick={() => { readSeq.current++; setImportCfg(null); if (fileInputRef.current) fileInputRef.current.value = '' }}>Choose other files</button>
               </div>
               <div className="config-grid">
+                {importCfg.parsed.sheets.length > 1 && (
+                  <div className="config-field">
+                    <label htmlFor="bk-import-sheet">Vilket blad?</label>
+                    <select id="bk-import-sheet" className="select" value={importCfg.parsed.sheet ?? ''}
+                      onChange={e => switchSheet(e.target.value)}>
+                      {importCfg.parsed.sheets.map(sh => <option key={sh} value={sh}>{sh}</option>)}
+                    </select>
+                  </div>
+                )}
                 {([['date', 'Date column'], ['specification', 'Type column (Specifikation)'], ['amount', 'Amount column (Belopp)']] as const).map(([k, lbl]) => (
                   <div key={k} className="config-field">
-                    <label>{lbl}</label>
-                    <select className="select" value={importCfg.mapping[k] ?? ''} onChange={e => reTriage({ mapping: { ...importCfg.mapping, [k]: e.target.value !== '' ? Number(e.target.value) : null } })}>
+                    <label htmlFor={'bk-map-' + k}>{lbl}</label>
+                    <select id={'bk-map-' + k} className="select" value={importCfg.mapping[k] ?? ''} onChange={e => reTriage({ mapping: { ...importCfg.mapping, [k]: e.target.value !== '' ? Number(e.target.value) : null } })}>
                       <option value="">— none —</option>
                       {importCfg.parsed.headers.map((h, i) => <option key={i} value={i}>{h || 'Column ' + (i + 1)}</option>)}
                     </select>
@@ -1332,8 +1400,8 @@ export default function Bolanekoll() {
               <div className="config-grid">
                 {([['balance', 'Balance column (Saldo)'], ['loan_number', 'Loan # column (optional)']] as const).map(([k, lbl]) => (
                   <div key={k} className="config-field">
-                    <label>{lbl}</label>
-                    <select className="select" value={importCfg.mapping[k] ?? ''} onChange={e => reTriage({ mapping: { ...importCfg.mapping, [k]: e.target.value !== '' ? Number(e.target.value) : null } })}>
+                    <label htmlFor={'bk-map-' + k}>{lbl}</label>
+                    <select id={'bk-map-' + k} className="select" value={importCfg.mapping[k] ?? ''} onChange={e => reTriage({ mapping: { ...importCfg.mapping, [k]: e.target.value !== '' ? Number(e.target.value) : null } })}>
                       <option value="">— none —</option>
                       {importCfg.parsed.headers.map((h, i) => <option key={i} value={i}>{h || 'Column ' + (i + 1)}</option>)}
                     </select>
