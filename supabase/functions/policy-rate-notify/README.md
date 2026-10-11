@@ -20,18 +20,12 @@ supabase functions deploy policy-rate-notify
 
 ## 2. Set secrets
 
-```sh
-supabase secrets set RESEND_API_KEY=re_xxx RESEND_FROM="Hemma OS <styrranta@your-verified-domain>" APP_ORIGIN=https://www.vardon-family.se
-```
+Secrets: see [`../_shared/README.md`](../_shared/README.md) (plan 131) for
+the full Resend domain/key setup and the exact `supabase secrets set` command.
 
-Resend requires a **verified sending domain** (or their shared onboarding
-domain, which is rate-limited and not suitable for production) before it will
-deliver mail from `RESEND_FROM`. Set that up in the Resend dashboard first —
-this is an owner action outside this repo.
-
-`APP_ORIGIN` is the owner-facing link in the email body (plan 130); the
-function throws and refuses to run without it rather than ever falling back
-to a guessed or stale domain. Plan 132 reuses the same secret.
+`APP_ORIGIN` is **required** — the owner-facing link in the email body (plan
+130); the function throws and refuses to run without it rather than ever
+falling back to a guessed or stale domain. Plan 132 reuses the same secret.
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` do **not** need to be set —
 Supabase injects both automatically into every deployed Edge Function.
