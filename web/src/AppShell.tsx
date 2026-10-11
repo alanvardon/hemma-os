@@ -1,11 +1,7 @@
 // AppShell — the authenticated app: the router, AuthGate (and so Supabase),
 // every tool store and the update/persistence banners. Split out of App.tsx
-// (plan 132) and lazy-imported from there, so the public `#/lon/<token>` page
-// (SalarySubmitPage) never evaluates this module, and so never evaluates
-// `lib/supabase`, the Zustand store or any `*-store.ts` either — a dynamic
-// `import()` only runs when the component requesting it actually renders, and
-// the token route never renders <AppShell/>. Default export only: this is
-// exactly what `App.tsx`'s `lazy(() => import('./AppShell'))` expects.
+// (plan 132) so App.tsx can branch to the public `#/lon/<token>` page
+// (SalarySubmitPage) before any of this renders.
 import { createHashRouter, Navigate, Outlet, RouterProvider, ScrollRestoration } from 'react-router-dom'
 import AuthGate from './components/AuthGate'
 import Home from './routes/Home'

@@ -1,13 +1,13 @@
 import { createContext, lazy, Suspense, useContext, useEffect, useState } from 'react'
-import SalarySubmitPage from './routes/SalarySubmitPage'
+import AppShell from './AppShell'
 
-// AppShell — the router, AuthGate, Supabase, every tool store — is
-// lazy-imported (plan 132). A dynamic `import()` only runs when the component
-// requesting it actually renders; the public `#/lon/<token>` branch below
-// never renders <AppShell/>, so it never evaluates `lib/supabase`, the
-// Zustand store or any `*-store.ts`. See AppShell.tsx and
-// SalarySubmitPage.test.tsx's import-boundary test.
-const AppShell = lazy(() => import('./AppShell'))
+// The public salary page is the rare path, so it is the one lazy-loaded: the
+// authenticated app keeps loading in a single chunk. The page's own module
+// graph never reaches `lib/supabase`, the Zustand store or any `*-store.ts`
+// (asserted by SalarySubmitPage.import-boundary.test.ts), and the branch below
+// never renders <AppShell/>, so the page never talks to the authenticated
+// client (plan 132, D7).
+const SalarySubmitPage = lazy(() => import('./routes/SalarySubmitPage'))
 
 // `#/lon/<token>` — the public salary-submission link emailed to each person
 // (plan 132). Checked before AuthGate/the router render at all. The token is
@@ -52,12 +52,12 @@ export default function App() {
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
       {salaryToken
-        ? <SalarySubmitPage token={salaryToken} />
-        : (
+        ? (
           <Suspense fallback={<div className="auth-splash" aria-hidden="true" />}>
-            <AppShell />
+            <SalarySubmitPage token={salaryToken} />
           </Suspense>
-        )}
+        )
+        : <AppShell />}
     </ThemeContext.Provider>
   )
 }

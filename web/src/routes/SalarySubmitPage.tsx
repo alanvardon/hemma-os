@@ -21,7 +21,9 @@ import { SalaryItemColumn, type SalaryItem } from './hushallsbudget-salary'
 import { monthLabelEn } from '../../../supabase/functions/_shared/salary-reminder-logic.ts'
 
 const FUNCTIONS_PATH = '/functions/v1/salary-reminder'
-const APP_ROOT_HREF = '#/'
+// A real navigation to the app root (no hash), not `#/`: App.tsx picks the
+// token branch once at mount, so a hash-only change would leave this page up.
+const APP_ROOT_HREF = './'
 
 interface ContextItem { label: string; amount: number }
 

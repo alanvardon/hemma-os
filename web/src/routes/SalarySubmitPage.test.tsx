@@ -70,7 +70,7 @@ describe('SalarySubmitPage', () => {
     mockFetchSequence([{ status: 404, body: { error: 'invalid_link' } }])
     render(<SalarySubmitPage token={TOKEN} />)
     await screen.findByText(/This link has expired or is no longer valid/)
-    expect(screen.getByRole('link', { name: /Hemma OS/ })).toHaveAttribute('href', '#/')
+    expect(screen.getByRole('link', { name: /Hemma OS/ })).toHaveAttribute('href', './')
   })
 
   it('already_logged: shows the month is already logged', async () => {
