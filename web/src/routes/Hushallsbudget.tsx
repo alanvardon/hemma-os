@@ -6,6 +6,7 @@ import {
 } from '../lib/hushallsbudget'
 import type { BudgetState, BudgetResult, Owner, Row, SalarySubmission, IncomeItem } from '../lib/hushallsbudget'
 import { loadBudget, saveBudget } from '../lib/hushallsbudget-store'
+import { SalaryItemColumn, type SalaryItem } from './hushallsbudget-salary'
 import { reportPersistenceError } from '../lib/persistence-error'
 import { mortgageMonthlyFigures } from '../lib/mortgage'
 import { loadMortgageSyncSnapshot } from '../lib/mortgage-store'
@@ -158,7 +159,9 @@ function Modal({ open, onClose, ariaLabel, children }: {
 }
 
 // ── Submit this month's salaries ─────────────────────────────────────────────
-interface SalaryItem { uid: number; label: string; amount: number }
+// SalaryItem, SalaryItemColumn and AmountInputRef live in ./hushallsbudget-salary
+// (plan 132) so the public #/lon/<token> page can reuse the exact same income
+// column outside this modal.
 
 function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onHistoryChanged }: {
   open: boolean; onClose: () => void; people: string[]; incomes: Row[]
@@ -236,31 +239,17 @@ function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onH
 
   // Plain helper (NOT a component) so the inputs keep focus across renders.
   const itemColumn = (owner: 'a' | 'b', items: SalaryItem[]) => (
-    <div className="income-col">
-      <div className="income-col-head">
-        <span className="income-col-name">
-          <PersonLabel name={owner === 'a' ? nameA : nameB} self={selfSlot === owner} other={selfSlot != null && selfSlot !== owner} />
-        </span>
-        <span className="income-col-sub">{fmt(owner === 'a' ? incomeA : incomeB)}</span>
-      </div>
-      <div className="sal-list">
-        {items.map((it, i) => (
-          <div className="sal-row" key={it.uid}>
-            <input
-              type="text" className="sal-row-label" value={it.label} placeholder="e.g. Lön, Barnbidrag, skatt" aria-label="Income name"
-              onChange={(e) => patchItem(owner, it.uid, { label: e.target.value })}
-            />
-            <AmountInputRef
-              inputRef={owner === 'a' && i === 0 ? firstAmountRef : undefined}
-              value={it.amount} onChange={(n) => patchItem(owner, it.uid, { amount: n })}
-              className="sal-row-amount" ariaLabel="Amount, kr"
-            />
-            <button type="button" className="sal-row-remove" aria-label="Remove income" onClick={() => removeItem(owner, it.uid)}>×</button>
-          </div>
-        ))}
-      </div>
-      <button type="button" className="btn btn-ghost row-add-btn" onClick={() => addItem(owner)}>+ Add income</button>
-    </div>
+    <SalaryItemColumn
+      name={owner === 'a' ? nameA : nameB}
+      self={selfSlot === owner}
+      other={selfSlot != null && selfSlot !== owner}
+      total={owner === 'a' ? incomeA : incomeB}
+      items={items}
+      firstAmountRef={owner === 'a' ? firstAmountRef : undefined}
+      onItemChange={(uidv, patch) => patchItem(owner, uidv, patch)}
+      onRemoveItem={(uidv) => removeItem(owner, uidv)}
+      onAddItem={() => addItem(owner)}
+    />
   )
 
   return (
@@ -303,24 +292,6 @@ function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onH
       </div>
       <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
     </Modal>
-  )
-}
-
-// AmountInput variant that exposes a ref to the underlying input (for focus).
-function AmountInputRef({ value, onChange, className, ariaLabel, inputRef }: {
-  value: number; onChange: (n: number) => void; className: string; ariaLabel: string
-  inputRef?: React.RefObject<HTMLInputElement | null>
-}) {
-  const [buf, setBuf] = useState(() => formatWithSpaces(value))
-  const [focused, setFocused] = useState(false)
-  useEffect(() => { if (!focused) setBuf(formatWithSpaces(value)) }, [value, focused])
-  return (
-    <input
-      ref={inputRef} type="text" inputMode="numeric" className={className} aria-label={ariaLabel} value={buf}
-      onFocus={() => setFocused(true)}
-      onChange={(e) => { setBuf(e.target.value); onChange(parseFormatted(e.target.value)) }}
-      onBlur={() => { setFocused(false); setBuf(formatWithSpaces(parseFormatted(buf))) }}
-    />
   )
 }
 
