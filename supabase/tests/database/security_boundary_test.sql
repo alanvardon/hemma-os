@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(21);
+select plan(22);
 
 select is(
   (
@@ -352,6 +352,14 @@ select ok(
   and not has_function_privilege('anon', 'public.discard_salary_drafts(text)', 'execute')
   and has_function_privilege('authenticated', 'public.discard_salary_drafts(text)', 'execute'),
   'finalize_salary_month is service-only; discard_salary_drafts is authenticated-only'
+);
+
+select ok(
+  not has_function_privilege('public', 'public.finalize_salary_month(uuid,text)', 'execute')
+  and not has_function_privilege('anon', 'public.finalize_salary_month(uuid,text)', 'execute')
+  and not has_function_privilege('authenticated', 'public.finalize_salary_month(uuid,text)', 'execute')
+  and has_function_privilege('service_role', 'public.finalize_salary_month(uuid,text)', 'execute'),
+  'the public finalize_salary_month wrapper is executable by service_role only'
 );
 
 select * from finish();

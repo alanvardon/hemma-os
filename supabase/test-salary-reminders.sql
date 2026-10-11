@@ -83,7 +83,12 @@ begin
     '[{"label":" Lön ","amount":42350},{"label":"Barnbidrag","amount":1250},{"label":"  ","amount":0}]',
     ' Bonus i mars ',
     '[{"label":"Lön","amount":38900}]', '');
-  outcome := private.finalize_salary_month(hh, '2026-01');
+  -- Finalized through the public wrapper as service_role (the Edge Function path).
+  set local role service_role;
+  perform set_config('request.jwt.claims', '{"role":"service_role"}', true);
+  outcome := public.finalize_salary_month(hh, '2026-01');
+  reset role;
+  perform set_config('request.jwt.claims', '', true);
   if outcome <> 'finalized' then raise exception 'FAIL golden outcome: %', outcome; end if;
 
   select * into strict r from public.salary_submissions where household_id = hh and month = '2026-01';
@@ -340,6 +345,11 @@ begin
     raise exception 'FAIL client executed finalize_salary_month';
   exception when insufficient_privilege then null;
   end;
+  begin
+    perform public.finalize_salary_month(hh1, '2026-09');
+    raise exception 'FAIL client executed public.finalize_salary_month';
+  exception when insufficient_privilege then null;
+  end;
 
   -- discard: validates the month, then clears only the caller's household.
   begin
@@ -414,6 +424,11 @@ begin
   begin
     perform private.finalize_salary_month('13200000-0000-0000-0000-0000000000a2', '2026-09');
     raise exception 'FAIL anon executed finalize_salary_month';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    perform public.finalize_salary_month('13200000-0000-0000-0000-0000000000a2', '2026-09');
+    raise exception 'FAIL anon executed public.finalize_salary_month';
   exception when insufficient_privilege then null;
   end;
 end $$;

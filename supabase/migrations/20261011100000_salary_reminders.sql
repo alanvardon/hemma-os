@@ -244,11 +244,9 @@ revoke all on function private.clear_salary_month(uuid, text) from public, anon,
 -- exactly as for every other insert path, and the reject_tombstoned_row trigger
 -- runs as usual (service-role / postgres branch, household from the row).
 --
--- Service role only: no client role may execute it. NOTE: the `private` schema
--- is neither exposed through PostgREST nor USAGE-granted to service_role, so
--- the Edge Function cannot reach this through supabase-js .rpc() as-is; Stage 3
--- must call it over a direct postgres connection or via a public wrapper
--- executable by service_role only (owner decision).
+-- Service role only: no client role may execute it. The `private` schema is
+-- not exposed through PostgREST, so the Edge Function calls the service-role-only
+-- public.finalize_salary_month wrapper defined at the end of this migration.
 
 create or replace function private.finalize_salary_month(p_household uuid, p_month text)
     returns text
@@ -362,3 +360,20 @@ $$;
 alter function public.discard_salary_drafts(text) owner to postgres;
 revoke all on function public.discard_salary_drafts(text) from public, anon;
 grant execute on function public.discard_salary_drafts(text) to authenticated;
+
+-- ── service-role entry point for the salary-reminder Edge Function ───────────
+-- The private schema is not exposed through PostgREST, so the Edge Function
+-- calls this thin public wrapper via .rpc(). Executable by service_role ONLY.
+
+create or replace function public.finalize_salary_month(p_household uuid, p_month text)
+    returns text
+    language sql
+    security definer
+    set search_path to ''
+    as $$
+  select private.finalize_salary_month(p_household, p_month);
+$$;
+
+alter function public.finalize_salary_month(uuid, text) owner to postgres;
+revoke all on function public.finalize_salary_month(uuid, text) from public, anon, authenticated;
+grant execute on function public.finalize_salary_month(uuid, text) to service_role;
