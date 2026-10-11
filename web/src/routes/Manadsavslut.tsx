@@ -27,6 +27,8 @@ import { useToast } from '../components/useToast'
 import { useConfirm } from '../components/useConfirm'
 import { persistenceErrorMessage } from '../lib/persistence-error'
 import { normalizeMonthEndItemDate } from '../lib/persistence-schema'
+import { IMPORT_ACCEPT, readTabular, UnsupportedFileError, type TabularResult } from '../lib/tabular'
+import { importSource, sourceLabel } from '../lib/import-source'
 import ItemDialog from './manadsavslut/ItemDialog'
 import SettleDialog from './manadsavslut/SettleDialog'
 import SettingsDialog from './manadsavslut/SettingsDialog'
@@ -35,6 +37,15 @@ import { fmtMoney, M, clean, cellAt, deriveTriage, currencyState, type TriageRow
 function canonicalImportDate(row: string[], mapping: ColMapping): string | null {
   const parsed = normalizeMonthEndItemDate(clean(cellAt(row, mapping.date_purchased)))
   return parsed.ok ? parsed.value : null
+}
+
+// How well a candidate row reads as a statement header (plan 129): the number
+// of columns autoMapColumns recognises. Three mappable columns, so the reader's
+// threshold of 2 means at least "date + amount" — the minimum that makes an
+// import meaningful. Only the xlsx branch uses it; CSV's header stays row 0.
+function scoreHeaderRow(headers: string[]): number {
+  const m = autoMapColumns(headers)
+  return [m.date_purchased, m.description, m.enter_amount].filter(v => v != null).length
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
@@ -69,6 +80,9 @@ export default function Manadsavslut() {
   const [isDragging, setIsDragging] = useState(false)
   const [importCfg, setImportCfg] = useState<ImportCfg | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Bumped per read, so a slow earlier read (e.g. a sheet switch) can never
+  // overwrite a later one or reopen an import the owner already cancelled.
+  const readSeq = useRef(0)
 
   const [itemDlg, setItemDlg] = useState<{ open: boolean; id: string | null }>({ open: false, id: null })
   const [settleDlg, setSettleDlg] = useState(false)
@@ -103,13 +117,27 @@ export default function Manadsavslut() {
   useEffect(() => { document.title = 'Månadsavslut — Hemma·OS' }, [])
 
   // ── Import ───────────────────────────────────────────────────────────────
-  async function handleFile(file: File) {
+  // `sheet` re-reads a multi-sheet workbook on the chosen sheet; CSV goes
+  // through readTabular's CSV branch, which is exactly parseCsv(await file.text()).
+  async function handleFile(file: File, sheet?: string) {
     if (!file) return
-    const text = await file.text()
-    const parsed = parseCsv(text)
+    const seq = ++readSeq.current
+    let parsed: TabularResult
+    try {
+      parsed = await readTabular(file, { parseCsvText: text => parseCsv(text), scoreHeaderRow, sheet })
+    } catch (err) {
+      if (seq !== readSeq.current) return
+      // No half-open config: a failed read closes any import in progress and
+      // clears the picker so the same file can be chosen again.
+      cancelImport()
+      showToast(err instanceof UnsupportedFileError ? err.message : 'Kunde inte läsa filen.')
+      return
+    }
+    if (seq !== readSeq.current) return
     if (!parsed.headers.length || !parsed.rows.length) { showToast('That file has no rows to import.'); return }
     const mapping = autoMapColumns(parsed.headers)
-    const frontedBy: Person = 'a'
+    // Switching sheet keeps the card the owner already picked.
+    const frontedBy: Person = sheet !== undefined && importCfg ? importCfg.frontedBy : 'a'
     const derived = deriveTriage(parsed, mapping, frontedBy, items)
     const triage: TriageRow[] = derived.map(d => ({ ...d, classification: d.duplicate ? 'exclude' : defaultClass }))
     setImportCfg({ file, parsed, mapping, frontedBy, triage })
@@ -124,7 +152,7 @@ export default function Manadsavslut() {
     })
   }
   function setAllClass(c: Treatment) { setImportCfg(cfg => cfg ? { ...cfg, triage: cfg.triage.map(t => ({ ...t, classification: c })) } : cfg) }
-  function cancelImport() { setImportCfg(null); if (fileInputRef.current) fileInputRef.current.value = '' }
+  function cancelImport() { readSeq.current++; setImportCfg(null); if (fileInputRef.current) fileInputRef.current.value = '' }
 
   const triageSummary = useMemo(() => {
     if (!importCfg) return ''
@@ -164,7 +192,7 @@ export default function Manadsavslut() {
       drafts.push(makeItem({
         date_purchased: date,
         description: clean(cellAt(row, importCfg.mapping.description)) || '(no description)',
-        enter_amount: t.charge, split: fields.split, pending: fields.pending, fronted_by: importCfg.frontedBy, owed_by: fields.owed_by, source: 'import:' + importCfg.file.name,
+        enter_amount: t.charge, split: fields.split, pending: fields.pending, fronted_by: importCfg.frontedBy, owed_by: fields.owed_by, source: importSource(importCfg.file.name, importCfg.parsed),
       }))
     })
     if (!drafts.length) { showToast('Nothing selected to add.'); return }
@@ -369,9 +397,9 @@ export default function Manadsavslut() {
           {!importCfg ? (
             <>
             <FileDropzone isDragging={isDragging} onDragChange={setIsDragging} inputRef={fileInputRef}
-              onFiles={files => { if (files[0]) handleFile(files[0]) }} accept=".csv,text/csv,text/plain">
-              <p className="dropzone-lead">Drop a card-statement <strong>.csv</strong> here, or <span className="link-btn">browse</span>.</p>
-              <p className="dropzone-hint">Swedish or English headers · comma or semicolon · we map the columns for you.</p>
+              onFiles={files => { if (files[0]) handleFile(files[0]) }} accept={IMPORT_ACCEPT}>
+              <p className="dropzone-lead">Drop a card-statement <strong>.csv</strong> or <strong>.xlsx</strong> here, or <span className="link-btn">browse</span>.</p>
+              <p className="dropzone-hint">Swedish or English headers · comma, semicolon or Excel · we map the columns for you.</p>
             </FileDropzone>
             {!items.length && (
               <div className="import-secondary">
@@ -383,14 +411,23 @@ export default function Manadsavslut() {
           ) : (
             <div className="import-config">
               <div className="import-filebar">
-                <span className="file-pill">{importCfg.file.name} · {importCfg.parsed.rows.length} rows · “{importCfg.parsed.delimiter === '\t' ? 'tab' : importCfg.parsed.delimiter}” delimited</span>
+                <span className="file-pill">{importCfg.file.name} · {importCfg.parsed.rows.length} rows · {sourceLabel(importCfg.parsed)}</span>
                 <button type="button" className="link-btn" onClick={cancelImport}>Choose a different file</button>
               </div>
               <div className="config-grid">
+                {importCfg.parsed.sheets.length > 1 && (
+                  <div className="config-field">
+                    <label htmlFor="ma-import-sheet">Vilket blad?</label>
+                    <select id="ma-import-sheet" className="select" value={importCfg.parsed.sheet ?? ''}
+                      onChange={e => handleFile(importCfg.file, e.target.value)}>
+                      {importCfg.parsed.sheets.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                )}
                 {([['date_purchased', 'Date column'], ['description', 'Description column'], ['enter_amount', 'Amount column']] as const).map(([k, lbl]) => (
                   <div key={k} className="config-field">
-                    <label>{lbl}</label>
-                    <select className="select" value={importCfg.mapping[k] ?? ''} onChange={e => reDerive({ mapping: { ...importCfg.mapping, [k]: e.target.value !== '' ? Number(e.target.value) : null } })}>
+                    <label htmlFor={'ma-map-' + k}>{lbl}</label>
+                    <select id={'ma-map-' + k} className="select" value={importCfg.mapping[k] ?? ''} onChange={e => reDerive({ mapping: { ...importCfg.mapping, [k]: e.target.value !== '' ? Number(e.target.value) : null } })}>
                       <option value="">— none —</option>
                       {importCfg.parsed.headers.map((h, i) => <option key={i} value={i}>{h || 'Column ' + (i + 1)}</option>)}
                     </select>

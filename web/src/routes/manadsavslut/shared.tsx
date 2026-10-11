@@ -2,6 +2,7 @@ import { parseAmount, inferSpendSign, flagDuplicates } from '../../lib/manadsavs
 import type { Item, Person, Treatment, CsvResult, ColMapping } from '../../lib/manadsavslut'
 import { Money } from '../../components/AnimatedNumber'
 import { CURRENCY_SUFFIX } from '../../lib/format'
+import type { TabularResult } from '../../lib/tabular'
 
 // ── Formatters (faithful to manadsavslut.js) ─────────────────────────────────
 
@@ -28,7 +29,10 @@ export function defaultPeriodLabel(): string {
 // ── Triage (import) ──────────────────────────────────────────────────────────
 
 export interface TriageRow { classification: Treatment; kind: 'charge' | 'refund' | 'noamount'; charge: number; duplicate: boolean }
-export interface ImportCfg { file: File; parsed: CsvResult; mapping: ColMapping; frontedBy: Person; triage: TriageRow[] }
+// `parsed` is the reader's TabularResult (plan 129) — structurally a CsvResult,
+// so deriveTriage keeps its CsvResult parameter; the extra fields drive the
+// file pill and the sheet picker.
+export interface ImportCfg { file: File; parsed: TabularResult; mapping: ColMapping; frontedBy: Person; triage: TriageRow[] }
 
 export function cellAt(row: string[], idx: number | null): string { return idx == null ? '' : (row[idx] == null ? '' : row[idx]) }
 
