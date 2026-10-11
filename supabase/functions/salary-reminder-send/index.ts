@@ -3,8 +3,11 @@
 // it emails each member-assigned person (household_people slot a/b) their own
 // single-purpose, no-login link to submit their half of the month's salaries.
 //
-// Not invoked from the browser — no CORS. Only a caller presenting the
-// service-role key as its bearer is accepted (see isServiceRoleCaller).
+// Not invoked from the browser — no CORS. verify_jwt is OFF for this function
+// (Supabase's pattern for cron/pg_net callers using `sb_secret_…` keys), so the
+// in-function isTrustedServerCaller check is the only gate: the request must
+// carry one of the project's secret keys (apikey header or Bearer), or the
+// legacy service_role key. Anon/publishable keys get 403.
 //
 // Per household × slot:
 //   skip if the month already has a salary_submissions row (D11), the slot has
@@ -21,9 +24,11 @@
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sendEmail } from '../_shared/resend.ts'
 import {
+  adminKey,
   base64UrlEncode,
   buildReminderEmail,
   isSendDay,
+  isTrustedServerCaller,
   localDryRunLinkLine,
   monthFor,
   personDisplayName,
@@ -37,24 +42,6 @@ const SLOTS: Slot[] = ['a', 'b']
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
-
-// Constant-time string compare (both sides are server-held secrets/bearers).
-function safeEqual(a: string, b: string): boolean {
-  const ea = new TextEncoder().encode(a)
-  const eb = new TextEncoder().encode(b)
-  let diff = ea.length ^ eb.length
-  for (let i = 0; i < Math.max(ea.length, eb.length); i++) diff |= (ea[i] ?? 0) ^ (eb[i] ?? 0)
-  return diff === 0
-}
-
-// The gateway's verify_jwt only proves the bearer is A valid project JWT —
-// the public anon key passes that too. This job mints credentials and sends
-// mail, so it additionally requires the bearer to be the service-role key.
-function isServiceRoleCaller(req: Request, serviceRoleKey: string): boolean {
-  const auth = req.headers.get('Authorization') ?? ''
-  const m = /^Bearer\s+(.+)$/i.exec(auth)
-  return !!m && safeEqual(m[1].trim(), serviceRoleKey)
-}
 
 // Error text for logs without household data: Resend's error body can echo
 // the recipient address, so only its status code survives.
@@ -85,13 +72,17 @@ async function listUserIdsByEmail(supabase: SupabaseClient): Promise<Map<string,
 
 Deno.serve(async (req: Request) => {
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-    if (!supabaseUrl || !serviceRoleKey) throw new Error('SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set')
-
-    if (!isServiceRoleCaller(req, serviceRoleKey)) {
+    const keyEnv = {
+      SUPABASE_SECRET_KEYS: Deno.env.get('SUPABASE_SECRET_KEYS'),
+      SUPABASE_SERVICE_ROLE_KEY: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
+    }
+    if (!isTrustedServerCaller({ apikey: req.headers.get('apikey'), authorization: req.headers.get('Authorization') }, keyEnv)) {
       return json({ ok: false, error: 'forbidden' }, 403)
     }
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const serviceKey = adminKey(keyEnv)
+    if (!supabaseUrl || !serviceKey) throw new Error('SUPABASE_URL / SUPABASE_SECRET_KEYS are not set')
 
     // Link origin (plan 131 secret). Checked before anything else so a
     // misconfiguration fails loudly every day, not only on send days.
@@ -102,7 +93,7 @@ Deno.serve(async (req: Request) => {
     const now = new Date()
     const today = stockholmToday(now)
     const month = monthFor(today)
-    const supabase = createClient(supabaseUrl, serviceRoleKey)
+    const supabase = createClient(supabaseUrl, serviceKey)
 
     // Which households are due today. No settings row = enabled, day 25.
     const [{ data: households, error: hhError }, { data: settingsRows, error: settingsError }] = await Promise.all([

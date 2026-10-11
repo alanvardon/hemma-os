@@ -19,6 +19,9 @@ import {
   stockholmToday,
   tokenExpiry,
   validateHalf,
+  adminKey,
+  isTrustedServerCaller,
+  safeEqual,
 } from '../../../supabase/functions/_shared/salary-reminder-logic.ts'
 
 describe('stockholmToday', () => {
@@ -390,5 +393,67 @@ describe('submitStatusFor', () => {
   it('returns null on anything unexpected', () => {
     expect(submitStatusFor('weird')).toBeNull()
     expect(submitStatusFor(null)).toBeNull()
+  })
+})
+
+describe('safeEqual', () => {
+  it('matches only identical strings', () => {
+    expect(safeEqual('sb_secret_abc', 'sb_secret_abc')).toBe(true)
+    expect(safeEqual('sb_secret_abc', 'sb_secret_abd')).toBe(false)
+    expect(safeEqual('sb_secret_abc', 'sb_secret_ab')).toBe(false)
+    expect(safeEqual('', '')).toBe(true)
+  })
+})
+
+// Server-to-server auth for salary-reminder-send (verify_jwt = false, so this
+// check is the only gate). Fictional keys.
+describe('isTrustedServerCaller', () => {
+  const SECRET = 'sb_secret_default_FICTIONAL'
+  const OTHER_SECRET = 'sb_secret_automations_FICTIONAL'
+  const LEGACY = 'eyJlegacy.service_role.FICTIONAL'
+  const ANON = 'eyJlegacy.anon.FICTIONAL'
+  const env = {
+    SUPABASE_SECRET_KEYS: JSON.stringify({ default: SECRET, automations: OTHER_SECRET }),
+    SUPABASE_SERVICE_ROLE_KEY: LEGACY,
+  }
+  const call = (h: { apikey?: string; authorization?: string }, e: Parameters<typeof isTrustedServerCaller>[1] = env) =>
+    isTrustedServerCaller({ apikey: h.apikey ?? null, authorization: h.authorization ?? null }, e)
+
+  it('accepts any project secret key in the apikey header', () => {
+    expect(call({ apikey: SECRET })).toBe(true)
+    expect(call({ apikey: OTHER_SECRET })).toBe(true)
+  })
+  it('accepts a secret key or the legacy service-role key as a Bearer token', () => {
+    expect(call({ authorization: `Bearer ${SECRET}` })).toBe(true)
+    expect(call({ authorization: `bearer ${LEGACY}` })).toBe(true)
+  })
+  it('rejects missing, empty, anon/publishable and wrong keys', () => {
+    expect(call({})).toBe(false)
+    expect(call({ apikey: '' })).toBe(false)
+    expect(call({ authorization: 'Bearer ' })).toBe(false)
+    expect(call({ authorization: `Bearer ${ANON}` })).toBe(false)
+    expect(call({ apikey: 'sb_publishable_FICTIONAL' })).toBe(false)
+    expect(call({ apikey: `${SECRET}x` })).toBe(false)
+    expect(call({ authorization: SECRET })).toBe(false) // no Bearer scheme
+  })
+  it('one wrong header does not hide a right one', () => {
+    expect(call({ apikey: ANON, authorization: `Bearer ${SECRET}` })).toBe(true)
+  })
+  it('fails closed when the env is missing or malformed', () => {
+    expect(call({ apikey: SECRET }, {})).toBe(false)
+    expect(call({ apikey: SECRET }, { SUPABASE_SECRET_KEYS: 'not json' })).toBe(false)
+    expect(call({ apikey: '' }, { SUPABASE_SECRET_KEYS: JSON.stringify({ default: '' }), SUPABASE_SERVICE_ROLE_KEY: '' })).toBe(false)
+    expect(call({ apikey: '42' }, { SUPABASE_SECRET_KEYS: JSON.stringify({ default: 42 }) })).toBe(false)
+    // Legacy still works when the JSON is broken.
+    expect(call({ authorization: `Bearer ${LEGACY}` }, { SUPABASE_SECRET_KEYS: '{', SUPABASE_SERVICE_ROLE_KEY: LEGACY })).toBe(true)
+  })
+})
+
+describe('adminKey', () => {
+  it('prefers the default secret key, then any secret key, then the legacy service-role key', () => {
+    expect(adminKey({ SUPABASE_SECRET_KEYS: JSON.stringify({ other: 'sb_secret_o', default: 'sb_secret_d' }), SUPABASE_SERVICE_ROLE_KEY: 'eyJ' })).toBe('sb_secret_d')
+    expect(adminKey({ SUPABASE_SECRET_KEYS: JSON.stringify({ other: 'sb_secret_o' }), SUPABASE_SERVICE_ROLE_KEY: 'eyJ' })).toBe('sb_secret_o')
+    expect(adminKey({ SUPABASE_SECRET_KEYS: 'nope', SUPABASE_SERVICE_ROLE_KEY: 'eyJ' })).toBe('eyJ')
+    expect(adminKey({})).toBeNull()
   })
 })

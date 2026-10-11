@@ -26,6 +26,7 @@
 // an address, items, amounts or notes. DB errors return a generic 500.
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import {
+  adminKey,
   isTokenFormat,
   personDisplayName,
   splitPrefill,
@@ -263,12 +264,15 @@ Deno.serve(async (req: Request) => {
     if (payload.action !== 'context' && payload.action !== 'submit') throw new HttpError(400, { error: 'bad_request' })
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-    if (!supabaseUrl || !serviceRoleKey) {
-      console.error('salary-reminder: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set')
+    const serviceKey = adminKey({
+      SUPABASE_SECRET_KEYS: Deno.env.get('SUPABASE_SECRET_KEYS'),
+      SUPABASE_SERVICE_ROLE_KEY: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
+    })
+    if (!supabaseUrl || !serviceKey) {
+      console.error('salary-reminder: SUPABASE_URL / SUPABASE_SECRET_KEYS are not set')
       throw SERVER_ERROR()
     }
-    const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } })
+    const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } })
 
     const { row, recipient } = await resolveToken(supabase, payload.token)
     const result = payload.action === 'context'

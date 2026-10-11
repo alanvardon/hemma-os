@@ -359,3 +359,60 @@ export function submitStatusFor(outcome: unknown): SubmitStatus | null {
     default: return null
   }
 }
+
+// ── Server-to-server auth (salary-reminder-send) ──────────────────────────────
+
+/** Constant-time string compare; the length difference is folded in, not short-circuited. */
+export function safeEqual(a: string, b: string): boolean {
+  const ea = new TextEncoder().encode(a)
+  const eb = new TextEncoder().encode(b)
+  let diff = ea.length ^ eb.length
+  for (let i = 0; i < Math.max(ea.length, eb.length); i++) diff |= (ea[i] ?? 0) ^ (eb[i] ?? 0)
+  return diff === 0
+}
+
+export interface ServerKeyEnv {
+  /** JSON dictionary of the project's secret keys (`sb_secret_…`), injected by Supabase. */
+  SUPABASE_SECRET_KEYS?: string
+  /** Legacy service_role JWT, injected by Supabase (deprecated path). */
+  SUPABASE_SERVICE_ROLE_KEY?: string
+}
+
+/** The project's secret keys, `default` first. Malformed or missing JSON → []. */
+function secretKeys(env: ServerKeyEnv): string[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(env.SUPABASE_SECRET_KEYS ?? '')
+  } catch {
+    return []
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
+  const dict = parsed as Record<string, unknown>
+  const names = Object.keys(dict).sort((a, b) => (a === 'default' ? -1 : b === 'default' ? 1 : 0))
+  return names.map((n) => dict[n]).filter((v): v is string => typeof v === 'string' && v !== '')
+}
+
+/**
+ * Whether a request carries a key that may run privileged server jobs: any of
+ * the project's secret keys, or the legacy service_role key, presented in the
+ * `apikey` header (Supabase's documented pattern for cron/pg_net calls) or as
+ * `Authorization: Bearer`. Anon/publishable keys never match. Fails closed on a
+ * missing or malformed env. With verify_jwt = false this is the ONLY gate.
+ */
+export function isTrustedServerCaller(
+  headers: { apikey: string | null; authorization: string | null },
+  env: ServerKeyEnv,
+): boolean {
+  const allowed = [...secretKeys(env), ...(env.SUPABASE_SERVICE_ROLE_KEY ? [env.SUPABASE_SERVICE_ROLE_KEY] : [])]
+  const bearer = /^Bearer\s+(.+)$/i.exec(headers.authorization ?? '')?.[1]?.trim()
+  const presented = [headers.apikey?.trim(), bearer].filter((v): v is string => !!v)
+  let ok = false
+  // Compare every pair (no early exit) so timing doesn't reveal which matched.
+  for (const p of presented) for (const k of allowed) if (safeEqual(p, k)) ok = true
+  return ok
+}
+
+/** The key Edge Functions use for their RLS-bypassing client: the `default` secret key, else any secret key, else the legacy service_role key. */
+export function adminKey(env: ServerKeyEnv): string | null {
+  return secretKeys(env)[0] ?? (env.SUPABASE_SERVICE_ROLE_KEY || null)
+}
