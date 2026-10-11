@@ -1,12 +1,11 @@
 name: Deploy Hemma·OS
 
-# Builds the React SPA (web/) once and publishes the Hemma·OS site to BOTH
-# Cloudflare (Workers static assets, the production target at
-# https://www.vardon-family.se/) and GitHub Pages, on every push to main. Plan 130
-# moves hosting to Cloudflare for real security response headers (frame-ancestors,
-# HSTS) and the owner's own domain; GitHub Pages keeps serving the same build
-# in parallel until the plan-130 cutover retires it (see the plan's cutover
-# runbook) — until then both origins must stay in sync. The SPA is the entry
+# Builds the React SPA (web/) and publishes it to Cloudflare (Workers static
+# assets) at https://www.vardon-family.se/ on every push to main (plan 130:
+# real security response headers and the owner's own domain). The old GitHub
+# Pages origin (alanvardon.github.io/hemma-os/) is retired: it now publishes
+# only legacy-redirect/, which forwards old bookmarks and home-screen icons to
+# the new origin with the hash route preserved. The SPA is the entry
 # point (index.html): it hosts the hub (/) and all migrated tools as hash
 # routes (/#/bostadskalkyl, etc.). Vanilla tools that haven't yet been
 # migrated to React are served alongside as static HTML files — each one is
@@ -86,9 +85,12 @@ jobs:
           # manadsavslut.html is now the SPA at /#/manadsavslut — no vanilla file needed
           # hushallsbudget.html is now the SPA at /#/hushallsbudget — no vanilla file needed
 
+      # The retired GitHub Pages origin serves only the redirect stub (plan 130
+      # cutover step 6), never the app — a second app origin would split
+      # sessions and local caches.
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: legacy-redirect
 
       - name: Upload _site for the Cloudflare deploy job
         uses: actions/upload-artifact@v4
@@ -102,7 +104,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-24.04
-    # GitHub Pages publish — permissions scoped to this job only.
+    # GitHub Pages publish (redirect stub only) — permissions scoped to this job.
     permissions:
       contents: read
       pages: write
