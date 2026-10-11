@@ -1,0 +1,78 @@
+/* salary-submit.css — the public #/lon/<token> page (plan 132).
+
+   SalarySubmitPage reuses the "Submit this month's salaries" modal's own
+   classnames (modal-head/-body/-foot, field, income-col, sal-row…), which
+   hushallsbudget.css scopes under `.hb-root` via native CSS nesting. This
+   page's card carries both `.hb-root` (so those nested selectors match as
+   descendants) and the generic `.modal` shell (modals.css: border, radius,
+   shadow, background) — `.salary-submit-card.hb-root` below overrides the
+   few `.hb-root`-only layout properties (the full-viewport split view) that
+   don't belong on a plain standalone card. Everything else is exactly the
+   existing CSS; this file only adds the page-level centering (the same
+   layout `.modal-backdrop` gives other modals, minus the backdrop — there is
+   nothing behind this page to dim) and the loading skeleton / status styles
+   that have no modal equivalent. */
+
+.salary-submit-page {
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  overflow-y: auto;
+  background: var(--paper);
+}
+
+.salary-submit-card.hb-root {
+  height: auto;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  width: 440px;
+}
+
+.salary-submit-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.salary-submit-skeleton-row {
+  height: 40px;
+  border-radius: var(--r-sm);
+  background: linear-gradient(90deg, var(--paper-warm) 25%, var(--rule) 37%, var(--paper-warm) 63%);
+  background-size: 400% 100%;
+  animation: salary-submit-shimmer 1.4s ease infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .salary-submit-skeleton-row { animation: none; }
+}
+@keyframes salary-submit-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+.salary-submit-status {
+  text-align: center;
+  color: var(--ink-mid);
+  line-height: 1.5;
+  margin: 0.5rem 0 1rem;
+}
+.salary-submit-status a { color: var(--accent); font-weight: 600; }
+
+.salary-submit-error {
+  margin-top: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--rule));
+  background: var(--warn-faint);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  justify-content: space-between;
+}
+
+@media (max-width: 480px) {
+  .salary-submit-card.hb-root { width: 100%; }
+}

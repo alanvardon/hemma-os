@@ -1,30 +1,23 @@
-import { createContext, useContext, useEffect, useState } from 'react'
-import { createHashRouter, Navigate, Outlet, RouterProvider, ScrollRestoration } from 'react-router-dom'
-import AuthGate from './components/AuthGate'
-import Home from './routes/Home'
-import ScenariosDashboard from './routes/ScenariosDashboard'
-import Bostadskalkyl from './routes/Bostadskalkyl'
-import Konsultkalkyl from './routes/Konsultkalkyl'
-import Lonevaxling from './routes/Lonevaxling'
-import StudentLoan from './routes/StudentLoan'
-import Bolanekoll from './routes/Bolanekoll'
-import Manadsavslut from './routes/Manadsavslut'
-import Hushallsbudget from './routes/Hushallsbudget'
-import Huskalendern from './routes/Huskalendern'
-import PersistenceNotice from './components/PersistenceNotice'
-import UpdateNotice from './components/UpdateNotice'
-import ErrorBoundary from './components/ErrorBoundary'
-import OfflineBanner from './components/OfflineBanner'
-import { ConfirmProvider } from './components/useConfirm'
+import { createContext, lazy, Suspense, useContext, useEffect, useState } from 'react'
+import SalarySubmitPage from './routes/SalarySubmitPage'
 
-function Layout() {
-  return (
-    <>
-      <ScrollRestoration getKey={(location) => location.pathname} />
-      <OfflineBanner />
-      <Outlet />
-    </>
-  )
+// AppShell — the router, AuthGate, Supabase, every tool store — is
+// lazy-imported (plan 132). A dynamic `import()` only runs when the component
+// requesting it actually renders; the public `#/lon/<token>` branch below
+// never renders <AppShell/>, so it never evaluates `lib/supabase`, the
+// Zustand store or any `*-store.ts`. See AppShell.tsx and
+// SalarySubmitPage.test.tsx's import-boundary test.
+const AppShell = lazy(() => import('./AppShell'))
+
+// `#/lon/<token>` — the public salary-submission link emailed to each person
+// (plan 132). Checked before AuthGate/the router render at all. The token is
+// 32 random bytes as base64url (43 chars); `{20,}` only sets a cheap lower
+// bound here — the Edge Function is the real validator.
+const SALARY_LINK_RE = /^#\/lon\/([A-Za-z0-9_-]{20,})$/
+
+function matchSalaryToken(hash: string): string | null {
+  const m = SALARY_LINK_RE.exec(hash)
+  return m ? m[1] : null
 }
 
 type Theme = 'light' | 'dark'
@@ -42,35 +35,12 @@ function getInitialTheme(): Theme {
   return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
 }
 
-// A data router (not <HashRouter>) so React Router's View Transitions —
-// `<Link viewTransition>` + useViewTransitionState — are available (plan 6).
-// Still hash-based for GitHub Pages.
-const router = createHashRouter([
-  {
-    element: <Layout />,
-    errorElement: <ErrorBoundary />,
-    children: [
-      { path: '/', element: <Home /> },
-      { path: '/bostadskalkyl', element: <ScenariosDashboard /> },
-      { path: '/bostadskalkyl/new', element: <Bostadskalkyl /> },
-      { path: '/bostadskalkyl/:id', element: <Bostadskalkyl /> },
-      { path: '/konsultkalkyl', element: <Konsultkalkyl /> },
-      { path: '/lonevaxling', element: <Lonevaxling /> },
-      { path: '/student-loan', element: <StudentLoan /> },
-      { path: '/bolanekoll', element: <Bolanekoll /> },
-      { path: '/manadsavslut', element: <Manadsavslut /> },
-      { path: '/hushallsbudget', element: <Hushallsbudget /> },
-      { path: '/huskalendern', element: <Huskalendern /> },
-      // Catch-all: unknown hashes (incl. the magic-link `#access_token…`
-      // callback, which supabase-js consumes on load) fall back to the hub
-      // instead of React Router's error page — plan 16a.
-      { path: '*', element: <Navigate to="/" replace /> },
-    ],
-  },
-])
-
 export default function App() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
+  // Read once at mount: a hash-router navigation never changes which branch
+  // this page is (the token page is never linked to from inside the app, and
+  // the app is never linked to from this page without a full reload).
+  const [salaryToken] = useState<string | null>(() => matchSalaryToken(window.location.hash))
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -81,15 +51,13 @@ export default function App() {
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      <AuthGate>
-        <ConfirmProvider>
-          <RouterProvider router={router} />
-          <PersistenceNotice />
-        </ConfirmProvider>
-      </AuthGate>
-      {/* Outside AuthGate: a stale bundle should offer a reload even from the
-          login screen (plan 100). */}
-      <UpdateNotice />
+      {salaryToken
+        ? <SalarySubmitPage token={salaryToken} />
+        : (
+          <Suspense fallback={<div className="auth-splash" aria-hidden="true" />}>
+            <AppShell />
+          </Suspense>
+        )}
     </ThemeContext.Provider>
   )
 }
