@@ -557,12 +557,15 @@ input::placeholder { color: var(--ink-faint); }
   color: var(--ink-soft); text-transform: uppercase;
 }
 .bk-root .config-note, .ma-root .config-note { font-size: 12px; color: var(--ink-soft); }
-.bk-root .select, .ma-root .select {
+.bk-root .select, .ma-root .select, .hb-root .select {
   font-family: var(--font-ui); font-size: 14px; color: var(--ink);
   background: var(--input-bg); border: 1px solid var(--rule);
   border-radius: var(--r-sm); padding: 8px 10px; width: 100%; cursor: pointer;
 }
-.bk-root .select:focus, .ma-root .select:focus { outline: none; border-color: var(--accent-light); box-shadow: var(--ring); background: var(--input-focus-bg); }
+.bk-root .select:focus, .ma-root .select:focus, .hb-root .select:focus { outline: none; border-color: var(--accent-light); box-shadow: var(--ring); background: var(--input-focus-bg); }
+.bk-root .select:disabled, .ma-root .select:disabled, .hb-root .select:disabled {
+  opacity: 0.5; cursor: default;
+}
 
 /* Segmented control */
 .bk-root .segmented, .ma-root .segmented {
