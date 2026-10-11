@@ -22,6 +22,7 @@ import {
   shouldNotify,
   type RatePoint,
 } from './logic.ts'
+import { sendEmail } from '../_shared/resend.ts'
 
 const SERIES = 'SECBREPOEFF'
 const SWEA_BASE = 'https://api.riksbank.se/swea/v1'
@@ -40,26 +41,6 @@ async function fetchLatestRate(): Promise<RatePoint> {
     throw new Error(`riksbank SWEA latest fetch returned an unexpected shape: ${JSON.stringify(body)}`)
   }
   return { date: body.date, value: body.value }
-}
-
-async function sendEmail(to: string[], email: { subject: string; text: string; html: string }): Promise<void> {
-  const apiKey = Deno.env.get('RESEND_API_KEY')
-  const from = Deno.env.get('RESEND_FROM')
-  if (!apiKey || !from) throw new Error('RESEND_API_KEY / RESEND_FROM are not set')
-  if (to.length === 0) throw new Error('sendEmail called with no recipients')
-
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ from, to, subject: email.subject, text: email.text, html: email.html }),
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => '<unreadable body>')
-    throw new Error(`Resend send failed: ${res.status} ${body}`)
-  }
 }
 
 Deno.serve(async (_req: Request) => {
@@ -133,7 +114,12 @@ Deno.serve(async (_req: Request) => {
       try {
         const previous = parsePoint(stored)
         const email = buildNotificationEmail(previous, current, appUrl)
-        await sendEmail(recipients, email)
+        const env = {
+          apiKey: Deno.env.get('RESEND_API_KEY'),
+          from: Deno.env.get('RESEND_FROM'),
+          dryRun: Deno.env.get('EMAIL_DRY_RUN') === '1',
+        }
+        await sendEmail(env, recipients, email)
 
         const { error: upsertError } = await supabase
           .from('notification_state')
