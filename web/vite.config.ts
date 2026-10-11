@@ -1,22 +1,34 @@
 /// <reference types="vitest/config" />
 import { createHash } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+import { buildCsp, buildHeadersFile } from './src/lib/security-headers.ts'
 
 // Injects a Content-Security-Policy <meta> as the first element after the
-// <meta charset> in <head> (plan 54). GitHub Pages can't set response headers,
-// so a meta CSP is the only lever — it covers everything except
-// frame-ancestors/reporting. CSP is the cheap cap on what an injected script
-// could do to the Supabase session token that lives in localStorage.
+// <meta charset> in <head> (plan 54), and in a build also emits the Cloudflare
+// `_headers` file (plan 130). Both come from buildCsp, so they can't drift; the
+// meta tag stays as defence in depth and covers hosts that can't set headers.
+// CSP is the cheap cap on what an injected script could do to the Supabase
+// session token that lives in localStorage.
 //
 // The inline theme <script> (index.html) is allowed by the sha256 of its exact
-// body, computed here so the hash never drifts when the snippet changes. In dev
-// we can't use the hash: Vite injects its own inline scripts (HMR client, React
-// refresh preamble), and a hash/nonce makes the browser IGNORE 'unsafe-inline'
-// — so dev uses 'unsafe-inline'/'unsafe-eval' and prod stays strict.
+// body, computed here so the hash never drifts when the snippet changes. Since
+// that hash only exists at build time, `_headers` must be generated, not
+// hand-written.
 function cspMeta(isDev: boolean, supabaseOrigin: string): Plugin {
+  let outDir = ''
+  let isBuild = false
+  // Captured in transformIndexHtml; read back when writing `_headers`.
+  let headerCsp: string | null = null
+  let buildFailed = false
   return {
     name: 'hemma-csp-meta',
+    configResolved(config) {
+      isBuild = config.command === 'build'
+      outDir = resolve(config.root, config.build.outDir)
+    },
     transformIndexHtml: {
       // Run last so the html we hash matches what ships (nothing rewrites the
       // inline script after us).
@@ -27,34 +39,8 @@ function cspMeta(isDev: boolean, supabaseOrigin: string): Plugin {
         if (!m) throw new Error('[csp] inline theme script not found in index.html')
         const hash = createHash('sha256').update(m[1], 'utf8').digest('base64')
 
-        // Scheme-aware: prod → https://<ref>.supabase.co, a local prod build →
-        // http://localhost:54321 (so the built app still reaches local Supabase
-        // for verification). ws(s) variant covers any realtime socket.
-        const supaHttp = supabaseOrigin
-        const supaWs = supabaseOrigin.replace(/^http/, 'ws')
-        const scriptSrc = isDev
-          ? "'self' 'unsafe-inline' 'unsafe-eval'"
-          : `'self' 'sha256-${hash}'`
-        // Dev talks to a local Supabase (http) and needs ws HMR; prod pins the
-        // baked Supabase origin (the key is in the bundle anyway).
-        const connectSrc = isDev
-          ? `'self' http://localhost:* ws://localhost:* http://127.0.0.1:* ws://127.0.0.1:* ${supaHttp} ${supaWs}`
-          : `'self' ${supaHttp} ${supaWs}`
-
-        const csp = [
-          "default-src 'self'",
-          `script-src ${scriptSrc}`,
-          // Motion/visx/NumberFlow inject inline styles + style attrs — style
-          // injection is far lower risk than script, so 'unsafe-inline' stays.
-          "style-src 'self' 'unsafe-inline'",
-          "img-src 'self' data:",
-          "font-src 'self'",
-          // Aurora video + posters are bundled assets.
-          "media-src 'self'",
-          `connect-src ${connectSrc}`,
-          "object-src 'none'",
-          "base-uri 'self'",
-        ].join('; ')
+        const csp = buildCsp({ isDev, supabaseOrigin, themeScriptHash: hash })
+        headerCsp = csp
 
         const tag = `<meta http-equiv="Content-Security-Policy" content="${csp}" />`
         // Keep <meta charset> first; slot the CSP right after it, before the
@@ -64,6 +50,18 @@ function cspMeta(isDev: boolean, supabaseOrigin: string): Plugin {
           `$1\n    ${tag}`,
         )
       },
+    },
+    buildEnd(error) {
+      if (error) buildFailed = true
+    },
+    // transformIndexHtml('post') can run after generateBundle, so the hash is
+    // only guaranteed once the bundle is written — emit `_headers` here.
+    closeBundle() {
+      if (!isBuild || buildFailed) return
+      if (headerCsp === null) {
+        throw new Error('[csp] theme script hash was never captured; refusing to build without _headers')
+      }
+      writeFileSync(resolve(outDir, '_headers'), buildHeadersFile(headerCsp))
     },
   }
 }

@@ -21,6 +21,7 @@ dist/
 # into bk-assets/. Never commit the generated bundle.
 /bk-assets/
 /_site/
+/.wrangler/
 
 # Playwright MCP artifacts + UI assessment / pilot screenshots (not source)
 .playwright-mcp/

@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "hemma-os",
+  "compatibility_date": "2026-10-10",
+  // Static site only — no Worker script (Workers static assets, plan 130).
+  "assets": { "directory": "./_site" },
+  // The app lives on www; the apex 301s to it via a Cloudflare Redirect Rule
+  // (dashboard, see plan 130's runbook) so there is only ONE app origin —
+  // two serving origins would split localStorage sessions and caches.
+  "routes": [{ "pattern": "www.vardon-family.se", "custom_domain": true }],
+  // No public *.workers.dev alias and no preview URLs: every build bakes in
+  // the production Supabase URL, so a preview would run unmerged code against
+  // live household data (plan 130 D4).
+  "workers_dev": false,
+  "preview_urls": false
+}

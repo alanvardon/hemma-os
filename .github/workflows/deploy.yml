@@ -1,26 +1,30 @@
-name: Deploy Hemma·OS to GitHub Pages
+name: Deploy Hemma·OS
 
-# Builds the React SPA (web/) and publishes the Hemma·OS site to GitHub Pages
-# on every push to main. The SPA is the entry point (index.html): it hosts the
-# hub (/) and all migrated tools as hash routes (/#/bostadskalkyl, etc.).
-# Vanilla tools that haven't yet been migrated to React are served alongside as
-# static HTML files — each one is removed from the assembly step once it ships
-# as a React route.
+# Builds the React SPA (web/) once and publishes the Hemma·OS site to BOTH
+# Cloudflare (Workers static assets, the production target at
+# https://www.vardon-family.se/) and GitHub Pages, on every push to main. Plan 130
+# moves hosting to Cloudflare for real security response headers (frame-ancestors,
+# HSTS) and the owner's own domain; GitHub Pages keeps serving the same build
+# in parallel until the plan-130 cutover retires it (see the plan's cutover
+# runbook) — until then both origins must stay in sync. The SPA is the entry
+# point (index.html): it hosts the hub (/) and all migrated tools as hash
+# routes (/#/bostadskalkyl, etc.). Vanilla tools that haven't yet been
+# migrated to React are served alongside as static HTML files — each one is
+# removed from the assembly step once it ships as a React route.
 
 on:
   push:
     branches: [main]
   workflow_dispatch: # lets you trigger a deploy by hand from the Actions tab
 
-# Permissions GitHub Pages needs to publish from an Action.
+# Job-level permissions below grant what each publish target actually needs;
+# this default covers everything else (checkout only).
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # One deploy at a time; let an in-progress run finish rather than cancelling it.
 concurrency:
-  group: pages
+  group: deploy
   cancel-in-progress: false
 
 jobs:
@@ -70,6 +74,11 @@ jobs:
           cp -r web/dist/bk-assets _site/bk-assets
           # Icons and manifest
           cp icon.svg manifest.webmanifest _site/
+          # Security response headers (plan 130 Stage 1) — generated at build
+          # time so the hash matches the meta CSP. Cloudflare's Workers static
+          # assets reads this the same way Pages does; it is not served as a
+          # regular asset.
+          cp web/dist/_headers _site/_headers
           # All tools have now shipped as React routes — nothing vanilla left to copy.
           # bostadskalkyl.html is now the SPA at /#/bostadskalkyl — no vanilla file needed
           # lonevaxling.html is now the SPA at /#/lonevaxling — no vanilla file needed
@@ -81,12 +90,52 @@ jobs:
         with:
           path: _site
 
+      - name: Upload _site for the Cloudflare deploy job
+        uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: _site
+          # _headers starts with an underscore, not a dot, so the default
+          # upload-artifact glob already includes it — no include-hidden-files
+          # needed.
+
   deploy:
     needs: build
     runs-on: ubuntu-24.04
+    # GitHub Pages publish — permissions scoped to this job only.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+  deploy-cloudflare:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5 # needed for wrangler.jsonc at the repo root
+
+      - name: Download the assembled site
+        uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: _site
+
+      - name: Require Cloudflare env
+        run: |
+          test -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" || { echo '::error::CLOUDFLARE_API_TOKEN secret is unset'; exit 1; }
+          test -n "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" || { echo '::error::CLOUDFLARE_ACCOUNT_ID secret is unset'; exit 1; }
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
