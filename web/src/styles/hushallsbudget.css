@@ -646,28 +646,42 @@
     white-space: normal;
   }
 
-  /* Plan 132 — the "email salary reminder" settings row. */
-  .salary-reminder-row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.6rem 0.9rem;
+  /* Plan 134 — salary-reminder settings row. Same shape as the shared
+     .toggle-row (student-loan.css): text left at flex:1, toggle far right;
+     the send day on its own line beneath. */
+  .salary-reminder {
     margin-top: 0.9rem;
     padding-top: 0.9rem;
     border-top: 1px solid var(--rule);
   }
-  .salary-reminder-row-label {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
+  .salary-reminder-head { display: flex; align-items: center; gap: 0.75rem; }
+  .salary-reminder-text { flex: 1; min-width: 0; line-height: 1.4; }
+  .salary-reminder-title {
+    display: block;
     font-size: 12.5px;
     font-weight: 550;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .salary-reminder-sub {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--ink-soft);
+  }
+  .salary-reminder-day-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.7rem;
+    font-size: 12.5px;
     color: var(--ink-mid);
   }
-  .salary-reminder-day { min-width: 4.5em; }
+  .salary-reminder-day { width: auto; min-width: 4.5em; padding: 6px 10px; }
+  .salary-reminder .toggle input:disabled + .toggle-slider { opacity: 0.5; cursor: default; }
   .salary-reminder-hint {
-    flex-basis: 100%;
+    margin: 0.5rem 0 0;
     font-size: 11px;
     color: var(--ink-soft);
     line-height: 1.4;

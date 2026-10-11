@@ -923,35 +923,52 @@ export default function Hushallsbudget() {
             </div>
             {pendingNote && <p className="salary-pending-note">{pendingNote}</p>}
 
-            <div className="salary-reminder-row">
-              <span className="salary-reminder-row-label">
-                Email salary reminder on day
+            <div
+              className={'salary-reminder' + (reminderSettings === null ? ' is-loading' : '')}
+              aria-busy={reminderSettings === null}
+            >
+              <div className="salary-reminder-head">
+                <span className="salary-reminder-text">
+                  <label className="salary-reminder-title" htmlFor="salary-reminder-enabled">
+                    Monthly salary reminder
+                  </label>
+                  <span className="salary-reminder-sub">
+                    Emails each of you a link to enter this month’s salary.
+                  </span>
+                </span>
+                <label className="toggle">
+                  <input
+                    id="salary-reminder-enabled"
+                    type="checkbox"
+                    checked={reminderSettings?.enabled ?? false}
+                    disabled={reminderSettings === null}
+                    onChange={(e) => updateReminderSettings({ enabled: e.target.checked })}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+              </div>
+
+              <div className="salary-reminder-day-row">
+                <label htmlFor="salary-reminder-day">Send on day</label>
                 <select
-                  className="salary-reminder-day"
-                  aria-label="Day of month to send the salary reminder email"
-                  value={reminderSettings?.send_day ?? 25}
-                  disabled={reminderSettings === null}
+                  id="salary-reminder-day"
+                  className="select salary-reminder-day"
+                  value={reminderSettings?.send_day ?? ''}
+                  disabled={reminderSettings === null || !reminderSettings.enabled}
                   onChange={(e) => updateReminderSettings({ send_day: Number(e.target.value) })}
                 >
+                  {reminderSettings === null && <option value="">–</option>}
                   {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
                     <option key={d} value={d}>{d}</option>
                   ))}
                 </select>
-              </span>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={reminderSettings?.enabled ?? true}
-                  disabled={reminderSettings === null}
-                  aria-label="Email salary reminder on"
-                  onChange={(e) => updateReminderSettings({ enabled: e.target.checked })}
-                />
-                <span className="toggle-slider" />
-              </label>
+                <span aria-hidden="true">of the month</span>
+              </div>
+
               {reminderSettingsUnknown && (
-                <span className="salary-reminder-hint" role="status">
+                <p className="salary-reminder-hint" role="status">
                   Couldn’t load this setting — showing the default, not necessarily what’s saved.
-                </span>
+                </p>
               )}
             </div>
           </div>
