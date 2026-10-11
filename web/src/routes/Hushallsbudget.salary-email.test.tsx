@@ -183,7 +183,7 @@ describe('Save → discard drafts', () => {
 describe('Reminder settings row', () => {
   it('saves a change to the send day', async () => {
     renderRoute()
-    const select = await screen.findByRole('combobox', { name: /day of month to send the salary reminder email/i })
+    const select = await screen.findByRole('combobox', { name: /send on day/i })
     await waitFor(() => expect(select).not.toBeDisabled())
     const user = userEvent.setup()
     await user.selectOptions(select, '10')
@@ -193,7 +193,7 @@ describe('Reminder settings row', () => {
   it('on a save failure, reverts the control and shows a toast', async () => {
     vi.mocked(settingsStore.saveSalaryReminderSettings).mockRejectedValue(new Error('network'))
     renderRoute()
-    const toggle = await screen.findByRole('checkbox', { name: /email salary reminder on/i })
+    const toggle = await screen.findByRole('checkbox', { name: /monthly salary reminder/i })
     await waitFor(() => expect(toggle).not.toBeDisabled())
     expect(toggle).toBeChecked()
     const user = userEvent.setup()
@@ -201,5 +201,31 @@ describe('Reminder settings row', () => {
     // Optimistic uncheck, then the rejected save reverts it back to checked.
     await waitFor(() => expect(toggle).toBeChecked())
     expect(await screen.findByText('Couldn’t save the reminder setting — try again.')).toBeInTheDocument()
+  })
+
+  it('with the reminder off, the day is disabled but still shows the saved day; turning it on re-enables it', async () => {
+    vi.mocked(settingsStore.loadSalaryReminderSettings).mockResolvedValue({ settings: { enabled: false, send_day: 12 }, unknown: false })
+    renderRoute()
+    const toggle = await screen.findByRole('checkbox', { name: /monthly salary reminder/i })
+    const select = await screen.findByRole('combobox', { name: /send on day/i })
+    await waitFor(() => expect(toggle).not.toBeDisabled())
+    expect(toggle).not.toBeChecked()
+    expect(select).toBeDisabled()
+    expect(select).toHaveValue('12')
+    const user = userEvent.setup()
+    await user.click(toggle)
+    await waitFor(() => expect(select).not.toBeDisabled())
+    await waitFor(() => expect(settingsStore.saveSalaryReminderSettings).toHaveBeenCalledWith({ enabled: true, send_day: 12 }))
+  })
+
+  it('while settings load, shows no fake value: placeholder day, disabled unchecked toggle', async () => {
+    vi.mocked(settingsStore.loadSalaryReminderSettings).mockReturnValue(new Promise(() => {}))
+    renderRoute()
+    const select = await screen.findByRole('combobox', { name: /send on day/i })
+    const toggle = await screen.findByRole('checkbox', { name: /monthly salary reminder/i })
+    expect(select).toHaveValue('')
+    expect(select).not.toHaveValue('25')
+    expect(toggle).toBeDisabled()
+    expect(toggle).not.toBeChecked()
   })
 })
