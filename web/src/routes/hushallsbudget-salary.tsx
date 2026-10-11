@@ -37,7 +37,7 @@ export function AmountInputRef({ value, onChange, className, ariaLabel, inputRef
  * avoid).
  */
 export function SalaryItemColumn({
-  name, self, other, total, items, firstAmountRef, onItemChange, onRemoveItem, onAddItem,
+  name, self, other, total, items, firstAmountRef, onItemChange, onRemoveItem, onAddItem, emailTag,
 }: {
   name: string
   self?: boolean
@@ -48,12 +48,17 @@ export function SalaryItemColumn({
   onItemChange: (uid: number, patch: Partial<SalaryItem>) => void
   onRemoveItem: (uid: number) => void
   onAddItem: () => void
+  /** Plan 132: this slot's current values came from an emailed submission (a
+      pending salary_submission_drafts row) instead of the budget baseline. A
+      text tag — never colour-only. */
+  emailTag?: boolean
 }) {
   return (
     <div className="income-col">
       <div className="income-col-head">
         <span className="income-col-name">
           <PersonLabel name={name} self={self} other={other} />
+          {emailTag && <span className="income-col-tag">Submitted via email</span>}
         </span>
         <span className="income-col-sub">{fmt(total)}</span>
       </div>
