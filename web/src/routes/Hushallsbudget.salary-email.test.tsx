@@ -140,6 +140,19 @@ describe('Pending "waiting for…" note', () => {
     await screen.findByRole('button', { name: /submit this month.s salaries/i })
     expect(screen.queryByText((_c, el) => el?.classList.contains('salary-pending-note') ?? false)).not.toBeInTheDocument()
   })
+
+  it('carries the emailed notes into the note field (A first, " · "-joined) so finishing in-app keeps them', async () => {
+    vi.mocked(draftsStore.listDrafts).mockResolvedValue([
+      { slot: 'b', income_items: [{ label: 'Lön', amount: 38900 }], note: ' parental leave ' },
+      { slot: 'a', income_items: [{ label: 'Lön', amount: 42000 }], note: 'bonus' },
+    ])
+    renderRoute()
+    const user = await openSalaryModal()
+
+    await waitFor(() => expect(screen.getByLabelText(/^Note/)).toHaveValue('bonus · parental leave'))
+    await user.click(screen.getByRole('button', { name: /confirm.*save/i }))
+    await waitFor(() => expect(salaryStore.add).toHaveBeenCalledWith(expect.objectContaining({ note: 'bonus · parental leave' })))
+  })
 })
 
 describe('Save → discard drafts', () => {

@@ -195,6 +195,7 @@ function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onH
   // pre-fill the modal. The user can then tweak amounts and add extra income
   // (barnbidrag, tax rebate…) without touching the baseline.
   const incomesRef = useRef(incomes)
+  const draftNoteRef = useRef('')
   incomesRef.current = incomes
   const prefillItems = (owner: 'a' | 'b'): SalaryItem[] => {
     const src = incomesRef.current
@@ -213,6 +214,7 @@ function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onH
     if (!open) return
     setMonth(currentMonth())
     setNote('')
+    draftNoteRef.current = ''
     const t = setTimeout(() => { firstAmountRef.current?.focus(); firstAmountRef.current?.select() }, 30)
     return () => clearTimeout(t)
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -233,6 +235,16 @@ function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onH
       setDraftSlots(new Set(bySlot.keys()))
       setItemsA(bySlot.has('a') ? draftItems(bySlot.get('a')!) : prefillItems('a'))
       setItemsB(bySlot.has('b') ? draftItems(bySlot.get('b')!) : prefillItems('b'))
+      // Carry the emailed notes over too (A first, ' · '-joined, the same rule
+      // as finalize_salary_month), or finishing the month here would silently
+      // drop them. Only replace a note this effect itself put there, so a note
+      // the user typed survives a month switch.
+      const draftNote = (['a', 'b'] as const)
+        .map((slot) => bySlot.get(slot)?.note?.trim() ?? '')
+        .filter(Boolean)
+        .join(' · ')
+      setNote((current) => (current === '' || current === draftNoteRef.current ? draftNote : current))
+      draftNoteRef.current = draftNote
     })
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
