@@ -96,3 +96,8 @@ jobs:
         run: |
           docker cp supabase/test-optimistic-concurrency.sql supabase_db_hemma-os:/tmp/test-optimistic-concurrency.sql
           docker exec supabase_db_hemma-os psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /tmp/test-optimistic-concurrency.sql
+
+      - name: Verify salary reminders
+        run: |
+          docker cp supabase/test-salary-reminders.sql supabase_db_hemma-os:/tmp/test-salary-reminders.sql
+          docker exec supabase_db_hemma-os psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /tmp/test-salary-reminders.sql

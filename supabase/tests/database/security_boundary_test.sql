@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(18);
+select plan(22);
 
 select is(
   (
@@ -11,7 +11,7 @@ select is(
     join pg_catalog.pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p')
   ),
-  20::bigint,
+  23::bigint,
   'the audited public-table inventory is complete'
 );
 
@@ -43,7 +43,10 @@ select ok(
         'household_invites',
         'household_members',
         'household_people',
-        'notification_state'
+        'notification_state',
+        'salary_reminder_settings',
+        'salary_submission_drafts',
+        'salary_reminder_tokens'
       )
       and not exists (
         select 1
@@ -279,6 +282,84 @@ select ok(
   and has_function_privilege('authenticated', 'private.current_household()', 'execute')
   and has_function_privilege('authenticated', 'private.invite_cap_ok(uuid)', 'execute'),
   'private helper access matches policy evaluation requirements'
+);
+
+select ok(
+  exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'salary_reminder_settings'
+      and cmd = 'SELECT' and qual ilike '%current_household%'
+  )
+  and exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'salary_reminder_settings'
+      and cmd = 'INSERT' and with_check ilike '%current_household%'
+  )
+  and exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'salary_reminder_settings'
+      and cmd = 'UPDATE' and qual ilike '%current_household%'
+      and with_check ilike '%current_household%'
+  )
+  and not exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'salary_reminder_settings'
+      and cmd in ('ALL', 'DELETE')
+  )
+  and not exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public' and table_name = 'salary_reminder_settings'
+      and (grantee in ('PUBLIC', 'anon')
+           or (grantee = 'authenticated' and privilege_type not in ('SELECT', 'INSERT', 'UPDATE')))
+  ),
+  'salary_reminder_settings is household-scoped select/insert/update with no delete'
+);
+
+select ok(
+  exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'salary_submission_drafts'
+      and cmd = 'SELECT' and qual ilike '%current_household%'
+  )
+  and not exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'salary_submission_drafts'
+      and cmd <> 'SELECT'
+  )
+  and not exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'salary_reminder_tokens'
+  )
+  and not exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public'
+      and (
+        (table_name = 'salary_submission_drafts'
+          and (grantee in ('PUBLIC', 'anon')
+               or (grantee = 'authenticated' and privilege_type <> 'SELECT')))
+        or (table_name = 'salary_reminder_tokens'
+          and grantee in ('PUBLIC', 'anon', 'authenticated'))
+      )
+  ),
+  'salary drafts are client read-only and reminder tokens have no client access'
+);
+
+select ok(
+  not has_function_privilege('public', 'private.finalize_salary_month(uuid,text)', 'execute')
+  and not has_function_privilege('anon', 'private.finalize_salary_month(uuid,text)', 'execute')
+  and not has_function_privilege('authenticated', 'private.finalize_salary_month(uuid,text)', 'execute')
+  and not has_function_privilege('public', 'public.discard_salary_drafts(text)', 'execute')
+  and not has_function_privilege('anon', 'public.discard_salary_drafts(text)', 'execute')
+  and has_function_privilege('authenticated', 'public.discard_salary_drafts(text)', 'execute'),
+  'finalize_salary_month is service-only; discard_salary_drafts is authenticated-only'
+);
+
+select ok(
+  not has_function_privilege('public', 'public.finalize_salary_month(uuid,text)', 'execute')
+  and not has_function_privilege('anon', 'public.finalize_salary_month(uuid,text)', 'execute')
+  and not has_function_privilege('authenticated', 'public.finalize_salary_month(uuid,text)', 'execute')
+  and has_function_privilege('service_role', 'public.finalize_salary_month(uuid,text)', 'execute'),
+  'the public finalize_salary_month wrapper is executable by service_role only'
 );
 
 select * from finish();

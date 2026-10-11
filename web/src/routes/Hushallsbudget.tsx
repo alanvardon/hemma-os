@@ -6,11 +6,16 @@ import {
 } from '../lib/hushallsbudget'
 import type { BudgetState, BudgetResult, Owner, Row, SalarySubmission, IncomeItem } from '../lib/hushallsbudget'
 import { loadBudget, saveBudget } from '../lib/hushallsbudget-store'
+import { SalaryItemColumn, type SalaryItem } from './hushallsbudget-salary'
 import { reportPersistenceError } from '../lib/persistence-error'
 import { mortgageMonthlyFigures } from '../lib/mortgage'
 import { loadMortgageSyncSnapshot } from '../lib/mortgage-store'
 import { todayISO } from '../lib/date'
 import * as salaryStore from '../lib/salary-store'
+import * as salaryDraftsStore from '../lib/salary-drafts-store'
+import type { SalaryDraft } from '../lib/salary-drafts-store'
+import * as salaryReminderSettingsStore from '../lib/salary-reminder-settings-store'
+import type { SalaryReminderSettings } from '../lib/salary-reminder-settings-store'
 import { Money, Percent } from '../components/AnimatedNumber'
 import BudgetDonutChart, { type DonutSegment } from '../components/charts/BudgetDonutChart'
 import DialogShell from '../components/DialogShell'
@@ -158,25 +163,39 @@ function Modal({ open, onClose, ariaLabel, children }: {
 }
 
 // ── Submit this month's salaries ─────────────────────────────────────────────
-interface SalaryItem { uid: number; label: string; amount: number }
+// SalaryItem, SalaryItemColumn and AmountInputRef live in ./hushallsbudget-salary
+// (plan 132) so the public #/lon/<token> page can reuse the exact same income
+// column outside this modal.
 
-function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onHistoryChanged }: {
+function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onHistoryChanged, notify }: {
   open: boolean; onClose: () => void; people: string[]; incomes: Row[]
   selfSlot?: CanonicalSlot | null; flashSaved: () => void; onHistoryChanged: () => void
+  /** Plan 132: the parent's own toast, used ONLY for the discard-failure
+      message — that notice must survive this modal closing (the save still
+      counts), so it can't live in the modal's own toast, which unmounts with it. */
+  notify: (msg: string) => void
 }) {
   const [month, setMonth] = useState(currentMonth())
   const [note, setNote] = useState('')
   const [itemsA, setItemsA] = useState<SalaryItem[]>([])
   const [itemsB, setItemsB] = useState<SalaryItem[]>([])
+  // Plan 132: which slots' current items came from an emailed draft rather
+  // than the baseline — drives the "Submitted via email" column tag.
+  const [draftSlots, setDraftSlots] = useState<Set<'a' | 'b'>>(new Set())
   const { toast, showToast } = useToast()
   const confirm = useConfirm()
   const uid = useRef(0)
   const firstAmountRef = useRef<HTMLInputElement>(null)
+  // Guards against a stale listDrafts response when the user flips the month
+  // picker faster than the request round-trips — only the latest request's
+  // result is ever applied.
+  const draftRequestRef = useRef(0)
 
   // Read-only snapshot of the static baseline income rows for a person, used to
   // pre-fill the modal. The user can then tweak amounts and add extra income
   // (barnbidrag, tax rebate…) without touching the baseline.
   const incomesRef = useRef(incomes)
+  const draftNoteRef = useRef('')
   incomesRef.current = incomes
   const prefillItems = (owner: 'a' | 'b'): SalaryItem[] => {
     const src = incomesRef.current
@@ -184,17 +203,52 @@ function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onH
       .map((row) => ({ label: row.label, amount: row.amount }))
     return (src.length ? src : [{ label: 'Lön / Salary', amount: 0 }]).map((it) => ({ uid: uid.current++, label: it.label, amount: it.amount }))
   }
+  const draftItems = (draft: SalaryDraft): SalaryItem[] => {
+    const src = draft.income_items.length ? draft.income_items : [{ label: 'Lön / Salary', amount: 0 }]
+    return src.map((it) => ({ uid: uid.current++, label: it.label, amount: it.amount }))
+  }
 
-  // Reset the form whenever it opens — prefill from the live budget baseline.
+  // Reset the form whenever it opens — month/note always come from the
+  // baseline/today, never from a previous session.
   useEffect(() => {
     if (!open) return
     setMonth(currentMonth())
     setNote('')
-    setItemsA(prefillItems('a'))
-    setItemsB(prefillItems('b'))
+    draftNoteRef.current = ''
     const t = setTimeout(() => { firstAmountRef.current?.focus(); firstAmountRef.current?.select() }, 30)
     return () => clearTimeout(t)
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load/prefill the income columns on open AND whenever the month changes —
+  // a slot with a pending emailed draft for THAT month is prefilled from the
+  // draft instead of the baseline; otherwise the baseline, same as before.
+  // This mirrors the original baseline-prefill timing (only at the moment the
+  // month's initial values are set), so values the user has already typed are
+  // never clobbered mid-edit.
+  useEffect(() => {
+    if (!open) return
+    let alive = true
+    const requestId = ++draftRequestRef.current
+    salaryDraftsStore.listDrafts(month).then((drafts) => {
+      if (!alive || requestId !== draftRequestRef.current) return // stale — month moved on
+      const bySlot = new Map(drafts.map((d) => [d.slot, d] as const))
+      setDraftSlots(new Set(bySlot.keys()))
+      setItemsA(bySlot.has('a') ? draftItems(bySlot.get('a')!) : prefillItems('a'))
+      setItemsB(bySlot.has('b') ? draftItems(bySlot.get('b')!) : prefillItems('b'))
+      // Carry the emailed notes over too (A first, ' · '-joined, the same rule
+      // as finalize_salary_month), or finishing the month here would silently
+      // drop them. Only replace a note this effect itself put there, so a note
+      // the user typed survives a month switch.
+      const draftNote = (['a', 'b'] as const)
+        .map((slot) => bySlot.get(slot)?.note?.trim() ?? '')
+        .filter(Boolean)
+        .join(' · ')
+      setNote((current) => (current === '' || current === draftNoteRef.current ? draftNote : current))
+      draftNoteRef.current = draftNote
+    })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, month])
 
   const nameA = people[0] || 'A', nameB = people[1] || 'B'
   const incomeA = sumItems(itemsA), incomeB = sumItems(itemsB)
@@ -231,36 +285,33 @@ function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onH
       showToast('Kunde inte spara — du kanske är offline.')
       return
     }
+    // The submission is already saved at this point — a discard failure must
+    // NOT undo or block the close; it only means a stale draft lingers until
+    // the next finalise/save clears it (see the migration's 'already_logged'
+    // branch). The notice has to survive this modal unmounting, so it goes
+    // through the parent's own toast, not this modal's.
+    try {
+      await salaryDraftsStore.discardDrafts(record.month)
+    } catch {
+      notify('Saved, but couldn’t clear the emailed entry — it will be cleared next time.')
+    }
     onClose(); flashSaved(); onHistoryChanged()
   }
 
   // Plain helper (NOT a component) so the inputs keep focus across renders.
   const itemColumn = (owner: 'a' | 'b', items: SalaryItem[]) => (
-    <div className="income-col">
-      <div className="income-col-head">
-        <span className="income-col-name">
-          <PersonLabel name={owner === 'a' ? nameA : nameB} self={selfSlot === owner} other={selfSlot != null && selfSlot !== owner} />
-        </span>
-        <span className="income-col-sub">{fmt(owner === 'a' ? incomeA : incomeB)}</span>
-      </div>
-      <div className="sal-list">
-        {items.map((it, i) => (
-          <div className="sal-row" key={it.uid}>
-            <input
-              type="text" className="sal-row-label" value={it.label} placeholder="e.g. Lön, Barnbidrag, skatt" aria-label="Income name"
-              onChange={(e) => patchItem(owner, it.uid, { label: e.target.value })}
-            />
-            <AmountInputRef
-              inputRef={owner === 'a' && i === 0 ? firstAmountRef : undefined}
-              value={it.amount} onChange={(n) => patchItem(owner, it.uid, { amount: n })}
-              className="sal-row-amount" ariaLabel="Amount, kr"
-            />
-            <button type="button" className="sal-row-remove" aria-label="Remove income" onClick={() => removeItem(owner, it.uid)}>×</button>
-          </div>
-        ))}
-      </div>
-      <button type="button" className="btn btn-ghost row-add-btn" onClick={() => addItem(owner)}>+ Add income</button>
-    </div>
+    <SalaryItemColumn
+      name={owner === 'a' ? nameA : nameB}
+      self={selfSlot === owner}
+      other={selfSlot != null && selfSlot !== owner}
+      total={owner === 'a' ? incomeA : incomeB}
+      items={items}
+      firstAmountRef={owner === 'a' ? firstAmountRef : undefined}
+      onItemChange={(uidv, patch) => patchItem(owner, uidv, patch)}
+      onRemoveItem={(uidv) => removeItem(owner, uidv)}
+      onAddItem={() => addItem(owner)}
+      emailTag={draftSlots.has(owner)}
+    />
   )
 
   return (
@@ -303,24 +354,6 @@ function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onH
       </div>
       <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
     </Modal>
-  )
-}
-
-// AmountInput variant that exposes a ref to the underlying input (for focus).
-function AmountInputRef({ value, onChange, className, ariaLabel, inputRef }: {
-  value: number; onChange: (n: number) => void; className: string; ariaLabel: string
-  inputRef?: React.RefObject<HTMLInputElement | null>
-}) {
-  const [buf, setBuf] = useState(() => formatWithSpaces(value))
-  const [focused, setFocused] = useState(false)
-  useEffect(() => { if (!focused) setBuf(formatWithSpaces(value)) }, [value, focused])
-  return (
-    <input
-      ref={inputRef} type="text" inputMode="numeric" className={className} aria-label={ariaLabel} value={buf}
-      onFocus={() => setFocused(true)}
-      onChange={(e) => { setBuf(e.target.value); onChange(parseFormatted(e.target.value)) }}
-      onBlur={() => { setFocused(false); setBuf(formatWithSpaces(parseFormatted(buf))) }}
-    />
   )
 }
 
@@ -513,6 +546,48 @@ export default function Hushallsbudget() {
   // must be told the Bolån rows below are the previous ones, not today's.
   const [mortgageRateGapParts, setMortgageRateGapParts] = useState(0)
 
+  // Plan 132 — the current calendar month's pending emailed salary halves,
+  // for the "<name> has submitted … waiting for <other name>" note next to
+  // the submit button. Refreshed on mount and whenever the modal closes
+  // (cancelled or saved — either way the drafts for this month may have
+  // changed).
+  const [currentMonthDrafts, setCurrentMonthDrafts] = useState<SalaryDraft[]>([])
+  const reloadPendingDrafts = useCallback(() => {
+    salaryDraftsStore.listDrafts(currentMonth()).then(setCurrentMonthDrafts)
+  }, [])
+  useEffect(() => { reloadPendingDrafts() }, [reloadPendingDrafts])
+
+  // Plan 132 — the household's email-reminder on/off + send-day setting.
+  // `null` is the genuine loading state (nothing fetched yet); once settled it
+  // always holds the real row OR the documented "no row" default — never both
+  // null and "settled". `reminderSettingsUnknown` is set only when a READ
+  // failed, so a value derived from the fallback default isn't shown as if it
+  // were confirmed saved state (the controls stay editable regardless — see
+  // the inline hint rendered below).
+  const [reminderSettings, setReminderSettings] = useState<SalaryReminderSettings | null>(null)
+  const [reminderSettingsUnknown, setReminderSettingsUnknown] = useState(false)
+  useEffect(() => {
+    salaryReminderSettingsStore.loadSalaryReminderSettings().then((loaded) => {
+      setReminderSettings(loaded.settings)
+      setReminderSettingsUnknown(loaded.unknown)
+    })
+  }, [])
+  async function updateReminderSettings(patch: Partial<SalaryReminderSettings>) {
+    if (!reminderSettings) return
+    const prevSettings = reminderSettings
+    const prevUnknown = reminderSettingsUnknown
+    const next = { ...reminderSettings, ...patch }
+    setReminderSettings(next)
+    setReminderSettingsUnknown(false)
+    try {
+      await salaryReminderSettingsStore.saveSalaryReminderSettings(next)
+    } catch {
+      setReminderSettings(prevSettings)
+      setReminderSettingsUnknown(prevUnknown)
+      showToast('Couldn’t save the reminder setting — try again.')
+    }
+  }
+
   // Load the persisted budget once on mount (now async — localStorage today,
   // cloud after the swap). `loadedRef` holds the exact object we hydrated with
   // so the save effect below can tell a load apart from a user edit and skip
@@ -582,6 +657,15 @@ export default function Hushallsbudget() {
   const personHead = (owner: 'a' | 'b') => (
     <PersonLabel name={owner === 'a' ? nameA : nameB} self={isSelf(owner)} other={isOther(owner)} />
   )
+
+  // Plan 132 — exactly one email half in for THIS calendar month: say who,
+  // and who the household is still waiting on. Two or zero drafts say
+  // nothing here (two means it will finalise on its own; zero means no
+  // emailed submission is pending) — never colour-only.
+  const pendingDraftSlot = currentMonthDrafts.length === 1 ? currentMonthDrafts[0].slot : null
+  const pendingNote = pendingDraftSlot
+    ? `${pendingDraftSlot === 'a' ? nameA : nameB} has submitted for ${monthLabel(currentMonth())} — waiting for ${pendingDraftSlot === 'a' ? nameB : nameA}`
+    : null
 
   // ── Immutable state mutation helper ────────────────────────────────────────
   const mutate = useCallback((fn: (draft: BudgetState) => void) => {
@@ -837,6 +921,39 @@ export default function Hushallsbudget() {
               <button type="button" className="btn btn-primary" onClick={() => setSalaryOpen(true)}>Submit this month’s salaries</button>
               <button type="button" className="btn btn-ghost" onClick={openHistory}>History</button>
             </div>
+            {pendingNote && <p className="salary-pending-note">{pendingNote}</p>}
+
+            <div className="salary-reminder-row">
+              <span className="salary-reminder-row-label">
+                Email salary reminder on day
+                <select
+                  className="salary-reminder-day"
+                  aria-label="Day of month to send the salary reminder email"
+                  value={reminderSettings?.send_day ?? 25}
+                  disabled={reminderSettings === null}
+                  onChange={(e) => updateReminderSettings({ send_day: Number(e.target.value) })}
+                >
+                  {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              </span>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={reminderSettings?.enabled ?? true}
+                  disabled={reminderSettings === null}
+                  aria-label="Email salary reminder on"
+                  onChange={(e) => updateReminderSettings({ enabled: e.target.checked })}
+                />
+                <span className="toggle-slider" />
+              </label>
+              {reminderSettingsUnknown && (
+                <span className="salary-reminder-hint" role="status">
+                  Couldn’t load this setting — showing the default, not necessarily what’s saved.
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Section 2: Costs */}
@@ -1088,8 +1205,8 @@ export default function Hushallsbudget() {
         </div>
       </div>
 
-      <SalaryModal open={salaryOpen} onClose={() => setSalaryOpen(false)} people={toolBound ? [nameA, nameB] : state.people} incomes={state.incomes}
-        selfSlot={mySlot} flashSaved={flashSaved} onHistoryChanged={() => { if (historyOpen) reloadHistory() }} />
+      <SalaryModal open={salaryOpen} onClose={() => { setSalaryOpen(false); reloadPendingDrafts() }} people={toolBound ? [nameA, nameB] : state.people} incomes={state.incomes}
+        selfSlot={mySlot} flashSaved={flashSaved} onHistoryChanged={() => { if (historyOpen) reloadHistory() }} notify={showToast} />
       <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} rows={historyRows} selfSlot={mySlot} onReload={reloadHistory} flashSaved={flashSaved} />
       <ChartOverlay open={chartOpen} onClose={() => setChartOpen(false)} segments={donutSegments} totalIncome={r.totalIncome} />
       <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
