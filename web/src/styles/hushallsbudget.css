@@ -679,7 +679,6 @@
     color: var(--ink-mid);
   }
   .salary-reminder-day { width: auto; min-width: 4.5em; padding: 6px 10px; }
-  .salary-reminder.is-loading .toggle,
   .salary-reminder .toggle input:disabled + .toggle-slider { opacity: 0.5; cursor: default; }
   .salary-reminder-hint {
     margin: 0.5rem 0 0;
