@@ -40,7 +40,7 @@ revoke all on function private.is_salary_month(text) from public, anon, authenti
 -- ── settings: one row (or none) per household ─────────────────────────────────
 
 create table if not exists public.salary_reminder_settings (
-  household_id uuid not null primary key references public.households(id) on delete cascade,
+  household_id uuid not null primary key references public.households(id) on delete cascade default private.current_household(),
   enabled      boolean not null default true,
   send_day     smallint not null default 25 check (send_day between 1 and 28),
   updated_at   timestamptz not null default now()

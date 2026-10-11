@@ -3,13 +3,11 @@
    (salary_reminder_settings, one row or none per household).
 
    No cache: this is a single small settings row behind a toggle, not data the
-   app must keep visible offline. Unlike every other household-owned table in
-   this codebase, salary_reminder_settings.household_id has NO column default
-   (see the migration) — the client must supply it explicitly. We use the
-   same syncCoordinator-held household id already used for cache-key scoping
-   elsewhere (sync.ts / storage.ts), rather than adding a second round trip
-   just to look it up; it is the same value RLS's `current_household()` would
-   resolve to for the same session. */
+   app must keep visible offline. household_id defaults to
+   `private.current_household()` like every other household-owned table, but
+   the upsert names it explicitly because it is the conflict target; we use the
+   syncCoordinator-held household id (the value RLS's `current_household()`
+   resolves to for this session; the policy's WITH CHECK rejects any other). */
 
 import { supabase } from './supabase'
 import { syncCoordinator } from './sync'
