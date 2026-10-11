@@ -374,6 +374,13 @@ authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
 allow_dynamic_registration = false
 
+# Plan 132: the public, token-checked salary submission endpoint behind the
+# emailed `#/lon/<token>` page. The link token in the request body is the only
+# credential (validated inside the function), so the gateway JWT check is off
+# for THIS function only. Every other function keeps the default verify_jwt = true.
+[functions.salary-reminder]
+verify_jwt = false
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.

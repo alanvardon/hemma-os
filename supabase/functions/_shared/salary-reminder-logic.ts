@@ -293,3 +293,69 @@ export function isLocalDryRunLinkLoggingAllowed(env: { EMAIL_DRY_RUN?: string; S
   if (!host) return false
   return host !== 'supabase.co' && !host.endsWith('.supabase.co')
 }
+
+/**
+ * The exact log line salary-reminder-send writes for a minted link, or null
+ * when it must not log it. The ONLY place the raw link may reach a log; it is
+ * gated on isLocalDryRunLinkLoggingAllowed so a production token (a live
+ * credential) can never be logged.
+ */
+export function localDryRunLinkLine(
+  env: { EMAIL_DRY_RUN?: string; SUPABASE_URL?: string },
+  slot: 'a' | 'b',
+  link: string,
+): string | null {
+  return isLocalDryRunLinkLoggingAllowed(env) ? `[local dry-run] ${slot} link: ${link}` : null
+}
+
+// ── Tokens and names (Stage 3) ──────────────────────────────────────────────
+
+/** A link token is 32 random bytes as unpadded base64url: exactly 43 chars. */
+export const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/
+
+export function isTokenFormat(token: unknown): token is string {
+  return typeof token === 'string' && TOKEN_RE.test(token)
+}
+
+/** Unpadded base64url of raw bytes (the token encoding). */
+export function base64UrlEncode(bytes: Uint8Array): string {
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/** Lower-case hex of raw bytes (matches Postgres encode(…, 'hex')). */
+export function toHex(bytes: Uint8Array): string {
+  let out = ''
+  for (const b of bytes) out += b.toString(16).padStart(2, '0')
+  return out
+}
+
+/**
+ * A slot's display name, mirroring private.household_person_display_name /
+ * private.resolve_person_name (plan 111): the assigned account's profile name,
+ * else the assigned email, else "Person A"/"Person B".
+ */
+export function personDisplayName(
+  profileName: string | null | undefined,
+  assignedEmail: string | null | undefined,
+  slot: 'a' | 'b',
+): string {
+  if (assignedEmail) return profileName || assignedEmail
+  return `Person ${slot.toUpperCase()}`
+}
+
+export type FinalizeOutcome = 'finalized' | 'pending' | 'already_logged' | 'zero_total'
+export type SubmitStatus = 'submitted' | 'finalized' | 'already_logged' | 'zero_total'
+
+/** finalize_salary_month's result → the public submit status ('pending' → 'submitted'). Null on anything unexpected. */
+export function submitStatusFor(outcome: unknown): SubmitStatus | null {
+  switch (outcome) {
+    case 'pending': return 'submitted'
+    case 'finalized':
+    case 'already_logged':
+    case 'zero_total':
+      return outcome
+    default: return null
+  }
+}

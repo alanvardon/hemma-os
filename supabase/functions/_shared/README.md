@@ -71,6 +71,10 @@ Then finish plan 72: deploy `policy-rate-notify` and run its README's steps
 3–4 (the pg_cron + Vault schedule, then verification). Do this **after** this
 plan's code PR is merged, so the deployed function uses the shared helper.
 
+Plan 132's salary emails use the same secrets. Their deploy (including the
+public `--no-verify-jwt` function) and their single daily cron are in
+[`../salary-reminder-send/README.md`](../salary-reminder-send/README.md).
+
 ### O4. (Optional, recommended) Magic-link emails via Resend
 
 In the Supabase dashboard → Authentication → Emails → SMTP Settings, enable

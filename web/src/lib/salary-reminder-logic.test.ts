@@ -3,8 +3,14 @@
 // under Vitest too — same pattern as resend-request.test.ts).
 import { describe, expect, it } from 'vitest'
 import {
+  base64UrlEncode,
   buildReminderEmail,
   isLocalDryRunLinkLoggingAllowed,
+  isTokenFormat,
+  localDryRunLinkLine,
+  personDisplayName,
+  submitStatusFor,
+  toHex,
   isSendDay,
   lastValidDayEn,
   monthFor,
@@ -315,5 +321,74 @@ describe('isLocalDryRunLinkLoggingAllowed', () => {
     [{ EMAIL_DRY_RUN: 'true', SUPABASE_URL: local }, false],
   ])('%j → %s', (env, expected) => {
     expect(isLocalDryRunLinkLoggingAllowed(env)).toBe(expected)
+  })
+})
+
+describe('localDryRunLinkLine (the only path a raw link may be logged)', () => {
+  const link = 'http://localhost:5174/#/lon/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+
+  it('logs locally when dry-run is on and the URL is not supabase.co', () => {
+    expect(localDryRunLinkLine({ EMAIL_DRY_RUN: '1', SUPABASE_URL: 'http://kong:8000' }, 'a', link))
+      .toBe(`[local dry-run] a link: ${link}`)
+  })
+
+  it('never logs against a hosted project, even in dry-run', () => {
+    expect(localDryRunLinkLine({ EMAIL_DRY_RUN: '1', SUPABASE_URL: 'https://abcd.supabase.co' }, 'b', link)).toBeNull()
+    expect(localDryRunLinkLine({ EMAIL_DRY_RUN: '1', SUPABASE_URL: 'https://ABCD.SUPABASE.CO.' }, 'b', link)).toBeNull()
+  })
+
+  it('never logs when dry-run is off or the URL is missing', () => {
+    expect(localDryRunLinkLine({ SUPABASE_URL: 'http://kong:8000' }, 'a', link)).toBeNull()
+    expect(localDryRunLinkLine({ EMAIL_DRY_RUN: 'true', SUPABASE_URL: 'http://kong:8000' }, 'a', link)).toBeNull()
+    expect(localDryRunLinkLine({ EMAIL_DRY_RUN: '1' }, 'a', link)).toBeNull()
+  })
+})
+
+describe('token encoding', () => {
+  it('32 bytes → 43-char unpadded base64url that passes the format check', () => {
+    const bytes = new Uint8Array(32).map((_, i) => (i * 37 + 250) % 256)
+    const token = base64UrlEncode(bytes)
+    expect(token).toHaveLength(43)
+    expect(token).not.toMatch(/[+/=]/)
+    expect(isTokenFormat(token)).toBe(true)
+  })
+
+  it('maps the url-unsafe base64 characters', () => {
+    expect(base64UrlEncode(new Uint8Array([0xfb, 0xff, 0xbf]))).toBe('-_-_')
+  })
+
+  it('rejects anything that is not exactly 43 base64url chars', () => {
+    expect(isTokenFormat('A'.repeat(42))).toBe(false)
+    expect(isTokenFormat('A'.repeat(44))).toBe(false)
+    expect(isTokenFormat('A'.repeat(42) + '=')).toBe(false)
+    expect(isTokenFormat('A'.repeat(42) + '+')).toBe(false)
+    expect(isTokenFormat(undefined)).toBe(false)
+    expect(isTokenFormat(123)).toBe(false)
+  })
+
+  it('hex matches Postgres encode(…, \'hex\')', () => {
+    expect(toHex(new Uint8Array([0, 15, 16, 255]))).toBe('000f10ff')
+  })
+})
+
+describe('personDisplayName (mirrors private.household_person_display_name)', () => {
+  it('profile name → assigned email → Person A/B', () => {
+    expect(personDisplayName('Alva', 'alva@example.test', 'a')).toBe('Alva')
+    expect(personDisplayName(null, 'alva@example.test', 'a')).toBe('alva@example.test')
+    expect(personDisplayName(undefined, null, 'b')).toBe('Person B')
+  })
+})
+
+describe('submitStatusFor', () => {
+  it('maps pending → submitted and passes the rest through', () => {
+    expect(submitStatusFor('pending')).toBe('submitted')
+    expect(submitStatusFor('finalized')).toBe('finalized')
+    expect(submitStatusFor('already_logged')).toBe('already_logged')
+    expect(submitStatusFor('zero_total')).toBe('zero_total')
+  })
+
+  it('returns null on anything unexpected', () => {
+    expect(submitStatusFor('weird')).toBeNull()
+    expect(submitStatusFor(null)).toBeNull()
   })
 })
