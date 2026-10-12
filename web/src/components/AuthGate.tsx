@@ -21,6 +21,13 @@ import {
   shouldOfferLegacyImport,
 } from '../lib/legacy-data'
 import { persistenceErrorMessage } from '../lib/persistence-error'
+import {
+  OTP_LENGTH,
+  OTP_RESEND_COOLDOWN_MS,
+  otpErrorMessage,
+  resendSecondsLeft,
+  sanitizeOtpInput,
+} from '../lib/auth-otp'
 import { useTheme } from '../App'
 import auroraMp4 from '../assets/auth/aurora.mp4'
 import auroraPosterAvif from '../assets/auth/aurora-poster.avif'
@@ -280,38 +287,138 @@ function AuroraBackdrop() {
   )
 }
 
+// Same options for the first send and every "Skicka ny kod", so a resend
+// behaves exactly like the original request.
+function requestEmailOtp(email: string) {
+  // Hardening (plan 46): the server-side hook_before_user_created is the real
+  // signup gate now. Backend details are deliberately not rendered. Always
+  // requesting shouldCreateUser: true is safe: existing
+  // users (the seeded couple) sign in as normal, invited partners self-onboard,
+  // and strangers get the hook's rejection instead of a silent no-op email.
+  return supabase.auth.signInWithOtp({
+    email,
+    // Land back on the bare app root (no hash route) so the magic-link tokens
+    // don't collide with React Router — plan 16a.
+    options: {
+      emailRedirectTo: window.location.origin + window.location.pathname,
+      shouldCreateUser: true,
+    },
+  })
+}
+
 function MagicLinkScreen() {
   const { theme } = useTheme()
   const [email, setEmail] = useState('')
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
   const [error, setError] = useState('')
+  // Sent phase (plan 136): the email carries both the link and a 6-digit code.
+  const [code, setCode] = useState('')
+  const [verifying, setVerifying] = useState(false)
+  const [codeError, setCodeError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [resending, setResending] = useState(false)
+  const [resendAt, setResendAt] = useState(0) // epoch ms when resend unlocks
+  const [now, setNow] = useState(0)
+  const codeInput = useRef<HTMLInputElement>(null)
+  // Synchronous guard: state updates are async, so a fast double event could
+  // otherwise fire two verifyOtp calls for one code.
+  const verifyInFlight = useRef(false)
+
+  // One ticking interval while the resend cooldown runs; cleared on unmount.
+  useEffect(() => {
+    if (resendAt <= Date.now()) return
+    const id = window.setInterval(() => {
+      const t = Date.now()
+      setNow(t)
+      if (t >= resendAt) window.clearInterval(id)
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [resendAt])
+
+  // After a failed verify the input is re-enabled; hand focus back to it.
+  useEffect(() => {
+    if (codeError && !verifying) codeInput.current?.focus()
+  }, [codeError, verifying])
+
+  function startCooldown() {
+    const t = Date.now()
+    setNow(t)
+    setResendAt(t + OTP_RESEND_COOLDOWN_MS)
+  }
 
   async function sendLink(e: React.FormEvent) {
     e.preventDefault()
     if (!email.trim()) return
     setStatus('sending')
     setError('')
-    // Hardening (plan 46): the server-side hook_before_user_created is the real
-    // signup gate now. Backend details are deliberately not rendered. Always
-    // requesting shouldCreateUser: true is safe: existing
-    // users (the seeded couple) sign in as normal, invited partners self-onboard,
-    // and strangers get the hook's rejection instead of a silent no-op email.
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      // Land back on the bare app root (no hash route) so the magic-link tokens
-      // don't collide with React Router — plan 16a.
-      options: {
-        emailRedirectTo: window.location.origin + window.location.pathname,
-        shouldCreateUser: true,
-      },
-    })
+    const { error } = await requestEmailOtp(email.trim())
     if (error) {
       setStatus('error')
       setError('Kunde inte skicka inloggningslänken. Försök igen.')
     } else {
+      startCooldown()
       setStatus('sent')
     }
   }
+
+  async function verify(token: string) {
+    if (token.length !== OTP_LENGTH || verifyInFlight.current) return
+    verifyInFlight.current = true
+    setVerifying(true)
+    setCodeError('')
+    setNotice('')
+    let message = ''
+    try {
+      const { error } = await supabase.auth.verifyOtp({ email: email.trim(), token, type: 'email' })
+      // Success needs nothing here: onAuthStateChange swaps in the app.
+      if (error) message = otpErrorMessage(error)
+    } catch (thrown) {
+      message = otpErrorMessage(thrown)
+    }
+    verifyInFlight.current = false
+    setVerifying(false)
+    setCodeError(message)
+  }
+
+  function onCodeChange(raw: string) {
+    const next = sanitizeOtpInput(raw)
+    if (next === code) return
+    setCode(next)
+    // Auto-submit from the change event rather than an effect, so it fires
+    // once per completed code even when StrictMode re-runs effects.
+    if (next.length === OTP_LENGTH) void verify(next)
+  }
+
+  async function resend() {
+    if (resending) return
+    setResending(true)
+    setCodeError('')
+    setNotice('')
+    let failed = false
+    try {
+      failed = Boolean((await requestEmailOtp(email.trim())).error)
+    } catch {
+      failed = true
+    }
+    setResending(false)
+    if (failed) {
+      setCodeError('Kunde inte skicka en ny kod. Försök igen om en stund.')
+      return
+    }
+    // The server invalidates the previous code, so drop the stale one.
+    setCode('')
+    startCooldown()
+    setNotice('En ny kod har skickats. Den gamla slutar gälla.')
+  }
+
+  function resetToEmailForm() {
+    setStatus('idle')
+    setCode('')
+    setCodeError('')
+    setNotice('')
+  }
+
+  const secondsLeft = resendSecondsLeft(resendAt, now)
 
   return (
     <div className="auth-screen">
@@ -322,16 +429,63 @@ function MagicLinkScreen() {
           <>
             <h1 className="auth-title">Kolla din inkorg</h1>
             <p className="auth-lead">
-              Vi har skickat en inloggningslänk till <strong>{email}</strong>. Öppna
-              den på den här enheten för att logga in.
+              Vi har skickat ett mejl till <strong>{email}</strong>. Skriv in koden
+              från mejlet, eller öppna länken på den här enheten.
             </p>
-            <button
-              type="button"
-              className="btn btn-ghost auth-reset"
-              onClick={() => setStatus('idle')}
+            <form
+              className="auth-form"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void verify(code)
+              }}
             >
-              Använd en annan e-post
-            </button>
+              <label className="auth-label" htmlFor="auth-code">Kod från mejlet</label>
+              {/* No maxLength: it would cut a pasted "123 456" to "123 45" before
+                  onChange runs. sanitizeOtpInput caps the value at 6 digits. */}
+              <input
+                ref={codeInput}
+                id="auth-code"
+                type="text"
+                className="auth-input auth-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]*"
+                value={code}
+                onChange={(e) => onCodeChange(e.target.value)}
+                disabled={verifying}
+                aria-invalid={codeError ? true : undefined}
+                aria-describedby={codeError ? 'auth-code-error' : undefined}
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="btn btn-primary auth-submit"
+                disabled={verifying || code.length !== OTP_LENGTH}
+              >
+                {verifying ? 'Loggar in…' : 'Logga in'}
+              </button>
+            </form>
+            {/* Reserved height so the error/notice line doesn't shift the buttons. */}
+            <div className="auth-code-feedback">
+              {codeError ? (
+                <p id="auth-code-error" className="auth-error" role="alert">{codeError}</p>
+              ) : notice ? (
+                <p className="auth-notice" role="status">{notice}</p>
+              ) : null}
+            </div>
+            <div className="auth-code-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => void resend()}
+                disabled={secondsLeft > 0 || resending}
+              >
+                {secondsLeft > 0 ? `Skicka ny kod (${secondsLeft} s)` : 'Skicka ny kod'}
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={resetToEmailForm}>
+                Använd en annan e-post
+              </button>
+            </div>
           </>
         ) : (
           <>

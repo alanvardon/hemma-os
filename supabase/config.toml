@@ -231,7 +231,9 @@ max_frequency = "1s"
 # Number of characters used in the email OTP.
 otp_length = 6
 # Number of seconds before the email OTP expires (defaults to 1 hour).
-otp_expiry = 3600
+# Plan 136: 15 minutes, because a typed code is guessable in a way a link isn't.
+# Mirror in production: Dashboard → Auth → Providers → Email → Email OTP Expiration.
+otp_expiry = 900
 
 # Use a production-ready SMTP server
 # [auth.email.smtp]
