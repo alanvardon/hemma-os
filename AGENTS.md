@@ -72,6 +72,7 @@ The application contains real household data. Production data and administration
 - Validate and migrate persisted shapes defensively. Repeatable migrations and merge functions must be idempotent and tested against malformed or legacy data when relevant.
 - Never edit an applied Supabase migration; create a new one. Schema, RLS, authentication, and security changes require approval and relevant automated tests.
 - Production changes are prohibited. Local migrations and read-only local database checks are allowed within an authorised task.
+- Never run `supabase config push`. `supabase/config.toml` holds local-only values (e.g. `site_url = "http://127.0.0.1:3000"`); pushing it overwrites production Auth settings and breaks login. Production auth configuration is managed in the Supabase dashboard.
 - Do not promise offline synchronisation without a retry and conflict model. Surface save failures when data loss matters.
 
 ## UX
