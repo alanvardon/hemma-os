@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="supported-color-schemes" content="light dark">
+  <title>Din bekräftelsekod</title>
+  <style>
+    @media (prefers-color-scheme: dark) {
+      body, .page { background:#161814 !important; }
+      .card { background:#20231e !important; }
+      .ink { color:#ece9df !important; }
+      .muted { color:#a3aca6 !important; }
+      .code { background:#161814 !important; color:#ece9df !important; }
+      .brand { color:#7fb593 !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background:#f4f2ea">
+  <table role="presentation" class="page" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f2ea">
+    <tr>
+      <td align="center" style="padding:24px 16px">
+        <table role="presentation" class="card" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px">
+          <tr>
+            <td style="padding:32px 32px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+              <p class="brand" style="margin:0;padding-bottom:12px;border-bottom:2px solid #b0652a;font-size:20px;font-weight:700;color:#2f5e45">Hemma·OS</p>
+            </td>
+          </tr>
+          <tr>
+            <td class="ink" style="padding:24px 32px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.5;color:#1f211c">
+              <h1 class="ink" style="margin:0 0 12px;font-size:24px;line-height:1.25;color:#1f211c">Bekräftelsekod</h1>
+              <p style="margin:0 0 24px">Ange koden för att bekräfta:</p>
+              <p class="code" style="margin:0;padding:16px;border-radius:8px;background:#f4f2ea;font-family:'SFMono-Regular',Menlo,Consolas,'Courier New',monospace;font-size:28px;letter-spacing:6px;text-align:center;color:#1f211c">{{ .Token }}</p>
+            </td>
+          </tr>
+          <tr>
+            <td class="muted" style="padding:0 32px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5;color:#5b6660">
+              <p style="margin:0 0 8px">Du får det här mejlet för att någon bad om att bekräfta en ändring av ditt konto i Hemma OS med {{ .Email }}. Var det inte du kan du ignorera det – inget händer utan koden.</p>
+              <p style="margin:0">Det går inte att svara på det här mejlet.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
