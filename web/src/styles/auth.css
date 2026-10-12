@@ -156,6 +156,54 @@
   margin-top: 22px;
 }
 
+/* ── Email code (plan 136) ─────────────────────────────────────────────────── */
+.auth-label {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  margin-bottom: -4px;
+}
+
+/* Builds on .auth-input. ≥16px so iOS doesn't zoom on focus (plan 75). */
+/* Doubled class to outrank components.css input[type="text"] (14px). */
+.auth-input.auth-code {
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3em;
+  /* Balance the trailing letter-spacing so the digits stay optically centred. */
+  text-indent: 0.3em;
+  text-align: center;
+}
+.auth-code:disabled {
+  opacity: 0.6;
+}
+
+/* Reserves two lines (the longest copy wraps once at phone width) so showing an
+   error or notice doesn't shift the buttons below. */
+.auth-code-feedback {
+  min-height: 52px; /* 12px margin + 2 × (13px × 1.5) */
+}
+.auth-code-feedback > .auth-error,
+.auth-code-feedback > .auth-notice {
+  margin: 12px 0 0;
+  line-height: 1.5;
+}
+
+.auth-notice {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.auth-code-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 /* ── Household menu (plan 16h) ─────────────────────────────────────────────── */
 /* The header trigger mirrors .theme-toggle-btn's circular chrome. */
 .household-btn {

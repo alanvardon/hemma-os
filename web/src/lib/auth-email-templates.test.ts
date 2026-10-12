@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 
 // Lint for the branded Swedish Supabase Auth email templates (plan 135).
-// Plan 136 deliberately changes the `{{ .Token }}` assertion.
+// Plan 136: magic_link and confirmation also show the 6-digit `{{ .Token }}` code, once.
 
 const dir = new URL('../../../supabase/templates/', import.meta.url)
 const configToml = readFileSync(new URL('../../../supabase/config.toml', import.meta.url), 'utf8')
@@ -10,13 +10,13 @@ const configToml = readFileSync(new URL('../../../supabase/config.toml', import.
 const COMMON = ['Token', 'TokenHash', 'SiteURL', 'Email', 'Data']
 const WITH_URL = [...COMMON, 'ConfirmationURL', 'RedirectTo']
 
-const TEMPLATES: Record<string, { allowed: string[]; url: boolean }> = {
-  magic_link: { allowed: WITH_URL, url: true },
-  confirmation: { allowed: WITH_URL, url: true },
-  invite: { allowed: WITH_URL, url: true },
-  email_change: { allowed: [...WITH_URL, 'NewEmail'], url: true },
-  recovery: { allowed: WITH_URL, url: true },
-  reauthentication: { allowed: COMMON, url: false },
+const TEMPLATES: Record<string, { allowed: string[]; url: boolean; token: boolean }> = {
+  magic_link: { allowed: WITH_URL, url: true, token: true },
+  confirmation: { allowed: WITH_URL, url: true, token: true },
+  invite: { allowed: WITH_URL, url: true, token: false },
+  email_change: { allowed: [...WITH_URL, 'NewEmail'], url: true, token: false },
+  recovery: { allowed: WITH_URL, url: true, token: false },
+  reauthentication: { allowed: COMMON, url: false, token: true },
 }
 
 function variables(html: string): string[] {
@@ -44,7 +44,14 @@ describe.each(Object.entries(TEMPLATES))('auth email template %s', (key, spec) =
     for (const v of variables(html)) expect(spec.allowed, `{{ .${v} }}`).toContain(v)
     const vars = variables(html)
     expect(vars.includes('NewEmail')).toBe(key === 'email_change')
-    expect(vars.includes('Token')).toBe(key === 'reauthentication')
+    expect(vars.includes('Token')).toBe(spec.token)
+  })
+
+  it('shows the token the expected number of times, never in the subject', () => {
+    expect(variables(html).filter((v) => v === 'Token')).toHaveLength(spec.token ? 1 : 0)
+    const subject = configToml.match(new RegExp(`^\\[auth\\.email\\.template\\.${key}\\]\\n(?:(?!\\[).+\\n?)*?^subject = "(.+)"$`, 'm'))
+    expect(subject, `subject for ${key}`).not.toBeNull()
+    expect(subject![1]).not.toMatch(/\{\{|Token/)
   })
 
   it(spec.url ? 'contains the confirmation URL exactly twice (button + fallback)' : 'shows the token and no URL variable', () => {
