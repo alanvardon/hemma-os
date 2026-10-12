@@ -29,12 +29,20 @@ including `site_url = "http://127.0.0.1:3000"`, and breaks production login.
    arrive in Swedish from `inloggning@mail.vardon-family.se`, the button should
    log you in, and the fallback URL should be visible. If anything is wrong, the
    dashboard's **Reset to default** is the rollback.
-4. **Never run `supabase config push`.**
+4. **Email code (plan 136):** `magic_link.html` and `confirmation.html` show
+   the 6-digit `{{ .Token }}` above the button. Paste both updated templates
+   into Dashboard -> Authentication -> Emails -> Templates, and set Dashboard ->
+   Authentication -> Providers -> Email -> **Email OTP Expiration** to `900`
+   seconds, mirroring `otp_expiry = 900` in `supabase/config.toml`. Keep the
+   subjects unchanged: the code must never appear in a subject (lock-screen
+   previews).
+5. **Never run `supabase config push`.**
 
 ## Rules enforced by `web/src/lib/auth-email-templates.test.ts`
 
 - No images, web fonts or other remote resources; all styles inline.
 - Only variables the template type supports; `{{ .Token }}` only in
-  `reauthentication.html`.
+  `reauthentication.html`, `magic_link.html` and `confirmation.html` (once
+  each, never in a subject).
 - `{{ .ConfirmationURL }}` appears twice (button and visible fallback).
 - Every mail says why it was sent and that it cannot be replied to.

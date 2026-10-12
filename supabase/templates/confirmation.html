@@ -30,16 +30,19 @@
           <tr>
             <td class="ink" style="padding:24px 32px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.5;color:#1f211c">
               <h1 class="ink" style="margin:0 0 12px;font-size:24px;line-height:1.25;color:#1f211c">Välkommen</h1>
-              <p style="margin:0 0 24px">Du har bjudits in till ett hushåll i Hemma OS. Tryck på knappen för att logga in första gången.</p>
+              <p style="margin:0 0 24px">Du har bjudits in till ett hushåll i Hemma OS. Skriv in koden på inloggningssidan för att logga in första gången.</p>
+              <p class="muted" style="margin:0 0 8px;font-size:14px;color:#5b6660">Din kod:</p>
+              <p class="code" style="margin:0 0 16px;padding:14px 16px;border-radius:8px;background:#f4f2ea;color:#1f211c;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Courier New',monospace;font-size:32px;font-weight:700;letter-spacing:8px;line-height:1.2;text-align:center">{{ .Token }}</p>
+              <p style="margin:0 0 16px">eller tryck på knappen:</p>
               <p style="margin:0 0 24px"><a href="{{ .ConfirmationURL }}" class="btn" style="display:inline-block;padding:10px 18px;border-radius:8px;background:#2f5e45;color:#ffffff;text-decoration:none;font-weight:600">Logga in</a></p>
               <p class="muted" style="margin:0 0 4px;font-size:14px;color:#5b6660">Fungerar inte knappen? Kopiera adressen nedan till webbläsaren:</p>
               <p class="muted" style="margin:0 0 16px;font-size:14px;color:#5b6660;word-break:break-all">{{ .ConfirmationURL }}</p>
-              <p class="muted" style="margin:0;font-size:14px;color:#5b6660">Länken går bara att använda en gång och slutar gälla efter en stund.</p>
+              <p class="muted" style="margin:0;font-size:14px;color:#5b6660">Koden och länken går bara att använda en gång och slutar gälla efter en stund.</p>
             </td>
           </tr>
           <tr>
             <td class="muted" style="padding:0 32px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.5;color:#5b6660">
-              <p style="margin:0 0 8px">Du får det här mejlet för att någon bad om att logga in på Hemma OS med {{ .Email }}. Var det inte du kan du ignorera det – inget händer utan länken.</p>
+              <p style="margin:0 0 8px">Du får det här mejlet för att någon bad om att logga in på Hemma OS med {{ .Email }}. Var det inte du kan du ignorera det – inget händer utan koden eller länken.</p>
               <p style="margin:0">Det går inte att svara på det här mejlet.</p>
             </td>
           </tr>
