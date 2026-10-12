@@ -166,7 +166,8 @@
 }
 
 /* Builds on .auth-input. ≥16px so iOS doesn't zoom on focus (plan 75). */
-.auth-code {
+/* Doubled class to outrank components.css input[type="text"] (14px). */
+.auth-input.auth-code {
   font-size: 1.5rem;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.3em;
