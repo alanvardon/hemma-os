@@ -1,3 +1,9 @@
+# LOCAL DEVELOPMENT ONLY. Never run `supabase config push`.
+# This file holds local values (site_url = http://127.0.0.1:3000, local
+# redirect URLs, email_sent = 2, no SMTP). Pushing it would overwrite the
+# production project's Auth settings and break login. Production auth
+# configuration is managed in the Supabase dashboard.
+#
 # For detailed configuration reference documentation, visit:
 # https://supabase.com/docs/guides/local-development/cli/config
 # A string used to distinguish different Supabase projects on the same host. Defaults to the
