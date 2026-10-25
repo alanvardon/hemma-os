@@ -105,6 +105,18 @@ const STANDARD_TOOLS: ToolDef[] = [
     ),
   },
   {
+    path: '/loner',
+    name: 'Löner',
+    desc: 'Skicka in månadens lön — var och en sin egen del. Se vem som överför till vem, redigera i efterhand och följ året.',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3" y="6.5" width="18" height="11" rx="2.5" pathLength="1"/>
+        <circle cx="12" cy="12" r="2.6" pathLength="1"/>
+        <path d="M6.5 10v4M17.5 10v4" pathLength="1"/>
+      </svg>
+    ),
+  },
+  {
     path: '/bostadskalkyl',
     name: 'Bostadskalkyl',
     desc: 'House purchase calculator for Sweden — upfront costs, lagfart & pantbrev, bank comparison, stress tests and saved scenarios.',
@@ -215,6 +227,7 @@ export default function Home() {
   const active: Record<string, boolean> = {
     '/bostadskalkyl': useToolCardActive('/bostadskalkyl'),
     '/hushallsbudget': useToolCardActive('/hushallsbudget'),
+    '/loner': useToolCardActive('/loner'),
     '/konsultkalkyl': useToolCardActive('/konsultkalkyl'),
     '/manadsavslut': useToolCardActive('/manadsavslut'),
     '/bolanekoll': useToolCardActive('/bolanekoll'),

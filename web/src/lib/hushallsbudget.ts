@@ -290,6 +290,10 @@ export interface SalarySubmission {
   note: string | null
   id?: string
   created_at?: string
+  /** Server-maintained (set_sync_revision trigger); read-only on the client and
+      never written back (salary-store's _row omits it). Plan 139 D4 uses it for
+      the "Ändrad" label. */
+  updated_at?: string
 }
 
 // Build a Supabase-shaped salary submission row from a month's incomes.

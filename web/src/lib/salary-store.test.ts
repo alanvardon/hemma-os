@@ -159,6 +159,21 @@ describe('write path', () => {
     expect(syncCoordinator.getRevision(`${TABLE}:s1`)).toBe(4)
   })
 
+  it('updated_at: read from the server for display, stamped on the optimistic cache copy, never sent, never exported', async () => {
+    mock().tables[TABLE] = [{ id: 's1', created_at: '2026-07-15T10:00:00.000Z', updated_at: '2026-07-15T10:00:00.000Z', revision: 1, ...sub() }]
+    const [listed] = await store.list()
+    expect(listed.updated_at).toBe('2026-07-15T10:00:00.000Z')
+
+    const saved = await store.update({ ...listed, income_b: 26000 })
+    expect(Date.parse(saved.updated_at!)).toBeGreaterThan(Date.parse('2026-07-15T10:00:00.000Z'))
+    expect((cache().submissions as { updated_at?: string }[])[0].updated_at).toBe(saved.updated_at)
+    // The write payload omits it (the server trigger owns updated_at).
+    expect(mock().tables[TABLE][0].updated_at).not.toBe(saved.updated_at)
+    // The backup format is unchanged.
+    const exported = JSON.parse(await store.exportJSON()) as { submissions: Record<string, unknown>[] }
+    expect(exported.submissions[0]).not.toHaveProperty('updated_at')
+  })
+
   it('update: a stale revision (the other person edited first) rejects as a conflict and stays dirty', async () => {
     mock().tables[TABLE] = [{ id: 's1', created_at: '2026-07-15T10:00:00.000Z', revision: 1, ...sub() }]
     const [listed] = await store.list()

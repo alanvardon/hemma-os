@@ -1,24 +1,22 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Maximize2 } from 'lucide-react'
 import { useToolPageActive } from '../lib/toolTransition'
 import {
-  applyMortgageSync, defaultState, computeBudget, buildSubmission, formatWithSpaces, parseFormatted, money as fmt,
+  applyMortgageSync, defaultState, computeBudget, formatWithSpaces, parseFormatted, money as fmt,
 } from '../lib/hushallsbudget'
-import type { BudgetState, BudgetResult, Owner, Row, SalarySubmission, IncomeItem } from '../lib/hushallsbudget'
+import type { BudgetState, BudgetResult, Owner, Row } from '../lib/hushallsbudget'
 import { loadBudget, saveBudget } from '../lib/hushallsbudget-store'
-import { SalaryItemColumn, type SalaryItem } from './hushallsbudget-salary'
 import { reportPersistenceError } from '../lib/persistence-error'
 import { mortgageMonthlyFigures } from '../lib/mortgage'
 import { loadMortgageSyncSnapshot } from '../lib/mortgage-store'
 import { todayISO } from '../lib/date'
 import * as salaryStore from '../lib/salary-store'
 import * as salaryDraftsStore from '../lib/salary-drafts-store'
-import type { SalaryDraft } from '../lib/salary-drafts-store'
-import * as salaryReminderSettingsStore from '../lib/salary-reminder-settings-store'
-import type { SalaryReminderSettings } from '../lib/salary-reminder-settings-store'
+import { buildMonthViews } from '../lib/loner'
+import type { MonthView } from '../lib/loner'
 import { Money, Percent } from '../components/AnimatedNumber'
 import BudgetDonutChart, { type DonutSegment } from '../components/charts/BudgetDonutChart'
-import DialogShell from '../components/DialogShell'
 import EditableName from '../components/EditableName'
 import Icon from '../components/Icon'
 import PageHeader from '../components/PageHeader'
@@ -29,11 +27,10 @@ import { useConfirm } from '../components/useConfirm'
 import { usePersonIdentity } from '../components/usePersonIdentity'
 import { PersonLabel } from '../components/PersonBadge'
 import { openHouseholdDialog } from '../components/HouseholdMenu'
-import type { CanonicalSlot } from '../lib/person-identity'
+import { currentMonth, monthLabel, monthStatusText } from './loner-labels'
 
 // ── Module helpers (faithful to budget.js) ───────────────────────────────────
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const CAT_TOKENS = ['--cat-1', '--cat-2', '--cat-3', '--cat-4', '--cat-5', '--cat-6', '--cat-7', '--cat-8']
 
 // Animated summary figures (NumberFlow). These roll the digits as you edit the
@@ -65,37 +62,6 @@ function buildDonutSegments(result: BudgetResult, nameA: string, nameB: string):
   // top-down by size — you can scan it (plan 63). pieSortValues is null in the
   // chart, so the arc order follows this array 1:1.
   return segs.filter((s) => s.value > 0).sort((a, b) => b.value - a.value)
-}
-
-function currentMonth(): string { return new Date().toISOString().slice(0, 7) } // YYYY-MM
-function monthLabel(ym: string): string {
-  const m = /^(\d{4})-(\d{2})$/.exec(ym || '')
-  if (!m) return ym || '—'
-  return (MONTHS[parseInt(m[2], 10) - 1] || '?') + ' ' + m[1]
-}
-function submittedLabel(iso: string | undefined): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '')
-  if (!m) return '—'
-  return parseInt(m[3], 10) + ' ' + (MONTHS[parseInt(m[2], 10) - 1] || '?') + ' ' + m[1]
-}
-function personFromRow(row: SalarySubmission, key: 'transfer_from' | 'transfer_to'): string {
-  return row[key] === 'b' ? (row.person_b_name || 'B') : (row.person_a_name || 'A')
-}
-function transferText(row: SalarySubmission): string {
-  if ((row.transfer_amount || 0) < 0.5) return 'Even — no transfer'
-  return personFromRow(row, 'transfer_from') + ' → ' + personFromRow(row, 'transfer_to') + '  ' + fmt(row.transfer_amount)
-}
-// Signed settle-up for a row: positive = A pays B, negative = B pays A.
-function signedTransfer(row: SalarySubmission): number {
-  const amt = row.transfer_amount || 0
-  return row.transfer_from === 'b' ? -amt : amt
-}
-function netText(net: number, nameA: string, nameB: string): string {
-  if (Math.abs(net) < 0.5) return 'Even over the year'
-  return (net > 0 ? nameA + ' → ' + nameB : nameB + ' → ' + nameA) + '  ' + fmt(Math.abs(net))
-}
-function sumItems(list: IncomeItem[]): number {
-  return list.reduce((t, it) => t + (it.amount || 0), 0)
 }
 
 // Closest row to insert before, given a list element and a pointer Y (drag-and-drop).
@@ -148,353 +114,6 @@ function EditableRow({ row, draggable, dragging, autoFocusLabel, onLabel, onAmou
   )
 }
 
-// ── Modal shell — a native <dialog> (via DialogShell) holding the salary +
-// history cards. showModal() gives the focus trap, Escape-to-close, background
-// inert-ing and scroll containment; the open/close animation lives in CSS
-// (dialog.hb-modal), matching the tool dialogs. ──────────────────────────────
-function Modal({ open, onClose, ariaLabel, children }: {
-  open: boolean; onClose: () => void; ariaLabel: string; children: React.ReactNode
-}) {
-  return (
-    <DialogShell open={open} onClose={onClose} className="hb-modal" ariaLabel={ariaLabel}>
-      {children}
-    </DialogShell>
-  )
-}
-
-// ── Submit this month's salaries ─────────────────────────────────────────────
-// SalaryItem, SalaryItemColumn and AmountInputRef live in ./hushallsbudget-salary
-// (plan 132) so the public #/lon/<token> page can reuse the exact same income
-// column outside this modal.
-
-function SalaryModal({ open, onClose, people, incomes, selfSlot, flashSaved, onHistoryChanged, notify }: {
-  open: boolean; onClose: () => void; people: string[]; incomes: Row[]
-  selfSlot?: CanonicalSlot | null; flashSaved: () => void; onHistoryChanged: () => void
-  /** Plan 132: the parent's own toast, used ONLY for the discard-failure
-      message — that notice must survive this modal closing (the save still
-      counts), so it can't live in the modal's own toast, which unmounts with it. */
-  notify: (msg: string) => void
-}) {
-  const [month, setMonth] = useState(currentMonth())
-  const [note, setNote] = useState('')
-  const [itemsA, setItemsA] = useState<SalaryItem[]>([])
-  const [itemsB, setItemsB] = useState<SalaryItem[]>([])
-  // Plan 132: which slots' current items came from an emailed draft rather
-  // than the baseline — drives the "Submitted via email" column tag.
-  const [draftSlots, setDraftSlots] = useState<Set<'a' | 'b'>>(new Set())
-  const { toast, showToast } = useToast()
-  const confirm = useConfirm()
-  const uid = useRef(0)
-  const firstAmountRef = useRef<HTMLInputElement>(null)
-  // Guards against a stale listDrafts response when the user flips the month
-  // picker faster than the request round-trips — only the latest request's
-  // result is ever applied.
-  const draftRequestRef = useRef(0)
-
-  // Read-only snapshot of the static baseline income rows for a person, used to
-  // pre-fill the modal. The user can then tweak amounts and add extra income
-  // (barnbidrag, tax rebate…) without touching the baseline.
-  const incomesRef = useRef(incomes)
-  const draftNoteRef = useRef('')
-  incomesRef.current = incomes
-  const prefillItems = (owner: 'a' | 'b'): SalaryItem[] => {
-    const src = incomesRef.current
-      .filter((row) => (owner === 'b' ? row.owner === 'b' : row.owner !== 'b'))
-      .map((row) => ({ label: row.label, amount: row.amount }))
-    return (src.length ? src : [{ label: 'Lön / Salary', amount: 0 }]).map((it) => ({ uid: uid.current++, label: it.label, amount: it.amount }))
-  }
-  const draftItems = (draft: SalaryDraft): SalaryItem[] => {
-    const src = draft.income_items.length ? draft.income_items : [{ label: 'Lön / Salary', amount: 0 }]
-    return src.map((it) => ({ uid: uid.current++, label: it.label, amount: it.amount }))
-  }
-
-  // Reset the form whenever it opens — month/note always come from the
-  // baseline/today, never from a previous session.
-  useEffect(() => {
-    if (!open) return
-    setMonth(currentMonth())
-    setNote('')
-    draftNoteRef.current = ''
-    const t = setTimeout(() => { firstAmountRef.current?.focus(); firstAmountRef.current?.select() }, 30)
-    return () => clearTimeout(t)
-  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Load/prefill the income columns on open AND whenever the month changes —
-  // a slot with a pending emailed draft for THAT month is prefilled from the
-  // draft instead of the baseline; otherwise the baseline, same as before.
-  // This mirrors the original baseline-prefill timing (only at the moment the
-  // month's initial values are set), so values the user has already typed are
-  // never clobbered mid-edit.
-  useEffect(() => {
-    if (!open) return
-    let alive = true
-    const requestId = ++draftRequestRef.current
-    salaryDraftsStore.listDrafts(month).then((drafts) => {
-      if (!alive || requestId !== draftRequestRef.current) return // stale — month moved on
-      const bySlot = new Map(drafts.map((d) => [d.slot, d] as const))
-      setDraftSlots(new Set(bySlot.keys()))
-      setItemsA(bySlot.has('a') ? draftItems(bySlot.get('a')!) : prefillItems('a'))
-      setItemsB(bySlot.has('b') ? draftItems(bySlot.get('b')!) : prefillItems('b'))
-      // Carry the emailed notes over too (A first, ' · '-joined, the same rule
-      // as finalize_salary_month), or finishing the month here would silently
-      // drop them. Only replace a note this effect itself put there, so a note
-      // the user typed survives a month switch.
-      const draftNote = (['a', 'b'] as const)
-        .map((slot) => bySlot.get(slot)?.note?.trim() ?? '')
-        .filter(Boolean)
-        .join(' · ')
-      setNote((current) => (current === '' || current === draftNoteRef.current ? draftNote : current))
-      draftNoteRef.current = draftNote
-    })
-    return () => { alive = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, month])
-
-  const nameA = people[0] || 'A', nameB = people[1] || 'B'
-  const incomeA = sumItems(itemsA), incomeB = sumItems(itemsB)
-  const preview = computeBudget({ incomes: [{ id: 'a', label: '', amount: incomeA, owner: 'a' }, { id: 'b', label: '', amount: incomeB, owner: 'b' }] })
-  const tr = preview.transfer
-
-  function patchItem(owner: 'a' | 'b', uidv: number, patch: Partial<SalaryItem>) {
-    const setter = owner === 'a' ? setItemsA : setItemsB
-    setter((list) => list.map((it) => (it.uid === uidv ? { ...it, ...patch } : it)))
-  }
-  function addItem(owner: 'a' | 'b') {
-    const setter = owner === 'a' ? setItemsA : setItemsB
-    setter((list) => [...list, { uid: uid.current++, label: '', amount: 0 }])
-  }
-  function removeItem(owner: 'a' | 'b', uidv: number) {
-    const setter = owner === 'a' ? setItemsA : setItemsB
-    setter((list) => list.filter((it) => it.uid !== uidv))
-  }
-
-  async function submit() {
-    if (incomeA + incomeB <= 0) return
-    const record = buildSubmission({
-      month: month || currentMonth(),
-      incomesA: itemsA.map((it) => ({ label: it.label.trim(), amount: it.amount })).filter((it) => it.label || it.amount),
-      incomesB: itemsB.map((it) => ({ label: it.label.trim(), amount: it.amount })).filter((it) => it.label || it.amount),
-      personAName: people[0], personBName: people[1], note: note.trim(),
-    })
-    const rows = await salaryStore.list()
-    const dupe = rows.some((r) => r.month === record.month)
-    if (dupe && !(await confirm({ title: 'Already logged ' + monthLabel(record.month) + '.', message: 'Add another entry for it?', confirmLabel: 'Lägg till ändå', danger: false }))) return
-    try {
-      await salaryStore.add(record)
-    } catch {
-      showToast('Kunde inte spara — du kanske är offline.')
-      return
-    }
-    // The submission is already saved at this point — a discard failure must
-    // NOT undo or block the close; it only means a stale draft lingers until
-    // the next finalise/save clears it (see the migration's 'already_logged'
-    // branch). The notice has to survive this modal unmounting, so it goes
-    // through the parent's own toast, not this modal's.
-    try {
-      await salaryDraftsStore.discardDrafts(record.month)
-    } catch {
-      notify('Saved, but couldn’t clear the emailed entry — it will be cleared next time.')
-    }
-    onClose(); flashSaved(); onHistoryChanged()
-  }
-
-  // Plain helper (NOT a component) so the inputs keep focus across renders.
-  const itemColumn = (owner: 'a' | 'b', items: SalaryItem[]) => (
-    <SalaryItemColumn
-      name={owner === 'a' ? nameA : nameB}
-      self={selfSlot === owner}
-      other={selfSlot != null && selfSlot !== owner}
-      total={owner === 'a' ? incomeA : incomeB}
-      items={items}
-      firstAmountRef={owner === 'a' ? firstAmountRef : undefined}
-      onItemChange={(uidv, patch) => patchItem(owner, uidv, patch)}
-      onRemoveItem={(uidv) => removeItem(owner, uidv)}
-      onAddItem={() => addItem(owner)}
-      emailTag={draftSlots.has(owner)}
-    />
-  )
-
-  return (
-    <Modal open={open} onClose={onClose} ariaLabel="Submit this month’s salaries">
-      <div className="modal-head">
-        <span className="modal-title">Submit this month’s salaries</span>
-        <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>×</button>
-      </div>
-      <div className="modal-body">
-        <p className="modal-note">
-          Enter what you each actually earned this month. It's logged separately —
-          your budget baseline above stays exactly as it is.
-        </p>
-        <div className="field">
-          <label htmlFor="salaryMonth">Month</label>
-          <input type="month" id="salaryMonth" value={month} onChange={(e) => setMonth(e.target.value)} />
-        </div>
-        <p className="field-label">Income this month — salary plus barnbidrag, tax rebates, anything else</p>
-        <div className="income-cols salary-income-cols">
-          {itemColumn('a', itemsA)}
-          {itemColumn('b', itemsB)}
-        </div>
-        <div className="field">
-          <label htmlFor="salaryNote">Note <span className="field-optional">(optional)</span></label>
-          <input type="text" id="salaryNote" value={note} placeholder="e.g. bonus, parental leave…" autoComplete="off" onChange={(e) => setNote(e.target.value)} />
-        </div>
-        <div className="salary-preview">
-          {tr.amount < 0.5
-            ? <>Even — nothing to transfer. You each take home {fmt(preview.equalShare)}.</>
-            : <>
-                <strong>{tr.from === 'a' ? nameA : nameB}</strong> pays <strong>{tr.to === 'a' ? nameA : nameB}</strong>{' '}
-                <strong className="pot-transfer-amount"><Money value={tr.amount} rollIn /></strong>
-                {' · each takes home ' + fmt(preview.equalShare)}
-              </>}
-        </div>
-      </div>
-      <div className="modal-foot">
-        <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-        <button type="button" className="btn btn-primary" disabled={incomeA + incomeB <= 0} onClick={submit}>Confirm &amp; save</button>
-      </div>
-      <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
-    </Modal>
-  )
-}
-
-// ── Submitted salary history ─────────────────────────────────────────────────
-function HistoryModal({ open, onClose, rows, selfSlot, onReload, flashSaved }: {
-  open: boolean; onClose: () => void; rows: SalarySubmission[]; selfSlot?: CanonicalSlot | null
-  onReload: () => void; flashSaved: () => void
-}) {
-  // Stored submission names are immutable history snapshots (plan 111). We only
-  // append "(du)" when the row's A/B slot resolves through the current tool
-  // binding to the signed-in account — we never rewrite the saved name itself.
-  const withDu = (slot: 'a' | 'b', name: string) => (selfSlot === slot ? `${name} (du)` : name)
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
-  const importInputRef = useRef<HTMLInputElement>(null)
-  const { toast, showToast } = useToast()
-  const confirm = useConfirm()
-
-  const year = rows.length ? String(rows[0].month || currentMonth()).slice(0, 4) : ''
-  const yr = rows.filter((r) => String(r.month || '').slice(0, 4) === year)
-  const nameA = yr[0]?.person_a_name || 'A', nameB = yr[0]?.person_b_name || 'B'
-  let totalA = 0, totalB = 0, net = 0
-  yr.forEach((r) => { totalA += r.income_a || 0; totalB += r.income_b || 0; net += signedTransfer(r) })
-
-  async function del(id: string | undefined) {
-    if (!id) return
-    if (!(await confirm({ title: 'Delete this submission?', message: 'This can’t be undone.' }))) return
-    try { await salaryStore.remove(id) } catch {
-      showToast('Kunde inte ta bort — du kanske är offline.'); return
-    }
-    onReload()
-  }
-  function download(filename: string, text: string, type: string) {
-    const blob = new Blob([text], { type })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = filename
-    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
-  }
-  async function exportJSON() { download('salary-submissions.json', await salaryStore.exportJSON(), 'application/json') }
-  async function exportCSV() { download('salary-submissions.csv', await salaryStore.exportCSV(), 'text/csv') }
-  function onImportFile(file: File | undefined) {
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      salaryStore.importJSON(String(reader.result)).then((added) => {
-        onReload(); flashSaved()
-        showToast(added > 0
-          ? 'Imported ' + added + ' submission' + (added === 1 ? '' : 's') + '.'
-          : 'Nothing new to import — those entries are already saved.')
-      }).catch((err) => showToast('Import failed: ' + (err && err.message ? err.message : 'unknown error')))
-    }
-    reader.readAsText(file)
-  }
-
-  function detailRow(label: string, value: string) {
-    return <div className="detail-row"><span className="detail-label">{label}</span><span className="detail-val">{value}</span></div>
-  }
-
-  return (
-    <Modal open={open} onClose={onClose} ariaLabel="Submitted months">
-      <div className="modal-head">
-        <span className="modal-title">Submitted months</span>
-        <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>×</button>
-      </div>
-      <div className="modal-body">
-        {yr.length > 0 && (
-          <div className="year-summary">
-            <div className="year-summary-head">
-              <span className="year-summary-title">{year} so far</span>
-              <span className="year-summary-count">{yr.length + (yr.length === 1 ? ' month' : ' months')}</span>
-            </div>
-            {detailRow(withDu('a', nameA) + ' income', fmt(totalA))}
-            {detailRow(withDu('b', nameB) + ' income', fmt(totalB))}
-            {detailRow('Net settle-up', netText(net, nameA, nameB))}
-          </div>
-        )}
-        <div className="history-list">
-          {rows.length === 0 ? (
-            <p className="history-empty">No months submitted yet — use “Submit this month’s salaries” to log one.</p>
-          ) : rows.map((row) => {
-            const open = !!expanded[row.id || '']
-            const items = Array.isArray(row.income_items) ? row.income_items : []
-            return (
-              <div className={'history-item' + (open ? ' open' : '')} key={row.id}>
-                <div className="history-head">
-                  <button type="button" className="history-toggle" aria-expanded={open}
-                    onClick={() => setExpanded((e) => ({ ...e, [row.id || '']: !open }))}>
-                    <span className="history-month">{monthLabel(row.month)}</span>
-                    <span className="history-amount">{transferText(row)}</span>
-                    <span className="history-chevron" aria-hidden="true">⌄</span>
-                  </button>
-                  <button type="button" className="history-delete" aria-label="Delete this submission" onClick={() => del(row.id)}>×</button>
-                </div>
-                <div className="history-detail">
-                  <div className="history-detail-inner">
-                    {detailRow('Submitted', submittedLabel(row.created_at))}
-                    {detailRow(withDu('a', row.person_a_name || 'A') + ' total', fmt(row.income_a || 0))}
-                    {detailRow(withDu('b', row.person_b_name || 'B') + ' total', fmt(row.income_b || 0))}
-                    {detailRow('Each takes home', fmt(row.equal_share || 0))}
-                    {detailRow('Transfer', transferText(row))}
-                    {(['a', 'b'] as const).map((owner) => {
-                      const its = items.filter((it) => it.owner === owner)
-                      if (!its.length) return null
-                      return (
-                        <div key={owner}>
-                          <div className="detail-subhead">{withDu(owner, owner === 'b' ? (row.person_b_name || 'B') : (row.person_a_name || 'A')) + ' income'}</div>
-                          {its.map((it, i) => detailRowKeyed(i, it.label || 'Income', fmt(it.amount || 0)))}
-                        </div>
-                      )
-                    })}
-                    {row.note && (
-                      <>
-                        <div className="detail-subhead">Note</div>
-                        <p className="detail-note">{row.note}</p>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-      <div className="modal-foot modal-foot-split">
-        <div className="modal-foot-actions">
-          <button type="button" className="btn btn-ghost" onClick={() => importInputRef.current?.click()}>Import…</button>
-          <button type="button" className="btn btn-ghost" onClick={exportCSV}>CSV</button>
-          <button type="button" className="btn btn-ghost" onClick={exportJSON}>JSON</button>
-        </div>
-        <button type="button" className="btn" onClick={onClose}>Close</button>
-        <input ref={importInputRef} type="file" accept="application/json,.json" hidden
-          onChange={(e) => { onImportFile(e.target.files?.[0]); e.target.value = '' }} />
-      </div>
-      <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
-    </Modal>
-  )
-}
-
-function detailRowKeyed(key: number, label: string, value: string) {
-  return <div className="detail-row" key={key}><span className="detail-label">{label}</span><span className="detail-val">{value}</span></div>
-}
-
 // ── Fullscreen chart overlay ─────────────────────────────────────────────────
 function ChartOverlay({ open, onClose, segments, totalIncome }: {
   open: boolean; onClose: () => void; segments: DonutSegment[]; totalIncome: number
@@ -536,9 +155,6 @@ export default function Hushallsbudget() {
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOverCatId, setDragOverCatId] = useState<string | null>(null)
 
-  const [salaryOpen, setSalaryOpen] = useState(false)
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [historyRows, setHistoryRows] = useState<SalarySubmission[]>([])
   const [chartOpen, setChartOpen] = useState(false)
   const mortgageFiguresRef = useRef<{ ranta: number; amortering: number } | null>(null)
   // Plan 126 §7 — how many funded lånedelar had no räntevillkor covering the
@@ -546,47 +162,17 @@ export default function Hushallsbudget() {
   // must be told the Bolån rows below are the previous ones, not today's.
   const [mortgageRateGapParts, setMortgageRateGapParts] = useState(0)
 
-  // Plan 132 — the current calendar month's pending emailed salary halves,
-  // for the "<name> has submitted … waiting for <other name>" note next to
-  // the submit button. Refreshed on mount and whenever the modal closes
-  // (cancelled or saved — either way the drafts for this month may have
-  // changed).
-  const [currentMonthDrafts, setCurrentMonthDrafts] = useState<SalaryDraft[]>([])
-  const reloadPendingDrafts = useCallback(() => {
-    salaryDraftsStore.listDrafts(currentMonth()).then(setCurrentMonthDrafts)
-  }, [])
-  useEffect(() => { reloadPendingDrafts() }, [reloadPendingDrafts])
-
-  // Plan 132 — the household's email-reminder on/off + send-day setting.
-  // `null` is the genuine loading state (nothing fetched yet); once settled it
-  // always holds the real row OR the documented "no row" default — never both
-  // null and "settled". `reminderSettingsUnknown` is set only when a READ
-  // failed, so a value derived from the fallback default isn't shown as if it
-  // were confirmed saved state (the controls stay editable regardless — see
-  // the inline hint rendered below).
-  const [reminderSettings, setReminderSettings] = useState<SalaryReminderSettings | null>(null)
-  const [reminderSettingsUnknown, setReminderSettingsUnknown] = useState(false)
+  // Plan 139 — the current month's salary status, shown as a compact row that
+  // links to Löner (where salaries are now submitted, edited and exported).
+  const [salaryMonth, setSalaryMonth] = useState<MonthView | null>(null)
   useEffect(() => {
-    salaryReminderSettingsStore.loadSalaryReminderSettings().then((loaded) => {
-      setReminderSettings(loaded.settings)
-      setReminderSettingsUnknown(loaded.unknown)
-    })
+    let alive = true
+    const cur = currentMonth()
+    Promise.all([salaryStore.list(), salaryDraftsStore.listDrafts(cur)]).then(([rows, pending]) => {
+      if (alive) setSalaryMonth(buildMonthViews(rows, pending, cur).find((v) => v.month === cur) ?? null)
+    }).catch(() => { /* status row simply stays hidden */ })
+    return () => { alive = false }
   }, [])
-  async function updateReminderSettings(patch: Partial<SalaryReminderSettings>) {
-    if (!reminderSettings) return
-    const prevSettings = reminderSettings
-    const prevUnknown = reminderSettingsUnknown
-    const next = { ...reminderSettings, ...patch }
-    setReminderSettings(next)
-    setReminderSettingsUnknown(false)
-    try {
-      await salaryReminderSettingsStore.saveSalaryReminderSettings(next)
-    } catch {
-      setReminderSettings(prevSettings)
-      setReminderSettingsUnknown(prevUnknown)
-      showToast('Couldn’t save the reminder setting — try again.')
-    }
-  }
 
   // Load the persisted budget once on mount (now async — localStorage today,
   // cloud after the swap). `loadedRef` holds the exact object we hydrated with
@@ -657,15 +243,6 @@ export default function Hushallsbudget() {
   const personHead = (owner: 'a' | 'b') => (
     <PersonLabel name={owner === 'a' ? nameA : nameB} self={isSelf(owner)} other={isOther(owner)} />
   )
-
-  // Plan 132 — exactly one email half in for THIS calendar month: say who,
-  // and who the household is still waiting on. Two or zero drafts say
-  // nothing here (two means it will finalise on its own; zero means no
-  // emailed submission is pending) — never colour-only.
-  const pendingDraftSlot = currentMonthDrafts.length === 1 ? currentMonthDrafts[0].slot : null
-  const pendingNote = pendingDraftSlot
-    ? `${pendingDraftSlot === 'a' ? nameA : nameB} has submitted for ${monthLabel(currentMonth())} — waiting for ${pendingDraftSlot === 'a' ? nameB : nameA}`
-    : null
 
   // ── Immutable state mutation helper ────────────────────────────────────────
   const mutate = useCallback((fn: (draft: BudgetState) => void) => {
@@ -780,10 +357,6 @@ export default function Hushallsbudget() {
     if (!(await confirm({ title: 'Reset the budget to the example data?', message: 'Your current rows will be replaced.', confirmLabel: 'Reset' }))) return
     setState(defaultState())
   }
-
-  // ── Salary history ─────────────────────────────────────────────────────────
-  const reloadHistory = useCallback(() => { salaryStore.list().then(setHistoryRows) }, [])
-  function openHistory() { reloadHistory(); setHistoryOpen(true) }
 
   // ── Derived display ────────────────────────────────────────────────────────
   const total = r.totalIncome || 1
@@ -917,60 +490,12 @@ export default function Hushallsbudget() {
               )}
             </div>
 
-            <div className="pot-actions">
-              <button type="button" className="btn btn-primary" onClick={() => setSalaryOpen(true)}>Submit this month’s salaries</button>
-              <button type="button" className="btn btn-ghost" onClick={openHistory}>History</button>
-            </div>
-            {pendingNote && <p className="salary-pending-note">{pendingNote}</p>}
-
-            <div
-              className={'salary-reminder' + (reminderSettings === null ? ' is-loading' : '')}
-              aria-busy={reminderSettings === null}
-            >
-              <div className="salary-reminder-head">
-                <span className="salary-reminder-text">
-                  <label className="salary-reminder-title" htmlFor="salary-reminder-enabled">
-                    Monthly salary reminder
-                  </label>
-                  <span className="salary-reminder-sub">
-                    Emails each of you a link to enter this month’s salary.
-                  </span>
-                </span>
-                <label className="toggle">
-                  <input
-                    id="salary-reminder-enabled"
-                    type="checkbox"
-                    checked={reminderSettings?.enabled ?? false}
-                    disabled={reminderSettings === null}
-                    onChange={(e) => updateReminderSettings({ enabled: e.target.checked })}
-                  />
-                  <span className="toggle-slider" />
-                </label>
+            {salaryMonth && (
+              <div className="salary-link-row">
+                <span>Löner för {monthLabel(currentMonth())}: <strong>{monthStatusText(salaryMonth, (slot) => (slot === 'a' ? nameA : nameB))}</strong></span>
+                <Link className="link-btn" to="/loner">Öppna Löner</Link>
               </div>
-
-              <div className="salary-reminder-day-row">
-                <label htmlFor="salary-reminder-day">Send on day</label>
-                <select
-                  id="salary-reminder-day"
-                  className="select salary-reminder-day"
-                  value={reminderSettings?.send_day ?? ''}
-                  disabled={reminderSettings === null || !reminderSettings.enabled}
-                  onChange={(e) => updateReminderSettings({ send_day: Number(e.target.value) })}
-                >
-                  {reminderSettings === null && <option value="">–</option>}
-                  {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </select>
-                <span aria-hidden="true">of the month</span>
-              </div>
-
-              {reminderSettingsUnknown && (
-                <p className="salary-reminder-hint" role="status">
-                  Couldn’t load this setting — showing the default, not necessarily what’s saved.
-                </p>
-              )}
-            </div>
+            )}
           </div>
 
           {/* Section 2: Costs */}
@@ -1222,9 +747,6 @@ export default function Hushallsbudget() {
         </div>
       </div>
 
-      <SalaryModal open={salaryOpen} onClose={() => { setSalaryOpen(false); reloadPendingDrafts() }} people={toolBound ? [nameA, nameB] : state.people} incomes={state.incomes}
-        selfSlot={mySlot} flashSaved={flashSaved} onHistoryChanged={() => { if (historyOpen) reloadHistory() }} notify={showToast} />
-      <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} rows={historyRows} selfSlot={mySlot} onReload={reloadHistory} flashSaved={flashSaved} />
       <ChartOverlay open={chartOpen} onClose={() => setChartOpen(false)} segments={donutSegments} totalIncome={r.totalIncome} />
       <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
     </div>

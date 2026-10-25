@@ -14,6 +14,7 @@ import Bolanekoll from './routes/Bolanekoll'
 import Manadsavslut from './routes/Manadsavslut'
 import Hushallsbudget from './routes/Hushallsbudget'
 import Huskalendern from './routes/Huskalendern'
+import Loner from './routes/Loner'
 import PersistenceNotice from './components/PersistenceNotice'
 import UpdateNotice from './components/UpdateNotice'
 import ErrorBoundary from './components/ErrorBoundary'
@@ -48,6 +49,7 @@ const router = createHashRouter([
       { path: '/bolanekoll', element: <Bolanekoll /> },
       { path: '/manadsavslut', element: <Manadsavslut /> },
       { path: '/hushallsbudget', element: <Hushallsbudget /> },
+      { path: '/loner', element: <Loner /> },
       { path: '/huskalendern', element: <Huskalendern /> },
       // Catch-all: unknown hashes (incl. the magic-link `#access_token…`
       // callback, which supabase-js consumes on load) fall back to the hub

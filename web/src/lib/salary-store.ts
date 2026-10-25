@@ -77,6 +77,7 @@ export function parseSubmission(raw: unknown): PersistedSalarySubmission | null 
     transfer_amount: typeof raw.transfer_amount === 'number' ? raw.transfer_amount : 0, transfer_from: raw.transfer_from === 'b' ? 'b' : 'a', transfer_to: raw.transfer_to === 'a' ? 'a' : 'b',
     equal_share: typeof raw.equal_share === 'number' ? raw.equal_share : 0, note: typeof raw.note === 'string' ? raw.note : null,
     ...(typeof raw.id === 'string' ? { id: raw.id } : {}), ...(typeof raw.created_at === 'string' ? { created_at: raw.created_at } : {}),
+    ...(typeof raw.updated_at === 'string' ? { updated_at: raw.updated_at } : {}),
   } as unknown as SalarySubmission)
   const result = { ...migrated, month: month.value }
   return created && created.ok ? { ...result, created_at: created.value as ISODateTime } : result as PersistedSalarySubmission
@@ -255,7 +256,9 @@ export async function add(record: SalarySubmission): Promise<SalarySubmission> {
 // order doesn't jump.
 export async function update(record: SalarySubmission): Promise<SalarySubmission> {
   if (!record.id) throw new Error('Salary update requires an id')
-  const saved: SalarySubmission = { ...record }
+  // updated_at is server-maintained and never sent (_row omits it); stamp the
+  // optimistic cache copy so "Ändrad" shows before the server round-trip.
+  const saved: SalarySubmission = { ...record, updated_at: new Date().toISOString() }
   const id = record.id
   await queueTableUpsert(RESOURCE, [_row(saved)], [id], () => {
     const rows = _readCache()
@@ -274,7 +277,8 @@ export async function remove(id: string): Promise<number> {
 
 // Pretty-printed export of the whole log, shaped for migration/backup.
 export async function exportJSON(): Promise<string> {
-  const submissions = await list()
+  // updated_at is server-maintained display metadata, not part of the backup format.
+  const submissions = (await list()).map(({ updated_at: _updatedAt, ...row }) => row)
   return JSON.stringify({ version: VERSION, submissions }, null, 2)
 }
 

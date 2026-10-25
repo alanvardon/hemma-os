@@ -614,26 +614,24 @@
   .pot-transfer-note { font-size: 11px; color: var(--ink-soft); margin-top: 0.45rem; line-height: 1.45; }
   .pot-transfer-note:empty { display: none; }
 
-  .pot-actions { display: flex; gap: 0.6rem; margin-top: 1rem; flex-wrap: wrap; }
-  .pot-actions .btn { flex: 1; min-width: 0; }
-  /* .btn labels are nowrap — on a phone equal-width buttons squeeze the CTA
-     below its text width. Stack the actions so the primary label keeps its
-     full width (plan 74). */
-  @media (max-width: 600px) {
-    .pot-actions { flex-direction: column; flex-wrap: nowrap; }
-    .pot-actions .btn { flex: none; width: 100%; }
-  }
-
-  /* Plan 132 — exactly one email half has arrived for the current month.
-     Text-only (no colour-only meaning); renders only while true, so there is
-     nothing to reserve space for when absent. */
-  .salary-pending-note {
-    margin: 0.6rem 0 0;
-    font-size: 12.5px;
+  /* Plan 139 — the compact "Löner för <månad>: <status>" row that links to
+     Löner. Text carries the status; the link is a plain text button. */
+  .salary-link-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.75rem;
+    margin-top: 1rem;
+    padding: 0.7rem 0.85rem;
+    background: var(--paper-warm);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-md);
+    font-size: 13px;
     color: var(--ink-mid);
     line-height: 1.4;
   }
-  .salary-pending-note strong { color: var(--ink); font-weight: 600; }
+  .salary-link-row strong { color: var(--ink); font-weight: 600; }
 
   /* Plan 132 — "Submitted via email" tag on a SalaryItemColumn head. Reuses
      the .owner-block-tag look (small, accent-coloured, never the only cue —
@@ -644,47 +642,6 @@
     font-weight: 500;
     color: var(--accent);
     white-space: normal;
-  }
-
-  /* Plan 134 — salary-reminder settings row. Same shape as the shared
-     .toggle-row (student-loan.css): text left at flex:1, toggle far right;
-     the send day on its own line beneath. */
-  .salary-reminder {
-    margin-top: 0.9rem;
-    padding-top: 0.9rem;
-    border-top: 1px solid var(--rule);
-  }
-  .salary-reminder-head { display: flex; align-items: center; gap: 0.75rem; }
-  .salary-reminder-text { flex: 1; min-width: 0; line-height: 1.4; }
-  .salary-reminder-title {
-    display: block;
-    font-size: 12.5px;
-    font-weight: 550;
-    color: var(--ink);
-    cursor: pointer;
-  }
-  .salary-reminder-sub {
-    display: block;
-    margin-top: 2px;
-    font-size: 11px;
-    color: var(--ink-soft);
-  }
-  .salary-reminder-day-row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    margin-top: 0.7rem;
-    font-size: 12.5px;
-    color: var(--ink-mid);
-  }
-  .salary-reminder-day { width: auto; min-width: 4.5em; padding: 6px 10px; }
-  .salary-reminder .toggle input:disabled + .toggle-slider { opacity: 0.5; cursor: default; }
-  .salary-reminder-hint {
-    margin: 0.5rem 0 0;
-    font-size: 11px;
-    color: var(--ink-soft);
-    line-height: 1.4;
   }
 
   /* ── Summary cards ──────────────────────────────────────────── */
@@ -1035,9 +992,6 @@
     border-top: 1px solid var(--rule);
     flex-wrap: wrap;
   }
-  .modal-foot-split { justify-content: space-between; align-items: center; }
-  .modal-foot-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-  .modal-foot-actions .btn { padding: 7px 12px; }
 
   /* Form fields inside the modal */
   .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 0.9rem; }
@@ -1106,115 +1060,6 @@
     transition: color 0.15s, background 0.15s, border-color 0.15s;
   }
   .sal-row-remove:hover { color: var(--warn); background: var(--warn-faint); border-color: var(--warn); }
-
-  /* ── Year-so-far summary (above the history list) ───────────── */
-  .year-summary {
-    background: linear-gradient(160deg, var(--accent-faint), var(--paper-warm));
-    border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--rule));
-    border-radius: var(--r-md);
-    padding: 0.75rem 0.9rem 0.85rem;
-    margin-bottom: 0.85rem;
-  }
-  .year-summary-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.5rem;
-    margin-bottom: 0.4rem;
-  }
-  .year-summary-title { font-family: var(--font-display); font-size: 1.1rem; color: var(--ink); }
-  .year-summary-count {
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--ink-soft);
-    white-space: nowrap;
-  }
-
-  /* ── Salary history list ────────────────────────────────────── */
-  .history-list { display: flex; flex-direction: column; gap: 0.5rem; }
-  .history-empty { font-size: 13px; color: var(--ink-soft); text-align: center; padding: 1.5rem 0.5rem; line-height: 1.5; }
-
-  .history-item {
-    background: var(--paper-warm);
-    border: 1px solid var(--rule);
-    border-radius: var(--r-md);
-    overflow: hidden;
-  }
-  .history-head { display: flex; align-items: stretch; }
-  .history-toggle {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    padding: 0.7rem 0.85rem;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    font-family: inherit;
-    color: var(--ink);
-    text-align: left;
-    transition: background 0.15s;
-  }
-  .history-toggle:hover { background: var(--paper-card); }
-  .history-month { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; margin-right: auto; }
-  .history-amount {
-    font-size: 12.5px;
-    font-weight: 550;
-    color: var(--accent);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  .history-chevron { flex-shrink: 0; color: var(--ink-soft); font-size: 13px; transition: transform 0.18s; }
-  .history-item.open .history-chevron { transform: rotate(180deg); }
-
-  .history-delete {
-    flex-shrink: 0;
-    align-self: center;
-    width: 26px; height: 26px;
-    margin-right: 0.5rem;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--ink-faint);
-    border-radius: 7px;
-    font-size: 17px;
-    line-height: 1;
-    cursor: pointer;
-    transition: color 0.15s, background 0.15s, border-color 0.15s;
-  }
-  .history-delete:hover { color: var(--warn); background: var(--warn-faint); border-color: var(--warn); }
-
-  .history-detail {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows 0.25s ease;
-  }
-  .history-item.open .history-detail { grid-template-rows: 1fr; }
-  .history-detail-inner {
-    overflow: hidden;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  .history-item.open .history-detail-inner {
-    padding: 0.55rem 0.85rem 0.8rem;
-    border-top: 1px solid var(--rule);
-  }
-  .detail-row { display: flex; justify-content: space-between; gap: 0.75rem; padding: 3px 0; font-size: 12px; }
-  .detail-label { color: var(--ink-soft); min-width: 0; }
-  .detail-val { color: var(--ink); font-weight: 550; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .detail-subhead {
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--ink-soft);
-    margin-top: 0.55rem;
-    margin-bottom: 1px;
-  }
-  .detail-note { font-size: 12px; color: var(--ink-mid); font-style: italic; margin-top: 2px; line-height: 1.45; }
 
   /* ── Mobile key-figures bar ─────────────────────────────────── */
   .mobile-bar {
