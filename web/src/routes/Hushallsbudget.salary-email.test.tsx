@@ -56,6 +56,8 @@ function monthLabel(ym: string): string {
   return MONTHS[parseInt(m[2], 10) - 1] + ' ' + m[1]
 }
 const THIS_MONTH = currentMonth()
+// Fields plan 139 added to SalaryDraft; this modal only reads slot/items/note.
+const DRAFT_META = { month: THIS_MONTH, submitted_via: 'email' as const, updated_at: '2026-10-03T08:00:00.123456+00:00' }
 
 function renderRoute() {
   const router = createMemoryRouter([
@@ -99,7 +101,7 @@ beforeEach(() => {
 describe('SalaryModal — emailed draft prefill', () => {
   it('prefills slot B from its pending draft and tags the column, leaving slot A on the baseline', async () => {
     vi.mocked(draftsStore.listDrafts).mockResolvedValue([
-      { slot: 'b', income_items: [{ label: 'Lön', amount: 38900 }], note: null },
+      { ...DRAFT_META, slot: 'b', income_items: [{ label: 'Lön', amount: 38900 }], note: null },
     ])
     renderRoute()
     await openSalaryModal()
@@ -118,7 +120,7 @@ describe('SalaryModal — emailed draft prefill', () => {
 describe('Pending "waiting for…" note', () => {
   it('renders with the submitter and the other person’s name when exactly one draft exists', async () => {
     vi.mocked(draftsStore.listDrafts).mockResolvedValue([
-      { slot: 'b', income_items: [{ label: 'Lön', amount: 38900 }], note: null },
+      { ...DRAFT_META, slot: 'b', income_items: [{ label: 'Lön', amount: 38900 }], note: null },
     ])
     renderRoute()
     const note = await screen.findByText((_c, el) => el?.classList.contains('salary-pending-note') ?? false)
@@ -133,8 +135,8 @@ describe('Pending "waiting for…" note', () => {
 
   it('shows nothing when both halves are already in (two drafts)', async () => {
     vi.mocked(draftsStore.listDrafts).mockResolvedValue([
-      { slot: 'a', income_items: [{ label: 'Lön', amount: 42000 }], note: null },
-      { slot: 'b', income_items: [{ label: 'Lön', amount: 38900 }], note: null },
+      { ...DRAFT_META, slot: 'a', income_items: [{ label: 'Lön', amount: 42000 }], note: null },
+      { ...DRAFT_META, slot: 'b', income_items: [{ label: 'Lön', amount: 38900 }], note: null },
     ])
     renderRoute()
     await screen.findByRole('button', { name: /submit this month.s salaries/i })
@@ -143,8 +145,8 @@ describe('Pending "waiting for…" note', () => {
 
   it('carries the emailed notes into the note field (A first, " · "-joined) so finishing in-app keeps them', async () => {
     vi.mocked(draftsStore.listDrafts).mockResolvedValue([
-      { slot: 'b', income_items: [{ label: 'Lön', amount: 38900 }], note: ' parental leave ' },
-      { slot: 'a', income_items: [{ label: 'Lön', amount: 42000 }], note: 'bonus' },
+      { ...DRAFT_META, slot: 'b', income_items: [{ label: 'Lön', amount: 38900 }], note: ' parental leave ' },
+      { ...DRAFT_META, slot: 'a', income_items: [{ label: 'Lön', amount: 42000 }], note: 'bonus' },
     ])
     renderRoute()
     const user = await openSalaryModal()
