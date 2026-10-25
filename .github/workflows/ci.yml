@@ -101,3 +101,8 @@ jobs:
         run: |
           docker cp supabase/test-salary-reminders.sql supabase_db_hemma-os:/tmp/test-salary-reminders.sql
           docker exec supabase_db_hemma-os psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /tmp/test-salary-reminders.sql
+
+      - name: Verify in-app salary halves
+        run: |
+          docker cp supabase/test-salary-halves.sql supabase_db_hemma-os:/tmp/test-salary-halves.sql
+          docker exec supabase_db_hemma-os psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /tmp/test-salary-halves.sql

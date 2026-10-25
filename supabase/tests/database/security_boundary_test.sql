@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(22);
+select plan(23);
 
 select is(
   (
@@ -360,6 +360,15 @@ select ok(
   and not has_function_privilege('authenticated', 'public.finalize_salary_month(uuid,text)', 'execute')
   and has_function_privilege('service_role', 'public.finalize_salary_month(uuid,text)', 'execute'),
   'the public finalize_salary_month wrapper is executable by service_role only'
+);
+
+select ok(
+  not has_function_privilege('public', 'public.save_salary_half(text,text,jsonb,text,timestamptz)', 'execute')
+  and not has_function_privilege('anon', 'public.save_salary_half(text,text,jsonb,text,timestamptz)', 'execute')
+  and has_function_privilege('authenticated', 'public.save_salary_half(text,text,jsonb,text,timestamptz)', 'execute')
+  and not has_function_privilege('authenticated', 'private.salary_validated_items(jsonb)', 'execute')
+  and not has_function_privilege('authenticated', 'private.caller_may_create_salary_half(uuid,text)', 'execute'),
+  'save_salary_half is authenticated-only; its private helpers are not client-executable'
 );
 
 select * from finish();
