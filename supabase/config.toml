@@ -416,6 +416,12 @@ verify_jwt = false
 [functions.salary-reminder-send]
 verify_jwt = false
 
+# salary-email-send (plan 139) is called by pg_cron every 5 minutes the same
+# way: a secret key in the apikey header, checked by isTrustedServerCaller
+# inside the function; anon/publishable get 403.
+[functions.salary-email-send]
+verify_jwt = false
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.
