@@ -426,8 +426,8 @@ export default function Loner() {
     ? 'Jämnt över året'
     : (net > 0 ? yearNameA + ' → ' + yearNameB : yearNameB + ' → ' + yearNameA) + '  ' + fmt(Math.abs(net))
 
-  function detailRow(label: string, value: string, key?: string | number) {
-    return <div className="detail-row" key={key}><span className="detail-label">{label}</span><span className="detail-val">{value}</span></div>
+  function detailRow(label: string, value: string, key?: string | number, text = false) {
+    return <div className="detail-row" key={key}><span className="detail-label">{label}</span><span className={'detail-val' + (text ? ' is-text' : '')}>{value}</span></div>
   }
 
   // ── This month card ────────────────────────────────────────────────────────
@@ -511,7 +511,7 @@ export default function Loner() {
           {detailRow(`${row.person_a_name || nameOf('a')}${isSelf('a') ? ' (du)' : ''} totalt`, fmt(row.income_a || 0))}
           {detailRow(`${row.person_b_name || nameOf('b')}${isSelf('b') ? ' (du)' : ''} totalt`, fmt(row.income_b || 0))}
           {detailRow('Var och en får', fmt(row.equal_share || 0))}
-          {detailRow('Överföring', transferSentence(row))}
+          {detailRow('Överföring', transferSentence(row), undefined, true)}
           {(['a', 'b'] as const).map((slot) => {
             const its = ownerItems(row, slot)
             return (
@@ -584,7 +584,7 @@ export default function Loner() {
               </div>
               {detailRow(`${yearNameA}${isSelf('a') ? ' (du)' : ''} inkomst`, fmt(totalA))}
               {detailRow(`${yearNameB}${isSelf('b') ? ' (du)' : ''} inkomst`, fmt(totalB))}
-              {detailRow('Nettoavräkning', netText)}
+              {detailRow('Nettoavräkning', netText, undefined, true)}
             </div>
           )}
           <div className="history-list">

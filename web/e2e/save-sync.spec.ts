@@ -69,6 +69,9 @@ interface Backend {
   remoteUpdatePart(currentLabel: string, nextLabel: string): void
   /** The current household identity view the RPCs read/write (plan 111). */
   identity: IdentityView
+  /** Plan 139: simulate the partner's emailed half landing as a pending draft
+      (what the salary-submit Edge Function inserts as the service role). */
+  partnerEmailsHalf(month: string, slot: 'a' | 'b', items: { label: string; amount: number }[]): void
 }
 
 // Seed the auth session and mock the whole Supabase origin. Inserted loan
@@ -91,7 +94,11 @@ async function mockBackend(page: Page): Promise<Backend> {
   const mortgages: Record<string, unknown>[] = []
   const periods: Record<string, unknown>[] = []
   const monthendItems: Record<string, unknown>[] = []
+  const salaryRows: Record<string, unknown>[] = []
+  const salaryDrafts: Record<string, unknown>[] = []
   const resources: Record<string, Record<string, unknown>[]> = {
+    salary_submissions: salaryRows,
+    salary_submission_drafts: salaryDrafts,
     mortgage_loan_parts: parts,
     mortgage_payments: payments,
     mortgage_banks: banks,
@@ -102,6 +109,27 @@ async function mockBackend(page: Page): Promise<Backend> {
   const receipts = new Map<string, unknown>()
   const PERSON_A = '11111111-1111-4111-8111-111111111111'
   const PERSON_B = '22222222-2222-4222-8222-222222222222'
+  // private.finalize_salary_month: with both halves pending, write the month's
+  // salary_submissions row and clear the drafts (zero total stays pending).
+  const finalizeSalaryMonth = (month: string, at: string): 'pending' | 'zero_total' | 'finalized' => {
+    const halves = salaryDrafts.filter((d) => d.month === month)
+    if (halves.length < 2) return 'pending'
+    const sum = (slot: string) => halves.filter((d) => d.slot === slot)
+      .flatMap((d) => d.income_items as { amount: number }[]).reduce((t, i) => t + i.amount, 0)
+    const incomeA = sum('a'), incomeB = sum('b')
+    if (incomeA + incomeB <= 0) return 'zero_total'
+    const nameOf = (slot: 'a' | 'b') => backend.identity.people.find((p) => p.slot === slot)?.display_name ?? null
+    salaryRows.push({
+      id: `sub-${month}`, created_at: at, updated_at: at, revision: 1, month,
+      person_a_name: nameOf('a'), person_b_name: nameOf('b'), income_a: incomeA, income_b: incomeB,
+      transfer_from: incomeA >= incomeB ? 'a' : 'b', transfer_to: incomeA >= incomeB ? 'b' : 'a',
+      transfer_amount: Math.abs(incomeA - incomeB) / 2, equal_share: (incomeA + incomeB) / 2, note: null,
+      income_items: halves.flatMap((d) => (d.income_items as { label: string; amount: number }[])
+        .map((i) => ({ owner: d.slot, label: i.label, amount: i.amount }))),
+    })
+    for (let i = salaryDrafts.length - 1; i >= 0; i--) if (salaryDrafts[i].month === month) salaryDrafts.splice(i, 1)
+    return 'finalized'
+  }
   const backend: Backend = {
     failInserts: false,
     remoteUpdatePart(currentLabel, nextLabel) {
@@ -113,6 +141,13 @@ async function mockBackend(page: Page): Promise<Backend> {
     // Starts as a provisioned-but-unconfigured household (people: []), which is
     // what household_identity() returns before "Personer i hushållet" is saved.
     identity: { household_id: HH_UUID, my_person_id: null, my_profile_name: null, people: [] },
+    partnerEmailsHalf(month, slot, items) {
+      salaryDrafts.push({
+        month, slot, income_items: items, note: null, submitted_via: 'email',
+        updated_at: new Date().toISOString(),
+      })
+      finalizeSalaryMonth(month, new Date().toISOString())
+    },
   }
 
   await page.addInitScript(
@@ -259,6 +294,26 @@ async function mockBackend(page: Page): Promise<Backend> {
       const response = { status: 'applied', mortgage: previous, revisions }
       receipts.set(body.p_operation_id, response)
       return route.fulfill({ json: response })
+    }
+    // Plan 139 save_salary_half: upsert one half; the second half finalizes the
+    // month into a salary_submissions row (same maths as private.finalize_salary_month).
+    if (path === '/rest/v1/rpc/save_salary_half' && req.method() === 'POST') {
+      const b = req.postDataJSON() as {
+        p_month: string; p_slot: 'a' | 'b'; p_items: { label: string; amount: number }[]
+        p_note: string | null; p_expected_updated_at: string | null
+      }
+      if (salaryRows.some((r) => r.month === b.p_month)) return route.fulfill({ json: { status: 'already_logged' } })
+      const updatedAt = new Date().toISOString()
+      const at = salaryDrafts.findIndex((d) => d.month === b.p_month && d.slot === b.p_slot)
+      const draft = {
+        month: b.p_month, slot: b.p_slot, income_items: b.p_items, note: b.p_note,
+        submitted_via: 'app', updated_at: updatedAt,
+      }
+      if (at >= 0) salaryDrafts[at] = draft; else salaryDrafts.push(draft)
+      const outcome = finalizeSalaryMonth(b.p_month, updatedAt)
+      return route.fulfill({ json: outcome === 'pending' ? { status: 'pending', updated_at: updatedAt }
+        : outcome === 'zero_total' ? { status: 'zero_total', updated_at: updatedAt }
+        : { status: 'finalized', updated_at: null } })
     }
     // ── Plan 111 identity RPCs (stateful, keyed to the seeded household) ──
     if (path === '/rest/v1/rpc/household_identity' && req.method() === 'POST') {
@@ -846,5 +901,77 @@ test('an .xlsx statement import survives reload, and the lazy parser chunk loads
   await expect(page.locator('table.items-table td.col-date', { hasText: '2026-03-01' })).toBeVisible()
 
   expect(cspViolations).toEqual([])
+  expect(errors).toEqual([])
+})
+
+// ── Plan 139 — Löner: per-person salary halves ───────────────────────────────
+
+const LONER_MONTH = new Date().toISOString().slice(0, 7)
+const kr = (n: string) => new RegExp(`${n.replace(' ', '\\s')}\\skr`)
+
+function lonerIdentity(backend: Backend) {
+  backend.identity = {
+    household_id: HH_UUID,
+    my_person_id: '11111111-1111-4111-8111-111111111111',
+    my_profile_name: 'Alex',
+    people: [
+      { id: '11111111-1111-4111-8111-111111111111', slot: 'a', display_name: 'Alex', assigned_email: 'e2e@local.test' },
+      { id: '22222222-2222-4222-8222-222222222222', slot: 'b', display_name: 'Sam', assigned_email: 'partner@local.test' },
+    ],
+  }
+}
+
+test('Löner: own half survives reload as waiting, the partner half completes it, and an edit persists', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  const backend = await mockBackend(page)
+  lonerIdentity(backend)
+  await page.goto('/#/loner')
+
+  // Submit Alex's half: Lön 38 450 + Barnbidrag 1 250.
+  const card = page.locator('.ln-card')
+  await card.getByRole('button', { name: 'Skicka in din lön' }).click()
+  const dialog = page.locator('dialog[open]')
+  await dialog.getByLabel('Belopp, kr').first().fill('38450')
+  await dialog.getByRole('button', { name: '+ Lägg till inkomst' }).click()
+  await dialog.getByLabel('Inkomstens namn').last().fill('Barnbidrag')
+  await dialog.getByLabel('Belopp, kr').last().fill('1250')
+  await dialog.getByRole('button', { name: 'Spara', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
+
+  // Waiting for Sam: the own half is shown, no transfer figure anywhere.
+  await expect(card.locator('.ln-chip')).toHaveText('Väntar på Sam')
+  await expect(card).toContainText(kr('39 700'))
+  await expect(card).not.toContainText('betalar')
+
+  await page.reload()
+  await expect(card.locator('.ln-chip')).toHaveText('Väntar på Sam')
+  await expect(card).toContainText(kr('39 700'))
+  await expect(card).not.toContainText('betalar')
+  await expect(page.locator('.ln-wrap')).not.toContainText('betalar')
+
+  // Sam's emailed half arrives: the month is complete with the golden transfer.
+  backend.partnerEmailsHalf(LONER_MONTH, 'b', [{ label: 'Lön', amount: 31200 }])
+  await page.reload()
+  await expect(card).toContainText(kr('31 200'))
+  await expect(card.locator('.ln-chip')).toHaveText('Klar')
+  await expect(card).toContainText(/Alex betalar Sam 4\s250\skr/)
+  await expect(card).toContainText(kr('35 450'))
+
+  // Edit Sam's half of the complete month: Lön 33 000 + Barnbidrag 1 250.
+  await card.getByRole('button', { name: 'Redigera Sams lön' }).click()
+  await dialog.getByLabel('Belopp, kr').first().fill('33000')
+  await dialog.getByRole('button', { name: '+ Lägg till inkomst' }).click()
+  await dialog.getByLabel('Inkomstens namn').last().fill('Barnbidrag')
+  await dialog.getByLabel('Belopp, kr').last().fill('1250')
+  await dialog.getByRole('button', { name: 'Spara', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
+  await expect(card).toContainText(/Alex betalar Sam 2\s725\skr/)
+
+  await page.reload()
+  await expect(card.locator('.ln-chip')).toHaveText('Klar')
+  await expect(card).toContainText(/Alex betalar Sam 2\s725\skr/)
+  await expect(card).toContainText(kr('36 975'))
+  await expect(card).not.toContainText(/betalar Sam 4\s250/)
+
   expect(errors).toEqual([])
 })

@@ -252,7 +252,9 @@
   }
   .detail-row { display: flex; justify-content: space-between; gap: 0.75rem; padding: 3px 0; font-size: 12px; }
   .detail-label { color: var(--ink-soft); min-width: 0; }
-  .detail-val { color: var(--ink); font-weight: 550; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .detail-val { color: var(--ink); font-weight: 550; font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+  /* A sentence value (transfer, net settlement) wraps instead of overflowing. */
+  .detail-val.is-text { white-space: normal; min-width: 0; }
   .detail-subhead {
     font-size: 10px;
     font-weight: 600;
