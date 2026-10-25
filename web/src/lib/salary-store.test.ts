@@ -132,6 +132,75 @@ describe('write path', () => {
     expect(syncCoordinator.getConflicts()).toHaveLength(1)
   })
 
+  it('update: requires an id and queues nothing without one', async () => {
+    await expect(store.update(sub() as never)).rejects.toThrow(/id/)
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.isDirty(TABLE)).toBe(false)
+  })
+
+  it('update: success sends the remembered revision, bumps it, and patches the cache in place', async () => {
+    mock().tables[TABLE] = [
+      { id: 's2', created_at: '2026-07-16T10:00:00.000Z', revision: 1, ...sub({ month: '2024-02' }) },
+      { id: 's1', created_at: '2026-07-15T10:00:00.000Z', revision: 3, ...sub() },
+      { id: 's0', created_at: '2026-07-14T10:00:00.000Z', revision: 1, ...sub({ month: '2023-12' }) },
+    ]
+    const [, listed] = await store.list()
+    const edited = { ...listed, income_b: 34250, transfer_amount: 2725, equal_share: 36975 }
+    await expect(store.update(edited)).resolves.toMatchObject({ id: 's1', income_b: 34250 })
+
+    const cloud = mock().tables[TABLE].find((r) => r.id === 's1')!
+    expect(cloud).toMatchObject({ income_b: 34250, transfer_amount: 2725, equal_share: 36975, created_at: '2026-07-15T10:00:00.000Z', revision: 4 })
+    expect(mock().tables[TABLE]).toHaveLength(3)
+    const cached = cache().submissions as { id: string; income_b: number }[]
+    expect(cached.map((r) => r.id)).toEqual(['s2', 's1', 's0']) // same position
+    expect(cached[1].income_b).toBe(34250)
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.isDirty(TABLE)).toBe(false)
+    expect(syncCoordinator.getRevision(`${TABLE}:s1`)).toBe(4)
+  })
+
+  it('updated_at: read from the server for display, stamped on the optimistic cache copy, never sent, never exported', async () => {
+    mock().tables[TABLE] = [{ id: 's1', created_at: '2026-07-15T10:00:00.000Z', updated_at: '2026-07-15T10:00:00.000Z', revision: 1, ...sub() }]
+    const [listed] = await store.list()
+    expect(listed.updated_at).toBe('2026-07-15T10:00:00.000Z')
+
+    const saved = await store.update({ ...listed, income_b: 26000 })
+    expect(Date.parse(saved.updated_at!)).toBeGreaterThan(Date.parse('2026-07-15T10:00:00.000Z'))
+    expect((cache().submissions as { updated_at?: string }[])[0].updated_at).toBe(saved.updated_at)
+    // The write payload omits it (the server trigger owns updated_at).
+    expect(mock().tables[TABLE][0].updated_at).not.toBe(saved.updated_at)
+    // The backup format is unchanged.
+    const exported = JSON.parse(await store.exportJSON()) as { submissions: Record<string, unknown>[] }
+    expect(exported.submissions[0]).not.toHaveProperty('updated_at')
+  })
+
+  it('update: a stale revision (the other person edited first) rejects as a conflict and stays dirty', async () => {
+    mock().tables[TABLE] = [{ id: 's1', created_at: '2026-07-15T10:00:00.000Z', revision: 1, ...sub() }]
+    const [listed] = await store.list()
+    mock().tables[TABLE][0] = { ...mock().tables[TABLE][0], income_b: 99999, revision: 2 }
+
+    await expect(store.update({ ...listed, income_b: 34250 })).rejects.toMatchObject({ category: 'conflict' })
+    // The server row is untouched — nothing was silently overwritten.
+    expect(mock().tables[TABLE][0]).toMatchObject({ income_b: 99999, revision: 2 })
+    // Outbox semantics: the optimistic local patch stays visible and the
+    // operation is retained as a failed conflict (dirty) until resolved.
+    expect((cache().submissions as { income_b: number }[])[0].income_b).toBe(34250)
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.isDirty(TABLE)).toBe(true)
+    expect(syncCoordinator.getConflicts()).toHaveLength(1)
+    expect(await store.list()).toEqual([expect.objectContaining({ id: 's1', income_b: 34250 })]) // dirty log wins reads
+  })
+
+  it('update: cloud error rejects and keeps the edit dirty for replay', async () => {
+    mock().tables[TABLE] = [{ id: 's1', created_at: '2026-07-15T10:00:00.000Z', revision: 1, ...sub() }]
+    const [listed] = await store.list()
+    mock().control.failing.add(TABLE)
+    await expect(store.update({ ...listed, income_b: 1 })).rejects.toBeTruthy()
+    const { syncCoordinator } = await import('./sync')
+    expect(syncCoordinator.isDirty(TABLE)).toBe(true)
+    expect(syncCoordinator.getConflicts()).toHaveLength(0)
+  })
+
   it('remove: cloud error throws', async () => {
     mock().control.failing.add(TABLE)
     await expect(store.remove('s1')).rejects.toBeTruthy()

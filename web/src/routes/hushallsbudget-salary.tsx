@@ -9,6 +9,25 @@ import { PersonLabel } from '../components/PersonBadge'
 
 export interface SalaryItem { uid: number; label: string; amount: number }
 
+/** The column's fixed UI strings. English by default (the public #/lon page);
+    Löner (plan 139) passes Swedish. */
+export interface SalaryColumnCopy {
+  emailTag: string
+  labelPlaceholder: string
+  labelAria: string
+  amountAria: string
+  removeAria: string
+  add: string
+}
+const SALARY_COLUMN_COPY_EN: SalaryColumnCopy = {
+  emailTag: 'Submitted via email',
+  labelPlaceholder: 'e.g. Lön, Barnbidrag, skatt',
+  labelAria: 'Income name',
+  amountAria: 'Amount, kr',
+  removeAria: 'Remove income',
+  add: '+ Add income',
+}
+
 // AmountInput variant that exposes a ref to the underlying input (for focus).
 export function AmountInputRef({ value, onChange, className, ariaLabel, inputRef }: {
   value: number; onChange: (n: number) => void; className: string; ariaLabel: string
@@ -37,7 +56,7 @@ export function AmountInputRef({ value, onChange, className, ariaLabel, inputRef
  * avoid).
  */
 export function SalaryItemColumn({
-  name, self, other, total, items, firstAmountRef, onItemChange, onRemoveItem, onAddItem, emailTag,
+  name, self, other, total, items, firstAmountRef, onItemChange, onRemoveItem, onAddItem, emailTag, copy = SALARY_COLUMN_COPY_EN,
 }: {
   name: string
   self?: boolean
@@ -52,13 +71,14 @@ export function SalaryItemColumn({
       pending salary_submission_drafts row) instead of the budget baseline. A
       text tag — never colour-only. */
   emailTag?: boolean
+  copy?: SalaryColumnCopy
 }) {
   return (
     <div className="income-col">
       <div className="income-col-head">
         <span className="income-col-name">
           <PersonLabel name={name} self={self} other={other} />
-          {emailTag && <span className="income-col-tag">Submitted via email</span>}
+          {emailTag && <span className="income-col-tag">{copy.emailTag}</span>}
         </span>
         <span className="income-col-sub">{fmt(total)}</span>
       </div>
@@ -66,19 +86,19 @@ export function SalaryItemColumn({
         {items.map((it, i) => (
           <div className="sal-row" key={it.uid}>
             <input
-              type="text" className="sal-row-label" value={it.label} placeholder="e.g. Lön, Barnbidrag, skatt" aria-label="Income name"
+              type="text" className="sal-row-label" value={it.label} placeholder={copy.labelPlaceholder} aria-label={copy.labelAria}
               onChange={(e) => onItemChange(it.uid, { label: e.target.value })}
             />
             <AmountInputRef
               inputRef={i === 0 ? firstAmountRef : undefined}
               value={it.amount} onChange={(n) => onItemChange(it.uid, { amount: n })}
-              className="sal-row-amount" ariaLabel="Amount, kr"
+              className="sal-row-amount" ariaLabel={copy.amountAria}
             />
-            <button type="button" className="sal-row-remove" aria-label="Remove income" onClick={() => onRemoveItem(it.uid)}>×</button>
+            <button type="button" className="sal-row-remove" aria-label={copy.removeAria} onClick={() => onRemoveItem(it.uid)}>×</button>
           </div>
         ))}
       </div>
-      <button type="button" className="btn btn-ghost row-add-btn" onClick={onAddItem}>+ Add income</button>
+      <button type="button" className="btn btn-ghost row-add-btn" onClick={onAddItem}>{copy.add}</button>
     </div>
   )
 }

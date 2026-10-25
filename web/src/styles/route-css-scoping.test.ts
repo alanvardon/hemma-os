@@ -17,6 +17,7 @@ const routeSheets: readonly RouteSheet[] = [
   { file: 'bolanekoll.css', root: '.bk-root' },
   { file: 'manadsavslut.css', root: '.ma-root' },
   { file: 'hushallsbudget.css', root: '.hb-root' },
+  { file: 'loner.css', root: '.ln-root' },
   { file: 'huskalendern.css', root: '.hk-root' },
   { file: 'dashboard.css', root: '.bk-page-root' },
 ]

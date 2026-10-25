@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(22);
+select plan(24);
 
 select is(
   (
@@ -11,7 +11,7 @@ select is(
     join pg_catalog.pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p')
   ),
-  23::bigint,
+  24::bigint,
   'the audited public-table inventory is complete'
 );
 
@@ -46,7 +46,8 @@ select ok(
         'notification_state',
         'salary_reminder_settings',
         'salary_submission_drafts',
-        'salary_reminder_tokens'
+        'salary_reminder_tokens',
+        'salary_emails'
       )
       and not exists (
         select 1
@@ -360,6 +361,46 @@ select ok(
   and not has_function_privilege('authenticated', 'public.finalize_salary_month(uuid,text)', 'execute')
   and has_function_privilege('service_role', 'public.finalize_salary_month(uuid,text)', 'execute'),
   'the public finalize_salary_month wrapper is executable by service_role only'
+);
+
+select ok(
+  not has_function_privilege('public', 'public.save_salary_half(text,text,jsonb,text,timestamptz)', 'execute')
+  and not has_function_privilege('anon', 'public.save_salary_half(text,text,jsonb,text,timestamptz)', 'execute')
+  and has_function_privilege('authenticated', 'public.save_salary_half(text,text,jsonb,text,timestamptz)', 'execute')
+  and not has_function_privilege('authenticated', 'private.salary_validated_items(jsonb)', 'execute')
+  and not has_function_privilege('authenticated', 'private.caller_may_create_salary_half(uuid,text)', 'execute'),
+  'save_salary_half is authenticated-only; its private helpers are not client-executable'
+);
+
+select ok(
+  not exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public' and tablename = 'salary_emails'
+  )
+  and not exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public' and table_name = 'salary_emails'
+      and grantee in ('PUBLIC', 'anon', 'authenticated')
+  )
+  and (select c.relrowsecurity from pg_catalog.pg_class c
+        where c.oid = 'public.salary_emails'::regclass)
+  and not has_function_privilege('public', 'public.claim_salary_emails(integer)', 'execute')
+  and not has_function_privilege('anon', 'public.claim_salary_emails(integer)', 'execute')
+  and not has_function_privilege('authenticated', 'public.claim_salary_emails(integer)', 'execute')
+  and has_function_privilege('service_role', 'public.claim_salary_emails(integer)', 'execute')
+  and not has_function_privilege('public', 'public.complete_salary_email(uuid,text,text)', 'execute')
+  and not has_function_privilege('anon', 'public.complete_salary_email(uuid,text,text)', 'execute')
+  and not has_function_privilege('authenticated', 'public.complete_salary_email(uuid,text,text)', 'execute')
+  and has_function_privilege('service_role', 'public.complete_salary_email(uuid,text,text)', 'execute')
+  and not has_function_privilege('public', 'public.request_salary_results_email(text)', 'execute')
+  and not has_function_privilege('anon', 'public.request_salary_results_email(text)', 'execute')
+  and has_function_privilege('authenticated', 'public.request_salary_results_email(text)', 'execute')
+  and not has_function_privilege('public', 'public.salary_results_email_status()', 'execute')
+  and not has_function_privilege('anon', 'public.salary_results_email_status()', 'execute')
+  and has_function_privilege('authenticated', 'public.salary_results_email_status()', 'execute')
+  and not has_function_privilege('authenticated', 'private.enqueue_salary_partner_email()', 'execute')
+  and not has_function_privilege('anon', 'private.enqueue_salary_partner_email()', 'execute'),
+  'salary_emails is service-role only (RLS on, no policies, no client grants); claim/complete are service-only; request/status are authenticated-only'
 );
 
 select * from finish();

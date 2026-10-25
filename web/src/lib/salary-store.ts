@@ -1,5 +1,6 @@
-/* salary-store.ts — append-only log of monthly salary submissions.
-   Data-access module for the Hushållsbudget pot. Phase 16b: reads and writes the
+/* salary-store.ts — log of monthly salary submissions (one row per month;
+   since plan 139 a row's halves can also be edited in place via update()).
+   Data-access module for the Hushållsbudget pot and Löner. Phase 16b: reads and writes the
    Supabase `salary_submissions` table, with a scoped durable cache/outbox so
    dirty local rows remain visible until cloud acknowledgement. Every
    exported signature is unchanged, so the call sites in Hushallsbudget.tsx don't
@@ -76,6 +77,7 @@ export function parseSubmission(raw: unknown): PersistedSalarySubmission | null 
     transfer_amount: typeof raw.transfer_amount === 'number' ? raw.transfer_amount : 0, transfer_from: raw.transfer_from === 'b' ? 'b' : 'a', transfer_to: raw.transfer_to === 'a' ? 'a' : 'b',
     equal_share: typeof raw.equal_share === 'number' ? raw.equal_share : 0, note: typeof raw.note === 'string' ? raw.note : null,
     ...(typeof raw.id === 'string' ? { id: raw.id } : {}), ...(typeof raw.created_at === 'string' ? { created_at: raw.created_at } : {}),
+    ...(typeof raw.updated_at === 'string' ? { updated_at: raw.updated_at } : {}),
   } as unknown as SalarySubmission)
   const result = { ...migrated, month: month.value }
   return created && created.ok ? { ...result, created_at: created.value as ISODateTime } : result as PersistedSalarySubmission
@@ -246,6 +248,26 @@ export async function add(record: SalarySubmission): Promise<SalarySubmission> {
   return saved
 }
 
+// Overwrite one existing record (plan 139 D4: a half of a completed month was
+// edited). Requires an id. Queued like add, but against the revision remembered
+// from the last list(), so a concurrent edit by the other person surfaces as a
+// 409 conflict (rejected, operation kept as a visible conflict) instead of a
+// silent overwrite. The cache is patched in place — same position, so the list
+// order doesn't jump.
+export async function update(record: SalarySubmission): Promise<SalarySubmission> {
+  if (!record.id) throw new Error('Salary update requires an id')
+  // updated_at is server-maintained and never sent (_row omits it); stamp the
+  // optimistic cache copy so "Ändrad" shows before the server round-trip.
+  const saved: SalarySubmission = { ...record, updated_at: new Date().toISOString() }
+  const id = record.id
+  await queueTableUpsert(RESOURCE, [_row(saved)], [id], () => {
+    const rows = _readCache()
+    const index = rows.findIndex((r) => r.id === id)
+    _writeCache(index >= 0 ? rows.map((r, i) => (i === index ? saved : r)) : [saved, ...rows])
+  })
+  return saved
+}
+
 // Drop one record by id; resolves the remaining (cached) count.
 export async function remove(id: string): Promise<number> {
   const rows = _readCache().filter((r) => r.id !== id)
@@ -255,7 +277,8 @@ export async function remove(id: string): Promise<number> {
 
 // Pretty-printed export of the whole log, shaped for migration/backup.
 export async function exportJSON(): Promise<string> {
-  const submissions = await list()
+  // updated_at is server-maintained display metadata, not part of the backup format.
+  const submissions = (await list()).map(({ updated_at: _updatedAt, ...row }) => row)
   return JSON.stringify({ version: VERSION, submissions }, null, 2)
 }
 

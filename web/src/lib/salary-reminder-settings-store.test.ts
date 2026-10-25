@@ -35,44 +35,56 @@ const TABLE = 'salary_reminder_settings'
 
 describe('loadSalaryReminderSettings', () => {
   it('reads an existing row as saved fact (unknown: false)', async () => {
-    mock().tables[TABLE] = [{ household_id: 'test-house', enabled: false, send_day: 10 }]
-    expect(await store.loadSalaryReminderSettings()).toEqual({ settings: { enabled: false, send_day: 10 }, unknown: false })
+    mock().tables[TABLE] = [{ household_id: 'test-house', enabled: false, send_day: 10, notify_partner: false, email_results: false }]
+    expect(await store.loadSalaryReminderSettings()).toEqual({ settings: { enabled: false, send_day: 10, notify_partner: false, email_results: false }, unknown: false })
   })
 
   it('no row means the documented default (enabled, day 25) — NOT unknown', async () => {
-    expect(await store.loadSalaryReminderSettings()).toEqual({ settings: { enabled: true, send_day: 25 }, unknown: false })
+    expect(await store.loadSalaryReminderSettings()).toEqual({ settings: { enabled: true, send_day: 25, notify_partner: true, email_results: true }, unknown: false })
   })
 
   it('a read failure falls back to the default but flags it unknown', async () => {
     mock().control.failing.add(TABLE)
-    expect(await store.loadSalaryReminderSettings()).toEqual({ settings: { enabled: true, send_day: 25 }, unknown: true })
+    expect(await store.loadSalaryReminderSettings()).toEqual({ settings: { enabled: true, send_day: 25, notify_partner: true, email_results: true }, unknown: true })
+  })
+
+  it('a row missing the new fields (legacy) reads them as on', async () => {
+    mock().tables[TABLE] = [{ household_id: 'test-house', enabled: false, send_day: 10 }]
+    expect(await store.loadSalaryReminderSettings()).toEqual({
+      settings: { enabled: false, send_day: 10, notify_partner: true, email_results: true }, unknown: false,
+    })
+  })
+
+  it('a malformed notify_partner / email_results falls back to on', async () => {
+    mock().tables[TABLE] = [{ household_id: 'test-house', enabled: true, send_day: 10, notify_partner: 'no', email_results: null }]
+    expect((await store.loadSalaryReminderSettings()).settings).toMatchObject({ notify_partner: true, email_results: true })
   })
 
   it('an out-of-range stored send_day falls back to the default for that field only', async () => {
     mock().tables[TABLE] = [{ household_id: 'test-house', enabled: true, send_day: 0 }]
-    expect(await store.loadSalaryReminderSettings()).toEqual({ settings: { enabled: true, send_day: 25 }, unknown: false })
+    expect(await store.loadSalaryReminderSettings()).toEqual({ settings: { enabled: true, send_day: 25, notify_partner: true, email_results: true }, unknown: false })
   })
 })
 
 describe('saveSalaryReminderSettings', () => {
   it('upserts on household_id and resolves on success', async () => {
-    await store.saveSalaryReminderSettings({ enabled: false, send_day: 12 })
-    expect(mock().tables[TABLE]).toEqual([{ household_id: 'test-house', enabled: false, send_day: 12 }])
+    await store.saveSalaryReminderSettings({ enabled: false, send_day: 12, notify_partner: false, email_results: true })
+    expect(mock().tables[TABLE]).toEqual([{ household_id: 'test-house', enabled: false, send_day: 12, notify_partner: false, email_results: true }])
   })
 
   it('re-saving updates the same row rather than inserting a second one', async () => {
-    await store.saveSalaryReminderSettings({ enabled: true, send_day: 25 })
-    await store.saveSalaryReminderSettings({ enabled: false, send_day: 5 })
-    expect(mock().tables[TABLE]).toEqual([{ household_id: 'test-house', enabled: false, send_day: 5 }])
+    await store.saveSalaryReminderSettings({ enabled: true, send_day: 25, notify_partner: true, email_results: true })
+    await store.saveSalaryReminderSettings({ enabled: false, send_day: 5, notify_partner: true, email_results: true })
+    expect(mock().tables[TABLE]).toEqual([{ household_id: 'test-house', enabled: false, send_day: 5, notify_partner: true, email_results: true }])
   })
 
   it('throws the backend error on failure', async () => {
     mock().control.failing.add(TABLE)
-    await expect(store.saveSalaryReminderSettings({ enabled: true, send_day: 25 })).rejects.toBeTruthy()
+    await expect(store.saveSalaryReminderSettings({ enabled: true, send_day: 25, notify_partner: true, email_results: true })).rejects.toBeTruthy()
   })
 
   it.each([0, 29, 1.5, Number.NaN])('rejects an invalid send_day (%s) with no network call', async (sendDay) => {
-    await expect(store.saveSalaryReminderSettings({ enabled: true, send_day: sendDay })).rejects.toThrow(/send_day/)
+    await expect(store.saveSalaryReminderSettings({ ...store.DEFAULT_SALARY_REMINDER_SETTINGS, send_day: sendDay })).rejects.toThrow(/send_day/)
     expect(mock().tables[TABLE] ?? []).toEqual([])
   })
 })

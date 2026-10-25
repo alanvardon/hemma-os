@@ -22,7 +22,15 @@ import {
   adminKey,
   isTrustedServerCaller,
   safeEqual,
+  salaryEmailDecision,
+  buildPartnerSubmittedEmail,
+  buildMonthResultsEmail,
+  formatKronor,
+  stockholmDateEn,
+  type SalaryEmailRow,
+  type SalaryResultsFigures,
 } from '../../../supabase/functions/_shared/salary-reminder-logic.ts'
+import { fmt } from './format'
 
 describe('stockholmToday', () => {
   it('winter (CET, UTC+1): the date flips at 23:00 UTC', () => {
@@ -455,5 +463,254 @@ describe('adminKey', () => {
     expect(adminKey({ SUPABASE_SECRET_KEYS: JSON.stringify({ other: 'sb_secret_o' }), SUPABASE_SERVICE_ROLE_KEY: 'eyJ' })).toBe('sb_secret_o')
     expect(adminKey({ SUPABASE_SECRET_KEYS: 'nope', SUPABASE_SERVICE_ROLE_KEY: 'eyJ' })).toBe('eyJ')
     expect(adminKey({})).toBeNull()
+  })
+})
+
+// ── Plan 139 Stage 5: salary emails (D7 partner, D8 results) ─────────────────
+// Fictional household: Anna (slot a, user u-a) and Bo (slot b, user u-b).
+
+const MEMBERS = [
+  { user_id: 'u-a', email: 'anna@example.test' },
+  { user_id: 'u-b', email: 'bo@example.test' },
+]
+const PEOPLE = [
+  { slot: 'a', assigned_email: 'anna@example.test' },
+  { slot: 'b', assigned_email: 'bo@example.test' },
+]
+const partnerRow = (over: Partial<SalaryEmailRow> = {}): SalaryEmailRow => ({
+  kind: 'partner_submitted', trigger: 'auto', submitter_slot: 'a', submission_id: null, actor_user_id: 'u-a', ...over,
+})
+const resultsRow = (over: Partial<SalaryEmailRow> = {}): SalaryEmailRow => ({
+  kind: 'month_results', trigger: 'auto', submitter_slot: null, submission_id: 'sub-1', actor_user_id: null, ...over,
+})
+
+// Base golden row (plan 139): A = 38 450 + 1 250 = 39 700, B = 31 200;
+// gap 8 500 → transfer 8 500 / 2 = 4 250 a→b; equal_share 70 900 / 2 = 35 450.
+const BASE: SalaryResultsFigures = {
+  person_a_name: 'Anna', person_b_name: 'Bo',
+  income_a: 39700, income_b: 31200, transfer_from: 'a', transfer_to: 'b', transfer_amount: 4250, equal_share: 35450,
+}
+// Equal: 30 000 / 30 000 → transfer 0, equal_share 30 000.
+const EQUAL: SalaryResultsFigures = { ...BASE, income_a: 30000, income_b: 30000, transfer_amount: 0, equal_share: 30000 }
+// Half-krona: 30 001 / 30 000 → gap 1 → transfer 0.5 a→b; equal_share 60 001 / 2 = 30 000.5.
+const HALF: SalaryResultsFigures = { ...BASE, income_a: 30001, income_b: 30000, transfer_amount: 0.5, equal_share: 30000.5 }
+
+const decide = (over: Partial<Parameters<typeof salaryEmailDecision>[0]> & { row: SalaryEmailRow }) =>
+  salaryEmailDecision({ settings: null, members: MEMBERS, people: PEOPLE, submission: null, draftSlots: ['a'], ...over })
+
+describe('salaryEmailDecision — partner_submitted (D7)', () => {
+  it('sends to the other slot only while the month is waiting', () => {
+    expect(decide({ row: partnerRow() })).toEqual({
+      action: 'send', recipients: [{ slot: 'b', email: 'bo@example.test', userId: 'u-b' }],
+    })
+    // Email-link path: actor null, submitter b → Anna.
+    expect(decide({ row: partnerRow({ submitter_slot: 'b', actor_user_id: null }), draftSlots: ['b'] })).toEqual({
+      action: 'send', recipients: [{ slot: 'a', email: 'anna@example.test', userId: 'u-a' }],
+    })
+  })
+
+  it('skips when the month has since completed (the results email covers it)', () => {
+    expect(decide({ row: partnerRow(), submission: BASE })).toEqual({ action: 'skip', reason: 'month_complete' })
+  })
+
+  it('skips when notify_partner is off; a missing field/row means on', () => {
+    expect(decide({ row: partnerRow(), settings: { notify_partner: false, email_results: true } }))
+      .toEqual({ action: 'skip', reason: 'opted_out' })
+    expect(decide({ row: partnerRow(), settings: {} }).action).toBe('send')
+    expect(decide({ row: partnerRow(), settings: null }).action).toBe('send')
+    // email_results off does not stop the partner email.
+    expect(decide({ row: partnerRow(), settings: { email_results: false } }).action).toBe('send')
+  })
+
+  it('drops a pending-invite recipient (assigned but not a current member)', () => {
+    expect(decide({ row: partnerRow(), members: [MEMBERS[0]] })).toEqual({ action: 'skip', reason: 'no_recipient' })
+  })
+
+  it('never emails the person who acted (D3: A submits unassigned B\'s half)', () => {
+    const people = [PEOPLE[0], { slot: 'b', assigned_email: null }]
+    expect(decide({ row: partnerRow({ submitter_slot: 'b', actor_user_id: 'u-a' }), people, draftSlots: ['b'] }))
+      .toEqual({ action: 'skip', reason: 'no_recipient' })
+  })
+
+  it('skips an unassigned recipient slot and a recipient who has meanwhile submitted', () => {
+    expect(decide({ row: partnerRow(), people: [PEOPLE[0]] })).toEqual({ action: 'skip', reason: 'no_recipient' })
+    expect(decide({ row: partnerRow(), draftSlots: ['a', 'b'] }))
+      .toEqual({ action: 'skip', reason: 'partner_already_submitted' })
+  })
+
+  it('matches emails case-insensitively and skips a malformed row', () => {
+    const people = [PEOPLE[0], { slot: 'b', assigned_email: ' Bo@Example.TEST ' }]
+    expect(decide({ row: partnerRow(), people }).action).toBe('send')
+    expect(decide({ row: partnerRow({ submitter_slot: null }) })).toEqual({ action: 'skip', reason: 'malformed' })
+  })
+})
+
+describe('salaryEmailDecision — month_results (D8)', () => {
+  it('sends one email to both current members', () => {
+    expect(decide({ row: resultsRow(), submission: BASE })).toEqual({
+      action: 'send', recipients: [
+        { slot: 'a', email: 'anna@example.test', userId: 'u-a' },
+        { slot: 'b', email: 'bo@example.test', userId: 'u-b' },
+      ],
+    })
+  })
+
+  it('skips a deleted submission', () => {
+    expect(decide({ row: resultsRow(), submission: null })).toEqual({ action: 'skip', reason: 'submission_deleted' })
+    expect(decide({ row: resultsRow({ trigger: 'manual' }), submission: null }))
+      .toEqual({ action: 'skip', reason: 'submission_deleted' })
+  })
+
+  it('opt-out stops only the automatic email; a manual resend always sends', () => {
+    const off = { notify_partner: true, email_results: false }
+    expect(decide({ row: resultsRow(), submission: BASE, settings: off })).toEqual({ action: 'skip', reason: 'opted_out' })
+    expect(decide({ row: resultsRow({ trigger: 'manual' }), submission: BASE, settings: off }).action).toBe('send')
+    // notify_partner off does not stop results.
+    expect(decide({ row: resultsRow(), submission: BASE, settings: { notify_partner: false } }).action).toBe('send')
+  })
+
+  it('drops a pending-invite slot, and skips when nobody is left', () => {
+    expect(decide({ row: resultsRow(), submission: BASE, members: [MEMBERS[1]] })).toEqual({
+      action: 'send', recipients: [{ slot: 'b', email: 'bo@example.test', userId: 'u-b' }],
+    })
+    expect(decide({ row: resultsRow(), submission: BASE, members: [] })).toEqual({ action: 'skip', reason: 'no_recipient' })
+  })
+
+  it('skips a row with a missing figure instead of guessing it', () => {
+    expect(decide({ row: resultsRow(), submission: { ...BASE, transfer_amount: null } }))
+      .toEqual({ action: 'skip', reason: 'submission_malformed' })
+    expect(decide({ row: resultsRow(), submission: { ...BASE, income_a: '39700' } }))
+      .toEqual({ action: 'skip', reason: 'submission_malformed' })
+    expect(decide({ row: resultsRow(), submission: { ...BASE, transfer_from: 'x' } }))
+      .toEqual({ action: 'skip', reason: 'submission_malformed' })
+    expect(decide({ row: resultsRow({ submission_id: null }), submission: BASE })).toEqual({ action: 'skip', reason: 'malformed' })
+  })
+})
+
+describe('formatKronor', () => {
+  it('is the app fmt expression exactly (NBSP grouping, whole kronor)', () => {
+    for (const n of [0, 0.5, 0.49, 4250, 35450, 30000.5, 1234567.89, -1500]) expect(formatKronor(n)).toBe(fmt(n))
+    expect(formatKronor(4250).replace(/ /g, ' ')).toBe('4 250 kr')
+  })
+})
+
+const LINK = 'http://localhost:5174/#/loner'
+const AMOUNT_RE = /\d[\d  ]*\s?kr\b|\bkr\b/
+// Strip the year so any remaining digit in the partner email is an amount leak.
+const digitsOtherThanYear = (s: string) => s.replace(/2026/g, '').replace(/5174/g, '').match(/\d/)
+
+describe('buildPartnerSubmittedEmail', () => {
+  it('renders the plan copy, "their", the button and the Löner link', () => {
+    const e = buildPartnerSubmittedEmail({ recipientName: 'Bo', submitterName: 'Anna', month: '2026-10', link: LINK })
+    expect(e.subject).toBe('Anna has submitted their salary for October 2026')
+    expect(e.text).toContain('Hi Bo,')
+    expect(e.text).toContain(
+      'Anna has logged their salary for October 2026 in Hemma OS. Yours is still missing — add it in Löner, or use the link from your monthly reminder.')
+    expect(e.html).toContain(`href="${LINK}"`)
+    expect(e.html).toContain('>Open Löner</a>')
+    expect(`${e.subject} ${e.text} ${e.html}`).not.toMatch(/\b(he|she|his|her|him)\b/i)
+  })
+
+  it('never contains an amount, for any input', () => {
+    const inputs = [
+      { recipientName: 'Bo', submitterName: 'Anna', month: '2026-10' },
+      { recipientName: 'bo@example.test', submitterName: 'Person A', month: '2026-01' },
+      { recipientName: 'Ö', submitterName: '', month: 'bad' },
+    ]
+    for (const i of inputs) {
+      // Extra fields (as a careless caller might pass) must not leak either.
+      const e = buildPartnerSubmittedEmail({ ...i, link: LINK, ...({ amount: 4250, income_a: 39700 } as object) } as never)
+      for (const s of [e.subject, e.text, e.html]) {
+        expect(s).not.toMatch(AMOUNT_RE)
+        expect(digitsOtherThanYear(s.replace(/style="[^"]*"/g, ''))).toBeNull()
+      }
+    }
+  })
+
+  it('escapes names in the HTML', () => {
+    const e = buildPartnerSubmittedEmail({ recipientName: '<b>', submitterName: 'A&"B\'', month: '2026-10', link: 'http://x/"><script>' })
+    expect(e.html).not.toContain('<b>')
+    expect(e.html).not.toContain('<script>')
+    expect(e.html).toContain('A&amp;&quot;B&#39;')
+    expect(e.html).toContain('&lt;b&gt;')
+  })
+})
+
+const nbsp = (s: string) => s.replace(/ /g, ' ')
+
+describe('buildMonthResultsEmail', () => {
+  const build = (submission: SalaryResultsFigures, previousSentAt: Date | null = null) =>
+    buildMonthResultsEmail({ month: '2026-10', nameA: 'Anna', nameB: 'Bo', submission, previousSentAt, link: LINK })
+
+  it('Base golden: totals, "Anna pays Bo 4 250 kr", each takes home 35 450 kr', () => {
+    const e = build(BASE)
+    expect(e.subject).toBe('Salary results for October 2026')
+    for (const s of [e.text, e.html]) {
+      expect(nbsp(s)).toContain('Anna pays Bo 4 250 kr')
+      expect(nbsp(s)).toContain('35 450 kr')
+      expect(nbsp(s)).toContain('39 700 kr')
+      expect(nbsp(s)).toContain('31 200 kr')
+      expect(s).toContain('Each takes home')
+      // Exactly the app formatter's string (with its NBSP).
+      expect(s).toContain(fmt(4250))
+      expect(s).not.toContain('replace the ones')
+    }
+    expect(nbsp(e.text)).toContain('Anna: 39 700 kr\nBo: 31 200 kr\nEach takes home: 35 450 kr\nAnna pays Bo 4 250 kr')
+    expect(e.html).toContain(`href="${LINK}"`)
+    expect(e.html).toContain('>Open Löner</a>')
+  })
+
+  it('B > A: Bo pays Anna', () => {
+    // B overtakes: 39 700 / 45 000 → gap −5 300 → 2 650 b→a; equal 84 700 / 2 = 42 350.
+    const e = build({ ...BASE, income_b: 45000, transfer_from: 'b', transfer_to: 'a', transfer_amount: 2650, equal_share: 42350 })
+    expect(nbsp(e.text)).toContain('Bo pays Anna 2 650 kr')
+    expect(nbsp(e.text)).toContain('Each takes home: 42 350 kr')
+  })
+
+  it('Equal golden: "Nothing to transfer"', () => {
+    const e = build(EQUAL)
+    expect(e.text).toContain('Nothing to transfer')
+    expect(e.html).toContain('Nothing to transfer')
+    expect(e.text).not.toContain('pays')
+  })
+
+  it('Half-krona golden: shows the transfer through fmt\'s own rounding', () => {
+    const e = build(HALF)
+    expect(e.text).toContain(`Anna pays Bo ${fmt(0.5)}`)
+    expect(e.text).toContain(`Each takes home: ${fmt(30000.5)}`)
+    expect(e.text).toContain(`Anna: ${fmt(30001)}`)
+  })
+
+  it('"Updated:" subject and the replace line when a previous email was sent', () => {
+    const sent = new Date('2026-11-03T08:00:00Z')
+    const e = build(BASE, sent)
+    expect(e.subject).toBe('Updated: salary results for October 2026')
+    expect(e.text).toContain(`These figures replace the ones we sent on ${stockholmDateEn(sent)}.`)
+    expect(stockholmDateEn(sent)).toBe('3 November 2026')
+    // Stockholm date, not UTC: 23:30 UTC on 2 Nov is 3 Nov in Stockholm.
+    expect(stockholmDateEn(new Date('2026-11-02T23:30:00Z'))).toBe('3 November 2026')
+  })
+
+  it('never contains itemised lines or notes', () => {
+    const withExtras = {
+      ...BASE, note: 'Bonus i mars HEMLIG',
+      income_items: [{ owner: 'a', label: 'Barnbidrag', amount: 1250 }, { owner: 'a', label: 'Lön', amount: 38450 }],
+    } as SalaryResultsFigures
+    const e = build(withExtras, new Date('2026-11-03T08:00:00Z'))
+    for (const s of [e.subject, e.text, e.html]) {
+      expect(s).not.toContain('Barnbidrag')
+      expect(s).not.toMatch(/Lön(?!er)/) // "Open Löner" is the only Lön* text
+      expect(s).not.toContain('HEMLIG')
+      expect(s).not.toContain('Bonus')
+      expect(nbsp(s)).not.toContain('1 250')
+      expect(nbsp(s)).not.toContain('38 450')
+    }
+  })
+
+  it('escapes names and throws on missing figures', () => {
+    const e = buildMonthResultsEmail({ month: '2026-10', nameA: '<i>A', nameB: 'B&B', submission: BASE, previousSentAt: null, link: LINK })
+    expect(e.html).toContain('&lt;i&gt;A pays B&amp;B')
+    expect(e.html).not.toContain('<i>')
+    expect(() => build({ ...BASE, equal_share: null })).toThrow()
   })
 })
