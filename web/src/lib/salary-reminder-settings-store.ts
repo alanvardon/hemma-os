@@ -15,9 +15,16 @@ import { syncCoordinator } from './sync'
 export interface SalaryReminderSettings {
   enabled: boolean
   send_day: number
+  /** Plan 139 D7: email the other person when one half is first submitted. */
+  notify_partner: boolean
+  /** Plan 139 D8: email both the results when a month completes (automatic
+      sends only; a manual resend always sends). */
+  email_results: boolean
 }
 
-export const DEFAULT_SALARY_REMINDER_SETTINGS: SalaryReminderSettings = { enabled: true, send_day: 25 }
+export const DEFAULT_SALARY_REMINDER_SETTINGS: SalaryReminderSettings = {
+  enabled: true, send_day: 25, notify_partner: true, email_results: true,
+}
 
 export interface SalaryReminderSettingsLoad {
   settings: SalaryReminderSettings
@@ -40,13 +47,16 @@ function isValidSendDay(value: unknown): value is number {
 export async function loadSalaryReminderSettings(): Promise<SalaryReminderSettingsLoad> {
   const { data, error } = await supabase
     .from('salary_reminder_settings')
-    .select('enabled, send_day')
+    .select('enabled, send_day, notify_partner, email_results')
     .maybeSingle()
   if (error) return { settings: { ...DEFAULT_SALARY_REMINDER_SETTINGS }, unknown: true }
   if (!data) return { settings: { ...DEFAULT_SALARY_REMINDER_SETTINGS }, unknown: false }
   const enabled = typeof data.enabled === 'boolean' ? data.enabled : DEFAULT_SALARY_REMINDER_SETTINGS.enabled
   const send_day = isValidSendDay(data.send_day) ? data.send_day : DEFAULT_SALARY_REMINDER_SETTINGS.send_day
-  return { settings: { enabled, send_day }, unknown: false }
+  // A missing or malformed field reads as the default (on), like no row.
+  const notify_partner = typeof data.notify_partner === 'boolean' ? data.notify_partner : DEFAULT_SALARY_REMINDER_SETTINGS.notify_partner
+  const email_results = typeof data.email_results === 'boolean' ? data.email_results : DEFAULT_SALARY_REMINDER_SETTINGS.email_results
+  return { settings: { enabled, send_day, notify_partner, email_results }, unknown: false }
 }
 
 /** Upsert the household's reminder setting. Validates send_day (1–28,
@@ -61,7 +71,13 @@ export async function saveSalaryReminderSettings(settings: SalaryReminderSetting
   const { error } = await supabase
     .from('salary_reminder_settings')
     .upsert(
-      { household_id: scope.identity.householdId, enabled: settings.enabled, send_day: settings.send_day },
+      {
+        household_id: scope.identity.householdId,
+        enabled: settings.enabled,
+        send_day: settings.send_day,
+        notify_partner: settings.notify_partner,
+        email_results: settings.email_results,
+      },
       { onConflict: 'household_id' },
     )
   if (error) throw error

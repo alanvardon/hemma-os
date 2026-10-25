@@ -11,6 +11,8 @@ import * as salaryDraftsStore from '../lib/salary-drafts-store'
 import { SalaryHalfConflict, SalaryHalfForbidden } from '../lib/salary-drafts-store'
 import * as salaryReminderSettingsStore from '../lib/salary-reminder-settings-store'
 import type { SalaryReminderSettings } from '../lib/salary-reminder-settings-store'
+import * as salaryEmailStore from '../lib/salary-email-store'
+import type { ResultsEmailStatus } from '../lib/salary-email-store'
 import { SYNC_STATUS_EVENT } from '../lib/sync'
 import DialogShell from '../components/DialogShell'
 import PageHeader from '../components/PageHeader'
@@ -38,7 +40,28 @@ const COLUMN_COPY: SalaryColumnCopy = {
 const MSG_SAVE_FAILED = 'Kunde inte spara — försök igen.'
 const MSG_CONFLICT = 'Någon annan ändrade precis den här lönen. Ladda om och försök igen.'
 const MSG_FORBIDDEN = 'Du kan bara skicka in din egen lön.'
+const MSG_SETTING_SAVE_FAILED = 'Kunde inte spara inställningen — försök igen.'
+const MSG_RESEND_QUEUED = 'Resultatet mejlas till er båda inom några minuter.'
+const MSG_RESEND_ALREADY = 'Ett mejl är redan på väg.'
+const MSG_RESEND_FAILED = 'Kunde inte skicka — försök igen.'
 const MSG_ALREADY_LOGGED = 'Månaden blev klar under tiden — dina ändringar ligger nu på den färdiga månaden'
+
+interface ResendFeedback { kind: 'ok' | 'error'; text: string }
+
+/** The status line under "Skicka resultatet igen". `changed` = the month was
+    edited after the last results email (updated_at later than last_sent_at). */
+function emailStatusLine(row: SalarySubmission, status: ResultsEmailStatus | undefined): { text: string | null; changed: boolean } {
+  const queued = status?.queued === true
+  const sentAt = status?.last_sent_at ?? null
+  const updated = Date.parse(row.updated_at ?? '')
+  const sent = sentAt ? Date.parse(sentAt) : NaN
+  // A queued mail already covers the current state, so nothing is "changed" then.
+  const changed = !queued && Number.isFinite(updated) && Number.isFinite(sent) && updated > sent
+  if (queued) return { text: 'Ett mejl är på väg', changed: false }
+  if (changed) return { text: 'Månaden har ändrats sedan senaste mejlet', changed }
+  const date = shortDate(sentAt)
+  return { text: date ? `Senast mejlat ${date}` : null, changed }
+}
 
 function sumItems(list: { amount: number }[]): number {
   return list.reduce((t, it) => t + (it.amount || 0), 0)
@@ -81,7 +104,7 @@ function HalfEditor({
   mySlot: Slot | null
   otherTotalFor: (month: string, slot: Slot) => number | null
   onClose: () => void
-  onSaved: () => void
+  onSaved: (editedRowId: string | null) => void
   onAlreadyLogged: (month: string, slot: Slot, items: IncomeItem[], note: string) => Promise<void>
   onReloadHalf: (month: string, slot: Slot) => Promise<void>
 }) {
@@ -140,7 +163,7 @@ function HalfEditor({
         const row = rows.find((r) => r.id === target.rowId)
         if (!row) { showToast('Månaden finns inte längre — ladda om sidan.'); return }
         await salaryStore.update(replaceHalf(row, slot, clean, noteText || null))
-        onSaved()
+        onSaved(target.rowId)
         return
       }
       const result = await salaryDraftsStore.saveHalf(
@@ -151,7 +174,7 @@ function HalfEditor({
         await onAlreadyLogged(month, slot, clean, noteText)
         return
       }
-      onSaved()
+      onSaved(null)
     } catch (err) {
       if (err instanceof SalaryHalfConflict) setProblem({ kind: 'conflict', text: MSG_CONFLICT })
       else if (err instanceof SalaryHalfForbidden) setProblem({ kind: 'forbidden', text: MSG_FORBIDDEN })
@@ -269,7 +292,7 @@ export default function Loner() {
       setReminderSettingsUnknown(loadedSettings.unknown)
     })
   }, [])
-  async function updateReminderSettings(patch: Partial<SalaryReminderSettings>) {
+  async function updateReminderSettings(patch: Partial<SalaryReminderSettings>, failureMessage = 'Kunde inte spara påminnelsen — försök igen.') {
     if (!reminderSettings) return
     const prevSettings = reminderSettings
     const prevUnknown = reminderSettingsUnknown
@@ -281,8 +304,48 @@ export default function Loner() {
     } catch {
       setReminderSettings(prevSettings)
       setReminderSettingsUnknown(prevUnknown)
-      showToast('Kunde inte spara påminnelsen — försök igen.')
+      showToast(failureMessage)
     }
+  }
+
+  // ── Results email (D8): status per month + manual resend ───────────────────
+  const [emailStatus, setEmailStatus] = useState<Map<string, ResultsEmailStatus>>(new Map())
+  const [sending, setSending] = useState<Record<string, boolean>>({})
+  const [feedback, setFeedback] = useState<Record<string, ResendFeedback>>({})
+  const [offer, setOffer] = useState<string | null>(null)
+  const offerTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshEmailStatus = useCallback(async () => {
+    setEmailStatus(await salaryEmailStore.listResultsEmailStatus())
+  }, [])
+  useEffect(() => { void refreshEmailStatus() }, [refreshEmailStatus])
+  useEffect(() => () => { if (offerTimer.current) clearTimeout(offerTimer.current) }, [])
+
+  async function resendResults(id: string): Promise<ResendFeedback> {
+    setSending((s) => ({ ...s, [id]: true }))
+    let result: ResendFeedback
+    try {
+      const answer = await salaryEmailStore.requestResultsEmail(id)
+      result = { kind: 'ok', text: answer === 'queued' ? MSG_RESEND_QUEUED : MSG_RESEND_ALREADY }
+    } catch {
+      result = { kind: 'error', text: MSG_RESEND_FAILED }
+    }
+    setFeedback((f) => ({ ...f, [id]: result }))
+    setSending((s) => ({ ...s, [id]: false }))
+    await refreshEmailStatus()
+    return result
+  }
+  function showOffer(id: string) {
+    if (offerTimer.current) clearTimeout(offerTimer.current)
+    setOffer(id)
+    offerTimer.current = setTimeout(() => setOffer(null), 10_000)
+  }
+  async function acceptOffer() {
+    const id = offer
+    if (!id) return
+    if (offerTimer.current) clearTimeout(offerTimer.current)
+    setOffer(null)
+    const result = await resendResults(id)
+    showToast(result.text)
   }
 
   // ── Who is who ─────────────────────────────────────────────────────────────
@@ -502,6 +565,25 @@ export default function Loner() {
       ? view.duplicates.map((row, i) => ({ key: row.id ?? `${view.month}-${i}`, view, row: row as SalarySubmission | null, duplicate: i > 0 }))
       : [{ key: view.month, view, row: null as SalarySubmission | null, duplicate: false }])
 
+  function resendBlock(row: SalarySubmission) {
+    const id = row.id
+    if (!id) return null
+    const { text, changed } = emailStatusLine(row, emailStatus.get(id))
+    const busy = sending[id] === true
+    const result = feedback[id]
+    return (
+      <div className="ln-resend">
+        <div className="detail-subhead">Resultatmejl</div>
+        {text && <p className="ln-resend-status" data-changed={changed || undefined}>{changed ? '! ' : ''}{text}</p>}
+        <button type="button" className={'btn ' + (changed ? 'btn-primary' : 'btn-ghost')} disabled={busy} aria-busy={busy}
+          onClick={() => { void resendResults(id) }}>
+          Skicka resultatet igen
+        </button>
+        <p className="ln-resend-feedback" data-kind={result?.kind} role="status" aria-live="polite">{result?.text ?? ''}</p>
+      </div>
+    )
+  }
+
   function entryDetail(view: MonthView, row: SalarySubmission | null) {
     if (row) {
       return (
@@ -528,6 +610,7 @@ export default function Loner() {
               <p className="detail-note">{row.note}</p>
             </>
           )}
+          {resendBlock(row)}
           <button type="button" className="btn btn-ghost ln-delete" onClick={() => { void removeRow(row.id) }}>Ta bort månaden</button>
         </>
       )
@@ -671,6 +754,36 @@ export default function Loner() {
               </p>
             )}
           </div>
+
+          {(['notify_partner', 'email_results'] as const).map((key) => {
+            const copy = key === 'notify_partner'
+              ? { id: 'salary-notify-partner', title: 'Mejla när den andra har skickat in', sub: 'Den andra får ett mejl när du skickar in din lön och månaden väntar på hen.' }
+              : { id: 'salary-email-results', title: 'Mejla resultatet när månaden är klar', sub: 'Ni får båda ett mejl med överföringen när den andra halvan kommit in.' }
+            return (
+              <div
+                key={key}
+                className={'salary-reminder ln-setting' + (reminderSettings === null ? ' is-loading' : '')}
+                aria-busy={reminderSettings === null}
+              >
+                <div className="salary-reminder-head">
+                  <span className="salary-reminder-text">
+                    <label className="salary-reminder-title" htmlFor={copy.id}>{copy.title}</label>
+                    <span className="salary-reminder-sub">{copy.sub}</span>
+                  </span>
+                  <label className="toggle">
+                    <input
+                      id={copy.id}
+                      type="checkbox"
+                      checked={reminderSettings?.[key] ?? false}
+                      disabled={reminderSettings === null}
+                      onChange={(e) => { void updateReminderSettings({ [key]: e.target.checked }, MSG_SETTING_SAVE_FAILED) }}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+              </div>
+            )
+          })}
         </section>
       </div>
 
@@ -683,12 +796,22 @@ export default function Loner() {
             mySlot={mySlot}
             otherTotalFor={otherTotalFor}
             onClose={() => setEditor(null)}
-            onSaved={() => { setEditor(null); flashSaved(); void reload() }}
+            onSaved={(editedRowId) => {
+              setEditor(null); flashSaved(); void reload()
+              if (editedRowId) { void refreshEmailStatus(); showOffer(editedRowId) }
+            }}
             onAlreadyLogged={onAlreadyLogged}
             onReloadHalf={reloadHalf}
           />
         )}
       </DialogShell>
+      {offer && (
+        <div className="ln-offer" role="status" aria-live="polite">
+          <span>Sparat. Mejla det nya resultatet?</span>
+          <button type="button" className="btn btn-primary" onClick={() => { void acceptOffer() }}>Mejla det nya resultatet</button>
+          <button type="button" className="ln-offer-close" aria-label="Stäng" onClick={() => setOffer(null)}>×</button>
+        </div>
+      )}
       <div className={'hb-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
     </div>
   )

@@ -271,4 +271,32 @@
   .history-amount { white-space: normal; }
   /* Inside its own card the reminder needs no divider or top gap. */
   .salary-reminder { margin-top: 0; padding-top: 0; border-top: none; }
+  /* The two email toggles sit below the reminder, separated by a rule. */
+  .salary-reminder.ln-setting { margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--rule); }
+
+  /* ── Results email: resend action + status (D8) ─────────────── */
+  .ln-resend { display: flex; flex-direction: column; align-items: flex-start; gap: 0.35rem; min-width: 0; }
+  .ln-resend .btn { max-width: 100%; white-space: normal; text-align: left; margin-top: 0.2rem; }
+  .ln-resend-status { margin: 0; font-size: 12px; color: var(--ink-mid); line-height: 1.45; }
+  .ln-resend-status[data-changed] { color: var(--warn); font-weight: 600; }
+  .ln-resend-feedback { margin: 0; font-size: 12px; line-height: 1.45; color: var(--accent); min-height: 0; }
+  .ln-resend-feedback:empty { display: none; }
+  .ln-resend-feedback[data-kind="error"] { color: var(--warn); font-weight: 600; }
+  .ln-resend-feedback[data-kind="error"]::before { content: "! "; }
+  .ln-resend-feedback[data-kind="ok"]::before { content: "✓ "; }
+
+  /* The post-edit offer: a toast that can be clicked (hb-toast ignores pointer events). */
+  .ln-offer {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    width: max-content; max-width: calc(100vw - 32px);
+    display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 0.75rem;
+    padding: 10px 14px; border-radius: var(--r-md);
+    background: var(--ink); color: var(--paper);
+    font-size: 13.5px; font-weight: 550; box-shadow: var(--shadow-md); z-index: 100;
+  }
+  .ln-offer .btn { white-space: normal; text-align: left; }
+  .ln-offer-close {
+    background: transparent; border: none; color: inherit; font-size: 20px; line-height: 1;
+    min-width: 32px; min-height: 32px; cursor: pointer; margin-left: auto;
+  }
 }

@@ -16,6 +16,7 @@ import type { SalarySubmission } from '../lib/hushallsbudget'
 import * as budgetStore from '../lib/hushallsbudget-store'
 import * as salaryStore from '../lib/salary-store'
 import * as draftsStore from '../lib/salary-drafts-store'
+import * as emailStore from '../lib/salary-email-store'
 import * as settingsStore from '../lib/salary-reminder-settings-store'
 import { PersistenceError } from '../lib/persistence-error'
 import { usePersonIdentity } from '../components/usePersonIdentity'
@@ -31,6 +32,7 @@ vi.mock('../lib/salary-drafts-store', async (importActual) => {
   return { ...actual, listDrafts: vi.fn(), saveHalf: vi.fn(), discardDrafts: vi.fn() }
 })
 vi.mock('../lib/salary-reminder-settings-store')
+vi.mock('../lib/salary-email-store')
 vi.mock('../components/usePersonIdentity')
 
 const THIS_MONTH = currentMonth()
@@ -96,8 +98,10 @@ beforeEach(() => {
   vi.mocked(usePersonIdentity).mockReturnValue(identityView('a'))
   vi.mocked(draftsStore.listDrafts).mockResolvedValue([])
   vi.mocked(draftsStore.saveHalf).mockResolvedValue({ status: 'pending', updated_at: DRAFT_AT })
-  vi.mocked(settingsStore.loadSalaryReminderSettings).mockResolvedValue({ settings: { enabled: true, send_day: 25 }, unknown: false })
+  vi.mocked(settingsStore.loadSalaryReminderSettings).mockResolvedValue({ settings: { enabled: true, send_day: 25, notify_partner: true, email_results: true }, unknown: false })
   vi.mocked(settingsStore.saveSalaryReminderSettings).mockResolvedValue(undefined)
+  vi.mocked(emailStore.listResultsEmailStatus).mockResolvedValue(new Map())
+  vi.mocked(emailStore.requestResultsEmail).mockResolvedValue('queued')
 })
 
 describe('Who may submit what (D2/D3)', () => {
@@ -335,7 +339,7 @@ describe('Reminder settings card (moved from Hushållsbudget)', () => {
     await waitFor(() => expect(select).not.toBeDisabled())
     const user = userEvent.setup()
     await user.selectOptions(select, '10')
-    await waitFor(() => expect(settingsStore.saveSalaryReminderSettings).toHaveBeenCalledWith({ enabled: true, send_day: 10 }))
+    await waitFor(() => expect(settingsStore.saveSalaryReminderSettings).toHaveBeenCalledWith({ enabled: true, send_day: 10, notify_partner: true, email_results: true }))
   })
 
   it('on a save failure, reverts the control and shows a toast', async () => {
@@ -351,7 +355,7 @@ describe('Reminder settings card (moved from Hushållsbudget)', () => {
   })
 
   it('with the reminder off, the day is disabled but still shows the saved day; turning it on re-enables it', async () => {
-    vi.mocked(settingsStore.loadSalaryReminderSettings).mockResolvedValue({ settings: { enabled: false, send_day: 12 }, unknown: false })
+    vi.mocked(settingsStore.loadSalaryReminderSettings).mockResolvedValue({ settings: { enabled: false, send_day: 12, notify_partner: true, email_results: true }, unknown: false })
     renderRoute()
     const toggle = await screen.findByRole('checkbox', { name: /månatlig lönepåminnelse/i })
     const select = await screen.findByRole('combobox', { name: /skicka på dag/i })
@@ -362,7 +366,7 @@ describe('Reminder settings card (moved from Hushållsbudget)', () => {
     const user = userEvent.setup()
     await user.click(toggle)
     await waitFor(() => expect(select).not.toBeDisabled())
-    await waitFor(() => expect(settingsStore.saveSalaryReminderSettings).toHaveBeenCalledWith({ enabled: true, send_day: 12 }))
+    await waitFor(() => expect(settingsStore.saveSalaryReminderSettings).toHaveBeenCalledWith({ enabled: true, send_day: 12, notify_partner: true, email_results: true }))
   })
 
   it('while settings load, shows no fake value: placeholder day, disabled unchecked toggle', async () => {
@@ -376,8 +380,177 @@ describe('Reminder settings card (moved from Hushållsbudget)', () => {
   })
 
   it('says so when the setting could not be read', async () => {
-    vi.mocked(settingsStore.loadSalaryReminderSettings).mockResolvedValue({ settings: { enabled: true, send_day: 25 }, unknown: true })
+    vi.mocked(settingsStore.loadSalaryReminderSettings).mockResolvedValue({ settings: { enabled: true, send_day: 25, notify_partner: true, email_results: true }, unknown: true })
     renderRoute()
     expect(await screen.findByText(/Kunde inte läsa inställningen/)).toBeInTheDocument()
+  })
+})
+
+const ALL_ON = { enabled: true, send_day: 25, notify_partner: true, email_results: true }
+
+describe('Email toggles (D7/D8)', () => {
+  const NOTIFY = /mejla när den andra har skickat in/i
+  const RESULTS = /mejla resultatet när månaden är klar/i
+
+  it('a toggle saves the whole settings object with only that field changed', async () => {
+    renderRoute()
+    const toggle = await screen.findByRole('checkbox', { name: NOTIFY })
+    await waitFor(() => expect(toggle).not.toBeDisabled())
+    expect(toggle).toBeChecked()
+    await userEvent.setup().click(toggle)
+    await waitFor(() => expect(settingsStore.saveSalaryReminderSettings).toHaveBeenCalledWith({ ...ALL_ON, notify_partner: false }))
+    expect(toggle).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: RESULTS })).toBeChecked()
+  })
+
+  it('a failed save reverts the toggle and shows the error', async () => {
+    vi.mocked(settingsStore.saveSalaryReminderSettings).mockRejectedValue(new Error('network'))
+    renderRoute()
+    const toggle = await screen.findByRole('checkbox', { name: RESULTS })
+    await waitFor(() => expect(toggle).not.toBeDisabled())
+    await userEvent.setup().click(toggle)
+    expect(await screen.findByText('Kunde inte spara inställningen — försök igen.')).toBeInTheDocument()
+    await waitFor(() => expect(toggle).toBeChecked())
+  })
+
+  it('reads a stored off value as off and shows loading state while loading', async () => {
+    vi.mocked(settingsStore.loadSalaryReminderSettings).mockResolvedValue({ settings: { ...ALL_ON, email_results: false }, unknown: false })
+    renderRoute()
+    const toggle = await screen.findByRole('checkbox', { name: RESULTS })
+    await waitFor(() => expect(toggle).not.toBeDisabled())
+    expect(toggle).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: NOTIFY })).toBeChecked()
+  })
+
+  it('while settings load, both toggles are disabled, unchecked and aria-busy', async () => {
+    vi.mocked(settingsStore.loadSalaryReminderSettings).mockReturnValue(new Promise(() => {}))
+    renderRoute()
+    for (const name of [NOTIFY, RESULTS]) {
+      const toggle = await screen.findByRole('checkbox', { name })
+      expect(toggle).toBeDisabled()
+      expect(toggle).not.toBeChecked()
+      expect(toggle.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'true')
+    }
+  })
+})
+
+describe('Resend the results email (D8)', () => {
+  async function openMonth() {
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: new RegExp(monthLabel(THIS_MONTH)) }))
+    return user
+  }
+  const resendButton = () => screen.findByRole('button', { name: 'Skicka resultatet igen' })
+
+  beforeEach(() => {
+    vi.mocked(salaryStore.list).mockResolvedValue([baseRow()])
+    vi.mocked(salaryStore.update).mockReset()
+    vi.mocked(salaryStore.update).mockResolvedValue(baseRow())
+  })
+
+  it('requests the email for that row and shows the success text; the status is refreshed', async () => {
+    renderRoute()
+    const user = await openMonth()
+    await user.click(await resendButton())
+    expect(await screen.findByText('Resultatet mejlas till er båda inom några minuter.')).toBeInTheDocument()
+    expect(emailStore.requestResultsEmail).toHaveBeenCalledWith('sub-1')
+    // once on load, once after the request
+    await waitFor(() => expect(emailStore.listResultsEmailStatus).toHaveBeenCalledTimes(2))
+  })
+
+  it('says so when a mail is already on its way', async () => {
+    vi.mocked(emailStore.requestResultsEmail).mockResolvedValue('already_queued')
+    renderRoute()
+    const user = await openMonth()
+    await user.click(await resendButton())
+    expect(await screen.findByText('Ett mejl är redan på väg.')).toBeInTheDocument()
+  })
+
+  it('an RPC failure shows the error and leaves the button usable', async () => {
+    vi.mocked(emailStore.requestResultsEmail).mockRejectedValue(new Error('boom'))
+    renderRoute()
+    const user = await openMonth()
+    await user.click(await resendButton())
+    expect(await screen.findByText('Kunde inte skicka — försök igen.')).toBeInTheDocument()
+    expect(await resendButton()).toBeEnabled()
+  })
+
+  it('disables the button while the request is in flight', async () => {
+    let finish: (v: 'queued') => void = () => {}
+    vi.mocked(emailStore.requestResultsEmail).mockReturnValue(new Promise((r) => { finish = r }))
+    renderRoute()
+    const user = await openMonth()
+    await user.click(await resendButton())
+    expect(await resendButton()).toBeDisabled()
+    finish('queued')
+    await waitFor(async () => expect(await resendButton()).toBeEnabled())
+  })
+
+  it('shows "Senast mejlat" for a sent month, "Ett mejl är på väg" when queued', async () => {
+    vi.mocked(emailStore.listResultsEmailStatus).mockResolvedValue(new Map([
+      ['sub-1', { submission_id: 'sub-1', last_sent_at: '2026-10-05T08:00:00.000Z', queued: false }],
+    ]))
+    const { unmount } = renderRoute()
+    await openMonth()
+    expect(await screen.findByText('Senast mejlat 5 okt')).toBeInTheDocument()
+    unmount()
+    vi.mocked(emailStore.listResultsEmailStatus).mockResolvedValue(new Map([
+      ['sub-1', { submission_id: 'sub-1', last_sent_at: '2026-10-05T08:00:00.000Z', queued: true }],
+    ]))
+    renderRoute()
+    await openMonth()
+    expect(await screen.findByText('Ett mejl är på väg')).toBeInTheDocument()
+  })
+
+  it('an edited month shows the changed notice and a primary button', async () => {
+    vi.mocked(salaryStore.list).mockResolvedValue([{ ...baseRow(), updated_at: '2026-10-10T10:00:00.000Z' }])
+    vi.mocked(emailStore.listResultsEmailStatus).mockResolvedValue(new Map([
+      ['sub-1', { submission_id: 'sub-1', last_sent_at: '2026-10-05T08:00:00.000Z', queued: false }],
+    ]))
+    renderRoute()
+    await openMonth()
+    expect(await screen.findByText(/Månaden har ändrats sedan senaste mejlet/)).toBeInTheDocument()
+    expect(await resendButton()).toHaveClass('btn-primary')
+  })
+
+  it('an unedited month keeps the ghost button; a never-emailed month shows no status line', async () => {
+    renderRoute()
+    await openMonth()
+    expect(await resendButton()).not.toHaveClass('btn-primary')
+    expect(screen.queryByText(/Senast mejlat|Ett mejl är på väg|har ändrats/)).not.toBeInTheDocument()
+  })
+
+  it('each legacy duplicate row has its own resend for its own id', async () => {
+    vi.mocked(salaryStore.list).mockResolvedValue([
+      baseRow(), { ...baseRow(), id: 'sub-0', created_at: '2026-08-01T10:00:00.000Z' },
+    ])
+    renderRoute()
+    const user = userEvent.setup()
+    const heads = await screen.findAllByRole('button', { name: new RegExp(monthLabel(THIS_MONTH)) })
+    await user.click(heads[1])
+    await user.click(await resendButton())
+    expect(emailStore.requestResultsEmail).toHaveBeenCalledWith('sub-0')
+  })
+
+  it('after editing a complete month, the offer mails that row\'s new result', async () => {
+    renderRoute()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Redigera din lön' }))
+    await user.click(await dialog().findByRole('button', { name: 'Spara' }))
+    expect(await screen.findByText('Sparat. Mejla det nya resultatet?')).toBeInTheDocument()
+    expect(emailStore.requestResultsEmail).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Mejla det nya resultatet' }))
+    await waitFor(() => expect(emailStore.requestResultsEmail).toHaveBeenCalledWith('sub-1'))
+    expect(await screen.findByText('Resultatet mejlas till er båda inom några minuter.')).toBeInTheDocument()
+  })
+
+  it('saving a draft half does not offer a results email', async () => {
+    vi.mocked(salaryStore.list).mockResolvedValue([])
+    renderRoute()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Skicka in din lön' }))
+    await user.click(await dialog().findByRole('button', { name: 'Spara' }))
+    await waitFor(() => expect(draftsStore.saveHalf).toHaveBeenCalled())
+    expect(screen.queryByText('Sparat. Mejla det nya resultatet?')).not.toBeInTheDocument()
   })
 })
