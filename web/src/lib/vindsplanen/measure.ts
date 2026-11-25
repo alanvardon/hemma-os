@@ -74,6 +74,12 @@ export function measureSteps(geo: Geometry, plan: Pick<PlanV2, 'options'>): Meas
   const ground = B.ground > 0 ? B.ground : FF(B)
   const OS = oldStairs(geo, B)
   const oldN = OS.P.n
+  // B8's dimension line stands just inside the opening's west end, at the
+  // front of step 2 (where the owner measured): from the straight step below
+  // it (0: the ground floor) up to this hallway's floor
+  const b8x = r.x0 + 0.02
+  const b8i = Math.ceil((b8x - OS.it.x) / OS.it.g - 1e-9)
+  const b8k = b8i >= 1 && b8i <= OS.P.a ? b8i : 0
   const xm = BAYS[Math.floor(BAYS.length / 2)].c
   const zs = (y: number) => HALF - y / SLOPE - 0.28
   const rx = RAFT_X[Math.max(0, Math.floor(RAFT_N / 2) - 1)]
@@ -126,7 +132,7 @@ export function measureSteps(geo: Geometry, plan: Pick<PlanV2, 'options'>): Meas
       boxes: [[r.x0, px, y0, y0 + B.ceil, inner - 0.04, inner + 0.04]] }),
     step({ code: 'B8', attic: false,
       fields: [{ key: 'steps', v: oldN, unit: '', min: 6, max: 24, raw: true }, { key: 'stepHeight', v: ground / oldN, min: 14, max: 24 }, { key: 'width', v: OLD_W(B), min: 60, max: 150 }],
-      cam: { p: [r.x1 - 0.3, y0 + 1.8, inner + dirH * 0.5], t: [r.x0 + 0.4, y0 - 1.2, wc] }, dims: [dim([r.x0 + 0.2, y0 - ground, wc], [r.x0 + 0.2, y0, wc], ground)] }),
+      cam: { p: [r.x1 - 0.3, y0 + 1.8, inner + dirH * 0.5], t: [r.x0 + 0.4, y0 - 1.2, wc] }, dims: [dim([b8x, y0 - ground + b8k * OS.P.r, wc], [b8x, y0, wc], ground - b8k * OS.P.r)] }),
   ]
   {
     const g = OS.it.g

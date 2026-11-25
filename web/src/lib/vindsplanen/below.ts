@@ -112,9 +112,13 @@ export interface OldStairsItem extends CurvedLike {
 /**
  * The old stairs, ground floor → hallway (v41 `oldStairs`, line 861): storey
  * height and step count as measured, else assumed equal to the floor above.
- * Against the long wall, turning at the east end toward the hallway; the
- * turn begins one going before the corner (unlike v41, whose winders all
- * fanned inside the corner square).
+ * Against the long wall, turning at the east end toward the hallway. The
+ * front of step 2 sits under the west end of the stairwell opening (B4), as
+ * on the owner's stairs (2026-11-25): the turn begins as far before the
+ * corner as that needs, so its winders also taper over the end of the first
+ * flight (v41 fanned them all inside the corner square and let the foot land
+ * wherever that put it). When the opening is too short for that, the turn
+ * starts at the corner.
  */
 export function oldStairs(geo: Geometry, B: Below): { it: OldStairsItem; P: StairPlan } {
   const r = swRect(geo, B)
@@ -124,20 +128,21 @@ export function oldStairs(geo: Geometry, B: Below): { it: OldStairsItem; P: Stai
   const n = B.oldN >= 4 ? B.oldN : Math.max(4, Math.round(F2 / 0.185))
   const r2 = F2 / n
   const g = B.oldG > 0 ? B.oldG : GOING // step depth as measured (B9), else assumed
-  // The turn starts one going before the corner, so the winders taper over
-  // the end of the first flight too (owner's stairs, 2026-11-25).
-  const lead = g
+  // how far before the corner the turn begins, for `a` straight steps, so the
+  // foot sits one going west of the opening's west end
+  const leadFor = (a: number) => Math.max(0, r.x1 - w - a * g - (r.x0 - g))
   // steps in the turn as counted (B9); until then, the fewest that give the
   // existing stairs normal headroom (1.9 m) under the edge of this floor
   const clear = (k: number) => {
     const a = n - 1 - k
-    const x = r.x1 - w - a * g - lead
+    const x = r.x1 - w - a * g - leadFor(a)
     const i = Math.ceil((r.x0 - x) / g - 1e-9)
     return i <= 0 || i > a || F2 - i * r2 - 0.25 >= 1.9
   }
   const wk = B.oldK >= 2 ? B.oldK : [3, 4, 5, 6].find(clear) || 6
   const b = B.oldK >= 2 ? B.oldB : 0
   const a = Math.max(0, n - 1 - wk - b)
+  const lead = leadFor(a)
   const it: OldStairsItem = { x: r.x1 - w - a * g - lead, z: north ? r.z0 + w / 2 : r.z1 - w / 2, rot: 0, turn: north ? 'R' : 'L', a, w, risers: n, g, wk, b, lead }
   return { it, P: curvedPlan(B, it, F2) }
 }
