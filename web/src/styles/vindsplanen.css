@@ -113,6 +113,34 @@
     max-width: calc(100% - 16px);
   }
   .vp-legend span { display: flex; align-items: center; gap: 6px; }
+  .vp-hist[hidden], .vp-cams[hidden] { display: none; }
+
+  /* ── Gå runt (walk mode) ────────────────────────────────────────────────── */
+  .vp-walk {
+    position: absolute; inset: 8px; z-index: 4; pointer-events: none;
+    display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; gap: 8px;
+  }
+  .vp-walk > * { pointer-events: auto; }
+  .vp-walk-info {
+    max-width: min(26rem, 100%); background: var(--glass); backdrop-filter: blur(6px);
+    border-radius: var(--r-sm); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink);
+  }
+  .vp-walk-where { font-weight: 600; }
+  .vp-walk-head { font-variant-numeric: tabular-nums; }
+  .vp-walk-head.is-warn { color: var(--warn); font-weight: 600; }
+  .vp-walk-help { margin: 0; font-size: 12px; color: var(--ink-soft); }
+  .vp-walk-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+  .vp-walk-acts .btn { padding: 6px 12px; font-size: 12.5px; min-height: 36px; }
+  .vp-stick {
+    align-self: flex-end; width: 120px; height: 120px; border-radius: 50%; flex: none;
+    background: var(--glass); border: 1px solid var(--rule); touch-action: none;
+    display: flex; align-items: center; justify-content: center; backdrop-filter: blur(6px);
+  }
+  .vp-stick i {
+    width: 52px; height: 52px; border-radius: 50%; background: var(--accent); opacity: 0.85; display: block; pointer-events: none;
+  }
+  @media (hover: hover) and (pointer: fine) { .vp-stick { display: none; } }
+  @media (pointer: coarse) { .vp-walk-help { display: none; } }
   .vp-sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
   .vp-sw-stand { background: oklch(62% 0.1 153); }
   .vp-sw-boa { background: oklch(72% 0.11 75); }

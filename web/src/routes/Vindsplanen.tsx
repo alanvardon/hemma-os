@@ -4,7 +4,7 @@
 // saves and the read/empty/error states. Geometry and advice come from the
 // pure core in lib/vindsplanen; nothing here computes them.
 
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useToolPageActive } from '../lib/toolTransition'
 import PageHeader from '../components/PageHeader'
 import ThemeToggle from '../components/ThemeToggle'
@@ -21,7 +21,7 @@ import { computeZones } from '../lib/vindsplanen/zones'
 import type { CameraPresetId, MovePatch, SceneHandle } from './vindsplanen/scene/Scene'
 import LayoutPanel from './vindsplanen/LayoutPanel'
 import MaterialsPanel from './vindsplanen/MaterialsPanel'
-import MeasurePanel from './vindsplanen/MeasurePanel'
+import MeasurePanel, { MEASURE_END } from './vindsplanen/MeasurePanel'
 import RoomPanel from './vindsplanen/RoomPanel'
 import SavePanel, { ImportBox } from './vindsplanen/SavePanel'
 import SceneHost from './vindsplanen/SceneHost'
@@ -30,6 +30,9 @@ import { downloadJson } from './vindsplanen/importPlan'
 import { addItem, duplicateItem, newItemId, patchItem, removeItem } from './vindsplanen/planOps'
 import { usePlanEditor } from './vindsplanen/usePlanEditor'
 import { loadViewPrefs, saveViewPrefs } from './vindsplanen/viewPrefs'
+
+// walk mode is its own small chunk, loaded the first time someone walks
+const WalkMode = lazy(() => import('./vindsplanen/WalkMode'))
 
 type Tab = 'plan' | 'material' | 'room' | 'measure' | 'save'
 const TABS: { v: Tab; label: string }[] = [
@@ -67,6 +70,7 @@ export default function Vindsplanen() {
   const [cam, setCam] = useState<CameraPresetId | null>(null)
   const [activeStep, setActiveStep] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [walking, setWalking] = useState(false)
   const sceneRef = useRef<SceneHandle>(null)
 
   // Everything derived comes from the pure core. The heavy parts follow a
@@ -79,7 +83,7 @@ export default function Vindsplanen() {
     return { warnings: planWarnings(lagGeo, lag), holesOk: skyHolesOk(lagGeo, lag.items), zones: computeZones(lagGeo, lag) }
   }, [lag, lagGeo])
   const steps = useMemo(() => (plan && geo ? measureSteps(geo, plan) : []), [plan, geo])
-  const step = tab === 'measure' && activeStep ? steps.find((s) => s.code === activeStep) ?? null : null
+  const step = tab === 'measure' && activeStep && activeStep !== MEASURE_END ? steps.find((s) => s.code === activeStep) ?? null : null
 
   // Opening a step: fly the camera to where the tape goes, and make sure the
   // floor below is visible for a floor-below step.
@@ -90,8 +94,20 @@ export default function Vindsplanen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fly once per step, not on every plan edit
   }, [step?.code])
 
+  // Esc closes the measuring walkthrough (v41 `endWalk`); walk mode handles its own Esc
+  useEffect(() => {
+    if (tab !== 'measure' || !activeStep || walking) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setActiveStep(null) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [tab, activeStep, walking])
+
   const changeTab = (t: Tab) => { setTab(t); if (t !== 'measure') setActiveStep(null) }
-  const openMeasure = (code: string | null) => { setTab('measure'); setActiveStep(code) }
+  // opening a measuring step leaves walk mode, and starting a walk closes the step (v41 openStep / fpStart)
+  const openStep = (code: string | null) => { if (code) setWalking(false); setActiveStep(code) }
+  const openMeasure = (code: string | null) => { setTab('measure'); openStep(code) }
+  const startWalk = () => { setActiveStep(null); setSelectedId(null); setCam(null); setWalking(true) }
+  const goCamera = (id: CameraPresetId) => { setWalking(false); setCam(id) }
 
   function addNew(type: Parameters<typeof addItem>[1]) {
     const id = newItemId()
@@ -188,7 +204,7 @@ export default function Vindsplanen() {
             plan={plan}
             view={view}
             selectedId={selectedId}
-            onSelect={(id) => { setSelectedId(id); if (id) changeTab('plan') }}
+            onSelect={(id) => { if (walking) return; setSelectedId(id); if (id) changeTab('plan') }}
             onMoveItem={(id, patch: MovePatch) => update((p) => patchItem(p, id, patch))}
             onDragEnd={editor.commit}
             camera={cam}
@@ -196,7 +212,12 @@ export default function Vindsplanen() {
             highlights={step}
             shellToday={!!step?.attic}
           />
-          <div className="vp-hist" role="group" aria-label="Historik">
+          {walking && (
+            <Suspense fallback={null}>
+              <WalkMode sceneRef={sceneRef} geo={geo} plan={plan} onExit={() => setWalking(false)} />
+            </Suspense>
+          )}
+          <div className="vp-hist" role="group" aria-label="Historik" hidden={walking}>
             <button type="button" className="btn btn-ghost" onClick={editor.undo} disabled={!editor.canUndo} title="Ångra (Cmd/Ctrl+Z)">
               ↶ Ångra
             </button>
@@ -207,15 +228,17 @@ export default function Vindsplanen() {
               Mått
             </button>
           </div>
-          <div className="vp-cams" role="group" aria-label="Kamera">
+          <div className="vp-cams" role="group" aria-label="Kamera" hidden={walking}>
+            <button type="button" className="btn btn-ghost vp-walk-btn" aria-pressed={walking} onClick={startWalk} title="Gå genom planen i ögonhöjd">
+              Gå runt
+            </button>
             {CAMERAS.map((c) => (
-              <button key={c.id} type="button" className="btn btn-ghost" onClick={() => setCam(c.id)}>
+              <button key={c.id} type="button" className="btn btn-ghost" onClick={() => goCamera(c.id)}>
                 {c.label}
               </button>
             ))}
-            {/* TODO(plan 140 Stage 5): "Gå" — first-person walk mode. */}
           </div>
-          {view.zones && (
+          {view.zones && !walking && (
             <div className="vp-legend" aria-label="Förklaring">
               <span><i className="vp-sw vp-sw-stand" aria-hidden="true" />Stående höjd, ≥ 1,90 m</span>
               <span><i className="vp-sw vp-sw-boa" aria-hidden="true" />Räknas också som boarea (+60 cm)</span>
@@ -262,7 +285,7 @@ export default function Vindsplanen() {
           {tab === 'material' && <MaterialsPanel plan={plan} onChange={editor.edit} />}
           {tab === 'room' && <RoomPanel geo={geo} plan={plan} view={view} onView={setView} onChange={editor.edit} onMeasure={openMeasure} />}
           {tab === 'measure' && (
-            <MeasurePanel geo={geo} plan={plan} steps={steps} activeCode={activeStep} onOpen={setActiveStep} onChange={editor.edit} onToast={showToast} />
+            <MeasurePanel geo={geo} plan={plan} steps={steps} activeCode={activeStep} onOpen={openStep} onChange={editor.edit} onToast={showToast} />
           )}
           {tab === 'save' && (
             <SavePanel plan={plan} saveState={editor.saveState} onImport={(p) => void importPlan(p)} onReset={() => void resetToExample()} onRetry={editor.retrySave} />

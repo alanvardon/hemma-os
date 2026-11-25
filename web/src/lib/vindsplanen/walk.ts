@@ -210,3 +210,117 @@ export const eyeHeight = (head: number): number => Math.min(EYE, Math.max(0.6, h
 
 /** Headroom below which the HUD says to stoop. */
 export const mustStoop = (head: number): boolean => head < BODY + 0.05
+
+// ---------- The per-frame walker (v41 `fpUpdate`, 1817–1830)
+
+/** A walker between frames: where the feet are, which way the eyes look, and how high they are. */
+export interface WalkState extends WalkPose {
+  yaw: number
+  pitch: number
+  /** Eye height in the world, eased towards feet + eyeHeight(headroom). */
+  eyeY: number
+}
+
+/**
+ * One frame's input. `f` forward (+) / back (−), `sd` step right (+) / left (−),
+ * `turn` right (+) / left (−); keys give ±1, the touch stick anything between.
+ */
+export interface WalkInput {
+  f: number
+  sd: number
+  turn: number
+  /** Shift: walk at 2.6 m/s instead of 1.3. */
+  run?: boolean
+}
+
+export const WALK_SPEED = 1.3
+export const RUN_SPEED = 2.6
+/** Turning speed, radians per second. */
+export const TURN_SPEED = 1.9
+/** Radians of look per pixel dragged. */
+export const LOOK_PER_PX = 0.005
+export const PITCH_MAX = 1.2
+
+/**
+ * Advance the walker by `dt` seconds (v41 `fpUpdate`): turn, then move — if
+ * the full move is refused, slide along x, else along z — then crouch under
+ * whatever is overhead. Returns the new state and the headroom where you stand.
+ */
+export function walkStep(
+  geo: Geometry,
+  plan: PlanSlice,
+  world: WalkWorld,
+  s: WalkState,
+  input: WalkInput,
+  dt: number,
+): { state: WalkState; head: number } {
+  const yaw = s.yaw + input.turn * TURN_SPEED * dt
+  const sp = (input.run ? RUN_SPEED : WALK_SPEED) * dt
+  let pose: WalkPose = s
+  if (input.f || input.sd) {
+    const cx = Math.cos(yaw)
+    const cz = Math.sin(yaw)
+    const dx = (cx * input.f - cz * input.sd) * sp
+    const dz = (cz * input.f + cx * input.sd) * sp
+    pose =
+      fpTry(geo, plan, world, s, s.x + dx, s.z + dz) ??
+      fpTry(geo, plan, world, s, s.x + dx, s.z) ??
+      fpTry(geo, plan, world, s, s.x, s.z + dz) ??
+      s
+  }
+  const head = fpHeadroom(geo, plan, world, pose.x, pose.z, pose.feet)
+  const eyeY = s.eyeY + (pose.feet + eyeHeight(head) - s.eyeY) * Math.min(1, dt * 10)
+  return { state: { x: pose.x, z: pose.z, feet: pose.feet, where: pose.where, yaw, pitch: s.pitch, eyeY }, head }
+}
+
+/** Drag to look (v41 1855–1863): `dx`, `dy` in pixels since the last move. */
+export const walkLook = (s: WalkState, dx: number, dy: number): WalkState => ({
+  ...s,
+  yaw: s.yaw + dx * LOOK_PER_PX,
+  pitch: clamp(s.pitch - dy * LOOK_PER_PX, -PITCH_MAX, PITCH_MAX),
+})
+
+type V3 = [number, number, number]
+
+/** Camera position and the point it looks at, one metre ahead. */
+export function walkCamera(s: WalkState): { p: V3; t: V3 } {
+  const cp = Math.cos(s.pitch)
+  return { p: [s.x, s.eyeY, s.z], t: [s.x + Math.cos(s.yaw) * cp, s.eyeY + Math.sin(s.pitch), s.z + Math.sin(s.yaw) * cp] }
+}
+
+/** Where the orbit camera looks when a walk ends (v41 `fpStop`): 1.5 m ahead, a little below the eyes. */
+export const walkExitCamera = (s: WalkState): { p: V3; t: V3 } => ({
+  p: [s.x, s.eyeY, s.z],
+  t: [s.x + Math.cos(s.yaw) * 1.5, s.eyeY - 0.3, s.z + Math.sin(s.yaw) * 1.5],
+})
+
+/** Keys held → input (v41: W/↑ forward, S/↓ back, D/A sideways, ←/→ turn, Shift runs). Keys are lower-case `KeyboardEvent.key`. */
+export function keysInput(keys: ReadonlySet<string>): WalkInput {
+  const has = (...k: string[]) => k.some((x) => keys.has(x))
+  return {
+    f: (has('w', 'arrowup') ? 1 : 0) - (has('s', 'arrowdown') ? 1 : 0),
+    sd: (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0),
+    turn: (keys.has('arrowright') ? 1 : 0) - (keys.has('arrowleft') ? 1 : 0),
+    run: keys.has('shift'),
+  }
+}
+
+/** Combine two inputs (keys and the touch stick), each axis kept within ±1. */
+export const addInputs = (a: WalkInput, b: WalkInput): WalkInput => ({
+  f: clamp(a.f + b.f, -1, 1),
+  sd: clamp(a.sd + b.sd, -1, 1),
+  turn: clamp(a.turn + b.turn, -1, 1),
+  run: !!(a.run || b.run),
+})
+
+/**
+ * The touch stick (v41 had ▲◀▼▶ hold buttons: up/down walk, left/right turn).
+ * `dx`, `dy` are the thumb's offset from the stick's centre in pixels, `r` its
+ * radius; a small dead zone, full speed at the rim.
+ */
+export function stickInput(dx: number, dy: number, r: number): WalkInput {
+  const d = Math.hypot(dx, dy)
+  if (r <= 0 || d < r * 0.15) return { f: 0, sd: 0, turn: 0 }
+  const k = Math.min(1, d / r) / d
+  return { f: 0 - dy * k, sd: 0, turn: dx * k }
+}

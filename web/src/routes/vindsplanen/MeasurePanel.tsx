@@ -1,7 +1,10 @@
 // Mät: the coded measuring steps as a list with their values and
 // uppmätt / uppskattning status, plus the step form (v41 Measure tab and its
 // walkthrough card). Selecting a step makes the route fly the camera there and
-// highlight where to put the tape. Walk mode comes in Stage 5.
+// highlight where to put the tape; Tillbaka / Hoppa över / Spara och gå
+// vidare step through the list, and past the last step the end card says what
+// is left (v41 `showWalk`). Changing an attic measurement redraws the attic in
+// place and moves on to the next step — no reload, so nothing to resume.
 
 import { useState } from 'react'
 import type { Geometry } from '../../lib/vindsplanen/attic'
@@ -9,6 +12,9 @@ import { applyMeasureStep, fieldDisplay, measureProgress, validateInputs, type M
 import type { PlanV2 } from '../../lib/vindsplanen/plan'
 import { todayISO } from '../../lib/date'
 import { GROUPS, stepText, valueText, whenText } from './measureText'
+
+/** `activeCode` past the last step: the end-of-list card. */
+export const MEASURE_END = 'end'
 
 export default function MeasurePanel({
   geo, plan, steps, activeCode, onOpen, onChange, onToast,
@@ -25,6 +31,7 @@ export default function MeasurePanel({
   const side = plan.options.below.side
   const progress = measureProgress(steps, M)
   const idx = activeCode ? steps.findIndex((s) => s.code === activeCode) : -1
+  const go = (i: number) => onOpen(i >= 0 && i < steps.length ? steps[i].code : i >= steps.length ? MEASURE_END : null)
 
   async function copyList() {
     const txt = steps
@@ -52,9 +59,32 @@ export default function MeasurePanel({
         index={idx}
         total={steps.length}
         onClose={() => onOpen(null)}
-        onGo={(i) => onOpen(i >= 0 && i < steps.length ? steps[i].code : null)}
+        onGo={go}
         onChange={onChange}
       />
+    )
+  }
+
+  if (activeCode === MEASURE_END) {
+    const left = progress.total - progress.done
+    return (
+      <div className="vp-pane">
+        <section className="vp-card vp-stepform" aria-labelledby="vp-step-title">
+          <div className="vp-step-top">
+            <span className="vp-count">Slutet av listan</span>
+          </div>
+          <h3 id="vp-step-title">{left ? `${left} kvar att mäta` : 'Allt är uppmätt'}</h3>
+          <p className="vp-note">
+            {left ? 'Listan visar vilka som återstår, markerade Uppskattning.' : 'Titta igen på trappornas varningar: en del av dem beror på de här måtten.'}{' '}
+            En dörr som saknas kan läggas till under Rummet → Dörrar på våningen under.
+          </p>
+          <div className="vp-actions">
+            <button type="button" className="btn btn-primary" onClick={() => onOpen(null)}>
+              Stäng
+            </button>
+          </div>
+        </section>
+      </div>
     )
   }
 
@@ -81,7 +111,6 @@ export default function MeasurePanel({
             Kopiera listan
           </button>
         </div>
-        {/* TODO(plan 140 Stage 5): walk mode (first-person) lives here. */}
       </div>
       {GROUPS.map((g) => {
         const list = steps.filter((s) => s.code[0] === g.code)
@@ -152,7 +181,7 @@ function StepForm({
     const next = applyMeasureStep(geo, plan, step.code, nums, todayISO())
     if (!next) return
     onChange(next)
-    onGo(last ? -1 : index + 1)
+    onGo(index + 1)
   }
 
   return (
@@ -224,7 +253,7 @@ function StepForm({
           <button type="button" className="btn btn-ghost" disabled={index === 0} onClick={() => onGo(index - 1)}>
             Tillbaka
           </button>
-          <button type="button" className="btn btn-ghost" onClick={() => onGo(last ? -1 : index + 1)}>
+          <button type="button" className="btn btn-ghost" onClick={() => onGo(index + 1)}>
             Hoppa över
           </button>
           <button type="button" className="btn btn-primary" onClick={save}>

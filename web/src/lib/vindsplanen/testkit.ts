@@ -10,6 +10,7 @@ import { atticOf, deriveGeometry, type Geometry } from './attic'
 import { importV1 } from './legacy'
 import type { PlanV2 } from './plan'
 import type { Warning } from './warnings'
+import type { Surface, WalkWorld } from './walk'
 
 export const FIXTURE_NAMES = ['example', 'owner-like', 'curved-80', 'spiral', 'straight', 'attic-custom'] as const
 export type FixtureName = (typeof FIXTURE_NAMES)[number]
@@ -168,6 +169,29 @@ export function v1ToV2(s: Record<string, unknown>): unknown {
     options: { gable: o.gable, below, knee: o.knee, board: o.board, attic: o.attic, measured: o.measured },
     items: s.items,
   }
+}
+
+/** A surface's centre: the mean of a tread's corners, or a rectangle's middle. */
+export const surfCentre = (s: Surface): [number, number] =>
+  s.poly
+    ? s.poly.reduce<[number, number]>((a, q) => [a[0] + q[0] / s.poly.length, a[1] + q[1] / s.poly.length], [0, 0])
+    : [(s.rect[0] + s.rect[1]) / 2, (s.rect[2] + s.rect[3]) / 2]
+
+/**
+ * The Stage 5 parity route for the owner-like plan (the browser parity script
+ * walks the same targets): from the attic down the new stairs, along the
+ * hallway, down the old stairs to the ground floor, then the same way back up.
+ */
+export function walkRoute(world: WalkWorld): [number, number][] {
+  const nu = world.surf.filter((s) => s.where === 'new').map(surfCentre)
+  const old = world.surf.filter((s) => s.where === 'old').map(surfCentre)
+  const gnd = world.surf.find((s) => s.where === 'ground')
+  if (!nu.length || !old.length || !gnd?.rect) throw new Error('walkRoute needs both stairs and the ground floor')
+  const [bx, bz] = nu[0]
+  const [ox] = old[old.length - 1]
+  const hall: [number, number][] = [[bx - 0.3, bz], [bx - 0.3, -0.95], [ox, -0.95]]
+  const down: [number, number][] = [...[...nu].reverse(), ...hall, ...[...old].reverse(), [gnd.rect[0] + 0.3, surfCentre(gnd)[1]]]
+  return [...down, ...[...down].reverse().slice(1), [7.5, 0.4]]
 }
 
 /** The deterministic generator the capture hook used for scripted walks. */
