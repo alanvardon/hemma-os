@@ -115,6 +115,19 @@
   .vp-legend span { display: flex; align-items: center; gap: 6px; }
   .vp-hist[hidden], .vp-cams[hidden] { display: none; }
 
+  /* ── Photo mode (plan 143) ─────────────────────────────────────────────── */
+  .vp-photo {
+    position: absolute; top: 8px; left: 8px; z-index: 4; max-width: calc(100% - 16px);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+    background: var(--glass); backdrop-filter: blur(6px); border-radius: var(--r-sm);
+    padding: 6px 6px 6px 12px; font-size: 13px; color: var(--ink);
+  }
+  .vp-photo-status { margin: 0; display: flex; flex-wrap: wrap; gap: 0 6px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 0; }
+  .vp-photo-count { font-weight: 500; color: var(--ink-mid); }
+  .vp-photo-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .vp-photo-acts .btn { padding: 6px 12px; font-size: 12.5px; min-height: 36px; }
+  .vp-photo-acts .btn-ghost { background: var(--glass); }
+
   /* ── Gå runt (walk mode) ────────────────────────────────────────────────── */
   .vp-walk {
     position: absolute; inset: 8px; z-index: 4; pointer-events: none;
