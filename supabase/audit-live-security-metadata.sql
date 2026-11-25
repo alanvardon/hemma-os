@@ -118,7 +118,7 @@ revisioned_table_mutation_grants as (
       'tool_state', 'scenarios', 'salary_submissions', 'monthend_items',
       'monthend_payments', 'mortgage_loan_parts', 'mortgage_rate_periods',
       'mortgage_payments', 'mortgage_valuations', 'mortgage_contributions',
-      'house_items'
+      'house_items', 'attic_plans'
     ]::text[])
     and tp.grantee in ('PUBLIC', 'anon', 'authenticated')
     and tp.privilege_type in ('INSERT', 'UPDATE', 'DELETE')

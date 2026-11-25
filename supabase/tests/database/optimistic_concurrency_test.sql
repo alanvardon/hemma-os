@@ -43,7 +43,8 @@ select ok(
       ('tool_state'), ('scenarios'), ('salary_submissions'), ('monthend_items'),
       ('monthend_payments'), ('mortgage_loan_parts'), ('mortgage_rate_periods'),
       ('mortgage_payments'), ('mortgage_valuations'), ('mortgage_contributions'),
-      ('mortgage_banks'), ('mortgages'), ('house_items')
+      ('mortgage_banks'), ('mortgages'), ('house_items'),
+      ('attic_plans')
     ) expected(table_name)
     left join pg_catalog.pg_class c on c.relname = expected.table_name
     left join pg_catalog.pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
@@ -51,7 +52,7 @@ select ok(
       and a.attnum > 0 and not a.attisdropped and a.attnotnull
     where a.attrelid is null
   ),
-  'all thirteen mutable stores have a required server revision'
+  'all fourteen mutable stores have a required server revision'
 );
 select is(
   (select count(*) from pg_catalog.pg_trigger t
@@ -59,7 +60,7 @@ select is(
     join pg_catalog.pg_namespace n on n.oid = p.pronamespace
     where not t.tgisinternal and n.nspname = 'private'
       and p.proname = 'set_sync_revision'),
-  13::bigint, 'all revisioned stores use the server revision trigger'
+  14::bigint, 'all revisioned stores use the server revision trigger'
 );
 select ok(
   not has_table_privilege('public', 'private.sync_operation_receipts', 'select')
