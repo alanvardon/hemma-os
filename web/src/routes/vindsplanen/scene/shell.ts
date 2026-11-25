@@ -12,7 +12,7 @@ import { clipBox, stairHoles } from '../../../lib/vindsplanen/stairs'
 import { computeZones, ZONE_BOA, ZONE_STAND } from '../../../lib/vindsplanen/zones'
 import { LABEL } from './labels'
 import type { SceneMats } from './materials'
-import { box, floorGeo, floorShape, label, planeM, profileGeo, rectPath, shadowy, type Built } from './util'
+import { box, floorGeo, floorShape, label, metreUv, planeM, profileGeo, rectPath, shadowy, type Built } from './util'
 
 type Slice = Pick<PlanV2, 'items' | 'options'>
 type SideKey = 'S' | 'N'
@@ -34,7 +34,7 @@ export function buildRafters(geo: Geometry, mats: SceneMats, board: readonly num
   const out = { S: new THREE.Group(), N: new THREE.Group() }
   RAFT_X.forEach((x) => {
     SIDES.forEach(([side, sign]) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(RAFT_W, RAFT_D, SLEN), mats.rafter)
+      const m = new THREE.Mesh(metreUv(new THREE.BoxGeometry(RAFT_W, RAFT_D, SLEN)), mats.rafter)
       m.rotation.x = sign * THETA
       m.position.set(x, H / 2, (sign * HALF) / 2)
       const ly = new THREE.Vector3(0, 1, 0).applyEuler(m.rotation)
@@ -184,7 +184,7 @@ export function buildBoard(geo: Geometry, plan: Slice, mats: SceneMats, today: b
     else ridge.push([EDGES[i], EDGES[i + 1]])
   })
   ridge.forEach(([a, b]) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(b - a, 0.12, 0.045), mats.rafter)
+    const m = new THREE.Mesh(metreUv(new THREE.BoxGeometry(b - a, 0.12, 0.045)), mats.rafter)
     m.position.set((a + b) / 2, H - 0.1, 0)
     m.castShadow = m.receiveShadow = true
     out.ridge.add(m)

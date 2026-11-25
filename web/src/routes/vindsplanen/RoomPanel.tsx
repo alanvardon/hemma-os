@@ -14,6 +14,7 @@ const SUN_LABEL: Record<(typeof SUN_IDS)[number], string> = {
   midday: 'Midday sun from the south',
   evening: 'Evening sun from the west',
   overcast: 'Overcast',
+  night: 'Evening, lamps on',
 }
 
 // [key, label, min cm, max cm] for the floor-below numbers (v41 renderBelow rows).
@@ -68,7 +69,7 @@ export default function RoomPanel({
       <div className="vp-group">
         <h2>Light and view</h2>
         <p className="vp-note">Only applies to this device.</p>
-        <SelectField id="vp-sun" label="Daylight" value={view.sun} options={SUN_IDS.map((s) => [s, SUN_LABEL[s]] as [typeof s, string])} onChange={(sun) => onView({ ...view, sun })} />
+        <SelectField id="vp-sun" label="Lighting" value={view.sun} options={SUN_IDS.map((s) => [s, SUN_LABEL[s]] as [typeof s, string])} onChange={(sun) => onView({ ...view, sun })} />
         <SelectField id="vp-quality" label="Quality" value={view.quality} options={[['nice', 'High (shading, sharper shadows)'], ['fast', 'Fast (for phones)']]} onChange={(quality) => onView({ ...view, quality })} />
         <CheckField id="vp-zones" label="Headroom zones" checked={view.zones} onChange={(zones) => onView({ ...view, zones })} />
         <CheckField id="vp-rafters" label="Show rafters" checked={view.rafters} onChange={(rafters) => onView({ ...view, rafters })} />

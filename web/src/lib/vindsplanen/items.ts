@@ -62,7 +62,7 @@ export const MATERIAL_DEFAULTS: Readonly<Record<MaterialCategory, string>> = Obj
   walls: 'white',
 })
 
-export const SUN_IDS = ['morning', 'midday', 'evening', 'overcast'] as const
+export const SUN_IDS = ['morning', 'midday', 'evening', 'overcast', 'night'] as const
 export type SunId = (typeof SUN_IDS)[number]
 
 // ---------- Roof windows
