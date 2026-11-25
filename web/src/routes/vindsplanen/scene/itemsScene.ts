@@ -9,9 +9,11 @@ import { BED_SIZES, closetGeom, furnitureChecks, railContext, skyHolesOk, storag
 import type { ClosetItem, CurvedItem, Item, PlanV2, SkylightItem, SpiralItem, StairsItem, StorageItem, WallItem } from '../../../lib/vindsplanen/plan'
 import { planOf, railSegments } from '../../../lib/vindsplanen/stairs'
 import { furnWarnings, skyInfo, stairInfo, wallInfo, WALL_DOOR_W } from '../../../lib/vindsplanen/warnings'
+import { fitModel, MODEL_VARIANTS } from '../../../lib/vindsplanen/modelFit'
 import { renderTreads } from './belowScene'
 import type { SceneMats } from './materials'
-import { bar, box, profileGeo, rb, rectPath, type Built } from './util'
+import type { SceneModels } from './models'
+import { bar, box, disposeObject, profileGeo, rb, rectPath, type Built } from './util'
 
 type Slice = Pick<PlanV2, 'items' | 'options'>
 type Furn = Extract<Item, { type: 'bed' | 'wardrobe' | 'desk' | 'sofa' | 'dresser' | 'nightstand' | 'rug' }>
@@ -25,7 +27,13 @@ const CORNERS: [number, number][] = [
 
 // ---------- Furniture
 
-export function buildFurniture(geo: Geometry, plan: Slice, it: Furn, mats: SceneMats): Built {
+/**
+ * Furniture: a procedural box group, returned at once. When a CC0 model fits
+ * the item's size (modelFit.ts) and loads, it replaces the box parts inside
+ * the same group, so the group's itemId, picking, selection and the clash
+ * overlay carry on unchanged. Models face +z like the boxes (backs at −z).
+ */
+export function buildFurniture(geo: Geometry, plan: Slice, it: Furn, mats: SceneMats, models?: SceneModels): Built {
   const { M } = mats
   const g = new THREE.Group()
   const { w, d, h, checks } = furnitureChecks(it)
@@ -96,7 +104,35 @@ export function buildFurniture(geo: Geometry, plan: Slice, it: Furn, mats: Scene
     m.castShadow = false
     g.add(m)
   }
-  return { obj: g }
+  return { obj: g, onDispose: models ? swapInModel(g, it, w, h, d, mats, models) : undefined }
+}
+
+/** Start loading the best-fitting model for a box item; returns the cancel for `Built.onDispose`. */
+function swapInModel(g: THREE.Group, it: Furn, w: number, h: number, d: number, mats: SceneMats, models: SceneModels): (() => void) | undefined {
+  const variants = MODEL_VARIANTS.filter((v) => v.type === it.type)
+  const fit = fitModel(variants, [w, h, d])
+  const variant = fit && variants.find((v) => v.id === fit.id)
+  if (!fit || !variant) return undefined
+  // Disposed and detached = the item was replaced or removed meanwhile: leave it alone.
+  // Disposed but still attached = a StrictMode effect replay (dev), whose group
+  // is still the one on screen: swap anyway.
+  let disposed = false
+  void models.template(variant.file).then((tpl) => {
+    if (!tpl) return // the model failed to load (warned once in models.ts): keep the box
+    if (disposed && !g.parent) return
+    const parts = g.children.filter((c) => !c.userData.overlay)
+    parts.forEach((c) => {
+      g.remove(c)
+      disposeObject(c, mats.shared)
+    })
+    const inst = tpl.clone(true)
+    inst.scale.set(...fit.scale)
+    inst.userData.model = variant.id
+    g.add(inst)
+  })
+  return () => {
+    disposed = true
+  }
 }
 
 // ---------- Partition wall
@@ -396,7 +432,7 @@ export function buildCloset(geo: Geometry, plan: Slice, it: ClosetItem, mats: Sc
 
 // ---------- Dispatch
 
-export function buildItem(geo: Geometry, plan: Slice, it: Item, mats: SceneMats): Built {
+export function buildItem(geo: Geometry, plan: Slice, it: Item, mats: SceneMats, models?: SceneModels): Built {
   let b: Built
   switch (it.type) {
     case 'skylight':
@@ -421,7 +457,7 @@ export function buildItem(geo: Geometry, plan: Slice, it: Item, mats: SceneMats)
       b = buildCloset(geo, plan, it, mats)
       break
     default:
-      b = buildFurniture(geo, plan, it, mats)
+      b = buildFurniture(geo, plan, it, mats, models)
   }
   b.obj.userData.itemId = it.id
   return b
