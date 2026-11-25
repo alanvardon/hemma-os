@@ -5,7 +5,7 @@ create extension if not exists pgtap with schema extensions;
 -- All data is fictional and all changes roll back. Fixture writes happen as
 -- postgres; assertions run as fictional user A through the authenticated role
 -- and the same auth.uid()/JWT boundary used by PostgREST.
-select plan(133);
+select plan(142);
 
 insert into auth.users (id, email)
 values
@@ -66,6 +66,10 @@ insert into public.house_items (id, household_id)
 values
   ('30000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001'),
   ('30000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002');
+insert into public.attic_plans (id, household_id, plan)
+values
+  ('31000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '{"v":2}'),
+  ('31000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002', '{"v":2}');
 insert into public.notification_state (household_id, key, value)
 values
   ('20000000-0000-0000-0000-000000000001', 'fixture-a-notification', 'fictional'),
@@ -83,7 +87,7 @@ select set_config(
   true
 );
 
--- The 11 revisioned stores remain household-readable, but every direct client
+-- The 12 revisioned stores remain household-readable, but every direct client
 -- mutation is revoked so stale clients cannot bypass optimistic concurrency.
 -- Each table emits nine separately named TAP assertions.
 create function pg_temp.test_mutable_store(
@@ -185,7 +189,8 @@ from (
     ('mortgage_valuations', 'id', 'fixture-a-valuation', 'fixture-b-valuation', 'insert-a-valuation', 'insert-b-valuation', '', ''),
     ('mortgage_contributions', 'id', 'fixture-a-contribution', 'fixture-b-contribution', 'insert-a-contribution', 'insert-b-contribution', '', ''),
     ('scenarios', 'id', 'fixture-a-scenario', 'fixture-b-scenario', 'insert-a-scenario', 'insert-b-scenario', '', ''),
-    ('house_items', 'id', '30000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004', '', '')
+    ('house_items', 'id', '30000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000004', '', ''),
+    ('attic_plans', 'id', '31000000-0000-0000-0000-000000000001', '31000000-0000-0000-0000-000000000002', '31000000-0000-0000-0000-000000000003', '31000000-0000-0000-0000-000000000004', ', plan', ', ''{}''::jsonb')
 ) as stores(table_name, key_column, own_key, foreign_key, insert_key, foreign_insert_key, extra_columns, extra_values)
 cross join lateral pg_temp.test_mutable_store(
   table_name,

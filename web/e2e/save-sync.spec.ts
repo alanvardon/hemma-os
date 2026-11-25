@@ -12,6 +12,7 @@
  * supabase-js session into localStorage — getSession() restores it without a
  * network call — plus a mocked claim_household RPC.
  */
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { test, expect, type Page } from '@playwright/test'
 
@@ -72,6 +73,10 @@ interface Backend {
   /** Plan 139: simulate the partner's emailed half landing as a pending draft
       (what the salary-submit Edge Function inserts as the service role). */
   partnerEmailsHalf(month: string, slot: 'a' | 'b', items: { label: string; amount: number }[]): void
+  /** Plan 140: the household's attic_plans rows as the cloud holds them. */
+  atticPlans: Record<string, unknown>[]
+  /** Simulate the partner saving a newer attic plan (bumps the revision). */
+  remoteUpdateAtticPlan(mutate: (plan: { items: Record<string, unknown>[] }) => void): void
 }
 
 // Seed the auth session and mock the whole Supabase origin. Inserted loan
@@ -96,6 +101,7 @@ async function mockBackend(page: Page): Promise<Backend> {
   const monthendItems: Record<string, unknown>[] = []
   const salaryRows: Record<string, unknown>[] = []
   const salaryDrafts: Record<string, unknown>[] = []
+  const atticPlans: Record<string, unknown>[] = []
   const resources: Record<string, Record<string, unknown>[]> = {
     salary_submissions: salaryRows,
     salary_submission_drafts: salaryDrafts,
@@ -105,6 +111,7 @@ async function mockBackend(page: Page): Promise<Backend> {
     mortgages,
     mortgage_rate_periods: periods,
     monthend_items: monthendItems,
+    attic_plans: atticPlans,
   }
   const receipts = new Map<string, unknown>()
   const PERSON_A = '11111111-1111-4111-8111-111111111111'
@@ -141,6 +148,15 @@ async function mockBackend(page: Page): Promise<Backend> {
     // Starts as a provisioned-but-unconfigured household (people: []), which is
     // what household_identity() returns before "Personer i hushållet" is saved.
     identity: { household_id: HH_UUID, my_person_id: null, my_profile_name: null, people: [] },
+    atticPlans,
+    remoteUpdateAtticPlan(mutate) {
+      const row = atticPlans[0]
+      if (!row) throw new Error('No mocked attic plan to update')
+      const plan = structuredClone(row.plan) as { items: Record<string, unknown>[] }
+      mutate(plan)
+      row.plan = plan
+      row.revision = Number(row.revision) + 1
+    },
     partnerEmailsHalf(month, slot, items) {
       salaryDrafts.push({
         month, slot, income_items: items, note: null, submitted_via: 'email',
@@ -973,5 +989,101 @@ test('Löner: own half survives reload as waiting, the partner half completes it
   await expect(card).toContainText(kr('36 975'))
   await expect(card).not.toContainText(/betalar Sam 4\s250/)
 
+  expect(errors).toEqual([])
+})
+
+// ── Plan 140 — Vindsplanen ──
+// The 3D scene is not asserted on (SwiftShader WebGL is flaky and its error
+// boundary falls back to a notice); these specs drive the panels only.
+
+const VP_EXAMPLE_INPUT = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../src/lib/vindsplanen/__fixtures__/example.json', import.meta.url)), 'utf8'),
+).input as { items: { type: string }[] }
+
+const atticItemTypes = (backend: Backend) =>
+  ((backend.atticPlans[0]?.plan as { items: { type: string }[] } | undefined)?.items ?? []).map((i) => i.type)
+
+test('Vindsplanen: an example plan edit autosaves and survives reload', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  const backend = await mockBackend(page)
+  await page.goto('/#/vindsplanen')
+
+  await expect(page.getByRole('heading', { name: 'Ingen plan ännu' })).toBeVisible()
+  await page.getByRole('button', { name: 'Börja med exempel' }).click()
+  const list = page.locator('.vp-list')
+  await expect(list).toBeVisible()
+  await expect(list).not.toContainText('Soffa')
+  await page.getByRole('button', { name: '+ Soffa' }).click()
+  await expect(list).toContainText('Soffa')
+
+  // debounced (1.5 s) household save lands in the mocked attic_plans table
+  await expect.poll(() => atticItemTypes(backend), { timeout: 10_000 }).toContain('sofa')
+
+  await page.reload()
+  await expect(page.locator('.vp-list')).toContainText('Soffa')
+  expect(errors).toEqual([])
+})
+
+test('Vindsplanen: a v41 export imported on the Spara tab is saved and shown after reload', async ({ page }) => {
+  const errors = trackPageErrors(page)
+  const backend = await mockBackend(page)
+  await page.goto('/#/vindsplanen')
+  await page.getByRole('button', { name: 'Börja med exempel' }).click()
+  await expect(page.locator('.vp-list')).toContainText('Takfönster')
+
+  // A small v41-shaped export: the example layout reduced to a bed and a dresser.
+  const v41 = { ...VP_EXAMPLE_INPUT, example: false, items: VP_EXAMPLE_INPUT.items.filter((i) => ['bed', 'dresser'].includes(i.type)) }
+  await page.getByRole('radio', { name: 'Spara' }).click()
+  await page.getByLabel('Klistra in en kopierad plan här').fill(JSON.stringify(v41))
+  await page.getByRole('button', { name: 'Läs in plan' }).click()
+  await page.getByRole('button', { name: 'Ersätt planen' }).click()
+
+  await page.getByRole('radio', { name: 'Planering' }).click()
+  await expect(page.locator('.vp-list')).toContainText('Säng')
+  await expect(page.locator('.vp-list')).not.toContainText('Takfönster')
+  await expect.poll(() => atticItemTypes(backend).sort(), { timeout: 10_000 }).toEqual(['bed', 'dresser'])
+
+  await page.reload()
+  await expect(page.locator('.vp-list')).toContainText('Byrå')
+  await expect(page.locator('.vp-list')).not.toContainText('Takfönster')
+  expect(errors).toEqual([])
+})
+
+test('Vindsplanen: a revision conflict asks which version to keep, and both choices work', async ({ page }) => {
+  test.setTimeout(60_000) // two debounced saves + two conflicts + a reload
+  const errors = trackPageErrors(page)
+  const backend = await mockBackend(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/vindsplanen')
+  await page.getByRole('button', { name: 'Börja med exempel' }).click()
+  await page.getByRole('button', { name: '+ Soffa' }).click()
+  await expect.poll(() => atticItemTypes(backend), { timeout: 10_000 }).toContain('sofa')
+
+  // Partner device removes the sofa (revision 2); this tab still holds revision 1.
+  backend.remoteUpdateAtticPlan((p) => { p.items = p.items.filter((i) => i.type !== 'sofa') })
+  await page.getByRole('button', { name: '+ Förråd' }).click()
+  await expect(page.locator('.persistence-conflict')).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Ladda molnversionen' }).click()
+  await expect(page.locator('.persistence-conflict')).not.toBeVisible()
+  await expect(page.locator('.vp-list')).toBeVisible()
+  await expect(page.locator('.vp-list')).not.toContainText('Soffa')
+  await expect(page.locator('.vp-list')).not.toContainText('Förråd')
+  // the dropped local edit must not be re-saved over the cloud after the debounce
+  await page.waitForTimeout(2500)
+  expect(atticItemTypes(backend)).not.toContain('storage')
+
+  // Conflict again from the now-current revision, this time keeping the local plan.
+  await page.getByRole('button', { name: '+ Förråd' }).click()
+  await expect.poll(() => atticItemTypes(backend), { timeout: 10_000 }).toContain('storage')
+  backend.remoteUpdateAtticPlan((p) => { p.items = p.items.filter((i) => i.type !== 'storage') })
+  await page.getByRole('button', { name: '+ Soffa' }).click()
+  await expect(page.locator('.persistence-conflict')).toBeVisible({ timeout: 10_000 })
+  await page.getByRole('button', { name: 'Behåll min version' }).click()
+  await expect(page.locator('.persistence-conflict')).not.toBeVisible()
+  await expect.poll(() => atticItemTypes(backend), { timeout: 10_000 }).toEqual(expect.arrayContaining(['storage', 'sofa']))
+
+  await page.reload()
+  await expect(page.locator('.vp-list')).toContainText('Förråd')
+  await expect(page.locator('.vp-list')).toContainText('Soffa')
   expect(errors).toEqual([])
 })

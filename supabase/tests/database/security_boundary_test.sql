@@ -11,7 +11,7 @@ select is(
     join pg_catalog.pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relkind in ('r', 'p')
   ),
-  24::bigint,
+  25::bigint,
   'the audited public-table inventory is complete'
 );
 
@@ -252,7 +252,7 @@ select ok(
         'tool_state', 'scenarios', 'salary_submissions', 'monthend_items',
         'monthend_payments', 'mortgage_loan_parts', 'mortgage_rate_periods',
         'mortgage_payments', 'mortgage_valuations', 'mortgage_contributions',
-        'mortgage_banks', 'mortgages', 'house_items'
+        'mortgage_banks', 'mortgages', 'house_items', 'attic_plans'
       ]::text[])
       and grantee in ('anon', 'authenticated')
       and privilege_type in ('INSERT', 'UPDATE', 'DELETE')
