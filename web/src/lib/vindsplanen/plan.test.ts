@@ -92,7 +92,12 @@ describe('view prefs', () => {
     expect(sanitizeViewPrefs({ zones: false, rafters: 'no', cutaway: false, sun: 'evening', quality: 'fast', dims: 1 })).toEqual({
       zones: false, rafters: true, cutaway: false, sun: 'evening', quality: 'fast', dims: false,
     })
-    expect(sanitizeViewPrefs({ sun: 'night', quality: 'ultra', dims: true })).toMatchObject({ sun: 'morning', quality: 'nice', dims: true })
+    expect(sanitizeViewPrefs({ sun: 'dusk', quality: 'ultra', dims: true })).toMatchObject({ sun: 'morning', quality: 'nice', dims: true })
     expect(sanitizeViewPrefs('x')).toEqual(defaultViewPrefs())
+  })
+
+  it("keep the evening-with-lamps mood ('night', plan 141)", () => {
+    expect(sanitizeViewPrefs({ sun: 'night' }).sun).toBe('night')
+    expect(sanitizeViewPrefs({ sun: 'night', quality: 'fast' }, true)).toMatchObject({ sun: 'night', quality: 'fast' })
   })
 })

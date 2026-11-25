@@ -18,14 +18,19 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import type { Pass } from 'three/examples/jsm/postprocessing/Pass.js'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { atticOf, clamp, deriveGeometry, snap, type Geometry } from '../../../lib/vindsplanen/attic'
 import { withFittedClosets } from '../../../lib/vindsplanen/items'
+import { lampSpots } from '../../../lib/vindsplanen/lamps'
 import { cameraPresets, type Camera } from '../../../lib/vindsplanen/measure'
 import type { Item, PlanV2, ViewPrefs } from '../../../lib/vindsplanen/plan'
 import { buildBelow } from './belowScene'
 import { buildDims, buildHighlights, type MeasureHighlight } from './dims'
 import { buildItem } from './itemsScene'
+import { buildLamps, roomEnvMap } from './lighting'
 import { createMats, ENV_INTENSITY, EXPOSURE, skyTexture, SUN_STYLE, type SceneMats } from './materials'
+import type { TexRes } from './textures'
 import { buildBoard, buildEast, buildEastLabel, buildFloors, buildKnee, buildRafters, buildSlopes, buildWestGable, buildZones } from './shell'
 import { disposeBuilt, disposeObject, type Built, type LabelData } from './util'
 
@@ -68,6 +73,14 @@ export interface SceneHandle {
 }
 
 let rectLightsReady = false
+
+/**
+ * UnrealBloomPass settings ('nice' only). The threshold is in linear HDR
+ * luminance before tone mapping: the sky background tops out near 0.85, a
+ * white wall in full sun reaches ~2.5, the lamp bulbs ~4. At 1.6 only sunlit
+ * pale surfaces and the bulbs bloom, and only faintly.
+ */
+const BLOOM = { strength: 0.22, radius: 0.35, threshold: 1.6 }
 
 export default function Scene(props: SceneProps) {
   const { className, ref, view } = props
@@ -119,6 +132,7 @@ type Slice = Pick<PlanV2, 'items' | 'options'>
 
 const isUp = (i: Item) => i.type === 'curved' || i.type === 'spiral'
 const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+const coarsePointer = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
 
 /** A JSON-equal copy that keeps its identity until the value really changes. */
 function useJson<T>(v: T): T {
@@ -247,12 +261,16 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
   const [graph] = useState(makeGraph)
   const dirty = useRef(true)
   const groups = useRef(new Map<string, THREE.Object3D>()).current
-  const [mats] = useState(() => createMats(gl.capabilities.getMaxAnisotropy()))
+  const nice = view.quality === 'nice'
+  // 2k textures only where they pay off: 'nice' quality on a fine pointer (desktop)
+  const texRes: TexRes = nice && !coarsePointer() ? '2k' : '1k'
+  const [mats] = useState(() => createMats(gl.capabilities.getMaxAnisotropy(), texRes))
   useEffect(() => () => mats.dispose(), [mats])
+  useEffect(() => mats.setRes(texRes), [mats, texRes])
   useEffect(() => mats.apply(materials), [mats, materials])
 
   const [lights] = useState(() => {
-    const hemi = new THREE.HemisphereLight('#e4edf7', '#a08c74', 0.9)
+    const hemi = new THREE.HemisphereLight('#e4edf7', '#a08c74', SUN_STYLE.morning.hemi)
     const sun = new THREE.DirectionalLight('#fff0dc', 3.2)
     sun.castShadow = true
     sun.shadow.bias = -0.0004
@@ -273,9 +291,9 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
     sun.intensity = s.int
     sun.color.set(s.color)
     sun.visible = s.int > 0
-    hemi.intensity = s.int > 0 ? 0.9 : 1.3
-  }, [lights, view.sun, geo.L])
-  const nice = view.quality === 'nice'
+    hemi.intensity = s.hemi
+    scene.environmentIntensity = ENV_INTENSITY * s.env
+  }, [lights, scene, view.sun, geo.L])
   useEffect(() => {
     const { sun } = lights
     const sz = nice ? 2048 : 1024
@@ -317,18 +335,31 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
     }
   }, [gl])
 
-  // sky as background and soft ambient light
+  // the sky gradient as background; RoomEnvironment as the image-based light (plan 141)
+  const night = view.sun === 'night'
   useEffect(() => {
-    const sky = skyTexture()
+    const sky = skyTexture(night)
     scene.background = sky
-    scene.environment = sky
-    scene.environmentIntensity = ENV_INTENSITY
     return () => {
       scene.background = null
-      scene.environment = null
       sky.dispose()
     }
-  }, [scene])
+  }, [scene, night])
+  useEffect(() => {
+    const env = roomEnvMap(gl)
+    scene.environment = env.texture
+    return () => {
+      scene.environment = null
+      env.dispose()
+    }
+  }, [gl, scene])
+
+  // the evening lamps: warm point lights, only in the 'night' mood
+  const lampItems = useJson(night ? rplan.items.filter((i) => i.type === 'wall' || i.type === 'nightstand' || i.type === 'desk' || i.type === 'sofa') : null)
+  const lamps = useMemo(() => (lampItems ? buildLamps(lampSpots(geo, lampItems), nice) : null), [geo, lampItems, nice])
+  useEffect(() => () => lamps?.dispose(), [lamps])
+  // daylight through the windows (their area lights) is gone at night
+  graph.winLights.visible = !night
 
   // ----- shell builders
   const rafters = useMemo(() => buildRafters(geo, mats, options.board, today), [geo, mats, options.board, today])
@@ -563,21 +594,42 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
     }
   }, [apiRef, camera, gl])
 
-  // ----- post-processing (ambient occlusion), 'nice' quality only
+  // ----- post-processing, 'nice' quality only: ambient occlusion, a soft bloom
+  // on the brightest spots (sunlit patches, the lamp bulbs), tone mapping, then
+  // SMAA (the composer's render target loses the canvas's MSAA)
   const composerRef = useRef<EffectComposer | null>(null)
   useEffect(() => {
     if (!nice) return
     const composer = new EffectComposer(gl)
-    composer.addPass(new RenderPass(scene, camera))
     const gtao = new GTAOPass(scene, camera, 16, 16)
     gtao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1.4, thickness: 1.2, scale: 1.1, samples: 16 })
     gtao.blendIntensity = 0.9
-    composer.addPass(gtao)
-    composer.addPass(new OutputPass())
+    const passes: Pass[] = [
+      new RenderPass(scene, camera),
+      gtao,
+      new UnrealBloomPass(new THREE.Vector2(256, 256), BLOOM.strength, BLOOM.radius, BLOOM.threshold),
+      new OutputPass(),
+    ]
+    passes.forEach((p) => composer.addPass(p))
     composerRef.current = composer
+    // SMAAPass embeds ~35 kB (gzip) of lookup images, so it is its own chunk,
+    // fetched only for 'nice'; until it arrives OutputPass draws to the screen.
+    let alive = true
+    import('three/examples/jsm/postprocessing/SMAAPass.js').then(
+      ({ SMAAPass }) => {
+        if (!alive) return
+        const smaa = new SMAAPass()
+        passes.push(smaa)
+        composer.addPass(smaa) // sized to the composer by addPass
+      },
+      () => {
+        /* no anti-aliasing pass: the image is still complete */
+      },
+    )
     return () => {
+      alive = false
       composerRef.current = null
-      gtao.dispose()
+      passes.forEach((p) => p.dispose())
       composer.dispose()
     }
   }, [gl, scene, camera, nice])
@@ -715,6 +767,7 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
       <primitive object={lights.sun} />
       <primitive object={lights.sun.target} />
       <primitive object={graph.winLights} />
+      {lamps && <primitive object={lamps.group} />}
       <primitive object={helper} />
       <primitive object={graph.shell}>
         <primitive object={graph.slope.S}>

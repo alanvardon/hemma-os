@@ -29,8 +29,37 @@ export function planeM(w: number, h: number): THREE.PlaneGeometry {
   return g
 }
 
+/**
+ * Box-projected UVs in metres for a box-like geometry (plan 141): each vertex
+ * takes the two coordinates across its normal's main axis, u along the longer
+ * of the two (by the geometry's size), so textures keep their real-world scale
+ * and wood grain runs along a part's length. BoxGeometry's own UVs stretch
+ * 0–1 over each face whatever its size.
+ */
+export function metreUv<T extends THREE.BufferGeometry>(g: T): T {
+  const pos = g.attributes.position
+  const nor = g.attributes.normal
+  const uv = g.attributes.uv
+  if (!pos || !nor || !uv) return g
+  g.computeBoundingBox()
+  const size = g.boundingBox ? g.boundingBox.getSize(new THREE.Vector3()).toArray() : [1, 1, 1]
+  const p = [0, 0, 0]
+  for (let i = 0; i < pos.count; i++) {
+    const n = [Math.abs(nor.getX(i)), Math.abs(nor.getY(i)), Math.abs(nor.getZ(i))]
+    const axis = n[0] >= n[1] && n[0] >= n[2] ? 0 : n[1] >= n[2] ? 1 : 2
+    const [a, b] = axis === 0 ? [1, 2] : axis === 1 ? [0, 2] : [0, 1]
+    const [u, v] = size[a] >= size[b] ? [a, b] : [b, a]
+    p[0] = pos.getX(i)
+    p[1] = pos.getY(i)
+    p[2] = pos.getZ(i)
+    uv.setXY(i, p[u], p[v])
+  }
+  uv.needsUpdate = true
+  return g
+}
+
 export function box(w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat)
+  const m = new THREE.Mesh(metreUv(new THREE.BoxGeometry(w, h, d)), mat)
   m.position.set(x, y, z)
   m.castShadow = m.receiveShadow = true
   return m
@@ -39,7 +68,7 @@ export function box(w: number, h: number, d: number, mat: THREE.Material, x = 0,
 /** A rounded box (v41 `rb`). */
 export function rb(w: number, h: number, d: number, r: number, mat: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
   const rr = Math.max(0.001, Math.min(r, w / 2 - 0.001, h / 2 - 0.001, d / 2 - 0.001))
-  const m = new THREE.Mesh(new RoundedBoxGeometry(w, h, d, 3, rr), mat)
+  const m = new THREE.Mesh(metreUv(new RoundedBoxGeometry(w, h, d, 3, rr)), mat)
   m.position.set(x, y, z)
   m.castShadow = m.receiveShadow = true
   return m

@@ -3,12 +3,15 @@
 // for the option colours and 592–643 for the painting and the materials).
 // Material *ids* live in lib/vindsplanen/items.ts; their looks live here.
 //
-// Textures are painted into in-memory canvases (CanvasTexture), so nothing
-// needs blob: URLs or workers (CSP: img-src 'self' data:).
+// The v41 looks are painted into in-memory canvases (CanvasTexture), so
+// nothing needs blob: URLs or workers (CSP: img-src 'self' data:). They show
+// on the first frame and stay if the CC0 PBR sets (textures.ts, plan 141)
+// fail to load; once a set has loaded it replaces the painted look.
 
 import * as THREE from 'three'
 import type { MaterialCategory } from '../../../lib/vindsplanen/items'
 import type { Materials } from '../../../lib/vindsplanen/plan'
+import { createTexSetCache, SETS, type SetName, type TexRes, type TexSet } from './textures'
 
 export interface SurfaceStyle {
   base: string
@@ -176,10 +179,73 @@ export interface SceneMats {
   shared: Set<THREE.Material>
   /** Apply the plan's surface choices (v41 applyAllMats). */
   apply(materials: Materials): void
+  /** The PBR texture resolution; a change reloads the sets and swaps them in when ready. */
+  setRes(res: TexRes): void
   dispose(): void
 }
 
-export function createMats(maxAnisotropy: number): SceneMats {
+// ---------- PBR looks (plan 141)
+
+/** How a surface option maps onto a CC0 texture set (textures.ts). */
+export interface PbrLook {
+  set: SetName
+  /**
+   * true: the set's colour map, tinted so its mean lands on `base` (wood,
+   * chipboard, fabric). false: painted — flat `base` with the set's relief
+   * (normal) and roughness/AO only.
+   */
+  map: boolean
+  base: string
+  /** The option's mean roughness; the set's roughness map varies around it. */
+  rough: number
+  normalScale?: number
+}
+
+/** Painted plaster: a calmer relief than the raw plaster scan. */
+const PLASTER_RELIEF = 0.7
+
+/** The PBR look of a surface option (the persisted option ids never change; only their looks). */
+export function pbrLook(cat: MaterialCategory, key: string, opt: SurfaceStyle): PbrLook {
+  const look = (set: SetName, map: boolean, normalScale?: number): PbrLook => ({ set, map, base: opt.base, rough: opt.rough, normalScale })
+  if (cat === 'floor') {
+    if (key === 'lino') return look('plaster', false, 0.15)
+    if (key === 'chip') return look('chipboard', true)
+    return look(key === 'pine' || key === 'smoked' ? 'floor-pine' : 'floor-oak', true)
+  }
+  if (cat === 'rafter') return look('floor-pine', false, 0.25) // solid timber: grain relief only, the option's colour
+  if (key === 'pine') return look('panel', true) // panel or walls in pine panelling
+  if (cat === 'panel' && key !== 'board') return look('panel', false) // painted panelling
+  return look('plaster', false, PLASTER_RELIEF)
+}
+
+/**
+ * `material.color` for a set's colour map so its mean (linear) albedo lands on
+ * `base`: per channel base / mean, in linear space. Capped at 4× so a pale
+ * option on a dark scan cannot blow the bright grain out to white.
+ */
+export function tintFor(base: string, albedo: readonly [number, number, number]): THREE.Color {
+  const t = new THREE.Color(base)
+  return new THREE.Color(clamp(t.r / albedo[0], 0, 4), clamp(t.g / albedo[1], 0, 4), clamp(t.b / albedo[2], 0, 4))
+}
+
+/** At most this much average occlusion from a set's AO map (the plaster and fabric scans are deep). */
+const MAX_MEAN_AO = 0.1
+
+let warned = false
+
+interface Slot {
+  mat: THREE.MeshStandardMaterial
+  /** Texture clones this material owns (map, normal, orm): disposed when replaced. */
+  owned: THREE.Texture[]
+  /** The look last asked for, and what to show until (or unless) it loads. */
+  last: { look: PbrLook; fallback: () => void } | null
+  /** `lookKey@res` of the PBR look on screen, or null for the fallback. */
+  showing: string | null
+  /** `lookKey@res` being waited for. */
+  want: string | null
+}
+
+export function createMats(maxAnisotropy: number, initialRes: TexRes = '1k'): SceneMats {
   const texCache = new Map<string, { map: THREE.CanvasTexture; bump: THREE.CanvasTexture }>()
   const getTex = (cat: MaterialCategory, key: string) => {
     const id = cat + ':' + key
@@ -238,23 +304,142 @@ export function createMats(maxAnisotropy: number): SceneMats {
   const hl = new THREE.MeshBasicMaterial({ color: '#e8762b', transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide })
   const shared = new Set<THREE.Material>([...Object.values(mats), ...Object.values(M), ...Object.values(M2), dim, hl])
 
-  const applyMat = (mat: THREE.MeshStandardMaterial, cat: MaterialCategory, key: string, panelKey: string) => {
-    let opt = (SURFACES[cat][key] ?? Object.values(SURFACES[cat])[0]) as SurfaceStyle
-    if (cat === 'rafter' && key === 'ceiling') opt = { ...(SURFACES.panel[panelKey] as SurfaceStyle), kind: 'solid' }
-    if (opt.kind === 'solid') {
-      mat.map = null
-      mat.bumpMap = null
-      mat.color.set(opt.base)
-    } else {
-      const t = getTex(cat, key)
-      mat.map = t.map
-      mat.bumpMap = t.bump
-      mat.bumpScale = 1.2
-      mat.color.set('#ffffff')
+  // ----- PBR swapping: each textured material shows its canvas (or plain)
+  // look at once and swaps to its CC0 set when that has loaded.
+  const sets = createTexSetCache()
+  let res = initialRes
+  let disposed = false
+  const slots = new Map<THREE.MeshStandardMaterial, Slot>()
+  const slotOf = (mat: THREE.MeshStandardMaterial): Slot => {
+    let s = slots.get(mat)
+    if (!s) slots.set(mat, (s = { mat, owned: [], last: null, showing: null, want: null }))
+    return s
+  }
+  const release = (s: Slot) => {
+    s.owned.forEach((t) => t.dispose())
+    s.owned = []
+  }
+  /** Back to the non-PBR look: clear the PBR maps and free their clones. */
+  const unPbr = (s: Slot) => {
+    const m = s.mat
+    m.normalMap = m.roughnessMap = m.aoMap = null
+    release(s)
+    s.showing = null
+  }
+  const showPbr = (s: Slot, look: PbrLook, set: TexSet, key: string) => {
+    const info = SETS[look.set]
+    const m = s.mat
+    release(s)
+    const mk = (t: THREE.Texture) => {
+      const c = t.clone()
+      c.repeat.set(1 / info.size, 1 / info.size) // the builders' UVs are in metres
+      c.rotation = info.boardsAlongV ? Math.PI / 2 : 0 // boards along u, as the canvas look paints them
+      s.owned.push(c)
+      return c
     }
-    mat.roughness = opt.rough
+    if (look.map) {
+      m.map = mk(set.map)
+      m.color.copy(tintFor(look.base, info.albedo))
+    } else {
+      m.map = null
+      m.color.set(look.base)
+    }
+    const orm = mk(set.orm)
+    m.normalMap = mk(set.normalMap)
+    m.normalScale.setScalar(look.normalScale ?? 1)
+    m.roughnessMap = orm
+    m.roughness = clamp(look.rough / info.rough, 0, 3)
+    m.aoMap = orm
+    m.aoMapIntensity = Math.min(1, MAX_MEAN_AO / Math.max(1e-3, 1 - info.ao))
+    m.bumpMap = null
+    m.needsUpdate = true
+    s.showing = key
+  }
+  const run = (s: Slot) => {
+    if (!s.last || disposed) return
+    const { look, fallback } = s.last
+    const lookKey = JSON.stringify(look)
+    const key = `${lookKey}@${res}`
+    if (s.showing === key) return
+    s.want = key
+    const ready = sets.peek(look.set, res)
+    if (ready) return showPbr(s, look, ready, key)
+    // keep the same look at the other resolution while the new one loads; else the fallback
+    if (!s.showing || !s.showing.startsWith(lookKey + '@')) {
+      unPbr(s)
+      fallback()
+    }
+    const r = res
+    sets.loadSet(look.set, r, maxAnisotropy).then(
+      (set) => {
+        if (!disposed && s.want === key && res === r) showPbr(s, look, set, key)
+      },
+      (err: unknown) => {
+        if (!warned) console.warn('Vindsplanen: textures could not load; keeping the painted look.', err)
+        warned = true
+      },
+    )
+  }
+  const pbr = (mat: THREE.MeshStandardMaterial, look: PbrLook, fallback: () => void) => {
+    const s = slotOf(mat)
+    s.last = { look, fallback }
+    run(s)
+  }
+  const plain = (mat: THREE.MeshStandardMaterial, base: string, rough: number) => () => {
+    mat.map = mat.bumpMap = null
+    mat.color.set(base)
+    mat.roughness = rough
     mat.needsUpdate = true
   }
+
+  const applyMat = (mat: THREE.MeshStandardMaterial, cat: MaterialCategory, key: string, panelKey: string) => {
+    const k = key in SURFACES[cat] ? key : Object.keys(SURFACES[cat])[0]
+    let opt = SURFACES[cat][k] as SurfaceStyle
+    if (cat === 'rafter' && k === 'ceiling') opt = { ...(SURFACES.panel[panelKey] ?? SURFACES.panel.white) as SurfaceStyle, kind: 'solid' }
+    const canvasLook = () => {
+      if (opt.kind === 'solid') {
+        mat.map = null
+        mat.bumpMap = null
+        mat.color.set(opt.base)
+      } else {
+        const t = getTex(cat, k)
+        mat.map = t.map
+        mat.bumpMap = t.bump
+        mat.bumpScale = 1.2
+        mat.color.set('#ffffff')
+      }
+      mat.roughness = opt.rough
+      mat.needsUpdate = true
+    }
+    pbr(mat, pbrLook(cat, k, opt), canvasLook)
+  }
+
+  // the fixed surfaces: plasterboard, the floor below, the fabrics
+  const fixed = () => {
+    pbr(mats.board, { set: 'plaster', map: false, base: '#f2f0eb', rough: 0.92, normalScale: PLASTER_RELIEF }, plain(mats.board, '#f2f0eb', 0.92))
+    pbr(M2.floor, { set: 'floor-oak', map: true, base: SURFACES.floor.oak.base as string, rough: 0.5 }, () => {
+      M2.floor.map = floorT.map
+      M2.floor.bumpMap = floorT.bump
+      M2.floor.color.set('#ffffff')
+      M2.floor.roughness = 0.5
+      M2.floor.needsUpdate = true
+    })
+    pbr(M2.wall, { set: 'plaster', map: false, base: '#f1efeb', rough: 0.92, normalScale: PLASTER_RELIEF }, plain(M2.wall, '#f1efeb', 0.92))
+    pbr(M2.ceil, { set: 'plaster', map: false, base: '#f6f5f2', rough: 0.95, normalScale: PLASTER_RELIEF }, plain(M2.ceil, '#f6f5f2', 0.95))
+    ;(
+      [
+        ['linen', '#f3f0e8', 0.92],
+        ['duvet', '#7f909c', 0.92],
+        ['sage', '#6f8a7c', 0.92],
+        ['sofa', '#8d9ba2', 0.92],
+        ['rug', '#c4b096', 1],
+      ] as const
+    ).forEach(([name, base, rough]) => {
+      const m = M[name] as THREE.MeshPhysicalMaterial
+      pbr(m, { set: 'fabric', map: true, base, rough }, plain(m, base, rough))
+    })
+  }
+  fixed()
 
   return {
     ...mats,
@@ -269,7 +454,17 @@ export function createMats(maxAnisotropy: number): SceneMats {
       applyMat(mats.rafter, 'rafter', m.rafter, m.panel)
       applyMat(mats.wall, 'walls', m.walls, m.panel)
     },
+    setRes(r) {
+      if (r === res || disposed) return
+      res = r
+      sets.keepOnly(r)
+      slots.forEach(run)
+    },
     dispose() {
+      disposed = true
+      slots.forEach(release)
+      slots.clear()
+      sets.dispose()
       shared.forEach((m) => m.dispose())
       texCache.forEach((t) => {
         t.map.dispose()
@@ -282,28 +477,40 @@ export function createMats(maxAnisotropy: number): SceneMats {
 
 // ---------- Sky and sun (v41 lines 402–407, 552–582)
 
-/** v41 `SUNS`: offset from the attic's middle (×1.6), intensity and colour. */
-export const SUN_STYLE = {
-  morning: { off: [7, 3.6, 3.2], int: 3.4, color: '#ffe6c4' },
-  midday: { off: [0.6, 6.4, 5.6], int: 3.6, color: '#fff4e4' },
-  evening: { off: [-7, 3.0, 3.6], int: 3.0, color: '#ffd2a1' },
-  overcast: { off: [1, 8, 2], int: 0, color: '#ffffff' },
-} as const
-
-export const ENV_INTENSITY = 0.75
+/**
+ * Light balance (plan 141). v41 lit the scene with its sky gradient as the
+ * environment at 0.75 and a hemisphere light at 0.9 (1.3 when overcast). The
+ * environment is now RoomEnvironment (lighting.ts), which is brighter than the
+ * gradient, so it runs lower and the flat hemisphere fill drops to leave room
+ * for it; together they keep the overall exposure of the v41 look.
+ */
+export const ENV_INTENSITY = 0.65
+export const HEMI = 0.55
+export const HEMI_OVERCAST = 0.75
 export const EXPOSURE = 1.12
 
-/** An equirectangular gradient used as background and as soft ambient light. */
-export function skyTexture(): THREE.DataTexture {
-  const stops = (
-    [
-      [0, '#7fa6d4'],
-      [0.38, '#b9d0e6'],
-      [0.5, '#e8eef1'],
-      [0.52, '#d3cfc4'],
-      [1, '#a8a294'],
-    ] as const
-  ).map(([t, h]) => [t, new THREE.Color(h)] as const)
+/**
+ * v41 `SUNS`: offset from the attic's middle (×1.6), intensity and colour;
+ * plus, per mood, the hemisphere fill and the environment (× ENV_INTENSITY).
+ * `night` (plan 141) is the evening with the lamps lit: a faint afterglow from
+ * the west, little daylight, and the lamps (lighting.ts) do the rest.
+ */
+export const SUN_STYLE = {
+  morning: { off: [7, 3.6, 3.2], int: 3.4, color: '#ffe6c4', hemi: HEMI, env: 1 },
+  midday: { off: [0.6, 6.4, 5.6], int: 3.6, color: '#fff4e4', hemi: HEMI, env: 1 },
+  evening: { off: [-7, 3.0, 3.6], int: 3.0, color: '#ffd2a1', hemi: HEMI, env: 1 },
+  overcast: { off: [1, 8, 2], int: 0, color: '#ffffff', hemi: HEMI_OVERCAST, env: 1 },
+  night: { off: [-7, 1.2, 3.6], int: 0.15, color: '#ff9a5a', hemi: 0.04, env: 0.12 },
+} as const
+
+const DAY_SKY = ['#7fa6d4', '#b9d0e6', '#e8eef1', '#d3cfc4', '#a8a294'] as const
+/** Late evening: deep blue overhead, a last warm band at the horizon, dark ground. */
+const NIGHT_SKY = ['#0b1222', '#18233a', '#4a3a44', '#1c1a1a', '#100f0e'] as const
+
+/** An equirectangular gradient used as the background (`night`: the late-evening sky). */
+export function skyTexture(night = false): THREE.DataTexture {
+  const hex = night ? NIGHT_SKY : DAY_SKY
+  const stops = ([0, 0.38, 0.5, 0.52, 1] as const).map((t, i) => [t, new THREE.Color(hex[i])] as const)
   const w = 256
   const h = 128
   const data = new Float32Array(w * h * 4)
