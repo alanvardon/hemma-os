@@ -57,7 +57,7 @@ export function stepText(st: MeasureStep, side: 'N' | 'S'): StepText {
       return {
         title: 'Old stairs: shape',
         sub: 'Step depth, and how the steps turn',
-        how: 'On a straight part of the old stairs, measure from the front edge of one step to the front edge of the next, flat along the step. Then, walking up, count the tapered steps in the turn (narrow at the post, wide at the wall), and the straight steps after the turn before you step onto the landing (do not count the landing itself). Together with B8 these decide how far the old stairs run under the hallway floor, and so the headroom on the way down.',
+        how: 'On a straight part of the old stairs, measure from the front edge of one step to the front edge of the next, flat along the step. Then, walking up, count the tapered steps in the turn (narrow at the post, wide at the wall), and the straight steps after the turn before you step onto the landing. Together with B8 these decide how far the old stairs run under the hallway floor, and so the headroom on the way down.',
         fields: ['Step depth', 'Tapered steps in the turn', 'Straight steps after the turn'],
       }
     case 'W1':

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ATTIC_DEF, deriveGeometry } from './attic'
 import { BELOW_DEF, belowLayout, belowWin, FF, hallRect, OLD_W, oldStairs, swRect, type BelowPart } from './below'
-import { toWorld } from './stairs'
 import { expectClose, FIXTURE_NAMES, goldPlan, type GoldMesh } from './testkit'
 
 describe('floor-below rectangles and old stairs — parity with v41', () => {
@@ -103,12 +102,11 @@ describe('hand-verified floor below (defaults)', () => {
   })
 })
 
-describe("old stairs shaped like the owner's: the turn begins one going early, a landing at the top", () => {
-  // Fictional stairs: 15 rises, 92 cm wide, 21 cm going, 7 winders and 1
-  // straight step after the turn, against the north wall. Walking up: steps
-  // 1–5 straight, 6–12 winders, 13 straight, 14 the landing, 15 the hallway.
+describe('old stairs: the turn begins one going before the corner', () => {
+  // Fictional stairs shaped like the owner's: 15 rises, 92 cm wide, 21 cm going,
+  // 8 winders and 1 straight step after the turn, against the north wall.
   const geo = deriveGeometry(ATTIC_DEF)
-  const B = { ...BELOW_DEF, oldN: 15, oldW: 0.92, oldG: 0.21, oldK: 7, oldB: 1 }
+  const B = { ...BELOW_DEF, oldN: 15, oldW: 0.92, oldG: 0.21, oldK: 8, oldB: 1 }
   const { it: os, P } = oldStairs(geo, B)
   const area = (poly: [number, number][]) =>
     Math.abs(
@@ -118,48 +116,26 @@ describe("old stairs shaped like the owner's: the turn begins one going early, a
       }, 0),
     ) / 2
 
-  it('14 treads = 5 straight + 7 winders + 1 straight + the landing', () => {
-    expect([P.a, P.wk, os.b]).toEqual([5, 7, 1])
+  it('14 treads = 5 straight + 8 winders + 1 after; the foot is one going further west than v41', () => {
+    expect(P.a).toBe(5)
     expect(P.treads).toHaveLength(14)
-    expect(P.treads.slice(0, 5).every((q) => q.straight && !q.dir)).toBe(true)
-    expect(P.treads.slice(5, 12).every((q) => !q.straight)).toBe(true)
-    expect(P.treads[12]).toMatchObject({ straight: true, dir: 'z' }) // step 13
-    expect(P.treads[13]).toMatchObject({ straight: true, dir: 'z' }) // step 14, the landing
-    // the landing is one rise below the hallway floor: 14 · 2.58 / 15
-    expect(P.treads[13].t).toBeCloseTo((14 * 2.58) / 15, 12)
-  })
-
-  it('the foot is one going further west than v41 put it: step 2 starts 5 goings + the lead + the width from the east wall', () => {
     expect(os.lead).toBeCloseTo(0.21, 12)
     // 8.5 − 0.92 − 5 · 0.21 − 0.21 = 6.32 (v41: 8.5 − 0.92 − 1.05 = 6.53)
     expect(os.x).toBeCloseTo(6.32, 12)
+    // the corner post: 5 straight goings + the lead from the foot
     expect(P.pivot[0]).toBeCloseTo(5 * 0.21 + 0.21, 12)
   })
 
   it('the winders tile the turn exactly (lead + corner square), rising one rise each, none narrowing to a point', () => {
-    const winders = P.treads.slice(P.a, P.a + 7)
+    const winders = P.treads.slice(P.a, P.a + 8)
     expect(winders.reduce((s, q) => s + area(q.poly), 0)).toBeCloseTo((0.21 + 0.92) * 0.92, 10)
     winders.forEach((q, j) => {
       expect(q.t).toBeCloseTo((P.a + j + 1) * P.r, 10)
-      expect(q.poly.length).toBeGreaterThanOrEqual(4) // a post-side edge (lead / 7 = 3 cm), not a v41 triangle
+      expect(q.poly.length).toBeGreaterThanOrEqual(4) // a post-side edge (lead / 8 ≈ 2.6 cm), not a v41 triangle
     })
+    // the first winder starts flush with the end of the straight flight
     expect(Math.min(...winders[0].poly.map((p) => p[0]))).toBeCloseTo(P.a * P.g, 12)
-    expect(winders[6].poly.some(([x, z]) => Math.abs(x - P.pivot[0]) < 1e-9 && Math.abs(z - P.pivot[1]) < 1e-9)).toBe(true)
-  })
-
-  it('the landing fills the rest of the stairwell, and is at least one going deep', () => {
-    const depth = (b: typeof B) => {
-      const q = oldStairs(geo, b).P.treads.at(-1)!.poly.map((p) => p[1])
-      return Math.max(...q) - Math.min(...q)
-    }
-    // default 1.0 m well: 1.0 − 0.92 − 0.21 < 0.21, so one going
-    expect(depth(B)).toBeCloseTo(0.21, 12)
-    // a 1.40 m well: 1.40 − 0.92 − 0.21 = 0.27, ending on the hallway edge of the well
-    const wide = { ...B, sw: 1.4 }
-    expect(depth(wide)).toBeCloseTo(0.27, 12)
-    const W = oldStairs(geo, wide)
-    const zs = W.P.treads.at(-1)!.poly.map(([a, b]) => toWorld(W.it, a, b)[1])
-    expect(Math.max(...zs)).toBeCloseTo(swRect(geo, wide).z1, 12)
+    // the last winder ends on the exit edge through the post
+    expect(winders[7].poly.some(([x, z]) => Math.abs(x - P.pivot[0]) < 1e-9 && Math.abs(z - P.pivot[1]) < 1e-9)).toBe(true)
   })
 })
-

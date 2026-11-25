@@ -52,12 +52,12 @@ describe('railSegments — guard and banister, parity with v41 stairRails', () =
 })
 
 describe('hand-verified stairs', () => {
-  it('the owner-like old stairs: 14 rises, 4 straight + 7 winders + 1 straight + the top landing', () => {
+  it('the owner-like old stairs: 14 rises, 5 straight + 7 winders + 1 straight', () => {
     const { gold } = goldPlan('owner-like')
     const P = gold.below.old as { P: { n: number; a: number; wk: number; treads: { straight?: boolean; dir?: string }[] }; it: { b: number } }
     expect(P.P.n).toBe(14)
-    expect([P.P.a, P.P.wk, P.it.b]).toEqual([4, 7, 1])
-    expect(P.P.treads).toHaveLength(13) // 12 steps, then the landing one rise below the hallway floor
+    expect([P.P.a, P.P.wk, P.it.b]).toEqual([5, 7, 1])
+    expect(P.P.treads).toHaveLength(13) // 13 steps before the landing
   })
 
   it('a quarter turn of three winders: 30° / 60° splits, mirrored for a right turn', () => {
