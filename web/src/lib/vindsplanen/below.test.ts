@@ -103,10 +103,11 @@ describe('hand-verified floor below (defaults)', () => {
 })
 
 describe('old stairs: the turn begins one going before the corner', () => {
-  // Fictional stairs shaped like the owner's: 15 rises, 92 cm wide, 21 cm going,
-  // 8 winders and 1 straight step after the turn, against the north wall.
+  // Fictional stairs shaped like the owner's: 14 rises, 92 cm wide, 21 cm going,
+  // 7 winders and 1 straight step after the turn, against the north wall.
+  // Walking up: 1–5 straight, 6–12 winders, 13 straight, 14 the hallway floor.
   const geo = deriveGeometry(ATTIC_DEF)
-  const B = { ...BELOW_DEF, oldN: 15, oldW: 0.92, oldG: 0.21, oldK: 8, oldB: 1 }
+  const B = { ...BELOW_DEF, oldN: 14, oldW: 0.92, oldG: 0.21, oldK: 7, oldB: 1 }
   const { it: os, P } = oldStairs(geo, B)
   const area = (poly: [number, number][]) =>
     Math.abs(
@@ -116,9 +117,13 @@ describe('old stairs: the turn begins one going before the corner', () => {
       }, 0),
     ) / 2
 
-  it('14 treads = 5 straight + 8 winders + 1 after; the foot is one going further west than v41', () => {
-    expect(P.a).toBe(5)
-    expect(P.treads).toHaveLength(14)
+  it('13 treads = 5 straight + 7 winders + 1 straight; the foot is one going further west than v41', () => {
+    expect([P.a, P.wk, os.b]).toEqual([5, 7, 1])
+    expect(P.treads).toHaveLength(13)
+    expect(P.treads.slice(0, 5).every((q) => q.straight && !q.dir)).toBe(true)
+    expect(P.treads.slice(5, 12).every((q) => !q.straight)).toBe(true)
+    expect(P.treads[12]).toMatchObject({ straight: true, dir: 'z' }) // step 13; step 14 is the hallway floor
+    expect(P.treads[12].t).toBeCloseTo((13 * 2.58) / 14, 12)
     expect(os.lead).toBeCloseTo(0.21, 12)
     // 8.5 − 0.92 − 5 · 0.21 − 0.21 = 6.32 (v41: 8.5 − 0.92 − 1.05 = 6.53)
     expect(os.x).toBeCloseTo(6.32, 12)
@@ -127,15 +132,15 @@ describe('old stairs: the turn begins one going before the corner', () => {
   })
 
   it('the winders tile the turn exactly (lead + corner square), rising one rise each, none narrowing to a point', () => {
-    const winders = P.treads.slice(P.a, P.a + 8)
+    const winders = P.treads.slice(P.a, P.a + 7)
     expect(winders.reduce((s, q) => s + area(q.poly), 0)).toBeCloseTo((0.21 + 0.92) * 0.92, 10)
     winders.forEach((q, j) => {
       expect(q.t).toBeCloseTo((P.a + j + 1) * P.r, 10)
-      expect(q.poly.length).toBeGreaterThanOrEqual(4) // a post-side edge (lead / 8 ≈ 2.6 cm), not a v41 triangle
+      expect(q.poly.length).toBeGreaterThanOrEqual(4) // a post-side edge (lead / 7 = 3 cm), not a v41 triangle
     })
     // the first winder starts flush with the end of the straight flight
     expect(Math.min(...winders[0].poly.map((p) => p[0]))).toBeCloseTo(P.a * P.g, 12)
     // the last winder ends on the exit edge through the post
-    expect(winders[7].poly.some(([x, z]) => Math.abs(x - P.pivot[0]) < 1e-9 && Math.abs(z - P.pivot[1]) < 1e-9)).toBe(true)
+    expect(winders[6].poly.some(([x, z]) => Math.abs(x - P.pivot[0]) < 1e-9 && Math.abs(z - P.pivot[1]) < 1e-9)).toBe(true)
   })
 })
