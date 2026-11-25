@@ -52,7 +52,7 @@ export function stepText(st: MeasureStep, side: 'N' | 'S'): StepText {
     case 'B7':
       return { title: 'Slatted screen', sub: 'West end to the white post', how: 'Along the screen: from its west end to the white post where the low railing starts.', fields: ['Screen length'] }
     case 'B8':
-      return { title: 'The old stairs', sub: 'Number of steps, step height, width', how: 'Count the steps from the ground floor up to this hallway (count each step you lift your foot onto, including the top one), measure the height of one step, and the width of the stairs.', fields: ['Number of steps', 'Height of one step', 'Width of the stairs'] }
+      return { title: 'The old stairs', sub: 'Number of steps, step height, width', how: 'Count the steps from the ground floor up to this hallway (count each step you lift your foot onto, including the top one), measure the height of one step, and the width of the stairs. The line on the model runs from the front edge of the step just inside the opening up to this hallway floor: measured there and divided by the steps it spans, it gives the height of one step.', fields: ['Number of steps', 'Height of one step', 'Width of the stairs'] }
     case 'B9':
       return {
         title: 'Old stairs: shape',

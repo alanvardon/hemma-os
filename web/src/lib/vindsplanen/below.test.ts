@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { ATTIC_DEF, deriveGeometry } from './attic'
 import { BELOW_DEF, belowLayout, belowWin, FF, hallRect, OLD_W, oldStairs, swRect, type BelowPart } from './below'
+import { measureSteps } from './measure'
+import { examplePlan } from './plan'
 import { expectClose, FIXTURE_NAMES, goldPlan, type GoldMesh } from './testkit'
 
 describe('floor-below rectangles and old stairs — parity with v41', () => {
@@ -99,5 +101,99 @@ describe('hand-verified floor below (defaults)', () => {
     const step10 = os.P.treads[9].t
     expect(step10).toBeCloseTo((10 * 2.58) / 14, 12)
     expect(Math.round((FF(B) + B.ceil - step10) * 100)).toBe(304)
+  })
+})
+
+describe('old stairs: step 2 starts under the opening, the turn begins before the corner', () => {
+  // Fictional stairs shaped like the owner's: 14 rises, 92 cm wide, 21 cm going,
+  // 7 winders and 1 straight step after the turn, against the north wall.
+  // Walking up: 1–5 straight, 6–12 winders, 13 straight, 14 the hallway floor.
+  const geo = deriveGeometry(ATTIC_DEF)
+  const B = { ...BELOW_DEF, oldN: 14, oldW: 0.92, oldG: 0.21, oldK: 7, oldB: 1 }
+  const { it: os, P } = oldStairs(geo, B)
+  const area = (poly: [number, number][]) =>
+    Math.abs(
+      poly.reduce((s, [x, z], i) => {
+        const [x2, z2] = poly[(i + 1) % poly.length]
+        return s + x * z2 - x2 * z
+      }, 0),
+    ) / 2
+
+  it('13 treads = 5 straight + 7 winders + 1 straight; the front of step 2 sits under the opening\'s west end', () => {
+    expect([P.a, P.wk, os.b]).toEqual([5, 7, 1])
+    expect(P.treads).toHaveLength(13)
+    expect(P.treads.slice(0, 5).every((q) => q.straight && !q.dir)).toBe(true)
+    expect(P.treads.slice(5, 12).every((q) => !q.straight)).toBe(true)
+    expect(P.treads[12]).toMatchObject({ straight: true, dir: 'z' }) // step 13; step 14 is the hallway floor
+    expect(P.treads[12].t).toBeCloseTo((13 * 2.58) / 14, 12)
+    // opening 8.5 − 2.30 = 6.20: the foot one going west of it, 5.99 (v41: 8.5 − 0.92 − 1.05 = 6.53)
+    expect(os.x).toBeCloseTo(5.99, 12)
+    expect(os.x + os.g).toBeCloseTo(swRect(geo, B).x0, 12)
+    // so the turn begins 2.30 − 0.92 − 4 · 0.21 = 0.54 before the corner post
+    expect(os.lead).toBeCloseTo(0.54, 12)
+    expect(P.pivot[0]).toBeCloseTo(5 * 0.21 + 0.54, 12)
+  })
+
+  it('the winders tile the turn exactly (lead + corner square), rising one rise each, none narrowing to a point', () => {
+    const winders = P.treads.slice(P.a, P.a + 7)
+    expect(winders.reduce((s, q) => s + area(q.poly), 0)).toBeCloseTo((0.54 + 0.92) * 0.92, 10)
+    winders.forEach((q, j) => {
+      expect(q.t).toBeCloseTo((P.a + j + 1) * P.r, 10)
+      expect(q.poly.length).toBeGreaterThanOrEqual(4) // a post-side edge (lead / 7 ≈ 7.7 cm), not a v41 triangle
+    })
+    // the first winder starts flush with the end of the straight flight
+    expect(Math.min(...winders[0].poly.map((p) => p[0]))).toBeCloseTo(P.a * P.g, 12)
+    // the last winder ends on the exit edge through the post
+    expect(winders[6].poly.some(([x, z]) => Math.abs(x - P.pivot[0]) < 1e-9 && Math.abs(z - P.pivot[1]) < 1e-9)).toBe(true)
+  })
+
+  describe('the top flight reaching past a 1.00 m stairwell into the hallway', () => {
+    // 0.92 m of stairs + 1 step of 0.21 m after the turn = 1.13 m from the long
+    // wall, 13 cm past the 1.00 m stairwell's hallway edge (z1 = −1.10).
+    const plan = { items: [], options: { below: B } } as unknown as Parameters<typeof belowLayout>[1]
+    const lay = belowLayout(geo, plan)
+    const floors = lay.parts.filter((p): p is Extract<BelowPart, { kind: 'plane' }> => p.kind === 'plane' && p.mat === 'floor' && Math.abs(p.y - lay.y0) < 1e-9)
+    const floorAt = (x: number, z: number) => floors.some((f) => Math.abs(x - f.x) <= f.w / 2 && Math.abs(z - f.z) <= f.h / 2)
+    const r = swRect(geo, B)
+
+    it('the hallway floor is open over the strip step 13 crosses, between the corner post and the east wall', () => {
+      expect(floorAt(r.x1 - 0.1, r.z1 + 0.06)).toBe(false) // over step 13
+      expect(floorAt(r.x1 - 0.1, r.z1 + 0.14)).toBe(true) // just past it: hallway floor
+      expect(floorAt(r.x1 - 0.92 - 0.05, r.z1 + 0.06)).toBe(true) // west of the post: hallway floor
+    })
+
+    it('the stairwell wall stops under step 13 there: up to the bottom of its riser (12 rises)', () => {
+      const walls = lay.parts.filter((p): p is Extract<BelowPart, { kind: 'plane' }> => p.kind === 'plane' && p.mat === 'wall' && Math.abs(p.z - (r.z1 + 0.01)) < 1e-9 && p.rotY === 0)
+      const east = walls.find((p) => p.x > r.x1 - 0.92)!
+      expect(east.w).toBeCloseTo(0.92, 12)
+      expect(east.h).toBeCloseTo(12 * P.r, 12)
+    })
+
+    it('a stairwell wide enough for the stairs keeps the hallway floor whole beside it', () => {
+      const wide = { ...B, sw: 1.2 }
+      const L2 = belowLayout(geo, { items: [], options: { below: wide } } as unknown as Parameters<typeof belowLayout>[1])
+      const r2 = swRect(geo, wide)
+      const f2 = L2.parts.filter((p): p is Extract<BelowPart, { kind: 'plane' }> => p.kind === 'plane' && p.mat === 'floor' && Math.abs(p.y - L2.y0) < 1e-9)
+      expect(f2.some((f) => Math.abs(r2.x1 - 0.1 - f.x) <= f.w / 2 && Math.abs(r2.z1 + 0.06 - f.z) <= f.h / 2)).toBe(true)
+      expect(f2).toHaveLength(floors.length - 1)
+    })
+  })
+
+  it('an opening too short to put step 2 under it: the turn starts at the corner, as v41', () => {
+    const short = { ...B, len: 1.5 }
+    const { it: o } = oldStairs(geo, short)
+    expect(o.lead).toBe(0)
+    expect(o.x).toBeCloseTo(8.5 - 0.92 - 5 * 0.21, 12)
+  })
+
+  it('B8 line: from the front of step 2 up to the hallway floor (owner: 266 cm over 12 rises)', () => {
+    const base = examplePlan()
+    const tall = { ...B, ground: ((266 / 12) * 14) / 100 }
+    const step = measureSteps(geo, { options: { ...base.options, below: tall } }).find((s) => s.code === 'B8')!
+    const [d] = step.dims
+    expect(d.b[1] - d.a[1]).toBeCloseTo(2.66, 12) // 12 rises of 22.2 cm, standing on step 2
+    expect(d.cm).toBe(266)
+    // at the front edge of step 2 (2 cm in, so it stands on the step)
+    expect(d.a[0] - (oldStairs(geo, tall).it.x + tall.oldG)).toBeCloseTo(0.02, 12)
   })
 })
