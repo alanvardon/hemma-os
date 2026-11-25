@@ -1,4 +1,4 @@
-// Swedish copy for the Measure tab's coded steps (v41 `walkSteps`, 1868–1960).
+// English copy for the Measure tab's coded steps (v41 `walkSteps`, 1868–1960).
 // The registry in lib/vindsplanen/measure.ts carries codes, fields and camera
 // data; the words are the route's. A D step is worded from the door it measures.
 
@@ -12,78 +12,78 @@ export interface StepText {
   fields: string[]
 }
 
-const TODAY = 'Mät vinden som den är idag, innan något tagits bort eller isolerats.'
+const TODAY = 'Measure the attic as it is today, before anything is taken out or insulated.'
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
 const nf = new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 1 })
 
 export function stepText(st: MeasureStep, side: 'N' | 'S'): StepText {
-  const longWall = side === 'S' ? 'södra' : 'norra'
-  const farWall = side === 'S' ? 'norra' : 'södra'
+  const longWall = side === 'S' ? 'south' : 'north'
+  const farWall = side === 'S' ? 'north' : 'south'
   switch (st.code) {
     case 'A1':
-      return { title: 'Vindens längd', sub: 'Västra gavelväggen till östra gavelväggen', how: `Längs golvet mitt på vinden, från västra gavelväggen till östra gavelväggen (den med fönstret). ${TODAY}`, fields: ['Västra gaveln till östra gaveln'] }
+      return { title: 'Attic length', sub: 'West gable wall to east gable wall', how: `Along the floor down the middle of the attic, from the west gable wall to the east gable wall (the one with the window). ${TODAY}`, fields: ['West gable to east gable'] }
     case 'A2':
-      return { title: 'Bredd mellan knäväggarna', sub: 'Södra knäväggen till norra knäväggen', how: `Tvärs över golvet, från den låga södra väggens yta till den låga norra väggens yta, i rät vinkel mot dem. ${TODAY}`, fields: ['Knävägg till knävägg'] }
+      return { title: 'Width between the knee walls', sub: 'South knee wall to north knee wall', how: `Across the floor, from the face of the low south wall to the face of the low north wall, at right angles to them. ${TODAY}`, fields: ['Knee wall to knee wall'] }
     case 'A3':
-      return { title: 'Knäväggens höjd', sub: 'Golv till knäväggens överkant', how: `Från golvet rakt upp till där den låga väggen möter det sluttande taket. ${TODAY}`, fields: ['Golv till knäväggens överkant'] }
+      return { title: 'Knee wall height', sub: 'Floor to the top of the knee wall', how: `From the floor straight up to where the low wall meets the sloping ceiling. ${TODAY}`, fields: ['Floor to top of knee wall'] }
     case 'A4':
-      return { title: 'Nockhöjd', sub: 'Golv till takets högsta punkt', how: `Från golvet rakt upp till taket på dess högsta punkt, mitt på vinden. Mät till panelen, inte till en bjälke som hänger under den. ${TODAY}`, fields: ['Golv till taket högst upp'] }
+      return { title: 'Ridge height', sub: 'Floor to the highest point of the ceiling', how: `From the floor straight up to the ceiling at its highest point, along the middle of the attic. Measure to the panelling, not to a beam that hangs below it. ${TODAY}`, fields: ['Floor to ceiling at the top'] }
     case 'A5':
-      return { title: 'Första sparren', sub: 'Västra gavelväggen till mitten av första sparren', how: `Längs det sluttande taket (eller längs golvet med hjälp av ett vattenpass), från västra gavelväggen till mitten av första sparren. ${TODAY}`, fields: ['Västra gaveln till sparrens mitt'] }
+      return { title: 'First rafter', sub: 'West gable wall to the middle of the first rafter', how: `Along the sloping ceiling (or along the floor, using a level), from the west gable wall to the middle of the first rafter. ${TODAY}`, fields: ['West gable to middle of rafter'] }
     case 'A6':
-      return { title: 'Sparrarnas avstånd', sub: 'Mitten av en sparre till mitten av nästa', how: `Från mitten av en sparre till mitten av nästa (samma som från vänster sida av en till vänster sida av nästa). Om de inte sitter jämnt, mät varje avstånd. ${TODAY}`, fields: ['Centrum till centrum'] }
+      return { title: 'Rafter spacing', sub: 'Middle of one rafter to the middle of the next', how: `From the middle of one rafter to the middle of the next one (the same as from the left side of one to the left side of the next). If they are not evenly spaced, measure each gap. ${TODAY}`, fields: ['Centre to centre'] }
     case 'A7':
-      return { title: 'Antal sparrar', sub: 'På ena sidan av taket', how: `Räkna sparrarna på ett takfall, från gavel till gavel. Räkna inte själva gavelväggarna. ${TODAY}`, fields: ['Sparrar på ena sidan'] }
+      return { title: 'Number of rafters', sub: 'On one side of the roof', how: `Count the rafters on one slope, from gable to gable. Do not count the gable walls themselves. ${TODAY}`, fields: ['Rafters on one side'] }
     case 'A8':
-      return { title: 'Sparrens storlek', sub: 'Hur djup och tjock en sparre är', how: `På en sparre: hur långt den sticker ut under panelen (djupet) och hur tjock den är från sida till sida. ${TODAY}`, fields: ['Djup under panelen', 'Tjocklek'] }
+      return { title: 'Rafter size', sub: 'How deep and how thick one rafter is', how: `On one rafter: how far it sticks out below the panelling (its depth), and how thick it is from side to side. ${TODAY}`, fields: ['Depth below the panelling', 'Thickness'] }
     case 'B1':
-      return { title: 'Takhöjd', sub: 'Hallens golv till tak', how: 'Stå i hallen och mät från golvet rakt upp till taket.', fields: ['Golv till tak'] }
+      return { title: 'Ceiling height', sub: 'Hallway floor to ceiling', how: 'Stand in the hallway and measure from the floor straight up to the ceiling.', fields: ['Floor to ceiling'] }
     case 'B2':
-      return { title: 'Våning till våning', sub: 'Hallens golv till vindsgolvet', how: 'Vid trapphålet, mät från hallens golv upp till vindsgolvets yta (genom luckan eller upp genom trappöppningen). Det ger tjockleken på bjälklaget emellan.', fields: ['Hallens golv till vindsgolv'] }
+      return { title: 'Floor to floor', sub: 'Hallway floor to attic floor', how: 'At the stairwell, measure from the hallway floor up to the attic floor surface (through the hatch or up the stair opening). This gives the thickness of the floor between.', fields: ['Hallway floor to attic floor'] }
     case 'B3':
-      return { title: 'Hallens längd', sub: 'Östra väggen till västra ändväggen', how: 'Från östra väggen (med fönstret) längs hallen till västra ändväggen (med dörrarna).', fields: ['Östra väggen till västra änden'] }
+      return { title: 'Hallway length', sub: 'East wall to the west end wall', how: 'From the east wall (with the window) along the hallway to the west end wall (with the doors).', fields: ['East wall to west end'] }
     case 'B4':
-      return { title: 'Trapphålets längd', sub: 'Östra väggen till öppningens slut', how: 'Längs trapphålet: från östra väggen till trapphålsöppningens västra ände, där spjälskärmen börjar.', fields: ['Östra väggen till öppningens slut'] }
+      return { title: 'Stairwell length', sub: 'East wall to the end of the opening', how: 'Along the stairwell: from the east wall to the west end of the stairwell opening, where the slatted screen starts.', fields: ['East wall to end of opening'] }
     case 'B5':
-      return { title: 'Trapphålets bredd', sub: 'Långväggen till skärmlinjen', how: `Tvärs över trapphålet: från ${longWall} väggen till spjälskärmens och räckets linje.`, fields: ['Vägg till skärmlinje'] }
+      return { title: 'Stairwell width', sub: 'Long wall to the screen line', how: `Across the stairwell: from the ${longWall} wall to the line of the slatted screen and railing.`, fields: ['Wall to screen line'] }
     case 'B6':
-      return { title: 'Hallen intill trapphålet', sub: 'Skärmlinjen till motstående vägg', how: `Från spjälskärmen och räcket tvärs över hallen till ${farWall} väggen.`, fields: ['Skärmlinje till vägg'] }
+      return { title: 'Hallway beside the stairwell', sub: 'Screen line to the opposite wall', how: `From the slatted screen and railing across the hallway to the ${farWall} wall.`, fields: ['Screen line to wall'] }
     case 'B7':
-      return { title: 'Spjälskärm', sub: 'Västra änden till den vita stolpen', how: 'Längs skärmen: från dess västra ände till den vita stolpen där det låga räcket börjar.', fields: ['Skärmens längd'] }
+      return { title: 'Slatted screen', sub: 'West end to the white post', how: 'Along the screen: from its west end to the white post where the low railing starts.', fields: ['Screen length'] }
     case 'B8':
-      return { title: 'Den gamla trappan', sub: 'Antal steg, steghöjd, bredd', how: 'Räkna stegen från bottenvåningen upp till den här hallen (räkna varje steg du lyfter foten upp på, inklusive det översta), mät höjden på ett steg och trappans bredd.', fields: ['Antal steg', 'Höjd på ett steg', 'Trappans bredd'] }
+      return { title: 'The old stairs', sub: 'Number of steps, step height, width', how: 'Count the steps from the ground floor up to this hallway (count each step you lift your foot onto, including the top one), measure the height of one step, and the width of the stairs.', fields: ['Number of steps', 'Height of one step', 'Width of the stairs'] }
     case 'B9':
       return {
-        title: 'Gamla trappan: form',
-        sub: 'Stegdjup och hur stegen svänger',
-        how: 'På en rak del av den gamla trappan, mät från framkanten av ett steg till framkanten av nästa, plant längs steget. Räkna sedan, på väg uppåt, de kilformade stegen i svängen (smala vid stolpen, breda vid väggen) och de raka stegen efter svängen innan du kliver upp på avsatsen. Tillsammans med B8 avgör det hur långt den gamla trappan går in under hallgolvet, och därmed takhöjden på vägen ned.',
-        fields: ['Stegdjup', 'Kilformade steg i svängen', 'Raka steg efter svängen'],
+        title: 'Old stairs: shape',
+        sub: 'Step depth, and how the steps turn',
+        how: 'On a straight part of the old stairs, measure from the front edge of one step to the front edge of the next, flat along the step. Then, walking up, count the tapered steps in the turn (narrow at the post, wide at the wall), and the straight steps after the turn before you step onto the landing. Together with B8 these decide how far the old stairs run under the hallway floor, and so the headroom on the way down.',
+        fields: ['Step depth', 'Tapered steps in the turn', 'Straight steps after the turn'],
       }
     case 'W1':
-      return { title: 'Hallfönster', sub: 'I östra väggen i hallens ände', how: 'Nere vid fönstret i östra väggen: mät längs väggen från norra väggen (trapphålssidan) till fönsteröppningens närmaste kant, sedan bredd, höjd och från golvet upp till fönsterbänken. Mät öppningen i väggen, inte karmen.', fields: ['Norra väggen till fönsterkanten', 'Bredd', 'Höjd', 'Golv till fönsterbänk'] }
+      return { title: 'Hallway window', sub: 'In the east wall at the end of the hallway', how: 'Downstairs, at the window in the east wall: measure along the wall from the north wall (the stairwell side) to the nearest edge of the window opening, then its width, its height, and from the floor up to the sill. Measure the opening in the wall, not the frame.', fields: ['North wall to window edge', 'Width', 'Height', 'Floor to sill'] }
     case 'W2':
-      return { title: 'Vindsfönster', sub: 'I vindens östra gavelvägg', how: 'På vinden vid fönstret i östra gavelväggen: mät längs väggen från hörnet med norra knäväggen till fönsteröppningens närmaste kant, sedan bredd, höjd och från golvet upp till fönsterbänken. Om det inte finns något fönster där, hoppa över och bocka ur det under Rummet → Fönster i östra gaveln.', fields: ['Norra knäväggen till fönsterkanten', 'Bredd', 'Höjd', 'Golv till fönsterbänk'] }
+      return { title: 'Attic window', sub: 'In the east gable wall of the attic', how: 'In the attic, at the window in the east gable wall: measure along the wall from the corner with the north knee wall to the nearest edge of the window opening, then its width, its height, and from the floor up to the sill. If there is no window there, skip this and untick it under Room → East gable window.', fields: ['North knee wall to window edge', 'Width', 'Height', 'Floor to sill'] }
   }
   // D steps: the door being measured.
   const d = st.door
   const isW = d?.wall === 'W'
-  const what = d?.kind === 'panel' ? 'skåp' : 'dörr'
-  const where = isW ? 'västra ändväggen' : `${d?.wall === 'N' ? 'norra' : 'södra'} väggen`
-  const ref = isW ? 'norra väggen' : 'östra väggen'
+  const what = d?.kind === 'panel' ? 'cupboard' : 'door'
+  const where = isW ? 'west end wall' : `${d?.wall === 'N' ? 'north' : 'south'} wall`
+  const ref = isW ? 'north wall' : 'east wall'
   return {
-    title: `${cap(what)} i ${where}`,
-    sub: `${cap(ref)} till närmaste kant, och bredd`,
-    how: `Mät längs golvet från ${ref} till närmaste kant på ${what}söppningen (innanför karmen), sedan öppningens bredd.`,
-    fields: [`Från ${ref} till kanten`, 'Öppningens bredd'],
+    title: `${cap(what)} in the ${where}`,
+    sub: `${cap(ref)} to its nearest edge, and its width`,
+    how: `Measure along the floor from the ${ref} to the nearest edge of the ${what} opening (inside the frame), then the width of the opening.`,
+    fields: [`From ${ref} to the edge`, 'Opening width'],
   }
 }
 
 export const GROUPS: { code: 'A' | 'B' | 'W' | 'D'; title: string; note: string }[] = [
-  { code: 'A', title: 'A · Vinden', note: 'Mät idag, innan något tas bort' },
-  { code: 'B', title: 'B · Våningen under', note: 'Hallen och trapphålet under de nya trapporna' },
-  { code: 'W', title: 'W · Fönster', note: 'Båda fönstren i östra väggen, ett över det andra' },
-  { code: 'D', title: 'D · Dörrar på våningen under', note: 'Var varje dörr sitter längs sin vägg' },
+  { code: 'A', title: 'A · The attic', note: 'Measure today, before anything is taken out' },
+  { code: 'B', title: 'B · Floor below', note: 'The hallway and the stairwell under the new stairs' },
+  { code: 'W', title: 'W · Windows', note: 'Both windows in the east wall, one above the other' },
+  { code: 'D', title: 'D · Doors on the floor below', note: 'Where each door sits along its wall' },
 ]
 
 /** v41 `valText`: the step's current values. */
@@ -91,4 +91,4 @@ export const valueText = (st: MeasureStep): string =>
   st.fields.map((f) => (f.raw ? String(fieldDisplay(f)) : `${nf.format(fieldDisplay(f))} cm`)).join(' · ')
 
 /** v41 `whenText`. */
-export const whenText = (v: string): string => (v === 'earlier' ? 'tidigare' : v)
+export const whenText = (v: string): string => v

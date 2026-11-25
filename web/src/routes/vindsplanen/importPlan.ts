@@ -1,15 +1,15 @@
 // Parsing pasted plan text: a v41 artifact "Copy plan" export (through
-// legacy.ts) or this tool's own export (a PlanV2, `v: 2`). Pure; the Spara tab
+// legacy.ts) or this tool's own export (a PlanV2, `v: 2`). Pure; the Save tab
 // shows the message for a failure.
 
 import { importV1Text } from '../../lib/vindsplanen/legacy'
 import { sanitizePlan, type PlanV2 } from '../../lib/vindsplanen/plan'
 
 export const IMPORT_MESSAGE = {
-  empty: 'Klistra in en kopierad plan först.',
-  'not-object': 'Texten är ingen plan från Vindsplanen. Kopiera hela planen och försök igen.',
-  'too-old': 'Öppna planen i artefakten först och kopiera den igen.',
-  invalid: 'Planen kunde inte läsas. Kontrollera att hela texten kopierades.',
+  empty: 'Paste a copied plan first.',
+  'not-object': 'This text is not a Vindsplanen plan. Copy the whole plan and try again.',
+  'too-old': 'Open the plan in the artifact first and copy it again.',
+  invalid: 'The plan could not be read. Check that the whole text was copied.',
 } as const
 
 export type ParsedPlan = { ok: true; plan: PlanV2 } | { ok: false; message: string }

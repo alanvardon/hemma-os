@@ -1,8 +1,8 @@
-// Mät: the coded measuring steps as a list with their values and
-// uppmätt / uppskattning status, plus the step form (v41 Measure tab and its
+// Measure tab: the coded measuring steps as a list with their values and
+// measured / estimate status, plus the step form (v41 Measure tab and its
 // walkthrough card). Selecting a step makes the route fly the camera there and
-// highlight where to put the tape; Tillbaka / Hoppa över / Spara och gå
-// vidare step through the list, and past the last step the end card says what
+// highlight where to put the tape; Back / Skip / Save and
+// continue step through the list, and past the last step the end card says what
 // is left (v41 `showWalk`). Changing an attic measurement redraws the attic in
 // place and moves on to the next step — no reload, so nothing to resume.
 
@@ -37,14 +37,14 @@ export default function MeasurePanel({
     const txt = steps
       .map((st) => {
         const t = stepText(st, side)
-        return `${st.code}  ${t.title}: ${valueText(st)} (${M[st.code] ? 'uppmätt ' + whenText(M[st.code]) : 'uppskattning'})\n    ${t.how}`
+        return `${st.code}  ${t.title}: ${valueText(st)} (${M[st.code] ? 'measured ' + whenText(M[st.code]) : 'estimate'})\n    ${t.how}`
       })
       .join('\n\n')
     try {
       await navigator.clipboard.writeText(txt)
-      onToast('Listan kopierad. Klistra in den i en anteckning att ha med dig.')
+      onToast('List copied. Paste it into a note to take with you.')
     } catch {
-      onToast('Kopiering är blockerad här.')
+      onToast('Copying is blocked here.')
     }
   }
 
@@ -71,16 +71,16 @@ export default function MeasurePanel({
       <div className="vp-pane">
         <section className="vp-card vp-stepform" aria-labelledby="vp-step-title">
           <div className="vp-step-top">
-            <span className="vp-count">Slutet av listan</span>
+            <span className="vp-count">End of the list</span>
           </div>
-          <h3 id="vp-step-title">{left ? `${left} kvar att mäta` : 'Allt är uppmätt'}</h3>
+          <h3 id="vp-step-title">{left ? `${left} left to measure` : 'Everything is measured'}</h3>
           <p className="vp-note">
-            {left ? 'Listan visar vilka som återstår, markerade Uppskattning.' : 'Titta igen på trappornas varningar: en del av dem beror på de här måtten.'}{' '}
-            En dörr som saknas kan läggas till under Rummet → Dörrar på våningen under.
+            {left ? 'The list shows which are left, marked Estimate.' : 'Look at the stairs’ warnings again: some of them depend on these measurements.'}{' '}
+            A missing door can be added under Room → Doors on the floor below.
           </p>
           <div className="vp-actions">
             <button type="button" className="btn btn-primary" onClick={() => onOpen(null)}>
-              Stäng
+              Close
             </button>
           </div>
         </section>
@@ -91,24 +91,24 @@ export default function MeasurePanel({
   return (
     <div className="vp-pane">
       <div className="vp-group">
-        <h2>Vad som ska mätas</h2>
+        <h2>What to measure</h2>
         <div className="vp-progress">
           <b>
-            {progress.done} av {progress.total} uppmätta
+            {progress.done} of {progress.total} measured
           </b>
           <span className="vp-meter" aria-hidden="true">
             <i style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }} />
           </span>
         </div>
         <p className="vp-note">
-          Varje mått har en kod: A för vinden, B för våningen under, W för fönstren och D för dörrarna på våningen under. Samma kod står på ritningen när måtten visas. Tryck på ett mått för att se var du ska hålla måttbandet och skriv sedan in vad du får.
+          Each measurement has a code: A for the attic, B for the floor below, W for the windows and D for the doors on the floor below. The same code appears on the model when measurements are shown. Tap a measurement to see where to hold the tape, then type in what you get.
         </p>
         <div className="vp-actions">
           <button type="button" className="btn btn-primary" onClick={() => onOpen(steps[progress.next]?.code ?? null)}>
-            Mät nästa
+            Measure next
           </button>
           <button type="button" className="btn btn-ghost" onClick={() => void copyList()}>
-            Kopiera listan
+            Copy the list
           </button>
         </div>
       </div>
@@ -133,7 +133,7 @@ export default function MeasurePanel({
                     key={st.code}
                     type="button"
                     className="vp-step"
-                    aria-label={`${st.code}, ${t.title}: ${valueText(st)}, ${done ? 'uppmätt' : 'uppskattning'}`}
+                    aria-label={`${st.code}, ${t.title}: ${valueText(st)}, ${done ? 'measured' : 'estimate'}`}
                     onClick={() => onOpen(st.code)}
                   >
                     <span className="vp-code">{st.code}</span>
@@ -142,7 +142,7 @@ export default function MeasurePanel({
                       <small>{t.sub}</small>
                     </span>
                     <span className="vp-step-val">{valueText(st)}</span>
-                    <span className={'vp-status' + (done ? ' is-ok' : '')}>{done ? 'Uppmätt' : 'Uppskattning'}</span>
+                    <span className={'vp-status' + (done ? ' is-ok' : '')}>{done ? 'Measured' : 'Estimate'}</span>
                   </button>
                 )
               })}
@@ -189,10 +189,10 @@ function StepForm({
       <section className="vp-card vp-stepform" aria-labelledby="vp-step-title">
         <div className="vp-step-top">
           <span className="vp-count">
-            {index + 1} av {total}
+            {index + 1} of {total}
           </span>
           <button type="button" className="btn btn-ghost" onClick={onClose}>
-            Stäng
+            Close
           </button>
         </div>
         <h3 id="vp-step-title">
@@ -201,7 +201,7 @@ function StepForm({
         <p className="vp-note">{t.how}</p>
         {bad.some(Boolean) && (
           <p className="vp-warn" role="alert">
-            <span className="vp-sr">Varning: </span>Ange ett tal inom det visade intervallet.
+            <span className="vp-sr">Warning: </span>Enter a number within the range shown.
           </p>
         )}
         {step.fields.map((f, k) => (
@@ -221,7 +221,7 @@ function StepForm({
                 if (e.key === 'Enter') save()
               }}
             />
-            <span className="vp-unit">{f.raw ? 'st' : 'cm'}</span>
+            <span className="vp-unit">{f.raw ? 'pcs' : 'cm'}</span>
             <span className="vp-range">
               {f.min}–{f.max}
             </span>
@@ -230,7 +230,7 @@ function StepForm({
         <p className="vp-note" role="status">
           {when ? (
             <>
-              Uppmätt {whenText(when)}.{' '}
+              Measured {whenText(when)}.{' '}
               <button
                 type="button"
                 className="vp-link"
@@ -240,24 +240,24 @@ function StepForm({
                   onChange({ ...plan, options: { ...plan.options, measured } })
                 }}
               >
-                Markera som uppskattning igen
+                Mark as an estimate again
               </button>
             </>
           ) : step.attic ? (
-            'Just nu en uppskattning. Sparar du markeras den som uppmätt och vinden ritas om.'
+            'Currently an estimate. Saving marks it as measured and redraws the attic.'
           ) : (
-            'Just nu en uppskattning. Sparar du markeras den som uppmätt.'
+            'Currently an estimate. Saving marks it as measured.'
           )}
         </p>
         <div className="vp-actions">
           <button type="button" className="btn btn-ghost" disabled={index === 0} onClick={() => onGo(index - 1)}>
-            Tillbaka
+            Back
           </button>
           <button type="button" className="btn btn-ghost" onClick={() => onGo(index + 1)}>
-            Hoppa över
+            Skip
           </button>
           <button type="button" className="btn btn-primary" onClick={save}>
-            {last ? 'Klar' : 'Spara och gå vidare'}
+            {last ? 'Done' : 'Save and continue'}
           </button>
         </div>
       </section>
