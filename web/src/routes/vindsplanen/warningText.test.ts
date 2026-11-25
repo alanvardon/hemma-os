@@ -29,16 +29,16 @@ describe('warningText', () => {
 
   it('formats numbers the Swedish way, in cm', () => {
     expect(warningText({ code: 'sky-wider-than-bay', params: { w: 114, clear: 101.5 } })).toBe(
-      '114 cm är bredare än de 101,5 cm mellan sparrarna. En sparre måste kapas och förstärkas.',
+      '114 cm is wider than the 101,5 cm gap between rafters. A rafter would have to be cut and trimmed.',
     )
-    expect(warningText({ code: 'up-walkway-narrow', params: { free: 75 } })).toContain('Bara 75 cm kvar')
-    expect(warningText({ code: 'up-over-well', params: { reach: 13, need: 15 } })).toContain('13 cm över')
+    expect(warningText({ code: 'up-walkway-narrow', params: { free: 75 } })).toContain('Leaves only 75 cm to walk past')
+    expect(warningText({ code: 'up-over-well', params: { reach: 13, need: 15 } })).toContain('13 cm over')
   })
 
   it('names the doors a stair stands in front of', () => {
-    expect(warningText({ code: 'up-door-blocked', params: { count: 1, walls: 'N' } })).toContain('en dörr')
-    expect(warningText({ code: 'up-door-blocked', params: { count: 2, walls: 'W,S' } })).toContain('2 dörrar')
-    expect(warningText({ code: 'up-door-blocked', params: { count: 2, walls: 'W,S' } })).toContain('västra änden, södra väggen')
+    expect(warningText({ code: 'up-door-blocked', params: { count: 1, walls: 'N' } })).toContain('a door')
+    expect(warningText({ code: 'up-door-blocked', params: { count: 2, walls: 'W,S' } })).toContain('2 doors')
+    expect(warningText({ code: 'up-door-blocked', params: { count: 2, walls: 'W,S' } })).toContain('west end, south wall')
   })
 
   it('words every warning the owner-like fixture produces', () => {

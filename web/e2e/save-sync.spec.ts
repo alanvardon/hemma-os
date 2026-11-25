@@ -1008,44 +1008,44 @@ test('Vindsplanen: an example plan edit autosaves and survives reload', async ({
   const backend = await mockBackend(page)
   await page.goto('/#/vindsplanen')
 
-  await expect(page.getByRole('heading', { name: 'Ingen plan ännu' })).toBeVisible()
-  await page.getByRole('button', { name: 'Börja med exempel' }).click()
+  await expect(page.getByRole('heading', { name: 'No plan yet' })).toBeVisible()
+  await page.getByRole('button', { name: 'Start with the example' }).click()
   const list = page.locator('.vp-list')
   await expect(list).toBeVisible()
-  await expect(list).not.toContainText('Soffa')
-  await page.getByRole('button', { name: '+ Soffa' }).click()
-  await expect(list).toContainText('Soffa')
+  await expect(list).not.toContainText('Sofa')
+  await page.getByRole('button', { name: '+ Sofa' }).click()
+  await expect(list).toContainText('Sofa')
 
   // debounced (1.5 s) household save lands in the mocked attic_plans table
   await expect.poll(() => atticItemTypes(backend), { timeout: 10_000 }).toContain('sofa')
 
   await page.reload()
-  await expect(page.locator('.vp-list')).toContainText('Soffa')
+  await expect(page.locator('.vp-list')).toContainText('Sofa')
   expect(errors).toEqual([])
 })
 
-test('Vindsplanen: a v41 export imported on the Spara tab is saved and shown after reload', async ({ page }) => {
+test('Vindsplanen: a v41 export imported on the Save tab is saved and shown after reload', async ({ page }) => {
   const errors = trackPageErrors(page)
   const backend = await mockBackend(page)
   await page.goto('/#/vindsplanen')
-  await page.getByRole('button', { name: 'Börja med exempel' }).click()
-  await expect(page.locator('.vp-list')).toContainText('Takfönster')
+  await page.getByRole('button', { name: 'Start with the example' }).click()
+  await expect(page.locator('.vp-list')).toContainText('Roof window')
 
   // A small v41-shaped export: the example layout reduced to a bed and a dresser.
   const v41 = { ...VP_EXAMPLE_INPUT, example: false, items: VP_EXAMPLE_INPUT.items.filter((i) => ['bed', 'dresser'].includes(i.type)) }
-  await page.getByRole('radio', { name: 'Spara' }).click()
-  await page.getByLabel('Klistra in en kopierad plan här').fill(JSON.stringify(v41))
-  await page.getByRole('button', { name: 'Läs in plan' }).click()
-  await page.getByRole('button', { name: 'Ersätt planen' }).click()
+  await page.getByRole('radio', { name: 'Save' }).click()
+  await page.getByLabel('Paste a copied plan here').fill(JSON.stringify(v41))
+  await page.getByRole('button', { name: 'Load plan' }).click()
+  await page.getByRole('button', { name: 'Replace the plan' }).click()
 
-  await page.getByRole('radio', { name: 'Planering' }).click()
-  await expect(page.locator('.vp-list')).toContainText('Säng')
-  await expect(page.locator('.vp-list')).not.toContainText('Takfönster')
+  await page.getByRole('radio', { name: 'Plan' }).click()
+  await expect(page.locator('.vp-list')).toContainText('Bed')
+  await expect(page.locator('.vp-list')).not.toContainText('Roof window')
   await expect.poll(() => atticItemTypes(backend).sort(), { timeout: 10_000 }).toEqual(['bed', 'dresser'])
 
   await page.reload()
-  await expect(page.locator('.vp-list')).toContainText('Byrå')
-  await expect(page.locator('.vp-list')).not.toContainText('Takfönster')
+  await expect(page.locator('.vp-list')).toContainText('Dresser')
+  await expect(page.locator('.vp-list')).not.toContainText('Roof window')
   expect(errors).toEqual([])
 })
 
@@ -1055,35 +1055,35 @@ test('Vindsplanen: a revision conflict asks which version to keep, and both choi
   const backend = await mockBackend(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/#/vindsplanen')
-  await page.getByRole('button', { name: 'Börja med exempel' }).click()
-  await page.getByRole('button', { name: '+ Soffa' }).click()
+  await page.getByRole('button', { name: 'Start with the example' }).click()
+  await page.getByRole('button', { name: '+ Sofa' }).click()
   await expect.poll(() => atticItemTypes(backend), { timeout: 10_000 }).toContain('sofa')
 
   // Partner device removes the sofa (revision 2); this tab still holds revision 1.
   backend.remoteUpdateAtticPlan((p) => { p.items = p.items.filter((i) => i.type !== 'sofa') })
-  await page.getByRole('button', { name: '+ Förråd' }).click()
+  await page.getByRole('button', { name: '+ Storage room' }).click()
   await expect(page.locator('.persistence-conflict')).toBeVisible({ timeout: 10_000 })
   await page.getByRole('button', { name: 'Ladda molnversionen' }).click()
   await expect(page.locator('.persistence-conflict')).not.toBeVisible()
   await expect(page.locator('.vp-list')).toBeVisible()
-  await expect(page.locator('.vp-list')).not.toContainText('Soffa')
-  await expect(page.locator('.vp-list')).not.toContainText('Förråd')
+  await expect(page.locator('.vp-list')).not.toContainText('Sofa')
+  await expect(page.locator('.vp-list')).not.toContainText('Storage room')
   // the dropped local edit must not be re-saved over the cloud after the debounce
   await page.waitForTimeout(2500)
   expect(atticItemTypes(backend)).not.toContain('storage')
 
   // Conflict again from the now-current revision, this time keeping the local plan.
-  await page.getByRole('button', { name: '+ Förråd' }).click()
+  await page.getByRole('button', { name: '+ Storage room' }).click()
   await expect.poll(() => atticItemTypes(backend), { timeout: 10_000 }).toContain('storage')
   backend.remoteUpdateAtticPlan((p) => { p.items = p.items.filter((i) => i.type !== 'storage') })
-  await page.getByRole('button', { name: '+ Soffa' }).click()
+  await page.getByRole('button', { name: '+ Sofa' }).click()
   await expect(page.locator('.persistence-conflict')).toBeVisible({ timeout: 10_000 })
   await page.getByRole('button', { name: 'Behåll min version' }).click()
   await expect(page.locator('.persistence-conflict')).not.toBeVisible()
   await expect.poll(() => atticItemTypes(backend), { timeout: 10_000 }).toEqual(expect.arrayContaining(['storage', 'sofa']))
 
   await page.reload()
-  await expect(page.locator('.vp-list')).toContainText('Förråd')
-  await expect(page.locator('.vp-list')).toContainText('Soffa')
+  await expect(page.locator('.vp-list')).toContainText('Storage room')
+  await expect(page.locator('.vp-list')).toContainText('Sofa')
   expect(errors).toEqual([])
 })

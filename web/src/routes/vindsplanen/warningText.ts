@@ -1,5 +1,5 @@
-// Swedish wording for the structured warnings from lib/vindsplanen/warnings.ts.
-// Translated from v41's English messages (vindsplanen-v41.html 1068–1291);
+// English wording for the structured warnings from lib/vindsplanen/warnings.ts:
+// v41's own messages (vindsplanen-v41.html 1068–1291);
 // the numbers are the ones v41 printed (whole cm, or one decimal where it did).
 // One entry per WarningCode, so adding a code without wording fails the build.
 
@@ -10,31 +10,31 @@ type Params = Record<string, number | string>
 const nf = new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 1 })
 const n = (v: unknown): string => nf.format(Number(v))
 
-const WALL: Record<string, string> = { W: 'västra änden', N: 'norra väggen', S: 'södra väggen' }
+const WALL: Record<string, string> = { W: 'west end', N: 'north wall', S: 'south wall' }
 
 const TEXT: Record<WarningCode, (p: Params) => string> = {
-  'furn-roof-clash': () => 'Går in i taklutningen. Flytta den mot mitten eller gör den lägre.',
-  'furn-outside': () => 'Sticker ut bakom en knävägg eller genom en gavel.',
-  'wall-door-low': (p) => `Dörren kan bara bli ${n(p.h)} cm hög här. Flytta den mot mitten.`,
-  'wall-on-rafter': () => 'Sitter på en sparrlinje. Det är bra och ofta enklast att fästa i.',
-  'sky-wider-than-bay': (p) => `${n(p.w)} cm är bredare än de ${n(p.clear)} cm mellan sparrarna. En sparre måste kapas och förstärkas.`,
-  'sky-reaches-ridge': () => 'För högt upp. Fönstret når upp till nocken.',
-  'sky-overlap': () => 'Överlappar ett annat takfönster. Flytta det ena.',
-  'stairs-outside': () => 'Öppningen går förbi en knävägg eller gavel.',
-  'stairs-steep-rise': (p) => `Varje steg är ${n(p.rise)} cm högt, vilket är brant. Sikta på ungefär 18 cm.`,
-  'stairs-too-steep': (p) => `För brant för daglig användning (2 × stighöjd + stegdjup = ${n(p.blondel)} cm; 60–65 cm är bekvämt). Gör trappan längre.`,
-  'stairs-shallow': (p) => `Mycket flacka steg (2 × stighöjd + stegdjup = ${n(p.blondel)} cm). Trappan kan göras kortare.`,
-  'stairs-low-head': (p) => `Låg takhöjd i trappan: ${n(p.head)} cm på den trängsta punkten. Flytta den mot mitten av vinden.`,
-  'up-walkway-narrow': (p) => `Bara ${n(p.free)} cm kvar att gå förbi i hallen under (cirka 80 cm behövs), vilket skulle blockera vägen till den befintliga trappan.`,
-  'up-outside-hall': () => 'Trappan går utanför hallen under, genom en vägg. Flytta eller vrid den.',
-  'up-over-well': (p) => `Första steget når ${n(p.reach)} cm över det befintliga trapphålet. Börja på fast golv: flytta trappan västerut, eller bygg ut hallgolvet ${n(p.need)} cm över trapphålet (Rummet → Våningen under).`,
-  'up-low-head': (p) => `Låg takhöjd under taket: ${n(p.head)} cm vid det trängsta steget (sikta på 190 eller mer). Sväng mot mitten av vinden tidigare.`,
-  'up-down-head': (p) => `Den som går ned i den befintliga trappan får bara ${n(p.head)} cm över huvudet under de nya trappstegen.`,
-  'up-knee-wall': () => 'Öppningen i vindsgolvet går bakom en knävägg, så knäväggen måste flyttas eller byggas om runt trappan.',
-  'up-hole-clash': () => 'Öppningen överlappar en annan trappöppning. Ta bort eller flytta den andra trappan.',
-  'spiral-landing-head': (p) => `Den som går på steg ${n(p.step)} passerar under det övre planet med bara ${n(p.head)} cm över huvudet (cirka 2 m behövs). Vrid spiralen så att planet hamnar över de lägsta stegen.`,
-  'spiral-shallow': (p) => `Stegen är bara ${n(p.going)} cm djupa längs gånglinjen (cirka 20 cm eller mer behövs). Gör spiralen bredare, vrid den längre eller lägg till steg.`,
-  'up-steep-rise': (p) => `Varje steg är ${n(p.rise)} cm högt, vilket är brant (cirka 18–20 cm är bekvämt). Håll alla steg lika höga.`,
+  'furn-roof-clash': () => 'Hits the roof slope. Move it toward the middle or make it lower.',
+  'furn-outside': () => 'Sticks out behind a knee wall or through a gable.',
+  'wall-door-low': (p) => `The door can only be ${n(p.h)} cm high here. Move it toward the middle.`,
+  'wall-on-rafter': () => 'Sits on a rafter line. That is fine and often easiest to fix to.',
+  'sky-wider-than-bay': (p) => `${n(p.w)} cm is wider than the ${n(p.clear)} cm gap between rafters. A rafter would have to be cut and trimmed.`,
+  'sky-reaches-ridge': () => 'Too high up. The window reaches the ridge.',
+  'sky-overlap': () => 'Overlaps another roof window. Move one of them.',
+  'stairs-outside': () => 'The opening runs past a knee wall or gable.',
+  'stairs-steep-rise': (p) => `Each step rises ${n(p.rise)} cm, which is steep. Aim for about 18 cm.`,
+  'stairs-too-steep': (p) => `Too steep for everyday use (2 × rise + going = ${n(p.blondel)} cm; 60–65 cm is comfortable). Make the stairs longer.`,
+  'stairs-shallow': (p) => `Very shallow steps (2 × rise + going = ${n(p.blondel)} cm). The stairs could be shorter.`,
+  'stairs-low-head': (p) => `Low headroom on the stairs: ${n(p.head)} cm at the tightest point. Move them toward the middle of the attic.`,
+  'up-walkway-narrow': (p) => `Leaves only ${n(p.free)} cm to walk past in the hallway below (about 80 cm is needed), which would block the way to the existing stairs.`,
+  'up-outside-hall': () => 'The stairs run outside the hallway below, through a wall. Move or turn them.',
+  'up-over-well': (p) => `The first step reaches ${n(p.reach)} cm over the existing stairwell. Start on solid floor: move the stairs west, or extend the hallway floor ${n(p.need)} cm over the stairwell (Room → Floor below).`,
+  'up-low-head': (p) => `Low headroom under the roof: ${n(p.head)} cm at the tightest step (aim for 190 or more). Turn toward the middle of the attic sooner.`,
+  'up-down-head': (p) => `Someone walking down the existing stairs would have only ${n(p.head)} cm above their head under these stairs.`,
+  'up-knee-wall': () => 'The opening in the attic floor reaches behind a knee wall, so that knee wall would need to move or be framed around the stairs.',
+  'up-hole-clash': () => 'Its opening overlaps another stair opening. Delete or move the other stairs.',
+  'spiral-landing-head': (p) => `Someone on step ${n(p.step)} walks under the top landing with only ${n(p.head)} cm above their head (about 2 m is needed). Turn the spiral further so the landing sits over the lowest steps.`,
+  'spiral-shallow': (p) => `The steps are only ${n(p.going)} cm deep along the walking line (about 20 cm or more is needed). Make the spiral wider, turn it further or add steps.`,
+  'up-steep-rise': (p) => `Each step is ${n(p.rise)} cm high, which is steep (about 18–20 cm is comfortable). Keep every step the same height.`,
   'up-door-blocked': (p) => {
     const count = Number(p.count)
     const walls = String(p.walls ?? '')
@@ -42,13 +42,13 @@ const TEXT: Record<WarningCode, (p: Params) => string> = {
       .filter(Boolean)
       .map((w) => WALL[w] ?? w)
       .join(', ')
-    return `Trappstegen står framför ${count > 1 ? `${count} dörrar` : 'en dörr'} på våningen under (${walls}). Flytta trappan eller dörren.`
+    return `The steps stand in front of ${count > 1 ? `${count} doors` : 'a door'} on the floor below (${walls}). Move the stairs or the door.`
   },
-  'storage-hole-overlap': () => 'Förrådet överlappar trappöppningen. Gör det kortare eller skjut det längs väggen.',
-  'storage-low-front': (p) => `Bara ${n(p.h)} cm högt framtill. Gör det grundare så att frontväggen hamnar där taket är högre.`,
-  'closet-hole-overlap': () => 'Garderoben överlappar trappöppningen. Gör den grundare.',
-  'closet-door-low': (p) => `Dörren kan bara bli ${n(p.h)} cm hög så långt in under sluttningen. Gör garderoben kortare så att dörrändan hamnar där taket är högre.`,
-  'closet-shallow': (p) => `Bara ${n(p.depth)} cm djup invändigt: räcker till hyllor, inte till hängande kläder.`,
+  'storage-hole-overlap': () => 'The storage room overlaps the stair opening. Make it shorter or slide it along.',
+  'storage-low-front': (p) => `Only ${n(p.h)} cm high at the front. Make it shallower so the front wall sits where the roof is higher.`,
+  'closet-hole-overlap': () => 'The closet overlaps the stair opening. Make it shallower.',
+  'closet-door-low': (p) => `The door can only be ${n(p.h)} cm high this far under the slope. Make the closet shorter so its door end sits where the roof is higher.`,
+  'closet-shallow': (p) => `Only ${n(p.depth)} cm deep inside: enough for shelves, not for hanging clothes.`,
 }
 
 export function warningText(w: Warning): string {

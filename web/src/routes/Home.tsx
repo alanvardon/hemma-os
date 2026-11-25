@@ -157,7 +157,7 @@ const STANDARD_TOOLS: ToolDef[] = [
   {
     path: '/vindsplanen',
     name: 'Vindsplanen',
-    desc: 'Planera vinden i 3D — trappor, takfönster, förråd och möbler, med varningar när något inte får plats.',
+    desc: 'Plan the attic in 3D — stairs, roof windows, storage and furniture, with warnings when something does not fit.',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M3 18 12 6l9 12" pathLength="1"/>
