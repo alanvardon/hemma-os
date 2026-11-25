@@ -6,43 +6,43 @@ import { MATERIAL_OPTIONS, type MaterialCategory } from '../../lib/vindsplanen/i
 import type { PlanV2 } from '../../lib/vindsplanen/plan'
 
 const CATEGORY: Record<MaterialCategory, string> = {
-  floor: 'Golv',
-  panel: 'Takpanel',
-  rafter: 'Sparrar',
-  walls: 'Väggar (knävägg, gavlar, mellanväggar)',
+  floor: 'Floor',
+  panel: 'Ceiling panelling',
+  rafter: 'Rafters',
+  walls: 'Walls (knee walls, gables, partitions)',
 }
 
-// name (Swedish) + a flat swatch colour per option id (v41 MATS).
+// name (English) + a flat swatch colour per option id (v41 MATS).
 const OPTION: Record<MaterialCategory, Record<string, [string, string]>> = {
   floor: {
-    oak: ['Ekgolv', '#b98c5a'],
-    whiteoak: ['Vitoljad ek', '#dcc8a8'],
-    pine: ['Furugolv', '#d6aa72'],
-    smoked: ['Rökt ek', '#6e4b31'],
-    grey: ['Gråtvättade bräder', '#aba59c'],
-    lino: ['Linoleum, salvia', '#8e9f88'],
-    chip: ['Spånskiva (idag)', '#c8a679'],
+    oak: ['Oak', '#b98c5a'],
+    whiteoak: ['White-oiled oak', '#dcc8a8'],
+    pine: ['Pine boards', '#d6aa72'],
+    smoked: ['Smoked oak', '#6e4b31'],
+    grey: ['Grey-washed boards', '#aba59c'],
+    lino: ['Linoleum, sage', '#8e9f88'],
+    chip: ['Chipboard (today)', '#c8a679'],
   },
   panel: {
-    pine: ['Naturfuru (idag)', '#dcc093'],
-    white: ['Vitmålad panel', '#efede7'],
-    grey: ['Ljusgrå panel', '#cdd2ce'],
-    green: ['Djupgrön panel', '#3e5a4b'],
-    board: ['Slät vit skiva', '#f2f0eb'],
+    pine: ['Natural pine (today)', '#dcc093'],
+    white: ['White-painted panelling', '#efede7'],
+    grey: ['Light grey panelling', '#cdd2ce'],
+    green: ['Deep green panelling', '#3e5a4b'],
+    board: ['Smooth white board', '#f2f0eb'],
   },
   rafter: {
-    natural: ['Natur (idag)', '#b98152'],
-    white: ['Vitmålade', '#efece6'],
-    black: ['Svarta', '#2b2826'],
-    ceiling: ['Som taket', '#d8d4cc'],
+    natural: ['Natural (today)', '#b98152'],
+    white: ['Painted white', '#efece6'],
+    black: ['Black', '#2b2826'],
+    ceiling: ['Same as ceiling', '#d8d4cc'],
   },
   walls: {
-    white: ['Vit', '#eeebe5'],
-    warm: ['Varmvit', '#ece2d3'],
-    sage: ['Salviagrön', '#a8b49f'],
-    clay: ['Lera', '#c79f86'],
-    navy: ['Mörkblå', '#36455c'],
-    pine: ['Furupanel', '#dcc093'],
+    white: ['White', '#eeebe5'],
+    warm: ['Warm white', '#ece2d3'],
+    sage: ['Sage green', '#a8b49f'],
+    clay: ['Clay', '#c79f86'],
+    navy: ['Navy', '#36455c'],
+    pine: ['Pine panelling', '#dcc093'],
   },
 }
 

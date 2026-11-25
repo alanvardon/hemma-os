@@ -1,4 +1,4 @@
-// Planering: add menu, the selected item's editor, the item list with warning
+// Plan tab: add menu, the selected item's editor, the item list with warning
 // counts, and the rooms the partition walls make (v41 Layout tab).
 
 import type { Geometry } from '../../lib/vindsplanen/attic'
@@ -30,7 +30,7 @@ export default function LayoutPanel({
   return (
     <div className="vp-pane">
       <div className="vp-group">
-        <h2>Lägg till</h2>
+        <h2>Add</h2>
         <div className="vp-adds">
           {ADD_ORDER.map((t) => (
             <button key={t} type="button" className="btn btn-ghost" onClick={() => onAdd(t)}>
@@ -56,9 +56,9 @@ export default function LayoutPanel({
       )}
 
       <div className="vp-group">
-        <h2>I planen</h2>
+        <h2>In the plan</h2>
         {plan.items.length === 0 ? (
-          <p className="vp-note">Inget i planen ännu. Lägg till något ovan.</p>
+          <p className="vp-note">Nothing in the plan yet. Add something above.</p>
         ) : (
           <ul className="vp-list">
             {plan.items.map((it) => {
@@ -69,8 +69,8 @@ export default function LayoutPanel({
                     <span className="vp-list-name">{TYPE_LABEL[it.type]}</span>
                     <span className="vp-list-meta">{describeItem(geo, plan, it)}</span>
                     {n > 0 && (
-                      <span className="vp-badge" title="Har varningar">
-                        {n} {n === 1 ? 'varning' : 'varningar'}
+                      <span className="vp-badge" title="Has warnings">
+                        {n} {n === 1 ? 'warning' : 'warnings'}
                       </span>
                     )}
                   </button>
@@ -82,15 +82,15 @@ export default function LayoutPanel({
       </div>
 
       <div className="vp-group">
-        <h2>Rum, uppdelade av mellanväggar</h2>
+        <h2>Rooms, split by partition walls</h2>
         <div className="vp-rooms">
           {zones.segs.map((s, i) => (
             <div key={i}>
               <span>
-                Rum {i + 1} · {fmt(s.a)}–{fmt(s.b)} m
+                Room {i + 1} · {fmt(s.a)}–{fmt(s.b)} m
               </span>
               <span>
-                {area(s.boa)} m² · {area(s.stand)} m² stående
+                {area(s.boa)} m² · {area(s.stand)} m² standing
               </span>
             </div>
           ))}

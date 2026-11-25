@@ -189,22 +189,22 @@ export default function WalkMode({
 
   const stoop = head != null && mustStoop(head)
   return (
-    <div className="vp-walk" role="region" aria-label="Gå runt">
+    <div className="vp-walk" role="region" aria-label="Walk around">
       <div className="vp-walk-info">
         <div className="vp-walk-where">{where ? WHERE_TEXT[where] : ''}</div>
         <div className={'vp-walk-head' + (stoop ? ' is-warn' : '')} aria-live="polite">
           {head != null && (
             <>
-              {stoop && <span className="vp-sr">Varning: </span>}
+              {stoop && <span className="vp-sr">Warning: </span>}
               {headText(head, where, !!plan.options.measured.B9)}
             </>
           )}
         </div>
-        <p className="vp-walk-help">W A S D eller piltangenterna, Skift för att skynda. Dra för att se dig om.</p>
+        <p className="vp-walk-help">W A S D or the arrow keys, Shift to hurry. Drag to look around.</p>
         <div className="vp-walk-acts">
-          <button type="button" className="btn btn-ghost" onClick={() => place('below')}>Starta nere</button>
-          <button type="button" className="btn btn-ghost" onClick={() => place('attic')}>Starta på vinden</button>
-          <button ref={exitBtn} type="button" className="btn btn-primary" onClick={onExit} title="Esc">Sluta gå</button>
+          <button type="button" className="btn btn-ghost" onClick={() => place('below')}>Start downstairs</button>
+          <button type="button" className="btn btn-ghost" onClick={() => place('attic')}>Start in the attic</button>
+          <button ref={exitBtn} type="button" className="btn btn-primary" onClick={onExit} title="Esc">Stop walking</button>
         </div>
       </div>
       <Stick onChange={(v) => { stick.current = v }} />

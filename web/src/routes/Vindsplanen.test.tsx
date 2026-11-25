@@ -92,14 +92,14 @@ describe('Vindsplanen route', () => {
     expect(savePlan).toHaveBeenCalledTimes(1)
     // the edit is still in the document the user sees
     expect(bed()).toMatchObject({ x: 2.05, z: 0.5 })
-    expect(screen.getByText('Senaste ändringen är inte sparad.')).toBeTruthy()
+    expect(screen.getByText('The latest change is not saved.')).toBeTruthy()
 
-    await userEvent.click(screen.getByRole('button', { name: 'Försök igen' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(savePlan).toHaveBeenCalledTimes(2))
     const sent = savePlan.mock.calls[1][0]
     expect(sent.id).toBe('row-1')
     expect((sent.plan.items.find((i) => i.id === 'b1') as { x: number }).x).toBe(2.05)
-    await waitFor(() => expect(screen.queryByText('Senaste ändringen är inte sparad.')).toBeNull())
+    await waitFor(() => expect(screen.queryByText('The latest change is not saved.')).toBeNull())
   })
 
   it('saves a committed edit after the debounce, and undo/redo walk the history', async () => {
@@ -113,9 +113,9 @@ describe('Vindsplanen route', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(1600) })
       expect(savePlan).toHaveBeenCalledTimes(1)
 
-      await userEvent.click(screen.getByRole('button', { name: /Ångra/ }))
+      await userEvent.click(screen.getByRole('button', { name: /Undo/ }))
       expect(bed().x).toBe(x0)
-      await userEvent.click(screen.getByRole('button', { name: /Gör om/ }))
+      await userEvent.click(screen.getByRole('button', { name: /Redo/ }))
       expect(bed().x).toBe(2.05)
     } finally {
       vi.useRealTimers()
@@ -127,8 +127,8 @@ describe('Vindsplanen route', () => {
     await screen.findByTestId('scene')
     const x0 = bed().x
     dragBed(2.05, 0.5)
-    await userEvent.click(screen.getByRole('radio', { name: 'Spara' }))
-    const box = screen.getByLabelText('Klistra in en kopierad plan här')
+    await userEvent.click(screen.getByRole('radio', { name: 'Save' }))
+    const box = screen.getByLabelText('Paste a copied plan here')
     fireEvent.keyDown(box, { key: 'z', ctrlKey: true })
     expect(bed().x).toBe(2.05)
     fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true })
@@ -140,10 +140,10 @@ describe('Vindsplanen route', () => {
   it('shows the read-error state for an invalid cloud row and never saves', async () => {
     loadPlan.mockResolvedValue({ row: null, fromCache: false, invalid: { v: 2, junk: true } })
     renderRoute()
-    expect(await screen.findByText('Planen kunde inte läsas')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Ladda ner rådata (JSON)' })).toBeTruthy()
+    expect(await screen.findByText('The plan could not be read')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Download raw data (JSON)' })).toBeTruthy()
     expect(screen.queryByTestId('scene')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Börja med exempel' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Start with the example' })).toBeNull()
     hide()
     document.dispatchEvent(new Event('visibilitychange'))
     expect(savePlan).not.toHaveBeenCalled()
@@ -151,7 +151,7 @@ describe('Vindsplanen route', () => {
 
   it('never flashes the empty state while a saved plan is still being prepared', async () => {
     let flashed = false
-    const obs = new MutationObserver(() => { if (document.body.textContent?.includes('Ingen plan ännu')) flashed = true })
+    const obs = new MutationObserver(() => { if (document.body.textContent?.includes('No plan yet')) flashed = true })
     obs.observe(document.body, { childList: true, subtree: true, characterData: true })
     renderRoute()
     await screen.findByTestId('scene')
@@ -162,8 +162,8 @@ describe('Vindsplanen route', () => {
   it('does not offer a first plan when the cloud could not be read', async () => {
     loadPlan.mockResolvedValue({ row: null, fromCache: true })
     renderRoute()
-    expect(await screen.findByText('Planen kunde inte hämtas')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Börja med exempel' })).toBeNull()
+    expect(await screen.findByText('The plan could not be fetched')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start with the example' })).toBeNull()
     hide()
     expect(savePlan).not.toHaveBeenCalled()
   })
@@ -182,7 +182,7 @@ describe('Vindsplanen route', () => {
 
     await waitFor(() => expect(h.props!.plan.items).toHaveLength(2))
     expect(loadPlan).toHaveBeenCalledTimes(2)
-    expect((screen.getByRole('button', { name: /Ångra/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /Undo/ }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('keeps edits made after a conflict appeared (and saves them) when it clears', async () => {
@@ -215,8 +215,8 @@ describe('Vindsplanen route', () => {
 
     it('offers import first, example second, and creates the plan from the example', async () => {
       renderRoute()
-      expect(await screen.findByRole('button', { name: 'Importera plan' })).toBeTruthy()
-      await userEvent.click(screen.getByRole('button', { name: 'Börja med exempel' }))
+      expect(await screen.findByRole('button', { name: 'Import plan' })).toBeTruthy()
+      await userEvent.click(screen.getByRole('button', { name: 'Start with the example' }))
       await screen.findByTestId('scene')
       await waitFor(() => expect(savePlan).toHaveBeenCalledTimes(1))
       const sent = savePlan.mock.calls[0][0]
@@ -226,9 +226,9 @@ describe('Vindsplanen route', () => {
 
     it('imports a v41 export and saves it', async () => {
       renderRoute()
-      await userEvent.click(await screen.findByRole('button', { name: 'Importera plan' }))
-      fireEvent.change(screen.getByLabelText('Klistra in en kopierad plan här'), { target: { value: JSON.stringify(ownerLike.input) } })
-      await userEvent.click(screen.getByRole('button', { name: 'Läs in plan' }))
+      await userEvent.click(await screen.findByRole('button', { name: 'Import plan' }))
+      fireEvent.change(screen.getByLabelText('Paste a copied plan here'), { target: { value: JSON.stringify(ownerLike.input) } })
+      await userEvent.click(screen.getByRole('button', { name: 'Load plan' }))
       await screen.findByTestId('scene')
       expect(h.props!.plan.items).toHaveLength(ownerLike.input.items.length)
       await waitFor(() => expect(savePlan).toHaveBeenCalledTimes(1))
@@ -239,63 +239,63 @@ describe('Vindsplanen route', () => {
       const old = structuredClone(ownerLike.input) as { options: { below: { v: number } } }
       old.options.below.v = 10
       renderRoute()
-      await userEvent.click(await screen.findByRole('button', { name: 'Importera plan' }))
-      fireEvent.change(screen.getByLabelText('Klistra in en kopierad plan här'), { target: { value: JSON.stringify(old) } })
-      await userEvent.click(screen.getByRole('button', { name: 'Läs in plan' }))
-      expect(await screen.findByText('Öppna planen i artefakten först och kopiera den igen.')).toBeTruthy()
+      await userEvent.click(await screen.findByRole('button', { name: 'Import plan' }))
+      fireEvent.change(screen.getByLabelText('Paste a copied plan here'), { target: { value: JSON.stringify(old) } })
+      await userEvent.click(screen.getByRole('button', { name: 'Load plan' }))
+      expect(await screen.findByText('Open the plan in the artifact first and copy it again.')).toBeTruthy()
       expect(screen.queryByTestId('scene')).toBeNull()
       expect(savePlan).not.toHaveBeenCalled()
     })
 
     it('rejects text that is not a plan', async () => {
       renderRoute()
-      await userEvent.click(await screen.findByRole('button', { name: 'Importera plan' }))
-      fireEvent.change(screen.getByLabelText('Klistra in en kopierad plan här'), { target: { value: 'hej' } })
-      await userEvent.click(screen.getByRole('button', { name: 'Läs in plan' }))
-      expect(await screen.findByText(/Texten är ingen plan/)).toBeTruthy()
+      await userEvent.click(await screen.findByRole('button', { name: 'Import plan' }))
+      fireEvent.change(screen.getByLabelText('Paste a copied plan here'), { target: { value: 'hej' } })
+      await userEvent.click(screen.getByRole('button', { name: 'Load plan' }))
+      expect(await screen.findByText(/This text is not a Vindsplanen plan/)).toBeTruthy()
     })
   })
 
   it('replaces an existing plan on import only after confirming, and it can be undone', async () => {
     renderRoute()
     await screen.findByTestId('scene')
-    await userEvent.click(screen.getByRole('radio', { name: 'Spara' }))
-    fireEvent.change(screen.getByLabelText('Klistra in en kopierad plan här'), { target: { value: JSON.stringify(ownerLike.input) } })
-    await userEvent.click(screen.getByRole('button', { name: 'Läs in plan' }))
-    await userEvent.click(await screen.findByRole('button', { name: 'Ersätt planen' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Save' }))
+    fireEvent.change(screen.getByLabelText('Paste a copied plan here'), { target: { value: JSON.stringify(ownerLike.input) } })
+    await userEvent.click(screen.getByRole('button', { name: 'Load plan' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Replace the plan' }))
     await waitFor(() => expect(h.props!.plan.items).toHaveLength(ownerLike.input.items.length))
     await waitFor(() => expect(savePlan).toHaveBeenCalledTimes(1))
-    await userEvent.click(screen.getByRole('button', { name: /Ångra/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Undo/ }))
     await waitFor(() => expect(h.props!.plan.items).toHaveLength(11))
   })
 
   it('keeps the panels working, with a notice, when WebGL is unavailable', async () => {
     HTMLCanvasElement.prototype.getContext = (() => null) as never
     renderRoute()
-    expect(await screen.findByText('3D-vyn kan inte visas i den här webbläsaren')).toBeTruthy()
+    expect(await screen.findByText('The 3D view cannot be shown in this browser')).toBeTruthy()
     expect(screen.queryByTestId('scene')).toBeNull()
-    expect(screen.getByText('I planen')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: '+ Säng' }))
-    expect(screen.getByRole('region', { name: 'Redigera säng' })).toBeTruthy()
+    expect(screen.getByText('In the plan')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '+ Bed' }))
+    expect(screen.getByRole('region', { name: 'Edit bed' })).toBeTruthy()
     hide()
     await waitFor(() => expect(savePlan).toHaveBeenCalledTimes(1))
   })
 
-  it('lists items with their warning counts and Swedish warning text', async () => {
+  it('lists items with their warning counts and English warning text', async () => {
     const r = ownerLike.input
     loadPlan.mockResolvedValue({ row: row(importOwnerLike(r)), fromCache: false })
     renderRoute()
     await screen.findByTestId('scene')
     expect(document.querySelectorAll('.vp-badge').length).toBeGreaterThan(0)
-    await userEvent.click(screen.getAllByRole('button', { name: /^Säng/ })[0])
-    expect(screen.getByText('Sticker ut bakom en knävägg eller genom en gavel.')).toBeTruthy()
+    await userEvent.click(screen.getAllByRole('button', { name: /^Bed/ })[0])
+    expect(screen.getByText('Sticks out behind a knee wall or through a gable.')).toBeTruthy()
   })
 
   it('persists view preferences per device in vp-view-v1', async () => {
     renderRoute()
     await screen.findByTestId('scene')
-    await userEvent.click(screen.getByRole('radio', { name: 'Rummet' }))
-    await userEvent.click(screen.getByLabelText('Visa sparrar'))
+    await userEvent.click(screen.getByRole('radio', { name: 'Room' }))
+    await userEvent.click(screen.getByLabelText('Show rafters'))
     expect(JSON.parse(localStorage.getItem('vp-view-v1')!)).toMatchObject({ rafters: false })
     // the plan itself is untouched by a view change
     expect(savePlan).not.toHaveBeenCalled()
@@ -307,9 +307,9 @@ describe('Vindsplanen route', () => {
     try {
       renderRoute()
       await screen.findByTestId('scene')
-      await userEvent.click(screen.getByRole('radio', { name: 'Rummet' }))
-      await userEvent.click(screen.getByLabelText('Visa sparrar'))
-      expect(screen.getByText('Vinden, mått')).toBeTruthy()
+      await userEvent.click(screen.getByRole('radio', { name: 'Room' }))
+      await userEvent.click(screen.getByLabelText('Show rafters'))
+      expect(screen.getByText('Attic measurements')).toBeTruthy()
     } finally {
       get.mockRestore()
       set.mockRestore()
@@ -319,8 +319,8 @@ describe('Vindsplanen route', () => {
   it('changing an attic measurement updates the plan without a reload', async () => {
     renderRoute()
     await screen.findByTestId('scene')
-    await userEvent.click(screen.getByRole('radio', { name: 'Rummet' }))
-    const len = screen.getByLabelText('A1 · Vindens längd, gavel till gavel')
+    await userEvent.click(screen.getByRole('radio', { name: 'Room' }))
+    const len = screen.getByLabelText('A1 · Attic length, gable to gable')
     await userEvent.clear(len)
     await userEvent.type(len, '900')
     await userEvent.tab()
@@ -330,17 +330,17 @@ describe('Vindsplanen route', () => {
   it('opens a measure step, validates the input and records it as measured', async () => {
     renderRoute()
     await screen.findByTestId('scene')
-    await userEvent.click(screen.getByRole('radio', { name: 'Mät' }))
-    await userEvent.click(screen.getByRole('button', { name: /^A4, Nockhöjd/ }))
-    const input = screen.getByLabelText('Golv till taket högst upp')
+    await userEvent.click(screen.getByRole('radio', { name: 'Measure' }))
+    await userEvent.click(screen.getByRole('button', { name: /^A4, Ridge height/ }))
+    const input = screen.getByLabelText('Floor to ceiling at the top')
     await userEvent.clear(input)
     await userEvent.type(input, '9999')
-    await userEvent.click(screen.getByRole('button', { name: 'Spara och gå vidare' }))
-    expect(screen.getByRole('alert').textContent).toContain('Ange ett tal')
+    await userEvent.click(screen.getByRole('button', { name: 'Save and continue' }))
+    expect(screen.getByRole('alert').textContent).toContain('Enter a number')
     expect(h.props!.plan.options.measured.A4).toBeUndefined()
     await userEvent.clear(input)
     await userEvent.type(input, '260')
-    await userEvent.click(screen.getByRole('button', { name: 'Spara och gå vidare' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save and continue' }))
     expect(h.props!.plan.options.measured.A4).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 })
