@@ -155,6 +155,18 @@ const STANDARD_TOOLS: ToolDef[] = [
     ),
   },
   {
+    path: '/vindsplanen',
+    name: 'Vindsplanen',
+    desc: 'Planera vinden i 3D — trappor, takfönster, förråd och möbler, med varningar när något inte får plats.',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M3 18 12 6l9 12" pathLength="1"/>
+        <path d="M3 18h18" pathLength="1"/>
+        <path d="M8.5 18v-3.2h7V18" pathLength="1"/>
+      </svg>
+    ),
+  },
+  {
     path: '/lonevaxling',
     name: 'Löneväxling',
     desc: "Salary sacrifice into pension — at what salary it pays off, the tax you save now and what it's worth net at payout. Sweden, 2026.",
@@ -233,6 +245,7 @@ export default function Home() {
     '/bolanekoll': useToolCardActive('/bolanekoll'),
     '/lonevaxling': useToolCardActive('/lonevaxling'),
     '/huskalendern': useToolCardActive('/huskalendern'),
+    '/vindsplanen': useToolCardActive('/vindsplanen'),
     '/student-loan': useToolCardActive('/student-loan'),
   }
 

@@ -2,7 +2,6 @@
 // every tool store and the update/persistence banners. Split out of App.tsx
 // (plan 132) so App.tsx can branch to the public `#/lon/<token>` page
 // (SalarySubmitPage) before any of this renders.
-import { lazy, Suspense } from 'react'
 import { createHashRouter,Navigate, Outlet, RouterProvider, ScrollRestoration } from 'react-router-dom'
 import AuthGate from './components/AuthGate'
 import Home from './routes/Home'
@@ -16,13 +15,12 @@ import Manadsavslut from './routes/Manadsavslut'
 import Hushallsbudget from './routes/Hushallsbudget'
 import Huskalendern from './routes/Huskalendern'
 import Loner from './routes/Loner'
+import Vindsplanen from './routes/Vindsplanen'
 import PersistenceNotice from './components/PersistenceNotice'
 import UpdateNotice from './components/UpdateNotice'
 import ErrorBoundary from './components/ErrorBoundary'
 import OfflineBanner from './components/OfflineBanner'
 import { ConfirmProvider } from './components/useConfirm'
-
-const VindsplanenSceneHarness = import.meta.env.DEV ? lazy(() => import('./routes/vindsplanen/scene/DevHarness')) : null
 
 function Layout() {
   return (
@@ -54,10 +52,7 @@ const router = createHashRouter([
       { path: '/hushallsbudget', element: <Hushallsbudget /> },
       { path: '/loner', element: <Loner /> },
       { path: '/huskalendern', element: <Huskalendern /> },
-      // TEMPORARY dev-only scene harness (plan 140 Stage 3); never in a build.
-      ...(VindsplanenSceneHarness
-        ? [{ path: '/dev/vindsplanen-scene', element: <Suspense fallback={null}><VindsplanenSceneHarness /></Suspense> }]
-        : []),
+      { path: '/vindsplanen', element: <Vindsplanen /> },
       // Catch-all: unknown hashes (incl. the magic-link `#access_token…`
       // callback, which supabase-js consumes on load) fall back to the hub
       // instead of React Router's error page — plan 16a.
