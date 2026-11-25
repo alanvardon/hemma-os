@@ -128,6 +128,12 @@ export interface CurvedLike extends Placed {
   g?: number
   wk?: number
   b?: number
+  /**
+   * How far before the corner square the turn begins, metres (0 or unset:
+   * every winder fans inside the corner square, as v41). With a lead the
+   * winders also taper over that much of the first flight.
+   */
+  lead?: number
 }
 
 /**
@@ -147,10 +153,12 @@ export function curvedPlan(B: Below, it: CurvedLike, Fo?: number): StairPlan {
   const turn = it.turn !== 'N'
   const wk = (it.wk ?? 0) >= 2 ? Math.round(it.wk as number) : 3 // winders in the quarter turn
   const a = turn ? clamp(Math.round(it.a), 0, total - wk) : total
+  const lead = turn && (it.lead ?? 0) > 0 ? (it.lead as number) : 0
   const T: Tread[] = []
   for (let i = 1; i <= a; i++)
     T.push({ poly: [[(i - 1) * g, -w / 2], [i * g, -w / 2], [i * g, w / 2], [(i - 1) * g, w / 2]], t: i * r, straight: true })
-  const x0 = a * g
+  const xa = a * g // where the turn begins
+  const x0 = xa + lead // the corner post
   let zEnd = 0
   let open: Pt[]
   let arrive: number
@@ -160,7 +168,28 @@ export function curvedPlan(B: Below, it: CurvedLike, Fo?: number): StairPlan {
   if (turn) {
     const k = Math.tan(Math.PI / 6) * w
     const P: Pt = [x0, -w / 2]
-    if (wk === 3)
+    if (lead > 0) {
+      // Winders spread over the lead and the corner square: their lines run
+      // from evenly spaced points on the post side (xa → post) to evenly
+      // spaced points along the wall side (round the corner to the exit edge).
+      const outerLen = lead + 2 * w
+      const inner = (s: number): Pt => [xa + s * lead, -w / 2]
+      const outer = (s: number): Pt => {
+        const d = s * outerLen
+        return d <= lead + w ? [xa + d, w / 2] : [x0 + w, w / 2 - (d - lead - w)]
+      }
+      const corner: Pt = [x0 + w, w / 2]
+      for (let j = 1; j <= wk; j++) {
+        const s0 = (j - 1) / wk
+        const s1 = j / wk
+        const O0 = outer(s0)
+        const O1 = outer(s1)
+        const poly: Pt[] = [inner(s0), inner(s1), O1]
+        if (s0 * outerLen < lead + w - 1e-9 && s1 * outerLen > lead + w + 1e-9) poly.push(corner)
+        poly.push(O0)
+        T.push({ poly, t: (a + j) * r })
+      }
+    } else if (wk === 3)
       T.push(
         { poly: [P, [x0, w / 2], [x0 + k, w / 2]], t: (a + 1) * r },
         { poly: [P, [x0 + k, w / 2], [x0 + w, w / 2], [x0 + w, -w / 2 + k]], t: (a + 2) * r },
@@ -189,7 +218,7 @@ export function curvedPlan(B: Below, it: CurvedLike, Fo?: number): StairPlan {
         dir: 'z',
       })
     zEnd = -w / 2 - b * g
-    const xs = ci < a ? ci * g : x0
+    const xs = ci < a ? ci * g : xa
     open =
       xs < x0 - 1e-6
         ? [[xs, w / 2], [x0 + w, w / 2], [x0 + w, zEnd], [x0, zEnd], [x0, -w / 2], [xs, -w / 2]]

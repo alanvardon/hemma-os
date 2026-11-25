@@ -81,7 +81,7 @@ export function walkWorld(geo: Geometry, plan: PlanSlice): WalkWorld {
     // walk on the old stairs as filling the opening's width, so there is no gap to trip on at the hallway edge
     const ow = clamp(r.z1 - r.z0 - OS.it.b * OS.it.g, 0.6, r.z1 - r.z0)
     const north = B.side === 'N'
-    const wit = { ...OS.it, w: ow, x: r.x1 - ow - OS.it.a * OS.it.g, z: north ? r.z0 + ow / 2 : r.z1 - ow / 2 }
+    const wit = { ...OS.it, w: ow, x: r.x1 - ow - OS.it.a * OS.it.g - OS.it.lead, z: north ? r.z0 + ow / 2 : r.z1 - ow / 2 }
     const WP = curvedPlan(B, wit, OS.P.F)
     WP.treads.forEach((t) => S.push({ poly: t.poly.map(([a, b]) => toWorld(wit, a, b)), y: yb + t.t, where: 'old', over: true }))
     S.push({ rect: [OS.it.x - GROUND_RUN, r.x1, r.z0, r.z1], holes: [], y: yb, where: 'ground' })
