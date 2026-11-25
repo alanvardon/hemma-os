@@ -86,6 +86,7 @@ jobs:
           supabase test db --local supabase/tests/database/optimistic_concurrency_test.sql
           supabase test db --local supabase/tests/database/mortgage_agreement_lifecycle_test.sql
           supabase test db --local supabase/tests/database/household_person_identity_test.sql
+          supabase test db --local supabase/tests/database/attic_plans_test.sql
 
       - name: Verify durable-delete concurrency
         run: |
