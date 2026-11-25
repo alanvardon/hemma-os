@@ -54,6 +54,9 @@ export function usePlanEditor(cb: { onSaved(): void; onError(message: string): v
   const rowRef = useRef<AtticPlanRow | null>(null)
   const dirty = useRef(false)
   const rev = useRef(0)
+  // rev when the current conflict appeared: edits made after it are kept;
+  // otherwise the resolution decides what is shown (see the conflict effect).
+  const conflictRev = useRef(0)
   const saving = useRef(false)
   const mounted = useRef(true)
   const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -229,13 +232,17 @@ export function usePlanEditor(cb: { onSaved(): void; onError(message: string): v
   }, [load])
 
   // A sync conflict is resolved in the app-wide PersistenceNotice. When it
-  // clears: with unsaved local edits, keep them and save again; otherwise
-  // reload the plan so the user sees what the resolution left, with a fresh
-  // undo history.
+  // clears: with local edits made after the conflict appeared, keep them and
+  // save again; otherwise reload the plan so the user sees what the resolution
+  // left (their own version after "Behåll min", the cloud's after "Ladda
+  // molnversionen"), with a fresh undo history. The conflicted save left the
+  // plan dirty, so dirty alone cannot tell the two apart: "Ladda molnversionen"
+  // dropped those edits and must not re-save them over the cloud.
   useEffect(() => {
     let had = !!pendingConflict()
     return onConflictChange((c) => {
       if (c) {
+        if (!had) conflictRev.current = rev.current
         had = true
         setSaveState('conflict')
         return
@@ -243,8 +250,9 @@ export function usePlanEditor(cb: { onSaved(): void; onError(message: string): v
       if (!had) return
       had = false
       setSaveState('idle')
-      if (dirty.current) scheduleSave()
+      if (rev.current !== conflictRev.current) scheduleSave()
       else {
+        dirty.current = false
         clearTimer(commitTimer)
         void load(false)
       }

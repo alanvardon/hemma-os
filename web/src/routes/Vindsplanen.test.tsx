@@ -185,16 +185,29 @@ describe('Vindsplanen route', () => {
     expect((screen.getByRole('button', { name: /Ångra/ }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('keeps unsaved local edits (and saves them) when a conflict clears', async () => {
+  it('keeps edits made after a conflict appeared (and saves them) when it clears', async () => {
     renderRoute()
     await screen.findByTestId('scene')
-    dragBed(2.05, 0.5)
     act(() => h.listener!({ id: 'op-1', resource: 'attic_plans' }))
+    dragBed(2.05, 0.5)
     act(() => h.listener!(null))
     expect(loadPlan).toHaveBeenCalledTimes(1)
     expect(bed().x).toBe(2.05)
     hide()
     await waitFor(() => expect(savePlan).toHaveBeenCalledTimes(1))
+  })
+
+  it('never re-saves the edit that conflicted: after "Ladda molnversionen" the cloud plan is shown and nothing is written', async () => {
+    const theirs: PlanV2 = { ...examplePlan(), items: examplePlan().items.slice(0, 2) }
+    renderRoute()
+    await screen.findByTestId('scene')
+    dragBed(2.05, 0.5)
+    act(() => h.listener!({ id: 'op-1', resource: 'attic_plans' }))
+    loadPlan.mockResolvedValue({ row: row(theirs), fromCache: false })
+    act(() => h.listener!(null))
+    await waitFor(() => expect(h.props!.plan.items).toHaveLength(2))
+    hide()
+    expect(savePlan).not.toHaveBeenCalled()
   })
 
   describe('empty household', () => {

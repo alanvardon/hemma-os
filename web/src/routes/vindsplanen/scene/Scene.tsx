@@ -608,6 +608,7 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
       if (labelEls.current.has(ob)) return
       const el = document.createElement('span')
       el.textContent = d.text
+      el.dataset.kind = d.kind
       Object.assign(el.style, { position: 'absolute', left: '0', top: '0', whiteSpace: 'nowrap', display: 'none' }, LABEL_STYLE[d.kind])
       layer.appendChild(el)
       labelEls.current.set(ob, el)
@@ -686,7 +687,18 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
           return
         }
         el.style.display = ''
-        el.style.transform = `translate(${(((v.x + 1) / 2) * w).toFixed(1)}px,${(((1 - v.y) / 2) * h).toFixed(1)}px) translate(-50%,-50%)`
+        let px = ((v.x + 1) / 2) * w
+        let py = ((1 - v.y) / 2) * h
+        // Name signs ("Väster · mot bostaden") describe a whole side, not a point
+        // on a line, so keep them inside the canvas instead of cut at its edge.
+        // Dimension labels stay on their line (a moved one would mislabel it).
+        if (el.dataset.kind === 'sign') {
+          const hw = el.offsetWidth / 2 + 4
+          const hh = el.offsetHeight / 2 + 4
+          px = Math.min(Math.max(px, hw), Math.max(hw, w - hw))
+          py = Math.min(Math.max(py, hh), Math.max(hh, h - hh))
+        }
+        el.style.transform = `translate(${px.toFixed(1)}px,${py.toFixed(1)}px) translate(-50%,-50%)`
       })
     }
   }, 1)
