@@ -143,4 +143,36 @@ describe('old stairs: the turn begins one going before the corner', () => {
     // the last winder ends on the exit edge through the post
     expect(winders[6].poly.some(([x, z]) => Math.abs(x - P.pivot[0]) < 1e-9 && Math.abs(z - P.pivot[1]) < 1e-9)).toBe(true)
   })
+
+  describe('the top flight reaching past a 1.00 m stairwell into the hallway', () => {
+    // 0.92 m of stairs + 1 step of 0.21 m after the turn = 1.13 m from the long
+    // wall, 13 cm past the 1.00 m stairwell's hallway edge (z1 = −1.10).
+    const plan = { items: [], options: { below: B } } as unknown as Parameters<typeof belowLayout>[1]
+    const lay = belowLayout(geo, plan)
+    const floors = lay.parts.filter((p): p is Extract<BelowPart, { kind: 'plane' }> => p.kind === 'plane' && p.mat === 'floor' && Math.abs(p.y - lay.y0) < 1e-9)
+    const floorAt = (x: number, z: number) => floors.some((f) => Math.abs(x - f.x) <= f.w / 2 && Math.abs(z - f.z) <= f.h / 2)
+    const r = swRect(geo, B)
+
+    it('the hallway floor is open over the strip step 13 crosses, between the corner post and the east wall', () => {
+      expect(floorAt(r.x1 - 0.1, r.z1 + 0.06)).toBe(false) // over step 13
+      expect(floorAt(r.x1 - 0.1, r.z1 + 0.14)).toBe(true) // just past it: hallway floor
+      expect(floorAt(r.x1 - 0.92 - 0.05, r.z1 + 0.06)).toBe(true) // west of the post: hallway floor
+    })
+
+    it('the stairwell wall stops under step 13 there: up to the bottom of its riser (12 rises)', () => {
+      const walls = lay.parts.filter((p): p is Extract<BelowPart, { kind: 'plane' }> => p.kind === 'plane' && p.mat === 'wall' && Math.abs(p.z - (r.z1 + 0.01)) < 1e-9 && p.rotY === 0)
+      const east = walls.find((p) => p.x > r.x1 - 0.92)!
+      expect(east.w).toBeCloseTo(0.92, 12)
+      expect(east.h).toBeCloseTo(12 * P.r, 12)
+    })
+
+    it('a stairwell wide enough for the stairs keeps the hallway floor whole beside it', () => {
+      const wide = { ...B, sw: 1.2 }
+      const L2 = belowLayout(geo, { items: [], options: { below: wide } } as unknown as Parameters<typeof belowLayout>[1])
+      const r2 = swRect(geo, wide)
+      const f2 = L2.parts.filter((p): p is Extract<BelowPart, { kind: 'plane' }> => p.kind === 'plane' && p.mat === 'floor' && Math.abs(p.y - L2.y0) < 1e-9)
+      expect(f2.some((f) => Math.abs(r2.x1 - 0.1 - f.x) <= f.w / 2 && Math.abs(r2.z1 + 0.06 - f.z) <= f.h / 2)).toBe(true)
+      expect(f2).toHaveLength(floors.length - 1)
+    })
+  })
 })

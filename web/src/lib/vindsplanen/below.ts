@@ -200,10 +200,24 @@ export function belowLayout(geo: Geometry, plan: Pick<PlanV2, 'items' | 'options
   const ox1 = clamp(r.x1, h.xw, L)
   const oz0 = clamp(r.z0, h.za, h.zb)
   const oz1 = clamp(r.z1, h.za, h.zb)
+  // The old stairs' top flight may reach past the stairwell into the hallway
+  // (stairs + steps after the turn wider than the well): the floor is open
+  // over that strip too, between the corner post and the east end.
+  const OS = oldStairs(geo, B)
+  const north = B.side === 'N'
+  const reach = OS.it.w / 2 + OS.it.b * OS.it.g
+  const out = Math.max(0, north ? OS.it.z + reach - r.z1 : r.z0 - (OS.it.z - reach))
+  const ax0 = clamp(OS.it.x + OS.P.pivot[0], ox0, ox1)
   rect(h.xw, ox0, h.za, h.zb)
   rect(ox1, L, h.za, h.zb)
-  rect(ox0, ox1, h.za, oz0)
-  rect(ox0, ox1, oz1, h.zb)
+  if (out > 0.005 && !north) {
+    rect(ox0, ax0, h.za, oz0)
+    rect(ax0, ox1, h.za, clamp(r.z0 - out, h.za, h.zb))
+  } else rect(ox0, ox1, h.za, oz0)
+  if (out > 0.005 && north) {
+    rect(ox0, ax0, oz1, h.zb)
+    rect(ax0, ox1, clamp(r.z1 + out, h.za, h.zb), h.zb)
+  } else rect(ox0, ox1, oz1, h.zb)
   // walls: hallway long walls, west end and the east wall with its window
   const wallZ = (z: number, cut: BelowCut) => plane(L - h.xw, B.ceil, 'wall', (h.xw + L) / 2, y0 + B.ceil / 2, z, 0, 0, cut)
   wallZ(h.zb, 'S')
@@ -260,7 +274,6 @@ export function belowLayout(geo: Geometry, plan: Pick<PlanV2, 'items' | 'options
     }
   }
   const inner = B.side === 'S' ? r.z0 : r.z1
-  const OS = oldStairs(geo, B)
   const ow = OLD_W(B)
   const px = clamp(r.x0 + B.screen, r.x0, r.x1)
   const ax = Math.max(px, r.x1 - ow)
@@ -312,7 +325,14 @@ export function belowLayout(geo: Geometry, plan: Pick<PlanV2, 'items' | 'options
   const sl = r.x1 - sx0
   const gr = GROUND_RUN
   const wz = inner + (B.side === 'N' ? 0.01 : -0.01)
-  plane(sl, OS.P.F, 'wall', sx0 + sl / 2, yb + OS.P.F / 2, wz, 0, 0)
+  if (out > 0.005) {
+    // where the top flight passes through this wall's line, the wall stops
+    // under the first step after the turn (the bottom of its riser)
+    const wl = ax0 - sx0
+    const hE = (OS.P.a + (OS.P.wk ?? 0)) * OS.P.r
+    plane(wl, OS.P.F, 'wall', sx0 + wl / 2, yb + OS.P.F / 2, wz, 0, 0)
+    plane(r.x1 - ax0, hE, 'wall', (ax0 + r.x1) / 2, yb + hE / 2, wz, 0, 0)
+  } else plane(sl, OS.P.F, 'wall', sx0 + sl / 2, yb + OS.P.F / 2, wz, 0, 0)
   plane(r.z1 - r.z0, OS.P.F, 'wall', sx0 - gr, yb + OS.P.F / 2, (r.z0 + r.z1) / 2, 0, Math.PI / 2)
   plane(gr, OS.P.F, 'wall', sx0 - gr / 2, yb + OS.P.F / 2, wz, 0, 0)
   plane(sl + gr, r.z1 - r.z0, 'floor', sx0 - gr + (sl + gr) / 2, yb, (r.z0 + r.z1) / 2, -Math.PI / 2, 0)
