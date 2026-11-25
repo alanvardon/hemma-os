@@ -1,6 +1,6 @@
 // Vindsplanen (plan 140): the attic planner. The household's plan is one
 // document (PlanV2) loaded and saved through vindsplanen-store; this route is
-// the shell around it — the lazy 3D scene, the panels, undo/redo, debounced
+// the shell around it (all copy in English) — the lazy 3D scene, the panels, undo/redo, debounced
 // saves and the read/empty/error states. Geometry and advice come from the
 // pure core in lib/vindsplanen; nothing here computes them.
 
@@ -36,20 +36,20 @@ const WalkMode = lazy(() => import('./vindsplanen/WalkMode'))
 
 type Tab = 'plan' | 'material' | 'room' | 'measure' | 'save'
 const TABS: { v: Tab; label: string }[] = [
-  { v: 'plan', label: 'Planering' },
+  { v: 'plan', label: 'Plan' },
   { v: 'material', label: 'Material' },
-  { v: 'room', label: 'Rummet' },
-  { v: 'measure', label: 'Mät' },
-  { v: 'save', label: 'Spara' },
+  { v: 'room', label: 'Room' },
+  { v: 'measure', label: 'Measure' },
+  { v: 'save', label: 'Save' },
 ]
 
 const CAMERAS: { id: CameraPresetId; label: string }[] = [
-  { id: 'overview', label: 'Överblick' },
-  { id: 'plan', label: 'Planritning' },
-  { id: 'east', label: 'Från öster' },
-  { id: 'eye', label: 'Stående' },
-  { id: 'below', label: 'Våningen under' },
-  { id: 'section', label: 'Snitt' },
+  { id: 'overview', label: 'Overview' },
+  { id: 'plan', label: 'Floor plan' },
+  { id: 'east', label: 'From the east' },
+  { id: 'eye', label: 'Eye level' },
+  { id: 'below', label: 'Floor below' },
+  { id: 'section', label: 'Section' },
 ]
 
 export default function Vindsplanen() {
@@ -122,54 +122,54 @@ export default function Vindsplanen() {
   function remove(id: string) {
     update((p) => removeItem(p, id))
     setSelectedId(null)
-    showToast('Borttaget. Ångra med Ångra-knappen.')
+    showToast('Deleted. Use Undo to bring it back.')
   }
   async function importPlan(next: PlanV2) {
     if (plan && !(await confirm({
-      title: 'Ersätta planen?',
-      message: 'Den nuvarande planen ersätts av den inlästa. Du kan ångra direkt efteråt.',
-      confirmLabel: 'Ersätt planen',
+      title: 'Replace the plan?',
+      message: 'The current plan is replaced by the loaded one. You can undo straight afterwards.',
+      confirmLabel: 'Replace the plan',
     }))) return
     if (plan) editor.replacePlan(next)
     else editor.begin(next)
     setSelectedId(null)
-    showToast('Planen inläst.')
+    showToast('Plan loaded.')
   }
   async function resetToExample() {
     if (!plan) return
     if (!(await confirm({
-      title: 'Börja om med exempel?',
-      message: 'Planen ersätts av exempelplanen. Uppmätta mått på vinden (A) behålls. Du kan ångra direkt efteråt.',
-      confirmLabel: 'Ersätt planen',
+      title: 'Start over with the example?',
+      message: 'The plan is replaced by the example plan. Measured attic dimensions (A) are kept. You can undo straight afterwards.',
+      confirmLabel: 'Replace the plan',
     }))) return
     const ex = examplePlan(plan.options.attic)
     const keep = Object.fromEntries(Object.entries(plan.options.measured).filter(([k]) => k[0] === 'A'))
     editor.replacePlan({ ...ex, options: { ...ex.options, measured: keep } })
     setSelectedId(null)
-    showToast('Exempelplanen inläst.')
+    showToast('Example plan loaded.')
   }
 
   let body
   if (phase.kind === 'loading') {
-    body = <p className="vp-state" role="status">Läser planen…</p>
+    body = <p className="vp-state" role="status">Loading the plan…</p>
   } else if (phase.kind === 'error') {
     body = (
       <section className="vp-card vp-state-card">
-        <h2>Planen kunde inte hämtas</h2>
-        <p className="vp-note">Det gick inte att läsa hushållets plan just nu. Inget har ändrats. Kontrollera anslutningen och försök igen.</p>
+        <h2>The plan could not be fetched</h2>
+        <p className="vp-note">The household’s plan could not be loaded right now. Nothing has changed. Check your connection and try again.</p>
         <div className="vp-actions">
-          <button type="button" className="btn btn-primary" onClick={() => void editor.reload()}>Försök igen</button>
+          <button type="button" className="btn btn-primary" onClick={() => void editor.reload()}>Try again</button>
         </div>
       </section>
     )
   } else if (phase.kind === 'invalid') {
     body = (
       <section className="vp-card vp-state-card">
-        <h2>Planen kunde inte läsas</h2>
-        <p className="vp-note">Den sparade planen har ett format som inte går att läsa. Inget skrivs över och inget sparas härifrån. Ladda ner den som den är, så kan den rättas till.</p>
+        <h2>The plan could not be read</h2>
+        <p className="vp-note">The saved plan is in a format that cannot be read. Nothing is overwritten and nothing is saved from here. Download it as it is so it can be fixed.</p>
         <div className="vp-actions">
           <button type="button" className="btn btn-primary" onClick={() => downloadJson('vindsplanen-raw.json', phase.raw)}>
-            Ladda ner rådata (JSON)
+            Download raw data (JSON)
           </button>
         </div>
       </section>
@@ -177,14 +177,14 @@ export default function Vindsplanen() {
   } else if (phase.kind === 'empty') {
     body = (
       <section className="vp-card vp-state-card">
-        <h2>Ingen plan ännu</h2>
-        <p className="vp-note">Planera vinden i 3D: placera trappor, fönster, förråd och möbler och se direkt om det får plats. Börja med att läsa in en plan du redan har, eller med ett exempel.</p>
+        <h2>No plan yet</h2>
+        <p className="vp-note">Plan the attic in 3D: place stairs, windows, storage and furniture and see straight away whether it fits. Start by loading a plan you already have, or with an example.</p>
         <div className="vp-actions">
           <button type="button" className="btn btn-primary" onClick={() => setShowImport((v) => !v)} aria-expanded={showImport}>
-            Importera plan
+            Import plan
           </button>
           <button type="button" className="btn btn-ghost" onClick={() => editor.begin(examplePlan())}>
-            Börja med exempel
+            Start with the example
           </button>
         </div>
         {showImport && <ImportBox id="vp-import-empty" onImport={(p) => void importPlan(p)} />}
@@ -192,13 +192,13 @@ export default function Vindsplanen() {
     )
   } else if (!plan || !geo || !derived) {
     // ready, but the deferred copy the derived numbers follow has not caught up yet (first render)
-    body = <p className="vp-state" role="status">Läser planen…</p>
+    body = <p className="vp-state" role="status">Loading the plan…</p>
   } else {
     const z = derived.zones
     const area = (n: number) => fmt(n * z.cellArea, 1)
     body = (
       <main className="vp-main">
-        <section className="vp-stage" aria-label="3D-vy">
+        <section className="vp-stage" aria-label="3D view">
           <SceneHost
             sceneRef={sceneRef}
             plan={plan}
@@ -217,20 +217,20 @@ export default function Vindsplanen() {
               <WalkMode sceneRef={sceneRef} geo={geo} plan={plan} onExit={() => setWalking(false)} />
             </Suspense>
           )}
-          <div className="vp-hist" role="group" aria-label="Historik" hidden={walking}>
-            <button type="button" className="btn btn-ghost" onClick={editor.undo} disabled={!editor.canUndo} title="Ångra (Cmd/Ctrl+Z)">
-              ↶ Ångra
+          <div className="vp-hist" role="group" aria-label="History" hidden={walking}>
+            <button type="button" className="btn btn-ghost" onClick={editor.undo} disabled={!editor.canUndo} title="Undo (Cmd/Ctrl+Z)">
+              ↶ Undo
             </button>
-            <button type="button" className="btn btn-ghost" onClick={editor.redo} disabled={!editor.canRedo} title="Gör om (Skift+Cmd/Ctrl+Z)">
-              ↷ Gör om
+            <button type="button" className="btn btn-ghost" onClick={editor.redo} disabled={!editor.canRedo} title="Redo (Shift+Cmd/Ctrl+Z)">
+              ↷ Redo
             </button>
-            <button type="button" className="btn btn-ghost" aria-pressed={view.dims} onClick={() => setView({ ...view, dims: !view.dims })} title="Visa måtten på modellen">
-              Mått
+            <button type="button" className="btn btn-ghost" aria-pressed={view.dims} onClick={() => setView({ ...view, dims: !view.dims })} title="Show measurements on the model">
+              Measurements
             </button>
           </div>
-          <div className="vp-cams" role="group" aria-label="Kamera" hidden={walking}>
-            <button type="button" className="btn btn-ghost vp-walk-btn" aria-pressed={walking} onClick={startWalk} title="Gå genom planen i ögonhöjd">
-              Gå runt
+          <div className="vp-cams" role="group" aria-label="Camera" hidden={walking}>
+            <button type="button" className="btn btn-ghost vp-walk-btn" aria-pressed={walking} onClick={startWalk} title="Walk through the plan at eye level">
+              Walk around
             </button>
             {CAMERAS.map((c) => (
               <button key={c.id} type="button" className="btn btn-ghost" onClick={() => goCamera(c.id)}>
@@ -239,32 +239,32 @@ export default function Vindsplanen() {
             ))}
           </div>
           {view.zones && !walking && (
-            <div className="vp-legend" aria-label="Förklaring">
-              <span><i className="vp-sw vp-sw-stand" aria-hidden="true" />Stående höjd, ≥ 1,90 m</span>
-              <span><i className="vp-sw vp-sw-boa" aria-hidden="true" />Räknas också som boarea (+60 cm)</span>
+            <div className="vp-legend" aria-label="Legend">
+              <span><i className="vp-sw vp-sw-stand" aria-hidden="true" />Standing height, ≥ 1,90 m</span>
+              <span><i className="vp-sw vp-sw-boa" aria-hidden="true" />Also counts as living area (+60 cm)</span>
             </div>
           )}
         </section>
 
-        <aside className="vp-panel" aria-label="Plan och inställningar">
+        <aside className="vp-panel" aria-label="Plan and settings">
           <div className="vp-stats">
-            <div><b>{area(z.floor)}</b><small>m² golv innanför knävägg</small></div>
-            <div><b>{area(z.stand)}</b><small>m² med stående höjd</small></div>
-            <div><b>{area(z.boa)}</b><small>m² boarea, ungefär</small></div>
+            <div><b>{area(z.floor)}</b><small>m² floor inside the knee walls</small></div>
+            <div><b>{area(z.stand)}</b><small>m² with standing height</small></div>
+            <div><b>{area(z.boa)}</b><small>m² living area, approx.</small></div>
           </div>
           <p className="vp-sub">
-            {fmt(geo.L)} × {fmt(geo.W)} m · nock {fmt(geo.H)} m · taklutning ≈ {Math.round((geo.THETA * 180) / Math.PI)}°
+            {fmt(geo.L)} × {fmt(geo.W)} m · ridge {fmt(geo.H)} m · roof pitch ≈ {Math.round((geo.THETA * 180) / Math.PI)}°
           </p>
           {(editor.saveState === 'failed' || editor.saveState === 'conflict') && (
             <div className="vp-savebar" role="status">
-              <span>{editor.saveState === 'failed' ? 'Senaste ändringen är inte sparad.' : 'Planen har ändrats på en annan enhet.'}</span>
+              <span>{editor.saveState === 'failed' ? 'The latest change is not saved.' : 'The plan was changed on another device.'}</span>
               {editor.saveState === 'failed' && (
-                <button type="button" className="btn btn-ghost" onClick={editor.retrySave}>Försök igen</button>
+                <button type="button" className="btn btn-ghost" onClick={editor.retrySave}>Try again</button>
               )}
             </div>
           )}
           <div className="vp-tabs">
-            <Segmented value={tab} options={TABS} onChange={changeTab} ariaLabel="Avsnitt" />
+            <Segmented value={tab} options={TABS} onChange={changeTab} ariaLabel="Section" />
           </div>
 
           {tab === 'plan' && (
@@ -297,7 +297,7 @@ export default function Vindsplanen() {
 
   return (
     <div className={'vp-root' + (active ? ' vt-page' : '')}>
-      <PageHeader backTo="/vindsplanen" title="Vindsplanen" tagline="Planera vinden i 3D" saveVisible={saved} actions={<ThemeToggle />} />
+      <PageHeader backTo="/vindsplanen" title="Vindsplanen" tagline="Plan the attic in 3D" saveVisible={saved} actions={<ThemeToggle />} />
       {body}
       <div className={'vp-toast' + (toast.show ? ' show' : '')} role="status" aria-live="polite">{toast.msg}</div>
     </div>

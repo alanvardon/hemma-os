@@ -1,4 +1,4 @@
-// Where the lamps go in the "Kväll, lampor tända" mood (plan 141): a pure
+// Where the lamps go in the "Evening, lamps on" mood (plan 141): a pure
 // placement the scene turns into warm point lights. No three.js here.
 //
 // Coordinates as in attic.ts: x from the west gable, y up from the attic

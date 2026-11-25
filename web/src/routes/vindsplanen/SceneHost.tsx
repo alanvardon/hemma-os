@@ -8,7 +8,7 @@ import type { SceneHandle, SceneProps } from './scene/Scene'
 
 const Scene = lazy(() => import('./scene/Scene'))
 
-export const NO_3D_TEXT = '3D-vyn kan inte visas i den här webbläsaren'
+export const NO_3D_TEXT = 'The 3D view cannot be shown in this browser'
 
 function webglAvailable(): boolean {
   try {
@@ -33,7 +33,7 @@ function Unavailable() {
   return (
     <div className="vp-no3d" role="status">
       <p>{NO_3D_TEXT}</p>
-      <p>Allt annat fungerar som vanligt: du kan redigera, mäta och spara planen.</p>
+      <p>Everything else works as usual: you can edit, measure and save the plan.</p>
     </div>
   )
 }
