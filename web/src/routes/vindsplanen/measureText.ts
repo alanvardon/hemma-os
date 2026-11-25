@@ -52,12 +52,12 @@ export function stepText(st: MeasureStep, side: 'N' | 'S'): StepText {
     case 'B7':
       return { title: 'Slatted screen', sub: 'West end to the white post', how: 'Along the screen: from its west end to the white post where the low railing starts.', fields: ['Screen length'] }
     case 'B8':
-      return { title: 'The old stairs', sub: 'Number of steps, step height, width', how: 'Count the steps from the ground floor up to this hallway (count each step you lift your foot onto, including the top one), measure the height of one step, and the width of the stairs.', fields: ['Number of steps', 'Height of one step', 'Width of the stairs'] }
+      return { title: 'The old stairs', sub: 'Number of steps, step height, width', how: 'Count each step up from the ground floor, including the final step onto the hallway landing. Measure straight up between the tops of two steps, and side to side across a straight step.', fields: ['Number of steps', 'Height of one step', 'Width of the stairs'] }
     case 'B9':
       return {
         title: 'Old stairs: shape',
         sub: 'Step depth, and how the steps turn',
-        how: 'On a straight part of the old stairs, measure from the front edge of one step to the front edge of the next, flat along the step. Then, walking up, count the tapered steps in the turn (narrow at the post, wide at the wall), and the straight steps after the turn before you step onto the landing. Together with B8 these decide how far the old stairs run under the hallway floor, and so the headroom on the way down.',
+        how: 'Measure straight across the top of a straight step, from its front edge to the front edge of the next step. Count the steps that fan out around the turn, then the straight steps between the turn and the hallway landing.',
         fields: ['Step depth', 'Tapered steps in the turn', 'Straight steps after the turn'],
       }
     case 'W1':

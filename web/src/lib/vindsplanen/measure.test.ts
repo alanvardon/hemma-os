@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { atticOf, deriveGeometry } from './attic'
+import { oldStairs, swRect } from './below'
 import { applyMeasureStep, fieldDisplay, measureProgress, measureSteps, validateInputs, type MeasureStep } from './measure'
 import { examplePlan } from './plan'
 import { expectClose, FIXTURE_NAMES, goldPlan } from './testkit'
@@ -85,5 +86,37 @@ describe('measure logic', () => {
   it('a door step turns "edge + width" into the door centre', () => {
     const out = applyMeasureStep(geo, plan, 'D1', [150, 90], '2026-11-25')
     expect(out?.options.below.doors[0]).toMatchObject({ at: 1.95, w: 0.9 })
+  })
+
+  it.each(['N', 'S'] as const)('puts the hallway opening above the front of the chosen tread (%s)', (side) => {
+    const stairs = structuredClone(plan)
+    stairs.options.below = { ...stairs.options.below, side, oldN: 15, oldW: 0.92, fill: 0.1 }
+    stairs.options.measured = { B4: '2026-11-24' }
+    const inputs = [21, 8, 1]
+    const date = '2026-11-25'
+    const withoutAlignment = applyMeasureStep(geo, stairs, 'B9', inputs, date)!
+    const before = oldStairs(geo, withoutAlignment.options.below)
+
+    const out = applyMeasureStep(geo, stairs, 'B9', inputs, date, { openingAboveStep: 2 })
+    expect(out).not.toBeNull()
+    if (!out) return
+    const B = out.options.below
+    const after = oldStairs(geo, B)
+    expect(after).toEqual(before)
+    expect(B.len).toBeCloseTo(1.86, 10)
+    expect(swRect(geo, B).x0 + B.fill).toBeCloseTo(after.it.x + after.it.g, 10)
+    expect(out.options.measured).toEqual({ B9: date })
+    expect(withoutAlignment.options.below.len).toBe(stairs.options.below.len)
+    expect(withoutAlignment.options.measured.B4).toBe('2026-11-24')
+  })
+
+  it('rejects fractional steps, steps in the turn, and an edge outside the hallway', () => {
+    const stairs = structuredClone(plan)
+    stairs.options.below = { ...stairs.options.below, oldN: 15, oldW: 0.92 }
+    const save = (openingAboveStep: number) => applyMeasureStep(geo, stairs, 'B9', [21, 8, 1], '2026-11-25', { openingAboveStep })
+    expect(save(1.5)).toBeNull()
+    expect(save(6)).toBeNull()
+    stairs.options.below.hallLen = 1
+    expect(save(2)).toBeNull()
   })
 })

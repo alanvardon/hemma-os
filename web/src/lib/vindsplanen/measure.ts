@@ -199,12 +199,16 @@ export function measureProgress(steps: readonly MeasureStep[], measured: Readonl
  * "Save and next" on a step (v41 line 2029): write each typed value (display
  * units) through the step's setter in order, mark the step measured on
  * `date`, and for an attic step normalise the attic with `atticOf`. Returns
- * null when any value fails `validateInputs`.
+ * null when any value fails validation. B9 can also align the opening to a
+ * straight tread after applying the stair dimensions.
  *
  * v41 reloaded the page when an attic step changed the attic, which re-ran
  * `sanitize` against the new geometry; this does the same in place.
  */
-export function applyMeasureStep(geo: Geometry, plan: PlanV2, code: string, inputs: readonly number[], date: string): PlanV2 | null {
+export function applyMeasureStep(
+  geo: Geometry, plan: PlanV2, code: string, inputs: readonly number[], date: string,
+  { openingAboveStep }: { openingAboveStep?: number } = {},
+): PlanV2 | null {
   const steps = measureSteps(geo, plan)
   const st = steps.find((s) => s.code === code)
   if (!st || validateInputs(st, inputs).some((ok) => !ok)) return null
@@ -239,6 +243,14 @@ export function applyMeasureStep(geo: Geometry, plan: PlanV2, code: string, inpu
       B.oldG = vals[0]
       B.oldK = Math.round(vals[1])
       B.oldB = Math.round(vals[2])
+      if (openingAboveStep !== undefined) {
+        const length = openingLengthAboveTread(geo, B, openingAboveStep)
+        if (length === null) return null
+        if (Math.abs(length - B.len) > 1e-9) {
+          B.len = length
+          delete out.options.measured.B4 // The length now comes from the tread, rather than a tape measurement.
+        }
+      }
       break
     case 'W1': B.winZ = vals[0]; B.winW = vals[1]; B.winH = vals[2]; B.winS = vals[3]; break
     case 'W2':
@@ -263,6 +275,14 @@ export function applyMeasureStep(geo: Geometry, plan: PlanV2, code: string, inpu
     if (JSON.stringify(out.options.attic) !== JSON.stringify(plan.options.attic)) return sanitizeShape(out)
   }
   return out
+}
+
+function openingLengthAboveTread(geo: Geometry, B: PlanV2['options']['below'], step: number): number | null {
+  const { it, P } = oldStairs(geo, B)
+  if (!Number.isInteger(step) || step < 1 || step > P.a) return null
+  const edge = it.x + (step - 1) * it.g
+  const length = swRect(geo, B).x1 - edge + B.fill
+  return edge >= hallRect(geo, B).xw && length >= 0.6 && length <= 5 ? length : null
 }
 
 /** v41 `CAMS`: the view presets. */

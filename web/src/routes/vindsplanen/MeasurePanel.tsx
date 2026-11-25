@@ -171,6 +171,8 @@ function StepForm({
   const when = plan.options.measured[step.code]
   const [text, setText] = useState<string[]>(() => step.fields.map((f) => String(fieldDisplay(f))))
   const [bad, setBad] = useState<boolean[]>([])
+  const [openingStep, setOpeningStep] = useState('')
+  const [badOpeningStep, setBadOpeningStep] = useState(false)
   const last = index === total - 1
 
   function save() {
@@ -178,8 +180,12 @@ function StepForm({
     const ok = validateInputs(step, nums)
     setBad(ok.map((v) => !v))
     if (ok.some((v) => !v)) return
-    const next = applyMeasureStep(geo, plan, step.code, nums, todayISO())
-    if (!next) return
+    const openingAboveStep = openingStep === '' ? undefined : Number(openingStep)
+    const next = applyMeasureStep(geo, plan, step.code, nums, todayISO(), { openingAboveStep })
+    if (!next) {
+      setBadOpeningStep(openingAboveStep !== undefined)
+      return
+    }
     onChange(next)
     onGo(index + 1)
   }
@@ -227,6 +233,34 @@ function StepForm({
             </span>
           </div>
         ))}
+        {step.code === 'B9' && (
+          <>
+            <div className="vp-row">
+              <label htmlFor="vp-opening-step">Step under the opening edge (optional)</label>
+              <input
+                id="vp-opening-step"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                step={1}
+                value={openingStep}
+                aria-describedby="vp-opening-step-help"
+                aria-invalid={badOpeningStep || undefined}
+                onChange={(e) => {
+                  setOpeningStep(e.target.value)
+                  setBadOpeningStep(false)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') save()
+                }}
+              />
+            </div>
+            <p id="vp-opening-step-help" className="vp-note">
+              Count from the bottom. The opening will start above the front edge of this step.
+            </p>
+            {badOpeningStep && <p className="vp-warn" role="alert">Choose a whole step number before the turn that places the opening inside the hallway.</p>}
+          </>
+        )}
         <p className="vp-note" role="status">
           {when ? (
             <>
