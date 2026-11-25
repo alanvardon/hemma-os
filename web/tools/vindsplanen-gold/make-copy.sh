@@ -3,11 +3,13 @@
 #   - storage keys renamed (vindsplanen- → vgold-) so it never touches a real plan,
 #   - gold-hook.js inserted before the module's closing </script>.
 # Usage: sh make-copy.sh [path/to/vindsplanen-v41.html]
-# Output: out/vindsplanen-gold.html (gitignored).
+# Output: $TMPDIR/vindsplanen-gold/vindsplanen-gold.html. It must stay outside
+# web/: Vite's dev dependency scan crawls every .html under web/ and fails on the
+# copy's CDN-only imports (three-gpu-pathtracer), breaking lazy imports.
 set -eu
 DIR=$(cd "$(dirname "$0")" && pwd)
 SRC=${1:-"$DIR/../../../planning/140-vindsplanen-ref/vindsplanen-v41.html"}
-OUT="$DIR/out"
+OUT="${TMPDIR:-/tmp}/vindsplanen-gold"
 mkdir -p "$OUT"
 sed "s/vindsplanen-/vgold-/g" "$SRC" > "$OUT/renamed.html"
 LAST=$(grep -n '</script>' "$OUT/renamed.html" | tail -1 | cut -d: -f1)

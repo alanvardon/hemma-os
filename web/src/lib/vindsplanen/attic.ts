@@ -178,3 +178,42 @@ export const boardedAt = (geo: Geometry, board: readonly number[], x: number): b
 /** Ceiling height at (x, z): the roof, lowered in an insulated (boarded) bay. */
 export const ceilAt = (geo: Geometry, board: readonly number[], x: number, z: number): number =>
   Math.max(0, roofY(geo, z) - (boardedAt(geo, board, x) ? geo.BOARD_DY : 0))
+
+// ---------- Slope placement, for drawing the shell (v41 buildSlopes 708,
+// buildBoard 727–744, buildSkylight 1110, the storage/closet shelves 1238/1284)
+
+/** Where the roof comes down to height y: the inverse of `roofY` (|z|). */
+export const roofZAt = (geo: Geometry, y: number): number => geo.HALF - y / geo.SLOPE
+
+/**
+ * A point on a slope: u along the attic (x), v up the slope from the eaves,
+ * moved `inset` straight in from the panelling (the plasterboard ceiling of an
+ * insulated bay sits BOARD_D in). Returns [x, y, z].
+ */
+export function slopePoint(geo: Geometry, side: 'N' | 'S', u: number, v: number, inset = 0): [number, number, number] {
+  const sign = side === 'S' ? 1 : -1
+  return [u, v * geo.SIN - inset * geo.COS, sign * (geo.HALF - v * geo.COS - inset * geo.SIN)]
+}
+
+/**
+ * The plasterboard ceiling of a run of insulated bays, in slope coordinates
+ * (`slopePoint` with inset BOARD_D): from v0 (the floor when the knee wall is
+ * opened, else the top of the knee wall) up to vTop where the two sides meet.
+ */
+export function boardSpan(geo: Geometry, kneeOpened: boolean): { v0: number; vTop: number } {
+  const d = geo.BOARD_D
+  const v0 = kneeOpened ? (d * geo.COS) / geo.SIN : (geo.HALF - geo.KZ - d * geo.SIN) / geo.COS
+  return { v0, vTop: (geo.HALF - d * geo.SIN) / geo.COS }
+}
+
+/**
+ * The end cap closing the insulation cavity where boarded bays stop next to an
+ * open one, as a (z, y) profile on the south side (negate z for north): from
+ * the board's foot to the panelling's foot, up to the ridge and back down.
+ */
+export function boardCapProfile(geo: Geometry, kneeOpened: boolean): [number, number][] {
+  const dy = geo.BOARD_DY
+  const zf = kneeOpened ? geo.HALF - dy / geo.SLOPE : geo.KZ
+  const yf = kneeOpened ? 0 : geo.KNEE_H - dy
+  return [[zf, yf], [kneeOpened ? geo.HALF : geo.KZ, kneeOpened ? 0 : geo.KNEE_H], [0, geo.H], [0, geo.H - dy]]
+}

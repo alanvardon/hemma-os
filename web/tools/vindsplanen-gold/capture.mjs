@@ -23,7 +23,7 @@ const PORT = 8790
 const FLAGS = ['owner-design-1', 'storage-room-1', 'storage-corner-2', 'bedroom-board-1', 'measure-1', 'closet-1', 'oldstairs-count-2', 'floor-fill-1']
 
 execFileSync('sh', [resolve(DIR, 'make-copy.sh'), ...process.argv.slice(2)], { stdio: 'inherit' })
-const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1'], { cwd: resolve(DIR, 'out'), stdio: 'ignore' })
+const server = spawn('python3', ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1'], { cwd: resolve(process.env.TMPDIR || '/tmp', 'vindsplanen-gold'), stdio: 'ignore' })
 const url = `http://127.0.0.1:${PORT}/vindsplanen-gold.html`
 
 async function waitForServer() {
