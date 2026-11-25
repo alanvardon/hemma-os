@@ -27,3 +27,20 @@ Notes for tinting and repeat (Stage 2):
   `plaster` is a mid grey-beige, so tint by `target / meanAlbedo` in linear
   space, or use normal and orm only (map = null) for painted options.
 - `panel` boards run vertically (tongue and groove).
+
+## Furniture models (plan 142)
+
+CC0 1.0 from Poly Haven, packed from the 1k glTF variant into self-contained
+`.glb` files under `models/` (embedded JPEG textures ≤ 1024 px, no
+Draco/meshopt/KTX2 — the CSP blocks their WASM decoders). Normalised: Y-up,
+metres, origin at the floor centre of the footprint, front facing +z.
+Downloaded 2026-11-25. Bed and wardrobe stay procedural: no CC0 model matched
+the style.
+
+| File | Slug / page | Author | Licence | w × h × d (m) | Look |
+|---|---|---|---|---|---|
+| `sofa-classic.glb` | `Sofa_01` — https://polyhaven.com/a/Sofa_01 | Kirill Sannikov | CC0 | 1.571 × 0.797 × 0.658 | Cream fabric 2-seat sofa, dark wooden legs |
+| `desk.glb` | `wooden_table_02` — https://polyhaven.com/a/wooden_table_02 | Serhii Khromov | CC0 | 1.134 × 0.800 × 0.706 | Simple wood slab table on tapered legs |
+| `dresser-painted.glb` | `painted_wooden_cabinet` — https://polyhaven.com/a/painted_wooden_cabinet | Kirill Sannikov | CC0 | 1.195 × 1.182 × 0.617 | White painted sideboard, 2 drawers over 2 doors |
+| `nightstand.glb` | `painted_wooden_nightstand` — https://polyhaven.com/a/painted_wooden_nightstand | Kirill Sannikov | CC0 | 0.505 × 0.616 × 0.509 | Blue painted bedside table, one drawer |
+| `nightstand-light.glb` | `side_table_01` — https://polyhaven.com/a/side_table_01 | James Ray Cock | CC0 | 0.550 × 0.551 × 0.450 | Light-oak open two-shelf side table |

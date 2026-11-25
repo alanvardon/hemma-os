@@ -28,6 +28,7 @@ import type { Item, PlanV2, ViewPrefs } from '../../../lib/vindsplanen/plan'
 import { buildBelow } from './belowScene'
 import { buildDims, buildHighlights, type MeasureHighlight } from './dims'
 import { buildItem } from './itemsScene'
+import { createModels, type SceneModels } from './models'
 import { buildLamps, roomEnvMap } from './lighting'
 import { createMats, ENV_INTENSITY, EXPOSURE, skyTexture, SUN_STYLE, type SceneMats } from './materials'
 import type { TexRes } from './textures'
@@ -188,19 +189,21 @@ const LABEL_STYLE: Record<LabelData['kind'], Partial<CSSStyleDeclaration>> = {
 
 // ---------- Item
 
-function ItemView({ geo, plan, it: raw, mats, graph, groups, hidden, dirty }: {
+function ItemView({ geo, plan, it: raw, mats, models, graph, groups, hidden, dirty }: {
   geo: Geometry
   /** The slice its builder reads: everything for stairs/storage/closet, else roof windows + options. */
   plan: Slice
   it: Item
   mats: SceneMats
+  /** The scene's furniture model cache (plan 142). */
+  models: SceneModels
   graph: Graph
   groups: Map<string, THREE.Object3D>
   hidden: boolean
   dirty: RefObject<boolean>
 }) {
   const it = useJson(raw)
-  const built = useMemo(() => buildItem(geo, plan, it, mats), [geo, plan, it, mats])
+  const built = useMemo(() => buildItem(geo, plan, it, mats, models), [geo, plan, it, mats, models])
   useOwned(built, (b: Built) => disposeBuilt(b, mats.shared), dirty)
   useEffect(() => {
     groups.set(it.id, built.obj)
@@ -268,6 +271,9 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
   useEffect(() => () => mats.dispose(), [mats])
   useEffect(() => mats.setRes(texRes), [mats, texRes])
   useEffect(() => mats.apply(materials), [mats, materials])
+  // furniture model templates live as long as the scene; items share their geometry and materials
+  const [models] = useState(() => createModels(gl.capabilities.getMaxAnisotropy()))
+  useEffect(() => () => models.dispose(), [models])
 
   const [lights] = useState(() => {
     const hemi = new THREE.HemisphereLight('#e4edf7', '#a08c74', SUN_STYLE.morning.hemi)
@@ -759,7 +765,7 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
   const skyIn = (side: 'S' | 'N'): ReactNode =>
     items
       .filter((i) => i.type === 'skylight' && i.slope === side)
-      .map((it) => <ItemView key={it.id} geo={geo} plan={skySlice} it={it} mats={mats} graph={graph} groups={groups} hidden={today} dirty={dirty} />)
+      .map((it) => <ItemView key={it.id} geo={geo} plan={skySlice} it={it} mats={mats} models={models} graph={graph} groups={groups} hidden={today} dirty={dirty} />)
   graph.below.visible = rplan.options.below.show
   return (
     <>
@@ -811,6 +817,7 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
               plan={it.type === 'curved' || it.type === 'spiral' || it.type === 'storage' || it.type === 'closet' ? full : skySlice}
               it={it}
               mats={mats}
+              models={models}
               graph={graph}
               groups={groups}
               hidden={today}

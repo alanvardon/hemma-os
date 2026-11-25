@@ -9,6 +9,8 @@ import type { Pt } from '../../../lib/vindsplanen/stairs'
 export interface Built {
   obj: THREE.Object3D
   lights?: THREE.Light[]
+  /** Run when the part is disposed, before its resources are freed (e.g. to drop a pending model swap). */
+  onDispose?: () => void
 }
 
 export function shadowy<T extends THREE.Object3D>(o: T): T {
@@ -178,18 +180,32 @@ export function hlBox(mat: THREE.Material, x0: number, x1: number, y0: number, y
 // ---------- Disposal
 
 /**
+ * Geometries and materials owned by a model template cache (models.ts):
+ * instances clone the template and share these, so object disposal must leave
+ * them alone; the cache frees them itself when the scene unmounts.
+ */
+const templateRes = new WeakSet<THREE.BufferGeometry | THREE.Material>()
+
+export function markTemplate(r: THREE.BufferGeometry | THREE.Material) {
+  templateRes.add(r)
+}
+
+export const isTemplate = (r: THREE.BufferGeometry | THREE.Material) => templateRes.has(r)
+
+/**
  * Free the GPU resources of a built subtree: every geometry, and every
  * material (with its textures) that is not one of the scene's shared ones.
+ * Model template geometries and materials (`markTemplate`) are skipped too.
  * Lights get `dispose()` too.
  */
 export function disposeObject(root: THREE.Object3D, shared: ReadonlySet<THREE.Material>) {
   root.traverse((o) => {
     const mesh = o as THREE.Mesh
-    if (mesh.geometry) mesh.geometry.dispose()
+    if (mesh.geometry && !templateRes.has(mesh.geometry)) mesh.geometry.dispose()
     const mat = mesh.material as THREE.Material | THREE.Material[] | undefined
     if (mat) {
       for (const m of Array.isArray(mat) ? mat : [mat]) {
-        if (shared.has(m)) continue
+        if (shared.has(m) || templateRes.has(m)) continue
         for (const v of Object.values(m)) if (v instanceof THREE.Texture) v.dispose()
         m.dispose()
       }
@@ -199,6 +215,7 @@ export function disposeObject(root: THREE.Object3D, shared: ReadonlySet<THREE.Ma
 }
 
 export function disposeBuilt(b: Built, shared: ReadonlySet<THREE.Material>) {
+  b.onDispose?.()
   disposeObject(b.obj, shared)
   b.lights?.forEach((l) => l.dispose())
 }
