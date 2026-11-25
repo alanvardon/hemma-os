@@ -107,6 +107,7 @@ export interface OldStairsItem extends CurvedLike {
   wk: number
   b: number
   lead: number
+  landingDepth: number
 }
 
 /**
@@ -114,7 +115,7 @@ export interface OldStairsItem extends CurvedLike {
  * height and step count as measured, else assumed equal to the floor above.
  * Against the long wall, turning at the east end toward the hallway; the
  * turn begins one going before the corner (unlike v41, whose winders all
- * fanned inside the corner square).
+ * fanned inside the corner square), and the top tread is a landing.
  */
 export function oldStairs(geo: Geometry, B: Below): { it: OldStairsItem; P: StairPlan } {
   const r = swRect(geo, B)
@@ -127,18 +128,35 @@ export function oldStairs(geo: Geometry, B: Below): { it: OldStairsItem; P: Stai
   // The turn starts one going before the corner, so the winders taper over
   // the end of the first flight too (owner's stairs, 2026-11-25).
   const lead = g
+  // The top tread is a landing one rise below the hallway floor, filling the
+  // rest of the stairwell after the straight steps that follow the turn (at
+  // least one going deep). So n rises = a + wk + b + landing + the hallway.
+  const landingFor = (b: number) => Math.max(g, B.sw - w - b * g)
   // steps in the turn as counted (B9); until then, the fewest that give the
   // existing stairs normal headroom (1.9 m) under the edge of this floor
   const clear = (k: number) => {
-    const a = n - 1 - k
+    const a = n - 2 - k
     const x = r.x1 - w - a * g - lead
     const i = Math.ceil((r.x0 - x) / g - 1e-9)
     return i <= 0 || i > a || F2 - i * r2 - 0.25 >= 1.9
   }
   const wk = B.oldK >= 2 ? B.oldK : [3, 4, 5, 6].find(clear) || 6
   const b = B.oldK >= 2 ? B.oldB : 0
-  const a = Math.max(0, n - 1 - wk - b)
-  const it: OldStairsItem = { x: r.x1 - w - a * g - lead, z: north ? r.z0 + w / 2 : r.z1 - w / 2, rot: 0, turn: north ? 'R' : 'L', a, w, risers: n, g, wk, b, lead }
+  const a = Math.max(0, n - 2 - wk - b)
+  const it: OldStairsItem = {
+    x: r.x1 - w - a * g - lead,
+    z: north ? r.z0 + w / 2 : r.z1 - w / 2,
+    rot: 0,
+    turn: north ? 'R' : 'L',
+    a,
+    w,
+    risers: n,
+    g,
+    wk,
+    b,
+    lead,
+    landingDepth: landingFor(b),
+  }
   return { it, P: curvedPlan(B, it, F2) }
 }
 

@@ -134,6 +134,12 @@ export interface CurvedLike extends Placed {
    * winders also taper over that much of the first flight.
    */
   lead?: number
+  /**
+   * Depth of a top landing after the straight steps that follow the turn,
+   * metres (0 or unset: none, as v41). The landing is the last tread, one
+   * rise below the floor above.
+   */
+  landingDepth?: number
 }
 
 /**
@@ -152,7 +158,8 @@ export function curvedPlan(B: Below, it: CurvedLike, Fo?: number): StairPlan {
   const m = it.turn === 'R' ? -1 : 1
   const turn = it.turn !== 'N'
   const wk = (it.wk ?? 0) >= 2 ? Math.round(it.wk as number) : 3 // winders in the quarter turn
-  const a = turn ? clamp(Math.round(it.a), 0, total - wk) : total
+  const land = turn && (it.landingDepth ?? 0) > 0 ? (it.landingDepth as number) : 0
+  const a = turn ? clamp(Math.round(it.a), 0, total - wk - (land > 0 ? 1 : 0)) : total
   const lead = turn && (it.lead ?? 0) > 0 ? (it.lead as number) : 0
   const T: Tread[] = []
   for (let i = 1; i <= a; i++)
@@ -209,7 +216,7 @@ export function curvedPlan(B: Below, it: CurvedLike, Fo?: number): StairPlan {
         T.push({ poly, t: (a + j) * r })
       }
     }
-    const b = total - a - wk
+    const b = total - a - wk - (land > 0 ? 1 : 0)
     for (let j = 1; j <= b; j++)
       T.push({
         poly: [[x0, -w / 2 - (j - 1) * g], [x0 + w, -w / 2 - (j - 1) * g], [x0 + w, -w / 2 - j * g], [x0, -w / 2 - j * g]],
@@ -218,6 +225,11 @@ export function curvedPlan(B: Below, it: CurvedLike, Fo?: number): StairPlan {
         dir: 'z',
       })
     zEnd = -w / 2 - b * g
+    if (land > 0) {
+      // the top landing: the last tread, one rise below the floor above
+      T.push({ poly: [[x0, zEnd], [x0 + w, zEnd], [x0 + w, zEnd - land], [x0, zEnd - land]], t: total * r, straight: true, dir: 'z' })
+      zEnd -= land
+    }
     const xs = ci < a ? ci * g : xa
     open =
       xs < x0 - 1e-6
