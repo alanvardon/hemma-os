@@ -1,22 +1,21 @@
-// policy-rate-notify — plan 72. Scheduled (via prod-only pg_cron, see
-// README.md) to run on the morning of each Riksbank decision date and email
-// every household when the policy rate (styrränta) has actually changed
-// since the last time that household was notified.
+// policy-rate-notify — plan 72. Scheduled DAILY (via prod-only pg_cron, see
+// README.md) to email every household when the policy rate (styrränta)
+// value differs from the last one that household was emailed. No decision
+// calendar (see logic.ts header): the email arrives on the rate's effective
+// date, and the fetched window gives the "gällande från" date.
 //
 // Not invoked from the browser — no CORS handling needed. Invoked by pg_cron
-// with a service-role bearer, or manually by the owner for a dry run.
+// with a bearer the gateway accepts (verify_jwt = true), or manually by the
+// owner for a dry run. Every run is idempotent via notification_state.
 //
-// Reuses the SWEA "Latest" fetch approach from riksbank-proxy/index.ts
-// (GET Observations/Latest/SECBREPOEFF) — that endpoint 200s with an empty
-// body when an Origin header is present, so this must run server-side, which
-// it already does. Decision-calendar + change-detection logic lives in
-// logic.ts and is mirrored by hand from web/src/lib/riksbank.ts (see that
-// file's header comment) — plan 88 will automate the sync later.
+// SWEA must be called server-side (it 200s with an empty body when an Origin
+// header is present — see riksbank-proxy/index.ts).
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import {
   buildNotificationEmail,
-  isDecisionDate,
+  currentRate,
+  parseObservations,
   parsePoint,
   serializePoint,
   shouldNotify,
@@ -26,32 +25,30 @@ import { sendEmail } from '../_shared/resend.ts'
 
 const SERIES = 'SECBREPOEFF'
 const SWEA_BASE = 'https://api.riksbank.se/swea/v1'
+// Long enough that the latest rate's effective date is inside the window for
+// any realistic gap between moves; the rate itself is always the latest value.
+const WINDOW_DAYS = 400
 
 function stockholmToday(): string {
-  // en-CA formats as YYYY-MM-DD, which is exactly what the decision calendar
-  // and notification_state use.
+  // en-CA formats as YYYY-MM-DD, the SWEA date format.
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Stockholm' })
 }
 
-async function fetchLatestRate(): Promise<RatePoint> {
-  const res = await fetch(`${SWEA_BASE}/Observations/Latest/${SERIES}`)
-  if (!res.ok) throw new Error(`riksbank SWEA latest fetch failed: ${res.status}`)
-  const body = await res.json()
-  if (!body || typeof body.date !== 'string' || typeof body.value !== 'number') {
-    throw new Error(`riksbank SWEA latest fetch returned an unexpected shape: ${JSON.stringify(body)}`)
-  }
-  return { date: body.date, value: body.value }
+function daysBefore(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
+async function fetchCurrentRate(today: string): Promise<RatePoint> {
+  const res = await fetch(`${SWEA_BASE}/Observations/${SERIES}/${daysBefore(today, WINDOW_DAYS)}/${today}`)
+  if (!res.ok) throw new Error(`riksbank SWEA observations fetch failed: ${res.status}`)
+  return currentRate(parseObservations(await res.json()))
 }
 
 Deno.serve(async (_req: Request) => {
   try {
     const today = stockholmToday()
-    if (!isDecisionDate(today)) {
-      console.log(`policy-rate-notify: no Riksbank decision today (${today}) — no-op`)
-      return new Response(JSON.stringify({ ok: true, notified: 0, reason: 'not a decision date' }), {
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
@@ -66,7 +63,7 @@ Deno.serve(async (_req: Request) => {
     const appOrigin = appOriginRaw.replace(/\/$/, '')
     const appUrl = `${appOrigin}/#/bolanekoll`
 
-    const current = await fetchLatestRate()
+    const current = await fetchCurrentRate(today)
     const supabase = createClient(supabaseUrl, serviceRoleKey)
 
     // household_members is in the exposed `public` schema (queryable via the
