@@ -1,38 +1,55 @@
 // policy-rate-notify/logic.ts — pure helpers for the plan-72 rate-change email
 // cron. Kept dependency-free (no Deno/network/Supabase imports) so it can be
-// unit tested directly. Two things are mirrored by hand from other modules
-// because the Deno edge-function runtime can't import from web/src:
-//   - RIKSBANK_DECISIONS_2026 mirrors web/src/lib/riksbank.ts — keep in sync
-//     (plan 88 will automate the decision calendar later).
-//   - The SWEA "Latest" shape mirrors supabase/functions/riksbank-proxy.
+// unit tested directly (web/src/lib/policy-rate-notify-logic.test.ts).
+//
+// The function runs DAILY and emails when the policy rate VALUE differs from
+// the last one emailed. There is deliberately no decision calendar: a
+// hand-mirrored one went stale (it ended 2026-08-19 and silently skipped the
+// 2026-11-03 decision), and SECBREPOEFF only changes on the EFFECTIVE date
+// (about a week after the announcement), so a decision-day check could not
+// see the new rate anyway. The email therefore arrives on the effective date.
+// The SWEA observation shape mirrors supabase/functions/riksbank-proxy.
 
 export interface RatePoint {
   date: string
   value: number
 }
 
-// Announcement (publication) dates — the 09:30 day the decision is published.
-// MIRROR of web/src/lib/riksbank.ts RIKSBANK_DECISIONS_2026 — update both by
-// hand whenever the calendar changes.
-export const RIKSBANK_DECISIONS_2026: string[] = [
-  '2026-01-29',
-  '2026-03-19',
-  '2026-05-07',
-  '2026-06-17',
-  '2026-08-19',
-]
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
-/** Is `today` (YYYY-MM-DD, Europe/Stockholm) a Riksbank decision day? */
-export function isDecisionDate(today: string, calendar: string[] = RIKSBANK_DECISIONS_2026): boolean {
-  return (calendar || []).includes(today)
+/**
+ * Validate a SWEA `Observations/{series}/{from}/{to}` body: an array of
+ * `{date: 'YYYY-MM-DD', value: number}`. Throws on any other shape (fail loud
+ * rather than email a guessed rate).
+ */
+export function parseObservations(body: unknown): RatePoint[] {
+  if (!Array.isArray(body)) {
+    throw new Error(`riksbank SWEA observations: expected an array, got ${String(JSON.stringify(body)).slice(0, 200)}`)
+  }
+  return body.map((o, i) => {
+    if (!o || typeof o.date !== 'string' || !DATE_RE.test(o.date) || typeof o.value !== 'number' || !Number.isFinite(o.value)) {
+      throw new Error(`riksbank SWEA observations: unexpected item at ${i}: ${String(JSON.stringify(o)).slice(0, 200)}`)
+    }
+    return { date: o.date, value: o.value }
+  })
 }
 
 /**
- * Serialise a rate point into the string stored in notification_state.value
- * so equality comparison is exact (date AND value, not just value) — a rate
- * held at the same number but re-published under a new effective date should
- * not be treated as "already notified".
+ * The rate in force at the end of a daily series, dated from the first
+ * observation of its latest unchanged run (its effective date within the
+ * window). If the whole window holds one value, that is the window's first
+ * date. Throws on an empty series.
  */
+export function currentRate(observations: RatePoint[]): RatePoint {
+  if (observations.length === 0) throw new Error('riksbank SWEA observations: empty series')
+  const sorted = [...observations].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  const latest = sorted[sorted.length - 1]
+  let since = latest.date
+  for (let i = sorted.length - 1; i >= 0 && sorted[i].value === latest.value; i--) since = sorted[i].date
+  return { date: since, value: latest.value }
+}
+
+/** Serialise a rate point (effective date + value) into notification_state.value. */
 export function serializePoint(point: RatePoint): string {
   return JSON.stringify({ date: point.date, value: point.value })
 }
@@ -48,11 +65,15 @@ export function parsePoint(stored: string | null | undefined): RatePoint | null 
   }
 }
 
-/** Should we send a notification: is `current` different from what's stored? */
+/**
+ * Should we send a notification: has the rate VALUE changed since the last
+ * one emailed? The date is ignored, so a daily series re-dating the same rate
+ * never emails. No (or a malformed) stored point means notify.
+ */
 export function shouldNotify(storedValue: string | null | undefined, current: RatePoint): boolean {
   const stored = parsePoint(storedValue)
   if (!stored) return true
-  return stored.date !== current.date || stored.value !== current.value
+  return stored.value !== current.value
 }
 
 export interface NotificationEmail {

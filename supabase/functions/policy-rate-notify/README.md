@@ -42,22 +42,20 @@ create extension if not exists pg_cron;
 create extension if not exists pg_net;
 ```
 
-Riksbank publishes decisions at 09:30 Europe/Stockholm. The function itself
-gates on the decision calendar (see `logic.ts` `isDecisionDate`), so the cron
-can run a little after that with margin — the important part is covering
-both UTC offsets Stockholm uses across the year (CET = UTC+1 in winter, CEST
-= UTC+2 in summer), so schedule **two** daily UTC times that both land after
-09:40 Stockholm in their respective season:
+The function runs **every day** and has no decision calendar (removed
+2026-11-25: the hand-mirrored calendar went stale and skipped the 2026-11-03
+decision). It fetches the last 400 days of the daily `SECBREPOEFF` series and
+emails a household only when the latest rate **value** differs from the one
+stored in `notification_state`. That series changes on the rate's
+**effective** date (about a week after the 09:30 announcement), so the email
+arrives on the effective date and says "gällande från <effective date>".
 
-- `40 7 * * *` → 07:40 UTC = 09:40 CEST (summer)
-- `40 8 * * *` → 08:40 UTC = 09:40 CET (winter)
+Any daily time works. The two schedules below predate that change and are
+kept as-is: a second same-day run is a no-op (`notification_state` already
+holds the value), so you can leave both or unschedule one.
 
-Only one of the two will actually be "after 09:40 local" on any given day,
-and the other fires ~1h early or ~1h late — both fine, since the function
-only proceeds on decision dates and `notification_state` makes a second
-same-day run a no-op (idempotency guard, see below), so it is safe to just
-leave both schedules active year-round rather than flipping them at the DST
-boundary.
+- `40 7 * * *` → 07:40 UTC
+- `40 8 * * *` → 08:40 UTC
 
 Store the function URL and service-role key in **Supabase Vault** rather than
 pasting the key inline into the cron job body (the job body is visible to
@@ -105,25 +103,26 @@ select cron.schedule(
 
 ## 4. Verify
 
-- **Decision-day dry run:** on (or by temporarily editing `RIKSBANK_DECISIONS_2026`
-  in `logic.ts` to include today, redeploying, and reverting after) a decision
-  date, invoke the function directly:
-  ```sh
-  curl -X POST "https://<project-ref>.supabase.co/functions/v1/policy-rate-notify" \
-    -H "Authorization: Bearer <service-role-key>"
+- **Run it once** (any day). Easiest without a key in shell history: in the
+  SQL editor, run the cron job's own `net.http_post` body from step 3, then
+  read the reply:
+  ```sql
+  select status_code, content, created from net._http_response order by id desc limit 3;
   ```
-  It should return `{"ok":true,"notified":N,"failures":0,"ratePoint":{...}}` and
-  every household member should receive exactly one email.
+  It should return `{"ok":true,"notified":N,"failures":0,"ratePoint":{...}}`.
+  `N` is the number of households whose stored rate differs from today's;
+  each of their members gets exactly one email. `pg_net` keeps replies for
+  about 6 hours only, so check soon after.
 - **Inspect state:**
   ```sql
   select household_id, key, value, notified_at from public.notification_state order by notified_at desc;
   ```
-  `value` is the JSON-serialised `{date, value}` point last emailed about.
-- **Confirm no second email on re-run:** invoke the function again immediately.
-  It should return `notified:0` for every household already at the current
-  rate — `notification_state` already holds that value, so `shouldNotify`
-  returns false and no second email is sent. This is the idempotency
-  guarantee even if both DST-bracket cron schedules fire on the same day.
+  `value` is the JSON-serialised `{date, value}` point last emailed about;
+  `date` is the effective date. Only `value` decides whether to email.
+- **Confirm no second email on re-run:** run it again immediately. It should
+  return `notified:0`: `notification_state` already holds the current value,
+  so `shouldNotify` returns false. This is also why the two daily schedules
+  never double-send.
 - **Check function logs** in the dashboard (Edge Functions → policy-rate-notify
   → Logs) for the `policy-rate-notify: {...}` summary line, or any
   `console.error` — a non-2xx response means at least one household failed
