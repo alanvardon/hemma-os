@@ -5,7 +5,7 @@
 import { useMemo } from 'react'
 import type { PlanV2 } from '../../lib/vindsplanen/plan'
 import { summarizeVariant, type VariantSummary } from './compare'
-import { fmt } from './fmt'
+import { fmt, fmtKr } from './fmt'
 
 const ROWS: { label: string; value: (s: VariantSummary) => string }[] = [
   { label: 'Floor inside the knee walls', value: (s) => `${fmt(s.floor, 1)} m²` },
@@ -14,7 +14,7 @@ const ROWS: { label: string; value: (s: VariantSummary) => string }[] = [
   { label: 'Warnings', value: (s) => String(s.warnings) },
   { label: 'Stairs', value: (s) => String(s.stairs) },
   { label: 'Roof windows', value: (s) => String(s.windows) },
-  // Plan 150: the cost estimate row goes here.
+  { label: 'Estimated cost (own prices)', value: (s) => (s.cost === null ? '–' : fmtKr(s.cost)) },
 ]
 
 export default function ComparePanel({

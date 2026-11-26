@@ -400,7 +400,7 @@ export default function Vindsplanen() {
               onDelete={remove}
             />
           )}
-          {tab === 'material' && <MaterialsPanel plan={plan} onChange={editor.edit} />}
+          {tab === 'material' && <MaterialsPanel geo={geo} plan={plan} onChange={editor.edit} />}
           {tab === 'room' && <RoomPanel geo={geo} plan={plan} view={view} onView={setView} onChange={editor.edit} onMeasure={openMeasure} />}
           {tab === 'measure' && (
             <MeasurePanel geo={geo} plan={plan} steps={steps} activeCode={activeStep} onOpen={openStep} onChange={editor.edit} onToast={showToast} />
