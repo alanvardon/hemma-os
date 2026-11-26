@@ -232,6 +232,26 @@ describe('sync coordinator', () => {
     expect(coordinator.getOutbox()).toMatchObject([{ entityIds: ['b'] }])
   })
 
+  it('discardOperation drops exactly one entry, keeping later edits of the same entity', async () => {
+    const coordinator = make()
+    coordinator.activate(A)
+    coordinator.register('test', async () => { throw new TypeError('fetch failed') })
+    await expect(coordinator.mutateBatch([
+      { resource: 'test', operation: 'delete', payload: {}, entityIds: ['a'], expectedRevisions: { 'rows:a': 1 } },
+      { resource: 'test', operation: 'upsert', payload: {}, entityIds: ['a'], expectedRevisions: { 'rows:a': 1 } },
+    ])).rejects.toMatchObject({ category: 'offline' })
+
+    const [first, second] = coordinator.getOutbox()
+    statuses.length = 0
+    expect(coordinator.discardOperation(first.id)).toBe(true)
+    expect(coordinator.getOutbox()).toEqual([second])
+    expect(statuses.at(-1)).toMatchObject({ state: 'waiting', pending: 1 })
+    expect(coordinator.discardOperation(first.id)).toBe(false)
+    expect(coordinator.discardOperation(second.id)).toBe(true)
+    expect(coordinator.getOutbox()).toEqual([])
+    expect(statuses.at(-1)).toMatchObject({ state: 'idle', pending: 0 })
+  })
+
   it('rejects new mutations while a namespace transition is paused', async () => {
     const coordinator = make()
     coordinator.activate(A)

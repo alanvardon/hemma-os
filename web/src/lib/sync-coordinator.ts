@@ -488,6 +488,20 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
     return removed
   }
 
+  /**
+   * Drop exactly one queued operation, leaving every other entry (including
+   * later edits of the same entity) untouched. For a write the caller has
+   * already reported as failed and must not replay behind the user's back.
+   */
+  function discardOperation(operationId: string): boolean {
+    const entries = getOutbox()
+    const remaining = entries.filter((entry) => entry.id !== operationId)
+    if (remaining.length === entries.length) return false
+    writeOutbox(remaining)
+    emit(remaining.length ? 'waiting' : 'idle')
+    return true
+  }
+
   function conflictChain(operationId: string): Set<string> {
     const ordered = getOutbox().slice().sort((a, b) => a.localRevision - b.localRevision || a.id.localeCompare(b.id))
     const start = ordered.find((entry) => entry.id === operationId)
@@ -585,6 +599,7 @@ export function createSyncCoordinator(adapters: CoordinatorAdapters) {
     resumeMutations,
     retryFailed,
     discardFailed,
+    discardOperation,
     reloadConflict,
     keepConflict,
     getConflicts,

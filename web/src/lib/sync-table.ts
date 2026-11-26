@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { syncCoordinator } from './sync'
+import type { SyncOperation } from './sync-coordinator'
 import { expectedRevisions, receiptRpc, rejectLegacyRowOperation, syncRpcResult } from './sync-rpc'
 
 interface TablePayload {
@@ -118,7 +119,7 @@ export async function queueTableUpsert(
 export async function queueTableDelete(
   resource: string,
   ids: string[],
-  applyLocal: () => void,
+  applyLocal: (operation: SyncOperation) => void,
 ): Promise<void> {
   const clean = ids.filter(Boolean)
   if (!clean.length) return
