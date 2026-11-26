@@ -8,7 +8,7 @@ import { resolve } from 'node:path'
 import { expect } from 'vitest'
 import { atticOf, deriveGeometry, type Geometry } from './attic'
 import { importV1 } from './legacy'
-import { SITE_DEF, type PlanV2 } from './plan'
+import { PRICES_NONE, SITE_DEF, type PlanV2 } from './plan'
 import type { Warning } from './warnings'
 import type { Surface, WalkWorld } from './walk'
 
@@ -168,6 +168,7 @@ export function v1ToV2(s: Record<string, unknown>): unknown {
     materials: s.materials,
     options: { gable: o.gable, below, knee: o.knee, board: o.board, attic: o.attic, measured: o.measured, site: { ...SITE_DEF } }, // v1 has no site (plan 144)
     items: s.items,
+    prices: { ...PRICES_NONE }, // v1 has no prices (plan 150)
   }
 }
 

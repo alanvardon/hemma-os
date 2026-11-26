@@ -5,6 +5,7 @@
 
 import { deriveGeometry } from '../../lib/vindsplanen/attic'
 import type { PlanV2 } from '../../lib/vindsplanen/plan'
+import { costLines, costTotal, quantities } from '../../lib/vindsplanen/quantities'
 import { isUpStair } from '../../lib/vindsplanen/stairs'
 import { planWarnings, realWarnings } from '../../lib/vindsplanen/warnings'
 import { computeZones } from '../../lib/vindsplanen/zones'
@@ -22,14 +23,21 @@ export interface VariantSummary {
   stairs: number
   /** Roof windows. */
   windows: number
-  // Plan 150: the variant's cost estimate joins here.
+  /**
+   * Estimated material cost, kr at full precision, from the variant's OWN
+   * prices (plan 150); null when any line with area has no price — a partial
+   * sum would understate it.
+   */
+  cost: number | null
 }
 
 export function summarizeVariant(plan: PlanV2): VariantSummary {
   const geo = deriveGeometry(plan.options.attic)
   const z = computeZones(geo, plan)
   const warns = planWarnings(geo, plan)
+  const total = costTotal(costLines(quantities(geo, plan), plan.prices))
   return {
+    cost: total.missing.length === 0 ? total.kr : null,
     floor: z.floor * z.cellArea,
     stand: z.stand * z.cellArea,
     boa: z.boa * z.cellArea,

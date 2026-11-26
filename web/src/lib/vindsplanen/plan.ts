@@ -211,11 +211,53 @@ export function sanitizeSite(raw: unknown): Site {
   }
 }
 
+/** The four material-cost lines (plan 150), in display order. */
+export const PRICE_KEYS = ['floor', 'panel', 'walls', 'insulation'] as const
+export type PriceKey = (typeof PRICE_KEYS)[number]
+
+/**
+ * The household's own material prices, kr/m² including VAT (moms), one per
+ * quantity in quantities.ts. `null` = not entered: that line is left out of
+ * the estimated total and reported as missing, never treated as 0. A price of
+ * 0 is a real price (the material is free or already owned).
+ */
+export type Prices = Record<PriceKey, number | null>
+
+export const PRICES_NONE: Readonly<Prices> = Object.freeze({ floor: null, panel: null, walls: null, insulation: null })
+
+/** A valid price: a finite number ≥ 0. */
+export const isPrice = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
+
+/**
+ * Financial input is never clamped or corrected: each field keeps a finite
+ * number ≥ 0 exactly as entered (−0 is stored as 0), and anything else —
+ * missing, negative, NaN, ±Infinity, a string (even "450"), a boolean —
+ * becomes null (not entered).
+ */
+export function sanitizePrices(raw: unknown): Prices {
+  const s: Loose = isObj(raw) ? raw : {}
+  const out = { ...PRICES_NONE }
+  for (const k of PRICE_KEYS) {
+    const v = s[k]
+    out[k] = isPrice(v) ? (v === 0 ? 0 : v) : null
+  }
+  return out
+}
+
 export interface PlanV2 {
   v: 2
   materials: Materials
   options: PlanOptions
   items: Item[]
+  /**
+   * Material prices (plan 150). Household-level, inside the plan document so
+   * each variant keeps its own. Optional in the type so older documents load;
+   * `sanitizePlan` always fills it (all null when missing). An older client
+   * (before plan 150) drops `prices` when it saves; accepted, as for
+   * `options.site` — the worst case is that the prices have to be entered
+   * again, and no quantity or other plan data is lost.
+   */
+  prices?: Prices
 }
 
 export type Quality = 'fast' | 'nice'
@@ -311,6 +353,7 @@ export function examplePlan(attic: Attic = ATTIC_DEF): PlanV2 {
       { id: 'c1', type: 'curved', x: 6.08, z: -1.55, rot: 0, turn: 'R', a: 4, w: 0.8, risers: 12 },
       { id: 'k1', type: 'desk', x: 8.15, z: 0, rot: 90, w: 1.2, d: 0.6, h: 0.75 },
     ],
+    prices: { ...PRICES_NONE },
   }
 }
 
@@ -512,8 +555,9 @@ export function sanitizeShape(p: unknown, opts: SanitizeOptions = {}): PlanV2 | 
   }
 
   const site = sanitizeSite(o.site)
+  const prices = sanitizePrices(p.prices)
 
-  return { v: 2, materials, options: { gable, below, knee, board, attic, measured, site }, items }
+  return { v: 2, materials, options: { gable, below, knee, board, attic, measured, site }, items, prices }
 }
 
 /**
