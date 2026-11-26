@@ -1,5 +1,6 @@
-// Vindsplanen (plan 140): the attic planner. The household's plan is one
-// document (PlanV2) loaded and saved through vindsplanen-store; this route is
+// Vindsplanen (plan 140): the attic planner. Each of the household's plan
+// variants (plan 149) is one document (PlanV2) loaded and saved through
+// vindsplanen-store, one open at a time; this route is
 // the shell around it (all copy in English) — the lazy 3D scene, the panels, undo/redo, debounced
 // saves and the read/empty/error states. Geometry and advice come from the
 // pure core in lib/vindsplanen; nothing here computes them.
@@ -25,6 +26,8 @@ import MaterialsPanel from './vindsplanen/MaterialsPanel'
 import MeasurePanel, { MEASURE_END } from './vindsplanen/MeasurePanel'
 import RoomPanel from './vindsplanen/RoomPanel'
 import SavePanel, { ImportBox } from './vindsplanen/SavePanel'
+import ComparePanel from './vindsplanen/ComparePanel'
+import VariantsBar from './vindsplanen/VariantsBar'
 import DrawingView from './vindsplanen/DrawingSheet'
 import SceneHost from './vindsplanen/SceneHost'
 import SunControl from './vindsplanen/SunControl'
@@ -174,6 +177,34 @@ export default function Vindsplanen() {
     setSelectedId(null)
     showToast('Deleted. Use Undo to bring it back.')
   }
+  async function switchVariant(id: string) {
+    if (await editor.switchTo(id)) {
+      setSelectedId(null)
+      setActiveStep(null)
+    }
+  }
+  async function duplicateVariant() {
+    if (await editor.duplicate()) {
+      setSelectedId(null)
+      setActiveStep(null)
+      showToast('Copy made. You are now editing the copy.')
+    }
+  }
+  async function deleteVariant() {
+    const row = editor.openRow
+    if (!row || !editor.canDelete) return
+    if (!(await confirm({
+      title: `Delete “${row.name}”?`,
+      message: 'This can’t be undone.',
+      confirmLabel: 'Delete plan',
+      cancelLabel: 'Cancel',
+    }))) return
+    if (await editor.deleteVariant(row.id)) {
+      setSelectedId(null)
+      setActiveStep(null)
+      showToast(`“${row.name}” deleted.`)
+    }
+  }
   async function importPlan(next: PlanV2) {
     if (plan && !(await confirm({
       title: 'Replace the plan?',
@@ -322,6 +353,17 @@ export default function Vindsplanen() {
         </section>
 
         <aside className="vp-panel" aria-label="Plan and settings">
+          <VariantsBar
+            variants={editor.variants.rows}
+            openId={editor.openId}
+            busy={editor.busy}
+            canDelete={editor.canDelete}
+            invalid={editor.variants.invalid}
+            onSwitch={(id) => void switchVariant(id)}
+            onDuplicate={() => void duplicateVariant()}
+            onRename={editor.rename}
+            onDelete={() => void deleteVariant()}
+          />
           <div className="vp-stats">
             <div><b>{area(z.floor)}</b><small>m² floor inside the knee walls</small></div>
             <div><b>{area(z.stand)}</b><small>m² with standing height</small></div>
@@ -364,9 +406,11 @@ export default function Vindsplanen() {
             <MeasurePanel geo={geo} plan={plan} steps={steps} activeCode={activeStep} onOpen={openStep} onChange={editor.edit} onToast={showToast} />
           )}
           {tab === 'save' && (
-            <SavePanel plan={plan} saveState={editor.saveState} onImport={(p) => void importPlan(p)} onReset={() => void resetToExample()} onRetry={editor.retrySave} onPrint={() => setSheetOpen(true)} />
+            <SavePanel plan={plan} saveState={editor.saveState} onImport={(p) => void importPlan(p)} onReset={() => void resetToExample()} onRetry={editor.retrySave} onPrint={() => setSheetOpen(true)}
+              compare={<ComparePanel variants={editor.variants.rows} openId={editor.openId} />}
+            />
           )}
-          {sheetOpen && <DrawingView geo={geo} plan={plan} onClose={() => setSheetOpen(false)} />}
+          {sheetOpen && <DrawingView geo={geo} plan={plan} title={editor.openRow?.name} onClose={() => setSheetOpen(false)} />}
         </aside>
       </main>
     )
