@@ -383,11 +383,22 @@ body.vp-sheet-open { overflow: hidden; }
 .vp-sheet-svg polygon.vp-d-opening { fill: url(#vp-hatch); stroke-width: 1.6px; }
 .vp-sheet-svg polygon.vp-d-storage { fill: #eee; stroke-width: 1px; }
 .vp-sheet-svg rect.vp-d-item { stroke-width: 1px; }
+.vp-sheet-svg rect.vp-d-furniture { stroke: #bbb; stroke-width: 0.6px; }
 .vp-sheet-svg rect.vp-d-storage { fill: #eee; stroke-width: 1px; }
 .vp-sheet-svg rect.vp-d-opening { stroke-width: 1.6px; }
 .vp-sheet-svg rect.vp-d-window { stroke-width: 1.2px; stroke-dasharray: 5 3; }
 .vp-sheet-svg text { fill: #111; stroke: none; font-family: Arial, Helvetica, sans-serif; }
 .vp-sheet-svg .vp-d-sub { fill: #444; }
+.vp-sheet-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6mm; }
+.vp-sheet-schedule { width: calc(100mm * var(--vp-zoom, 1)); font-size: calc(8pt * var(--vp-zoom, 1)); border-collapse: collapse; color: #111; font-family: Arial, Helvetica, sans-serif; }
+.vp-sheet-schedule caption { text-align: left; font-weight: 600; margin-bottom: 2px; }
+.vp-sheet-schedule th, .vp-sheet-schedule td { border-bottom: 0.5px solid #999; padding: 1.2mm 1.5mm; text-align: left; vertical-align: top; }
+.vp-sheet-schedule thead th { font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.05em; color: #555; }
+.vp-sheet-schedule tbody th { white-space: nowrap; font-weight: 700; }
+@media screen and (max-width: 760px) {
+  .vp-sheet-row { flex-direction: column; flex-wrap: nowrap; }
+  .vp-sheet-schedule { width: calc(100vw - 48px); font-size: 12px; }
+}
 .vp-sheet-title {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 4px 16px;
   margin: 8px 0 0; padding-top: 6px; border-top: 1px solid #111; font-size: 11px; width: 0; min-width: 100%;

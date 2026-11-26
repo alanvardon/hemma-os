@@ -25,12 +25,12 @@ import { bayAt, clamp, cm, roofY, roofZAt, slopePoint, STAND, type Geometry } fr
 import { BED_SIZES, closetGeom, skyRect, storageGeom } from './items'
 import { isUpStair, stairHoles, toWorld, type Pt, type UpStair } from './stairs'
 import { curvedInfo, stairInfo, wallInfo, WALL_DOOR_W } from './warnings'
-import type { ClosetItem, FurnitureItem, Item, PlanV2, SkylightItem, StairsItem, StorageItem, WallItem } from './plan'
+import type { ClosetItem, Item, PlanV2, SkylightItem, StairsItem, StorageItem, WallItem } from './plan'
 
 export type { Pt }
 
 export type LineStyle = 'wall' | 'thin' | 'hidden' | 'axis'
-export type RectStyle = 'opening' | 'item' | 'storage' | 'window'
+export type RectStyle = 'opening' | 'item' | 'storage' | 'window' | 'furniture'
 export type PolyStyle = 'opening' | 'storage'
 
 /**
@@ -61,7 +61,22 @@ export interface Drawing {
   prims: Prim[]
 }
 
+/** One row of the schedule that sits beside the plan: a short tag and what it stands for. */
+export interface ScheduleRow {
+  /** the item this row describes */
+  id: string
+  /** 'W1', 'D1', 'S1', 'ST1', 'C1' — the label drawn on the plan */
+  tag: string
+  kind: 'window' | 'door' | 'stairs' | 'storage' | 'closet'
+  text: string
+}
+
 export interface PlanDrawing extends Drawing {
+  /**
+   * Everything the plan only tags, written out: roof windows, partition-wall
+   * doors, stairs, storage rooms and closets, in that order.
+   */
+  schedule: ScheduleRow[]
   /**
    * The north arrow, from the house's ridge bearing (plan 144); null when the
    * plan has no site. `dir` is a unit vector in the plan frame pointing north.
@@ -77,15 +92,6 @@ const nf = new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 1 })
 export const dimText = (m: number): string => nf.format(Math.round(Math.abs(m) * 1000) / 10)
 /** Fixed decimals, as routes/vindsplanen/fmt.ts (lib code cannot import routes). */
 const fixed = (v: number, d: number): string => v.toLocaleString('sv-SE', { minimumFractionDigits: d, maximumFractionDigits: d })
-
-const NAME: Record<FurnitureItem['type'], string> = {
-  wardrobe: 'Wardrobe',
-  desk: 'Desk',
-  sofa: 'Sofa',
-  dresser: 'Dresser',
-  nightstand: 'Nightstand',
-  rug: 'Rug',
-}
 
 type Slice = Pick<PlanV2, 'items' | 'options'>
 
@@ -193,12 +199,40 @@ export function skyFootprint(geo: Geometry, it: SkylightItem): { x0: number; x1:
   return { x0: r.x0, x1: r.x1, z0: Math.min(za, zb), z1: Math.max(za, zb) }
 }
 
+const STAIR_KIND: Record<StairItem['type'], string> = { stairs: 'Stairs', spiral: 'Spiral stairs', curved: 'Turning stairs' }
+
+/**
+ * Short plan tags by item id. Roof windows W1… go west to east (south slope
+ * before north at the same x), partition-wall doors D1… and stairs S1… west
+ * to east, storage rooms ST1… and closets C1… in item order. A partition wall
+ * without a door has no tag.
+ */
+export function planTags(geo: Geometry, plan: Slice): Map<string, string> {
+  const out = new Map<string, string>()
+  const number = (prefix: string, items: { id: string; x: number; tie?: number }[]) =>
+    [...items].sort((a, b) => a.x - b.x || (a.tie ?? 0) - (b.tie ?? 0)).forEach((q, i) => out.set(q.id, `${prefix}${i + 1}`))
+  number('W', plan.items.filter((i): i is SkylightItem => i.type === 'skylight').map((i) => ({ id: i.id, x: skyFootprint(geo, i).x0, tie: i.slope === 'S' ? 0 : 1 })))
+  number('D', plan.items.filter((i): i is WallItem => i.type === 'wall' && i.door).map((i) => ({ id: i.id, x: i.x })))
+  number('S', plan.items.filter(isStair).map((i) => ({ id: i.id, x: i.x })))
+  plan.items.filter((i) => i.type === 'storage').forEach((i, n) => out.set(i.id, `ST${n + 1}`))
+  plan.items.filter((i) => i.type === 'closet').forEach((i, n) => out.set(i.id, `C${n + 1}`))
+  return out
+}
+
+const KIND_ORDER: ScheduleRow['kind'][] = ['window', 'door', 'stairs', 'storage', 'closet']
+
 /** The plan sheet: shell, rafters, standing height, openings, walls, rooms and furniture. */
 export function planDrawing(geo: Geometry, plan: PlanV2): PlanDrawing {
   const { L, KZ, HALF, EDGES, RAFT_X } = geo
   const d = new Sheet()
   const knee = plan.options.knee
   const board = plan.options.board
+  const tags = planTags(geo, plan)
+  const schedule: ScheduleRow[] = []
+  const row = (id: string, kind: ScheduleRow['kind'], text: string) => schedule.push({ id, tag: tags.get(id) ?? '', kind, text })
+
+  // ---- furniture first, so it sits behind everything: outlines only, no labels
+  for (const it of plan.items) if (!isStair(it) && !['skylight', 'wall', 'storage', 'closet'].includes(it.type)) drawFurniture(d, it as FurnitureOrBed)
 
   // ---- the shell: gables, eaves, knee walls (none in an opened bay), ridge
   d.line([0, -HALF], [0, HALF], 'wall', 'shell')
@@ -210,14 +244,14 @@ export function planDrawing(geo: Geometry, plan: PlanV2): PlanDrawing {
     for (let i = 0; i < EDGES.length - 1; i++) if (!knee[side].includes(i)) d.line([EDGES[i], z], [EDGES[i + 1], z], 'wall', 'shell')
   }
   d.line([0, 0], [L, 0], 'axis', 'shell')
-  d.label([L / 2, -0.12], 'Ridge', 'shell')
+  d.label([L + 0.75, 0], 'Ridge', 'shell') // east of the gable, clear of the ridge-line dimensions
   d.label([L / 2, -KZ + 0.12], 'Knee wall', 'shell', `${dimText(geo.KNEE_H)} cm high`)
 
   // ---- rafters (centre lines, eaves to eaves) and the chain from the west gable
   RAFT_X.forEach((x) => d.line([x, -HALF], [x, HALF], 'thin', 'rafters'))
   const chain = [0, ...RAFT_X, L]
   for (let i = 0; i < chain.length - 1; i++) d.dim([chain[i], -HALF], [chain[i + 1], -HALF], 0.3, N, 'rafters')
-  if (RAFT_X.length > 1) d.label([L / 2, -HALF - 0.55], `Rafters c/c ${dimText(geo.RAFT_CC)}`, 'rafters')
+  if (RAFT_X.length > 1) d.label([L / 2, -HALF - 0.75], `Rafters c/c ${dimText(geo.RAFT_CC)}`, 'rafters')
 
   // ---- the 1.90 m standing-height line, lowered under an insulated bay's ceiling
   for (const sg of [-1, 1]) {
@@ -226,7 +260,7 @@ export function planDrawing(geo: Geometry, plan: PlanV2): PlanDrawing {
       d.line([EDGES[i], z], [EDGES[i + 1], z], 'hidden', 'stand')
     }
   }
-  d.label([0.6, -geo.Z190 + 0.1], 'Standing height 190 cm', 'stand')
+  d.label([-1.3, -geo.Z190], 'Standing height 190 cm', 'stand') // west of the gable, level with its line, clear of furniture
 
   // ---- overall: length, eaves to eaves, knee wall to knee wall
   d.dim([0, HALF], [L, HALF], 0.3, S, 'overall')
@@ -236,18 +270,22 @@ export function planDrawing(geo: Geometry, plan: PlanV2): PlanDrawing {
   // ---- items
   const openings = stairOpenings(geo, plan)
   for (const it of plan.items) {
-    if (isStair(it)) drawStairOpening(d, geo, plan, it, openings.get(it.id))
-    else if (it.type === 'skylight') drawSkylight(d, geo, it)
-    else if (it.type === 'wall') drawWall(d, geo, it)
-    else if (it.type === 'storage') drawStorage(d, geo, plan, it)
-    else if (it.type === 'closet') drawCloset(d, geo, plan, it)
-    else drawFurniture(d, it)
+    if (isStair(it)) drawStairOpening(d, geo, plan, it, openings.get(it.id), tags.get(it.id) ?? '', row)
+    else if (it.type === 'skylight') drawSkylight(d, geo, it, tags.get(it.id) ?? '', row)
+    else if (it.type === 'wall') drawWall(d, geo, it, tags.get(it.id), row)
+    else if (it.type === 'storage') drawStorage(d, geo, plan, it, tags.get(it.id) ?? '', row)
+    else if (it.type === 'closet') drawCloset(d, geo, plan, it, tags.get(it.id) ?? '', row)
   }
+  const num = (r: ScheduleRow) => Number(r.tag.replace(/\D/g, ''))
+  schedule.sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || num(a) - num(b))
 
-  return { bounds: boundsOf(d.prims), prims: d.prims, north: northArrow(plan) }
+  return { bounds: boundsOf(d.prims), prims: d.prims, schedule, north: northArrow(plan) }
 }
 
-function drawStairOpening(d: Sheet, geo: Geometry, plan: Slice, it: StairItem, hole: Pt[] | undefined) {
+type AddRow = (id: string, kind: ScheduleRow['kind'], text: string) => unknown
+type FurnitureOrBed = Exclude<Item, StairItem | SkylightItem | WallItem | StorageItem | ClosetItem>
+
+function drawStairOpening(d: Sheet, geo: Geometry, plan: Slice, it: StairItem, hole: Pt[] | undefined, stag: string, row: AddRow) {
   if (!hole) return
   const tag = `${it.type}:${it.id}`
   const b = bbox(hole)
@@ -259,31 +297,33 @@ function drawStairOpening(d: Sheet, geo: Geometry, plan: Slice, it: StairItem, h
   d.dim([0, b.z1], [b.x0, b.z1], 0.15, S, tag)
   const zr = b.z1 < 0 ? b.z1 : b.z0
   d.dim([b.x0, 0], [b.x0, zr], 0.15, W, tag)
-  d.label([(b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2], 'Stair opening', tag, stairSteps(geo, plan, it))
+  d.label([(b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2], stag, tag)
+  row(it.id, 'stairs', `${STAIR_KIND[it.type]} · ${stairSteps(geo, plan, it)} · opening ${dimText(b.x1 - b.x0)} × ${dimText(b.z1 - b.z0)}`)
 }
 
-/** "12 steps · rise 21,5 cm · going 24 cm", the numbers the item info shows. */
+/** "12 steps · rise 21,5 · going 24", the numbers the item info shows (cm). */
 function stairSteps(geo: Geometry, plan: Slice, it: StairItem): string {
   if (it.type === 'stairs') {
     const s = stairInfo(geo, it)
-    return `${s.n} steps · rise ${fixed(s.rise * 100, 1)} cm · going ${fixed(s.going * 100, 1)} cm`
+    return `${s.n} steps · rise ${fixed(s.rise * 100, 1)} · going ${fixed(s.going * 100, 1)}`
   }
   const P = curvedInfo(geo, plan, it, new Set()).P
-  return `${P.n} steps · rise ${fixed(P.r * 100, 1)} cm · going ${fixed(P.g * 100, 0)} cm`
+  return `${P.n} steps · rise ${fixed(P.r * 100, 1)} · going ${fixed(P.g * 100, 0)}`
 }
 
-function drawSkylight(d: Sheet, geo: Geometry, it: SkylightItem) {
+function drawSkylight(d: Sheet, geo: Geometry, it: SkylightItem, stag: string, row: AddRow) {
   const tag = `skylight:${it.id}`
   const f = skyFootprint(geo, it)
   d.rect([(f.x0 + f.x1) / 2, (f.z0 + f.z1) / 2], f.x1 - f.x0, f.z1 - f.z0, 0, 'window', tag)
   const zr = it.slope === 'N' ? f.z0 : f.z1 // the outer (eaves-side) edge
   d.dim([0, zr], [f.x0, zr], 0.12, it.slope === 'N' ? N : S, tag)
-  d.label([(f.x0 + f.x1) / 2, (f.z0 + f.z1) / 2], `Roof window ${it.size}, sill ${dimText(it.bottom)} cm`, tag, `${it.slope === 'N' ? 'North' : 'South'} slope · bay ${it.bay + 1}`)
+  d.label([(f.x0 + f.x1) / 2, (f.z0 + f.z1) / 2], stag, tag)
+  row(it.id, 'window', `Roof window ${it.size} cm · ${it.slope === 'N' ? 'north' : 'south'} slope, bay ${it.bay + 1} · sill ${dimText(it.bottom)} cm`)
 }
 
-function drawWall(d: Sheet, geo: Geometry, it: WallItem) {
+function drawWall(d: Sheet, geo: Geometry, it: WallItem, stag: string | undefined, row: AddRow) {
   const tag = `wall:${it.id}`
-  const { KZ } = geo
+  const { KZ, HALF } = geo
   const x = it.x
   const { zc, dh } = wallInfo(geo, it)
   const dw = WALL_DOOR_W
@@ -291,13 +331,14 @@ function drawWall(d: Sheet, geo: Geometry, it: WallItem) {
     d.line([x, -KZ], [x, zc - dw / 2], 'wall', tag)
     d.line([x, zc + dw / 2], [x, KZ], 'wall', tag)
     d.dim([x, zc - dw / 2], [x, zc + dw / 2], 0.15, E, tag)
-    d.label([x + 0.35, zc], `Door ${dimText(dw)} × ${dimText(dh)} cm`, tag)
+    d.label([x + 0.3, zc], stag ?? '', tag)
+    row(it.id, 'door', `Door ${dimText(dw)} × ${dimText(dh)} cm in partition wall at ${dimText(x)} cm from west gable`)
   } else d.line([x, -KZ], [x, KZ], 'wall', tag)
-  d.dim([0, KZ - 0.2], [x, KZ - 0.2], 0.1, N, tag)
-  d.label([x, -KZ + 0.35], 'Partition wall', tag)
+  d.dim([0, HALF], [x, HALF], 0.6, S, tag) // below the overall length, clear of windows and items
+  if (!it.door) d.label([x, -KZ + 0.35], 'Partition wall', tag)
 }
 
-function drawStorage(d: Sheet, geo: Geometry, plan: Slice, it: StorageItem) {
+function drawStorage(d: Sheet, geo: Geometry, plan: Slice, it: StorageItem, stag: string, row: AddRow) {
   const tag = `storage:${it.id}`
   const G = storageGeom(geo, plan, it)
   const { x0, x1, zf, zb, ext, xe, dc, dw, dh } = G
@@ -314,10 +355,11 @@ function drawStorage(d: Sheet, geo: Geometry, plan: Slice, it: StorageItem) {
   } else if (!G.sharedX1) d.line([x1, zf], [x1, zb], 'wall', tag)
   d.dim([x0, zf], [xe, zf], 0.15, [0, -G.sg], tag)
   d.dim([x0, zf], [x0, G.sg * geo.KZ], 0.15, W, tag)
-  d.label([(x0 + x1) / 2, (zf + zb) / 2], 'Storage room', tag, `${it.door === 'none' ? 'Opening' : 'Door'} ${dimText(dw)} × ${dimText(dh)} cm`)
+  d.label([(x0 + x1) / 2, (zf + zb) / 2], stag, tag)
+  row(it.id, 'storage', `Storage room ${dimText(x1 - x0)} × ${dimText(Math.abs(zb - zf))} · ${it.door === 'none' ? 'opening' : 'door'} ${dimText(dw)} × ${dimText(dh)} cm`)
 }
 
-function drawCloset(d: Sheet, geo: Geometry, plan: Slice, it: ClosetItem) {
+function drawCloset(d: Sheet, geo: Geometry, plan: Slice, it: ClosetItem, stag: string, row: AddRow) {
   const tag = `closet:${it.id}`
   const C = closetGeom(geo, plan, it)
   const { x0, x1, zb, zd, xi, dc, dw, dh } = C
@@ -327,18 +369,15 @@ function drawCloset(d: Sheet, geo: Geometry, plan: Slice, it: ClosetItem) {
   d.line([Math.min(x1, dc + dw / 2), zd], [x1, zd], 'wall', tag)
   d.dim([x0, zd], [x1, zd], 0.15, [0, -C.sg], tag)
   d.dim([xi, zd], [xi, zb], 0.15, [C.dir, 0], tag)
-  d.label([(x0 + x1) / 2, (zd + zb) / 2], 'Closet', tag, `Door ${dimText(dw)} × ${dimText(dh)} cm`)
+  d.label([(x0 + x1) / 2, (zd + zb) / 2], stag, tag)
+  row(it.id, 'closet', `Closet ${dimText(x1 - x0)} × ${dimText(Math.abs(zb - zd))} · door ${dimText(dw)} × ${dimText(dh)} cm`)
 }
 
-function drawFurniture(d: Sheet, it: Exclude<Item, StairItem | SkylightItem | WallItem | StorageItem | ClosetItem>) {
+/** Furniture is context, not construction: a light outline, no label, no size. */
+function drawFurniture(d: Sheet, it: FurnitureOrBed) {
   const tag = `${it.type}:${it.id}`
-  if (it.type === 'bed') {
-    d.rect([it.x, it.z], BED_SIZES[it.size], 2.0, it.rot, 'item', tag)
-    d.label([it.x, it.z], `Bed ${it.size}`, tag)
-    return
-  }
-  d.rect([it.x, it.z], it.w, it.d, it.rot, 'item', tag)
-  d.label([it.x, it.z], NAME[it.type], tag, `${dimText(it.w)} × ${dimText(it.d)} cm`)
+  if (it.type === 'bed') d.rect([it.x, it.z], BED_SIZES[it.size], 2.0, it.rot, 'furniture', tag)
+  else d.rect([it.x, it.z], it.w, it.d, it.rot, 'furniture', tag)
 }
 
 /**

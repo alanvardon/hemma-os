@@ -11,8 +11,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Geometry } from '../../lib/vindsplanen/attic'
 import type { PlanV2 } from '../../lib/vindsplanen/plan'
-import { isUpStair } from '../../lib/vindsplanen/stairs'
-import { DIM_UNIT, planDrawing, sectionDrawing, type Drawing, type PlanDrawing, type Prim, type Pt } from '../../lib/vindsplanen/drawing'
+import { DIM_UNIT, planDrawing, sectionDrawing, type Drawing, type PlanDrawing, type Prim, type Pt, type ScheduleRow } from '../../lib/vindsplanen/drawing'
 
 const SCALES = [50, 75, 100, 125, 150, 200, 250, 300, 400, 500]
 /** Usable paper for one figure on A4 landscape (10 mm margins, title block and caption below). */
@@ -20,6 +19,9 @@ const MAX_W_MM = 277
 const MAX_H_MM = 135
 const PAD_MM = 12
 const STRIP_MM = 16
+/** Width of the schedule column beside the plan, and the gap before it. */
+const SCHEDULE_MM = 100
+const SCHEDULE_GAP_MM = 6
 const INK = '#111'
 
 interface Fig {
@@ -32,7 +34,7 @@ interface Fig {
 }
 
 /** The largest standard scale at which the drawing (plus margin) fits one page. */
-function fitFigure(d: Drawing, strip: boolean): Fig {
+function fitFigure(d: Drawing, strip: boolean, side = 0): Fig {
   const [[x0, z0], [x1, z1]] = d.bounds
   const bw = x1 - x0
   const bh = z1 - z0
@@ -41,7 +43,7 @@ function fitFigure(d: Drawing, strip: boolean): Fig {
     const u = s / 1000
     const w = bw / u + 2 * PAD_MM
     const h = bh / u + 2 * PAD_MM + (strip ? STRIP_MM : 0)
-    if (w <= MAX_W_MM && h <= MAX_H_MM) {
+    if (w + side <= MAX_W_MM && h <= MAX_H_MM) {
       scale = s
       break
     }
@@ -209,37 +211,61 @@ function TitleBlock({ title, date, fig, extra }: { title: string; date: string; 
   )
 }
 
-const STAIR_NAME = { stairs: 'Stairs', spiral: 'Spiral stairs', curved: 'Turning stairs' } as const
+const STAIR_NAME = { stairs: 'stairs', spiral: 'spiral stairs', curved: 'turning stairs' } as const
+
+function Schedule({ rows }: { rows: ScheduleRow[] }) {
+  return (
+    <table className="vp-sheet-schedule">
+      <caption>Schedule</caption>
+      <thead>
+        <tr>
+          <th scope="col">Tag</th>
+          <th scope="col">Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.id}>
+            <th scope="row">{r.tag}</th>
+            <td>{r.text}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
 
 export function DrawingSheet({ geo, plan, title = 'Vindsplanen', date = new Date() }: { geo: Geometry; plan: PlanV2; title?: string; date?: Date }) {
   const dateText = date.toLocaleDateString('sv-SE')
   const pd = useMemo(() => planDrawing(geo, plan), [geo, plan])
-  const planFig = useMemo(() => fitFigure(pd, true), [pd])
+  const planFig = useMemo(() => fitFigure(pd, true, pd.schedule.length ? SCHEDULE_MM + SCHEDULE_GAP_MM : 0), [pd])
   const sections = useMemo(() => {
-    const out: { id: string; name: string; d: Drawing; fig: Fig }[] = []
-    let n = 0
-    for (const it of plan.items) {
-      if (it.type !== 'stairs' && !isUpStair(it)) continue
-      n++
-      const d = sectionDrawing(geo, plan, it.id)
-      if (d) out.push({ id: it.id, name: `${STAIR_NAME[it.type]} ${n}`, d, fig: fitFigure(d, false) })
+    const out: { id: string; tag: string; name: string; d: Drawing; fig: Fig }[] = []
+    for (const r of pd.schedule) {
+      if (r.kind !== 'stairs') continue
+      const it = plan.items.find((i) => i.id === r.id)
+      const d = sectionDrawing(geo, plan, r.id)
+      if (d && it && (it.type === 'stairs' || it.type === 'spiral' || it.type === 'curved')) out.push({ id: r.id, tag: r.tag, name: STAIR_NAME[it.type], d, fig: fitFigure(d, false) })
     }
     return out
-  }, [geo, plan])
+  }, [geo, plan, pd])
 
   return (
     <div className="vp-sheet-doc">
       <figure className="vp-sheet-fig">
         <figcaption>Plan, seen from above</figcaption>
-        <FigureSvg d={pd} fig={planFig} label="Plan of the attic seen from above">
-          <Strip fig={planFig} d={pd} />
-        </FigureSvg>
+        <div className="vp-sheet-row">
+          <FigureSvg d={pd} fig={planFig} label="Plan of the attic seen from above">
+            <Strip fig={planFig} d={pd} />
+          </FigureSvg>
+          {pd.schedule.length > 0 && <Schedule rows={pd.schedule} />}
+        </div>
         <TitleBlock title={title} date={dateText} fig={planFig} />
       </figure>
       {sections.map((s) => (
         <figure key={s.id} className="vp-sheet-fig">
-          <figcaption>Section through {s.name.toLowerCase()}, looking east (north on the left)</figcaption>
-          <FigureSvg d={s.d} fig={s.fig} label={`Section through ${s.name.toLowerCase()}`} />
+          <figcaption>Section {s.tag} — {s.name}, looking east (north on the left)</figcaption>
+          <FigureSvg d={s.d} fig={s.fig} label={`Section ${s.tag}, ${s.name}`} />
           <TitleBlock title={title} date={dateText} fig={s.fig} />
         </figure>
       ))}

@@ -37,6 +37,12 @@ describe('Print drawing', () => {
     const text = dlg.textContent ?? ''
     expect(text).toContain('850') // overall length
     for (const x of [geo.RAFT_X[0], geo.RAFT_X[1] - geo.RAFT_X[0]]) expect(text).toContain(dimText(x))
+    // the schedule table beside the plan, and the section titled by the stair tag
+    const table = within(dlg).getByRole('table')
+    expect(within(table).getByRole('rowheader', { name: 'W1' })).toBeTruthy()
+    expect(table.textContent).toContain('Roof window 78×118 cm · south slope, bay 2 · sill 100 cm')
+    expect(table.textContent).toContain('Door 80 × 200 cm in partition wall at 480 cm from west gable')
+    expect(text).toContain('Section S1 — turning stairs, looking east')
     expect(text).toContain('Vindsplanen')
     expect(text).toContain('2026-11-26')
     expect(text).toContain('Dimensions in cm')

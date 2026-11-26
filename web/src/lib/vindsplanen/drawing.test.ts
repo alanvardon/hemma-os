@@ -4,7 +4,7 @@ import { closetGeom, storageGeom } from './items'
 import { examplePlan, sanitizeShape, type PlanV2 } from './plan'
 import { isUpStair, stairHoles } from './stairs'
 import { curvedInfo, stairInfo, wallInfo } from './warnings'
-import { dimText, northArrow, planDrawing, sectionDrawing, skyFootprint, stairOpenings, type Prim } from './drawing'
+import { dimText, northArrow, planDrawing, planTags, sectionDrawing, skyFootprint, stairOpenings, type Prim } from './drawing'
 import { FIXTURE_NAMES, goldPlan, loadJson } from './testkit'
 
 const NBSP = ' '
@@ -95,7 +95,10 @@ describe('planDrawing — the example plan (default attic)', () => {
     const rect = tagged(d.prims, 'skylight:s1').find((p) => p.k === 'rect')
     expect(rect).toMatchObject({ w: f.x1 - f.x0, h: f.z1 - f.z0, rot: 0, style: 'window', at: [(f.x0 + f.x1) / 2, (f.z0 + f.z1) / 2] })
     const label = tagged(d.prims, 'skylight:s1').find((p) => p.k === 'label')
-    expect(label).toMatchObject({ text: 'Roof window 78×118, sill 100 cm', sub: 'South slope · bay 2' })
+    // on the plan only the tag; west to east, south before north: s1 (x 1.42) W1, s2 (north, bay 3) W2, s3 W3
+    expect(label).toEqual({ k: 'label', at: [(f.x0 + f.x1) / 2, (f.z0 + f.z1) / 2], text: 'W1', tag: 'skylight:s1' })
+    expect(planTags(geo, plan).get('s2')).toBe('W2')
+    expect(planTags(geo, plan).get('s3')).toBe('W3')
     expect(dims(d.prims, 'skylight:s1').map((p) => p.text)).toEqual(['142'])
   })
 
@@ -111,7 +114,7 @@ describe('planDrawing — the example plan (default attic)', () => {
       [[4.8, 0.4], [4.8, geo.KZ]],
     ])
     expect(dims(d.prims, 'wall:w1').map((p) => p.text)).toEqual(['80', '480'])
-    expect(tagged(d.prims, 'wall:w1').find((p) => p.k === 'label' && p.text.startsWith('Door'))).toMatchObject({ text: 'Door 80 × 200 cm' })
+    expect(tagged(d.prims, 'wall:w1').find((p) => p.k === 'label' && p.text === 'D1')).toBeTruthy()
   })
 
   it('overall L × W, knee to knee, ridge and standing-height lines', () => {
@@ -127,21 +130,49 @@ describe('planDrawing — the example plan (default attic)', () => {
     })
   })
 
-  it('furniture as turned rectangles with labels', () => {
-    expect(tagged(d.prims, 'bed:b1')).toEqual([
-      { k: 'rect', at: [1.05, 0], w: 1.6, h: 2, rot: 90, style: 'item', tag: 'bed:b1' },
-      { k: 'label', at: [1.05, 0], text: 'Bed 160×200', tag: 'bed:b1' },
+  it('furniture is a light outline only: no label, no dimension, drawn first (behind)', () => {
+    expect(tagged(d.prims, 'bed:b1')).toEqual([{ k: 'rect', at: [1.05, 0], w: 1.6, h: 2, rot: 90, style: 'furniture', tag: 'bed:b1' }])
+    for (const id of ['n1', 'n2', 'd1', 'r1', 'k1']) {
+      const it = plan.items.find((i) => i.id === id)
+      const mine = tagged(d.prims, `${it?.type}:${id}`)
+      expect(mine, id).toHaveLength(1)
+      expect(mine[0], id).toMatchObject({ k: 'rect', style: 'furniture' })
+    }
+    const firstOther = d.prims.findIndex((p) => !(p.k === 'rect' && p.style === 'furniture'))
+    expect(d.prims.slice(firstOther).some((p) => p.k === 'rect' && p.style === 'furniture')).toBe(false)
+  })
+
+  it('the schedule writes out every tagged item with the numbers the old labels used', () => {
+    expect(d.schedule.map((r) => [r.tag, r.kind, r.text])).toEqual([
+      ['W1', 'window', 'Roof window 78×118 cm · south slope, bay 2 · sill 100 cm'],
+      ['W2', 'window', 'Roof window 78×118 cm · north slope, bay 3 · sill 100 cm'],
+      ['W3', 'window', 'Roof window 78×118 cm · south slope, bay 6 · sill 100 cm'],
+      ['D1', 'door', 'Door 80 × 200 cm in partition wall at 480 cm from west gable'],
+      ['S1', 'stairs', 'Turning stairs · 12 steps · rise 21,5 · going 24 · opening 152 × 122,5'],
     ])
-    expect(tagged(d.prims, 'desk:k1')[1]).toMatchObject({ text: 'Desk', sub: '120 × 60 cm' })
+    expect(d.schedule.map((r) => r.id)).toEqual(['s1', 's2', 's3', 'w1', 'c1'])
+  })
+
+  it('tags are numbered west to east; storage rooms and closets in item order', () => {
+    const { plan, geo } = goldPlan('owner-like')
+    const t = planTags(geo, plan)
+    const d = planDrawing(geo, plan)
+    expect(d.schedule.filter((r) => r.kind === 'storage').map((r) => r.tag)).toEqual(plan.items.filter((i) => i.type === 'storage').map((_, n) => `ST${n + 1}`))
+    expect(d.schedule.filter((r) => r.kind === 'closet').map((r) => r.tag)).toEqual(plan.items.filter((i) => i.type === 'closet').map((_, n) => `C${n + 1}`))
+    const wallX = (k: string) => plan.items.filter((i) => i.type === 'wall' && i.door && t.get(i.id)?.startsWith(k)).map((i) => (i.type === 'wall' ? i.x : 0))
+    expect(wallX('D')).toEqual([...wallX('D')].sort((a, b) => a - b))
+    // every label on the plan is a short tag from the schedule, or one of the fixed notes
+    const tagsSet = new Set(d.schedule.map((r) => r.tag))
+    for (const p of d.prims) if (p.k === 'label' && p.tag.includes(':') && p.text !== 'Partition wall') expect(tagsSet.has(p.text), p.text).toBe(true)
   })
 
   it('bounds enclose every point, dimension lines included', () => {
     const [lo, hi] = d.bounds
     // the rafter chain hangs 0.30 north of the eaves; the overall length 0.30 south
-    expect(lo[1]).toBeCloseTo(-geo.HALF - 0.55, 9) // the rafter label sits lowest of all
-    expect(hi[1]).toBeCloseTo(geo.HALF + 0.3, 9)
-    expect(lo[0]).toBeCloseTo(-0.3, 9) // knee-to-knee dim west of the gable
-    expect(hi[0]).toBeCloseTo(geo.L + 0.3, 9)
+    expect(lo[1]).toBeCloseTo(-geo.HALF - 0.75, 9) // the rafter label sits highest of all
+    expect(hi[1]).toBeCloseTo(geo.HALF + 0.6, 9) // the partition wall's position hangs below the overall length
+    expect(lo[0]).toBeCloseTo(-1.3, 9) // the standing-height label, west of the knee-to-knee dim
+    expect(hi[0]).toBeCloseTo(geo.L + 0.75, 9) // the ridge label, east of the gable
   })
 })
 
