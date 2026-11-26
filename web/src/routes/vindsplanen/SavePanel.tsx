@@ -50,13 +50,14 @@ export function ImportBox({ onImport, id = 'vp-import' }: { onImport: (plan: Pla
 }
 
 export default function SavePanel({
-  plan, saveState, onImport, onReset, onRetry,
+  plan, saveState, onImport, onReset, onRetry, onPrint,
 }: {
   plan: PlanV2
   saveState: SaveState
   onImport: (plan: PlanV2) => void
   onReset: () => void
   onRetry: () => void
+  onPrint: () => void
 }) {
   const [msg, setMsg] = useState('')
   async function copy() {
@@ -81,13 +82,16 @@ export default function SavePanel({
             </button>
           </div>
         )}
-        <p className="vp-note">To keep your own copy, or move the plan somewhere, copy it as text or download it as a file.</p>
+        <p className="vp-note">To keep your own copy, or move the plan somewhere, copy it as text or download it as a file. "Print drawing" opens a dimensioned plan and stair section for the builder.</p>
         <div className="vp-actions">
           <button type="button" className="btn btn-primary" onClick={() => void copy()}>
             Copy plan (JSON)
           </button>
           <button type="button" className="btn btn-ghost" onClick={() => downloadJson('vindsplanen.json', plan)}>
             Download .json
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={onPrint}>
+            Print drawing
           </button>
           <button type="button" className="btn btn-ghost vp-danger" onClick={onReset}>
             Start over with the example

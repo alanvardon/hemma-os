@@ -24,6 +24,7 @@ import MaterialsPanel from './vindsplanen/MaterialsPanel'
 import MeasurePanel, { MEASURE_END } from './vindsplanen/MeasurePanel'
 import RoomPanel from './vindsplanen/RoomPanel'
 import SavePanel, { ImportBox } from './vindsplanen/SavePanel'
+import DrawingView from './vindsplanen/DrawingSheet'
 import SceneHost from './vindsplanen/SceneHost'
 import SunControl from './vindsplanen/SunControl'
 import { fmt } from './vindsplanen/fmt'
@@ -73,6 +74,7 @@ export default function Vindsplanen() {
   const [activeStep, setActiveStep] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
   const [walking, setWalking] = useState(false)
+  const [sheetOpen, setSheetOpen] = useState(false)
   /** Photo mode (plan 143): the path tracer's phase and progress, null when off. */
   const [photo, setPhoto] = useState<{ phase: Exclude<PhotoPhase, 'off' | 'failed'>; samples: number; max: number } | null>(null)
   const sceneRef = useRef<SceneHandle>(null)
@@ -360,8 +362,9 @@ export default function Vindsplanen() {
             <MeasurePanel geo={geo} plan={plan} steps={steps} activeCode={activeStep} onOpen={openStep} onChange={editor.edit} onToast={showToast} />
           )}
           {tab === 'save' && (
-            <SavePanel plan={plan} saveState={editor.saveState} onImport={(p) => void importPlan(p)} onReset={() => void resetToExample()} onRetry={editor.retrySave} />
+            <SavePanel plan={plan} saveState={editor.saveState} onImport={(p) => void importPlan(p)} onReset={() => void resetToExample()} onRetry={editor.retrySave} onPrint={() => setSheetOpen(true)} />
           )}
+          {sheetOpen && <DrawingView geo={geo} plan={plan} onClose={() => setSheetOpen(false)} />}
         </aside>
       </main>
     )

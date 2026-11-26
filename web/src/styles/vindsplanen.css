@@ -349,3 +349,62 @@
     .vp-state-card { margin: 1rem auto; }
   }
 }
+
+/* ── Builder's drawing sheet (plan 145) ─────────────────────────────────────
+   Rendered in a portal on <body>, so it is styled outside `.vp-root`. Always
+   black on white, in both themes. */
+.vp-sheet-view {
+  position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column;
+  background: #e9e9e6; color: #111; font-family: var(--font-ui, system-ui, sans-serif);
+}
+body.vp-sheet-open { overflow: hidden; }
+.vp-sheet-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px;
+  background: var(--paper, #fff); color: var(--ink, #111); border-bottom: 1px solid var(--rule, #ccc);
+}
+.vp-sheet-bar h2 { margin: 0 auto 0 0; font-size: 1rem; }
+.vp-sheet-zoom { display: flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; font-size: 13px; }
+.vp-sheet-zoom span { min-width: 3.2em; text-align: center; }
+.vp-sheet-scroll { flex: 1; min-height: 0; overflow: auto; padding: 12px; overscroll-behavior: contain; }
+.vp-sheet-doc { display: flex; flex-direction: column; gap: 16px; width: max-content; min-width: 100%; }
+.vp-sheet-fig {
+  margin: 0; background: #fff; color: #111; padding: 10px; box-shadow: 0 1px 6px rgb(0 0 0 / 0.25);
+  width: max-content; break-inside: avoid;
+}
+.vp-sheet-fig figcaption { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.vp-sheet-svg { display: block; width: calc(var(--w) * var(--vp-zoom, 1)); height: calc(var(--h) * var(--vp-zoom, 1)); background: #fff; }
+.vp-sheet-svg line, .vp-sheet-svg polygon, .vp-sheet-svg rect { vector-effect: non-scaling-stroke; fill: none; stroke: #111; }
+.vp-sheet-svg .vp-d-wall { stroke-width: 2.4px; }
+.vp-sheet-svg .vp-d-thin { stroke-width: 1px; }
+.vp-sheet-svg .vp-d-hidden { stroke-width: 1px; stroke-dasharray: 5 3; }
+.vp-sheet-svg .vp-d-axis { stroke-width: 1px; stroke-dasharray: 10 3 2 3; }
+.vp-sheet-svg .vp-d-dim, .vp-sheet-svg .vp-d-ext { stroke-width: 0.6px; }
+.vp-sheet-svg .vp-d-tick { stroke-width: 1.2px; }
+.vp-sheet-svg polygon.vp-d-opening { fill: url(#vp-hatch); stroke-width: 1.6px; }
+.vp-sheet-svg polygon.vp-d-storage { fill: #eee; stroke-width: 1px; }
+.vp-sheet-svg rect.vp-d-item { stroke-width: 1px; }
+.vp-sheet-svg rect.vp-d-storage { fill: #eee; stroke-width: 1px; }
+.vp-sheet-svg rect.vp-d-opening { stroke-width: 1.6px; }
+.vp-sheet-svg rect.vp-d-window { stroke-width: 1.2px; stroke-dasharray: 5 3; }
+.vp-sheet-svg text { fill: #111; stroke: none; font-family: Arial, Helvetica, sans-serif; }
+.vp-sheet-svg .vp-d-sub { fill: #444; }
+.vp-sheet-title {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 4px 16px;
+  margin: 8px 0 0; padding-top: 6px; border-top: 1px solid #111; font-size: 11px; width: 0; min-width: 100%;
+}
+.vp-sheet-title div { min-width: 0; }
+.vp-sheet-title dt { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: #555; }
+.vp-sheet-title dd { margin: 0; }
+.vp-sheet-title p { grid-column: 1 / -1; margin: 0; font-weight: 600; }
+
+@page { size: A4 landscape; margin: 10mm; }
+@media print {
+  html, body { background: #fff !important; overflow: visible !important; height: auto !important; }
+  body.vp-sheet-open > *:not(.vp-sheet-view) { display: none !important; }
+  .vp-sheet-view { position: static; display: block; background: #fff; }
+  .vp-sheet-bar { display: none; }
+  .vp-sheet-scroll { overflow: visible; padding: 0; --vp-zoom: 1 !important; }
+  .vp-sheet-doc { gap: 0; width: auto; min-width: 0; }
+  .vp-sheet-fig { box-shadow: none; padding: 0; break-inside: avoid; break-after: page; }
+  .vp-sheet-fig:last-child { break-after: auto; }
+}
