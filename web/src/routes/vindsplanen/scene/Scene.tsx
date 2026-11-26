@@ -647,7 +647,7 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
   }
   const startPhoto = (opts: PhotoStartOptions) => {
     if (photo.current) return
-    const settings = photoSettings(coarsePointer())
+    const settings = photoSettings(coarsePointer(), gl.getPixelRatio())
     const ph: PhotoState = { opts, session: null, orbit: ctl.current.orbit }
     photo.current = ph
     // land a camera flight now (its caller hears it ended), then hold the camera still
@@ -673,7 +673,8 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
         if (photo.current !== ph) return
         ph.session = mod.startPhoto(gl, scene, camera, {
           settings,
-          hide: [helper, graph.dims, graph.walk, ...cutsRef.current.filter((k) => k.hidden).map((k) => k.g)],
+          hide: [helper, graph.dims, graph.walk],
+          cutaway: cutsRef.current.filter((k) => k.hidden).map((k) => k.g),
           reducedMotion: reducedMotion(),
           onSamples: (n) => ph.opts.onSamples(n, settings.maxSamples),
           onDone: () => ph.opts.onPhase('done'),

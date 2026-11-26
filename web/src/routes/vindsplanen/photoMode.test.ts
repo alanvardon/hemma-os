@@ -1,13 +1,65 @@
 // Plan 143 — photo mode's pure parts: device settings, phase, sample count and status copy.
 import { describe, expect, it } from 'vitest'
-import { photoFileName, photoPhase, photoSettings, photoStatus, shownSamples } from './photoMode'
+import { GAIN_RANGE, GAIN_SAMPLE_CLAMP, matchGain, photoFileName, photoPhase, photoSettings, photoStatus, shownSamples } from './photoMode'
 
 describe('photoSettings', () => {
-  it('desktop: 400 samples at full resolution with the default tiling and 1k textures', () => {
-    expect(photoSettings(false)).toEqual({ maxSamples: 400, renderScale: 1, tiles: null, textureSize: 1024 })
+  it('desktop: 300 samples in 3×3 tiles with 1k textures, at full resolution on a 1× screen', () => {
+    expect(photoSettings(false)).toEqual({ maxSamples: 300, renderScale: 1, tiles: 3, textureSize: 1024 })
+    expect(photoSettings(false, 1)).toEqual(photoSettings(false))
   })
-  it('mobile: 200 samples at half resolution in 2×2 tiles with 512 px textures', () => {
+  it('desktop traces about one ray per CSS pixel on a dense screen, never below half', () => {
+    expect(photoSettings(false, 2).renderScale).toBe(0.5)
+    expect(photoSettings(false, 1.25).renderScale).toBeCloseTo(0.8)
+    expect(photoSettings(false, 3).renderScale).toBe(0.5)
+    expect(photoSettings(false, 0.5).renderScale).toBe(1)
+  })
+  it('desktop treats a broken pixel ratio as 1×', () => {
+    expect(photoSettings(false, Number.NaN).renderScale).toBe(1)
+    expect(photoSettings(false, 0).renderScale).toBe(1)
+    expect(photoSettings(false, -2).renderScale).toBe(1)
+  })
+  it('mobile: 200 samples at half resolution in 2×2 tiles with 512 px textures, whatever the screen', () => {
     expect(photoSettings(true)).toEqual({ maxSamples: 200, renderScale: 0.5, tiles: 2, textureSize: 512 })
+    expect(photoSettings(true, 3)).toEqual(photoSettings(true))
+  })
+})
+
+/** RGBA pixels from [r, g, b, a] tuples. */
+const px = (...p: number[][]) => Float32Array.from(p.flat())
+
+describe('matchGain', () => {
+  it('brings the traced mean to the raster mean, per channel', () => {
+    const ref = px([0.8, 0.8, 0.8, 1], [0.4, 0.4, 0.4, 1])
+    const trace = px([0.8, 0.6, 0.4, 1], [0.4, 0.3, 0.2, 1])
+    const [r, g, b] = matchGain(ref, trace)
+    expect(r).toBeCloseTo(1)
+    expect(g).toBeCloseTo(1.2 / 0.9)
+    expect(b).toBeCloseTo(2)
+  })
+  it('measures only pixels the raster image covers fully (the sky background is left out)', () => {
+    const ref = px([0.5, 0.5, 0.5, 1], [9, 9, 9, 0], [9, 9, 9, 0.5])
+    const trace = px([0.25, 0.25, 0.25, 1], [0.1, 0.1, 0.1, 1], [0.1, 0.1, 0.1, 1])
+    expect(matchGain(ref, trace)).toEqual([2, 2, 2])
+  })
+  it('clips trace fireflies before averaging', () => {
+    const ref = px([1, 1, 1, 1], [1, 1, 1, 1])
+    const trace = px([1000, 1000, 1000, 1], [0, 0, 0, 1])
+    // means 1 vs (clamp + 0) / 2: the firefly counts as GAIN_SAMPLE_CLAMP, not 1000
+    expect(matchGain(ref, trace)).toEqual([2 / GAIN_SAMPLE_CLAMP, 2 / GAIN_SAMPLE_CLAMP, 2 / GAIN_SAMPLE_CLAMP])
+  })
+  it('keeps the gain within its range', () => {
+    expect(matchGain(px([1, 1, 1, 1]), px([0.001, 0.001, 0.001, 1]))).toEqual([GAIN_RANGE[1], GAIN_RANGE[1], GAIN_RANGE[1]])
+    expect(matchGain(px([0.001, 0.001, 0.001, 1]), px([3, 3, 3, 1]))).toEqual([GAIN_RANGE[0], GAIN_RANGE[0], GAIN_RANGE[0]])
+  })
+  it('leaves a channel at 1 when either image is black in it or nothing is measurable', () => {
+    expect(matchGain(px([0.5, 0, 0.5, 1]), px([0.25, 0.5, 0, 1]))).toEqual([2, 1, 1])
+    expect(matchGain(px([1, 1, 1, 0]), px([0.5, 0.5, 0.5, 1]))).toEqual([1, 1, 1])
+    expect(matchGain(new Float32Array(0), new Float32Array(0))).toEqual([1, 1, 1])
+  })
+  it('skips broken values and measures the shorter image only', () => {
+    const ref = px([Number.NaN, 0.5, 0.5, 1], [0.5, 0.5, 0.5, 1], [5, 5, 5, 1])
+    const trace = px([0.25, Number.POSITIVE_INFINITY, 0.25, 1], [0.25, 0.25, 0.25, 1])
+    expect(matchGain(ref, trace)).toEqual([2, 2, 2])
   })
 })
 
