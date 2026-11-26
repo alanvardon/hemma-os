@@ -16,6 +16,7 @@ import { deriveGeometry } from '../lib/vindsplanen/attic'
 import { skyHolesOk } from '../lib/vindsplanen/items'
 import { measureSteps } from '../lib/vindsplanen/measure'
 import { examplePlan, type PlanV2, type ViewPrefs } from '../lib/vindsplanen/plan'
+import { checkRules } from '../lib/vindsplanen/rules'
 import { planWarnings } from '../lib/vindsplanen/warnings'
 import { computeZones } from '../lib/vindsplanen/zones'
 import type { CameraPresetId, MovePatch, SceneHandle } from './vindsplanen/scene/Scene'
@@ -88,7 +89,7 @@ export default function Vindsplanen() {
   const lagGeo = useMemo(() => (lag ? deriveGeometry(lag.options.attic) : null), [lag])
   const derived = useMemo(() => {
     if (!lag || !lagGeo) return null
-    return { warnings: planWarnings(lagGeo, lag), holesOk: skyHolesOk(lagGeo, lag.items), zones: computeZones(lagGeo, lag) }
+    return { warnings: planWarnings(lagGeo, lag), holesOk: skyHolesOk(lagGeo, lag.items), zones: computeZones(lagGeo, lag), rules: checkRules(lagGeo, lag) }
   }, [lag, lagGeo])
   const steps = useMemo(() => (plan && geo ? measureSteps(geo, plan) : []), [plan, geo])
   const step = tab === 'measure' && activeStep && activeStep !== MEASURE_END ? steps.find((s) => s.code === activeStep) ?? null : null
@@ -347,6 +348,7 @@ export default function Vindsplanen() {
               plan={plan}
               zones={z}
               warnings={derived.warnings}
+              rules={derived.rules}
               holesOk={derived.holesOk}
               selectedId={selectedId}
               onSelect={setSelectedId}

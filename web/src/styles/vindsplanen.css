@@ -233,6 +233,35 @@
   .vp-rooms > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; font-size: 13px; color: var(--ink-mid); }
   .vp-rooms span:last-child { font-variant-numeric: tabular-nums; color: var(--ink); }
 
+
+  /* ── Rules check ────────────────────────────────────────────────────────── */
+  .vp-rules > summary {
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 10px;
+    min-height: 44px; align-content: center; cursor: pointer; padding: 4px 10px;
+    background: var(--paper-card); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  }
+  .vp-rules > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .vp-rules-title { font: 650 12px var(--font-ui); text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); }
+  .vp-rules-tally { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .vp-rules-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin-top: 8px; }
+  .vp-rules-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .vp-rule {
+    width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0;
+    text-align: left; font: inherit; font-size: 13px; line-height: 1.45; color: var(--ink);
+    background: var(--paper-card); border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 8px 10px;
+  }
+  button.vp-rule { min-height: 44px; cursor: pointer; }
+  button.vp-rule:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.vp-rule[aria-current='true'] { border-color: var(--accent); background: var(--accent-faint); }
+  .vp-rule-status {
+    font-size: 11.5px; font-weight: 700; border-radius: 999px; padding: 1px 8px; white-space: nowrap;
+    border: 1px solid var(--rule); color: var(--ink-mid);
+  }
+  .vp-rule-status.is-ok { color: var(--accent); background: var(--accent-faint); border-color: var(--accent-light); }
+  .vp-rule-status.is-fail { color: var(--warn); background: var(--warn-faint); border-color: var(--warn-light); }
+  .vp-rule-text { overflow-wrap: anywhere; min-width: 0; }
+  .vp-rule-ref { font-size: 11.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+
   /* ── Materials ──────────────────────────────────────────────────────────── */
   .vp-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); gap: 8px; }
   .vp-swatch {
