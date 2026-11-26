@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ATTIC_DEF, deriveGeometry } from './attic'
-import { defaultViewPrefs, examplePlan, num, sanitizePlan, sanitizeShape, sanitizeViewPrefs, type BedItem, type PlanV2 } from './plan'
+import { defaultViewPrefs, examplePlan, isMonthDay, num, sanitizePlan, sanitizeShape, sanitizeSite, sanitizeViewPrefs, SITE_DEF, type BedItem, type PlanV2 } from './plan'
+import { importV1 } from './legacy'
 import { expectClose, FIXTURE_NAMES, loadGold, loadJson, v1ToV2 } from './testkit'
 
 interface SanitizeGold {
@@ -84,13 +85,17 @@ describe('sanitizePlan (stored PlanV2 documents)', () => {
 
 describe('view prefs', () => {
   it('default to v41 example options; quality is fast on touch', () => {
-    expect(defaultViewPrefs()).toEqual({ zones: true, rafters: true, cutaway: true, sun: 'morning', quality: 'nice', dims: false })
+    expect(defaultViewPrefs()).toEqual({
+      zones: true, rafters: true, cutaway: true, sun: 'morning', quality: 'nice', dims: false,
+      sunMode: 'preset', sunDate: '06-21', sunMinutes: 720,
+    })
     expect(defaultViewPrefs(true).quality).toBe('fast')
   })
 
   it('take booleans, known suns and qualities only; dims only when exactly true', () => {
     expect(sanitizeViewPrefs({ zones: false, rafters: 'no', cutaway: false, sun: 'evening', quality: 'fast', dims: 1 })).toEqual({
       zones: false, rafters: true, cutaway: false, sun: 'evening', quality: 'fast', dims: false,
+      sunMode: 'preset', sunDate: '06-21', sunMinutes: 720,
     })
     expect(sanitizeViewPrefs({ sun: 'dusk', quality: 'ultra', dims: true })).toMatchObject({ sun: 'morning', quality: 'nice', dims: true })
     expect(sanitizeViewPrefs('x')).toEqual(defaultViewPrefs())
@@ -99,5 +104,73 @@ describe('view prefs', () => {
   it("keep the evening-with-lamps mood ('night', plan 141)", () => {
     expect(sanitizeViewPrefs({ sun: 'night' }).sun).toBe('night')
     expect(sanitizeViewPrefs({ sun: 'night', quality: 'fast' }, true)).toMatchObject({ sun: 'night', quality: 'fast' })
+  })
+})
+
+describe('site (plan 144)', () => {
+  it('a plan without a site gets the default ridge bearing 90 and 59.3 N 18.0 E', () => {
+    expect(SITE_DEF).toEqual({ ridgeBearing: 90, lat: 59.3, lon: 18.0 })
+    expect((sanitizePlan({ v: 2, items: [] }) as PlanV2).options.site).toEqual(SITE_DEF)
+    expect((sanitizePlan({ v: 2, items: [], options: { gable: { w: 1 } } }) as PlanV2).options.site).toEqual(SITE_DEF)
+    expect(examplePlan().options.site).toEqual(SITE_DEF)
+  })
+
+  it('clamps out-of-range numbers like num() (370 → 359, not wrapped) and defaults non-numbers', () => {
+    expect(sanitizeSite({ ridgeBearing: 370, lat: 80, lon: 3 })).toEqual({ ridgeBearing: 359, lat: 69, lon: 10 })
+    expect(sanitizeSite({ ridgeBearing: -10, lat: 40, lon: 40 })).toEqual({ ridgeBearing: 0, lat: 55, lon: 25 })
+    expect(sanitizeSite({ ridgeBearing: '45', lat: '60', lon: null })).toEqual(SITE_DEF)
+    expect(sanitizeSite({ ridgeBearing: Number.NaN, lat: Number.POSITIVE_INFINITY })).toEqual(SITE_DEF)
+    expect(sanitizeSite('north')).toEqual(SITE_DEF)
+  })
+
+  it('keeps lat/lon to one decimal (no precise location persists) and the bearing as given', () => {
+    expect(sanitizeSite({ ridgeBearing: 123.4, lat: 59.33412, lon: 18.0686 })).toEqual({ ridgeBearing: 123.4, lat: 59.3, lon: 18.1 })
+  })
+
+  it('round-trips through sanitizePlan and JSON, and is idempotent', () => {
+    const p = examplePlan()
+    p.options.site = { ridgeBearing: 135, lat: 63.8, lon: 20.3 }
+    const once = sanitizePlan(JSON.parse(JSON.stringify(p))) as PlanV2
+    expect(once.options.site).toEqual({ ridgeBearing: 135, lat: 63.8, lon: 20.3 })
+    expect(sanitizePlan(once)).toEqual(once)
+  })
+
+  it('a v1 (v41) import has no site and gets the default', () => {
+    const r = importV1({ ...examplePlanAsV1(), v: 1 })
+    expect(r.ok && r.plan.options.site).toEqual(SITE_DEF)
+  })
+})
+
+/** A minimal v41-style export: post-migration below.v 11, no site. */
+function examplePlanAsV1() {
+  const ex = examplePlan()
+  const options: Record<string, unknown> = { ...ex.options, below: { ...ex.options.below, v: 11 } }
+  delete options.site
+  return { materials: ex.materials, options, items: ex.items }
+}
+
+describe('view prefs — real sun (plan 144)', () => {
+  it('take a known sunMode, a valid MM-DD and an integer minute 0–1439', () => {
+    expect(sanitizeViewPrefs({ sunMode: 'real', sunDate: '12-21', sunMinutes: 0 })).toMatchObject({ sunMode: 'real', sunDate: '12-21', sunMinutes: 0 })
+    expect(sanitizeViewPrefs({ sunMinutes: 1439 }).sunMinutes).toBe(1439)
+  })
+
+  it('invalid values take the default (not clamped)', () => {
+    expect(sanitizeViewPrefs({ sunMode: 'sunny', sunDate: '02-30', sunMinutes: 1440 })).toMatchObject({ sunMode: 'preset', sunDate: '06-21', sunMinutes: 720 })
+    expect(sanitizeViewPrefs({ sunDate: 'xx', sunMinutes: -1 })).toMatchObject({ sunDate: '06-21', sunMinutes: 720 })
+    expect(sanitizeViewPrefs({ sunDate: 1221, sunMinutes: '600' })).toMatchObject({ sunDate: '06-21', sunMinutes: 720 })
+    expect(sanitizeViewPrefs({ sunMinutes: 600.5 }).sunMinutes).toBe(720)
+  })
+
+  it('MM-DD accepts only days that exist in every year', () => {
+    expect(['01-01', '02-28', '04-30', '12-31'].every(isMonthDay)).toBe(true)
+    expect(['02-29', '02-30', '04-31', '13-01', '00-10', '1-01', '06-21x', ''].some(isMonthDay)).toBe(false)
+  })
+
+  it('the caller can supply the default date (today, at load); an invalid one falls back to 06-21', () => {
+    expect(defaultViewPrefs(false, '11-26').sunDate).toBe('11-26')
+    expect(sanitizeViewPrefs({}, false, '11-26').sunDate).toBe('11-26')
+    expect(sanitizeViewPrefs({ sunDate: '03-01' }, false, '11-26').sunDate).toBe('03-01')
+    expect(defaultViewPrefs(false, '02-29').sunDate).toBe('06-21')
   })
 })

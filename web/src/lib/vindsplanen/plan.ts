@@ -173,6 +173,42 @@ export interface PlanOptions {
   attic: Attic
   /** Measure-step code → date measured ('YYYY-MM-DD' or 'earlier'). */
   measured: Record<string, string>
+  /**
+   * Where the house stands, for the real sun (plan 144). Household-level: both
+   * partners see the same house. An older client (before plan 144) drops
+   * `site` when it saves; accepted, the worst case is that it reverts to
+   * SITE_DEF and nothing else is lost.
+   */
+  site: Site
+}
+
+export interface Site {
+  /** Compass bearing (degrees, 0–359) of the model's +x axis, west gable → east gable. */
+  ridgeBearing: number
+  /** Latitude, degrees north (55–69), one decimal. No address is stored. */
+  lat: number
+  /** Longitude, degrees east (10–25), one decimal. */
+  lon: number
+}
+
+/** Default site: ridge east–west (the model's own naming, attic.ts), central Stockholm. */
+export const SITE_DEF: Readonly<Site> = { ridgeBearing: 90, lat: 59.3, lon: 18.0 }
+
+/** Round to one decimal: the site is coarse on purpose (~10 km), for privacy. */
+const oneDecimal = (v: number): number => Math.round(v * 10) / 10
+
+/**
+ * `num()` per field: a finite number is clamped (bearing 370 → 359, not
+ * wrapped), anything else takes the default. lat/lon are then rounded to one
+ * decimal so a precise location never persists.
+ */
+export function sanitizeSite(raw: unknown): Site {
+  const s: Loose = isObj(raw) ? raw : {}
+  return {
+    ridgeBearing: num(s.ridgeBearing, 0, 359, SITE_DEF.ridgeBearing),
+    lat: oneDecimal(num(s.lat, 55, 69, SITE_DEF.lat)),
+    lon: oneDecimal(num(s.lon, 10, 25, SITE_DEF.lon)),
+  }
 }
 
 export interface PlanV2 {
@@ -184,6 +220,8 @@ export interface PlanV2 {
 
 export type Quality = 'fast' | 'nice'
 
+export type SunMode = 'preset' | 'real'
+
 export interface ViewPrefs {
   zones: boolean
   rafters: boolean
@@ -191,19 +229,47 @@ export interface ViewPrefs {
   sun: SunId
   quality: Quality
   dims: boolean
+  /** 'preset': one of the fixed `sun` moods; 'real': the sun for sunDate/sunMinutes at the plan's site. */
+  sunMode: SunMode
+  /** Month and day for the real sun, 'MM-DD' (no year; 02-29 is not offered). */
+  sunDate: string
+  /** Swedish clock time for the real sun, minutes after midnight (0–1439). */
+  sunMinutes: number
+}
+
+/**
+ * The pure default for `sunDate`. viewPrefs.ts passes today's date instead
+ * when it loads prefs, so the sanitizer stays deterministic.
+ */
+export const SUN_DATE_DEF = '06-21'
+export const SUN_MINUTES_DEF = 720
+
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+/** 'MM-DD' for a day that exists in every year (so 02-29 is refused). */
+export function isMonthDay(v: unknown): v is string {
+  if (typeof v !== 'string') return false
+  const m = /^(\d{2})-(\d{2})$/.exec(v)
+  if (!m) return false
+  const month = Number(m[1])
+  const day = Number(m[2])
+  return month >= 1 && month <= 12 && day >= 1 && day <= DAYS_IN_MONTH[month - 1]
 }
 
 /** v41 defaults: quality is 'fast' on a coarse (touch) pointer. */
-export function defaultViewPrefs(coarse = false): ViewPrefs {
-  return { zones: true, rafters: true, cutaway: true, sun: 'morning', quality: coarse ? 'fast' : 'nice', dims: false }
+export function defaultViewPrefs(coarse = false, sunDate: string = SUN_DATE_DEF): ViewPrefs {
+  return {
+    zones: true, rafters: true, cutaway: true, sun: 'morning', quality: coarse ? 'fast' : 'nice', dims: false,
+    sunMode: 'preset', sunDate: isMonthDay(sunDate) ? sunDate : SUN_DATE_DEF, sunMinutes: SUN_MINUTES_DEF,
+  }
 }
 
 type Loose = Record<string, unknown>
 const isObj = (v: unknown): v is Loose => !!v && typeof v === 'object'
 
 /** v41 view-pref rules (sanitize lines 459–462). */
-export function sanitizeViewPrefs(raw: unknown, coarse = false): ViewPrefs {
-  const out = defaultViewPrefs(coarse)
+export function sanitizeViewPrefs(raw: unknown, coarse = false, sunDate: string = SUN_DATE_DEF): ViewPrefs {
+  const out = defaultViewPrefs(coarse, sunDate)
   if (!isObj(raw)) return out
   ;(['zones', 'rafters', 'cutaway'] as const).forEach((k) => {
     if (typeof raw[k] === 'boolean') out[k] = raw[k] as boolean
@@ -211,6 +277,10 @@ export function sanitizeViewPrefs(raw: unknown, coarse = false): ViewPrefs {
   if (typeof raw.sun === 'string' && (SUN_IDS as readonly string[]).includes(raw.sun)) out.sun = raw.sun as SunId
   out.dims = raw.dims === true
   if (raw.quality === 'fast' || raw.quality === 'nice') out.quality = raw.quality
+  // Plan 144 real sun: invalid values take the default (not clamped).
+  if (raw.sunMode === 'preset' || raw.sunMode === 'real') out.sunMode = raw.sunMode
+  if (isMonthDay(raw.sunDate)) out.sunDate = raw.sunDate
+  if (Number.isInteger(raw.sunMinutes) && (raw.sunMinutes as number) >= 0 && (raw.sunMinutes as number) <= 1439) out.sunMinutes = raw.sunMinutes as number
   return out
 }
 
@@ -226,6 +296,7 @@ export function examplePlan(attic: Attic = ATTIC_DEF): PlanV2 {
       board: [],
       attic: { ...attic },
       measured: {},
+      site: { ...SITE_DEF },
     },
     items: [
       { id: 'w1', type: 'wall', x: 4.8, door: true, doorZ: 0 },
@@ -440,7 +511,9 @@ export function sanitizeShape(p: unknown, opts: SanitizeOptions = {}): PlanV2 | 
     }
   }
 
-  return { v: 2, materials, options: { gable, below, knee, board, attic, measured }, items }
+  const site = sanitizeSite(o.site)
+
+  return { v: 2, materials, options: { gable, below, knee, board, attic, measured, site }, items }
 }
 
 /**

@@ -19,7 +19,10 @@ describe('importV1 — a v41 "Copy plan" export', () => {
     const g = loadGold('owner-like')
     const r = importV1(g.input)
     if (!r.ok) throw new Error(r.reason)
-    expect(r.view).toEqual({ zones: true, rafters: true, cutaway: true, sun: 'evening', quality: 'nice', dims: false })
+    expect(r.view).toEqual({
+      zones: true, rafters: true, cutaway: true, sun: 'evening', quality: 'nice', dims: false,
+      sunMode: 'preset', sunDate: '06-21', sunMinutes: 720, // v41 had no real sun (plan 144)
+    })
     for (const k of ['zones', 'rafters', 'cutaway', 'sun', 'quality', 'dims']) expect(k in r.plan.options).toBe(false)
   })
 
