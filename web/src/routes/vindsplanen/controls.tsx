@@ -87,6 +87,54 @@ export function CmField({
   )
 }
 
+/**
+ * A plain number field (degrees, latitude…): `value` is shown as-is and
+ * committed on blur / Enter, clamped to [min, max] and rounded to `decimals`
+ * (the plan's own sanitiser clamps the same way, so the stored value never
+ * differs from what is shown). Invalid text is dropped without a change.
+ */
+export function NumField({
+  id, label, value, min, max, decimals = 0, unit, onChange,
+}: {
+  id: string
+  label: string
+  value: number
+  min: number
+  max: number
+  decimals?: number
+  unit?: string
+  onChange: (v: number) => void
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const commit = () => {
+    if (draft === null) return
+    const v = parseFloat(draft.replace(',', '.'))
+    setDraft(null)
+    if (!Number.isFinite(v)) return
+    const f = 10 ** decimals
+    const c = Math.round(clamp(v, min, max) * f) / f
+    if (c !== value) onChange(c)
+  }
+  return (
+    <Row id={id} label={label} out={unit ?? ''}>
+      <input
+        id={id}
+        type="number"
+        inputMode="decimal"
+        min={min}
+        max={max}
+        step={decimals ? 1 / 10 ** decimals : 1}
+        value={draft ?? String(value)}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+        }}
+      />
+    </Row>
+  )
+}
+
 export function RangeField({
   id, label, value, min, max, step, format, onChange,
 }: {

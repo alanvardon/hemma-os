@@ -25,6 +25,7 @@ import MeasurePanel, { MEASURE_END } from './vindsplanen/MeasurePanel'
 import RoomPanel from './vindsplanen/RoomPanel'
 import SavePanel, { ImportBox } from './vindsplanen/SavePanel'
 import SceneHost from './vindsplanen/SceneHost'
+import SunControl from './vindsplanen/SunControl'
 import { fmt } from './vindsplanen/fmt'
 import { downloadJson } from './vindsplanen/importPlan'
 import { photoStatus, type PhotoPhase } from './vindsplanen/photoMode'
@@ -185,12 +186,13 @@ export default function Vindsplanen() {
     if (!plan) return
     if (!(await confirm({
       title: 'Start over with the example?',
-      message: 'The plan is replaced by the example plan. Measured attic dimensions (A) are kept. You can undo straight afterwards.',
+      message: 'The plan is replaced by the example plan. Measured attic dimensions (A) and the house orientation and place are kept. You can undo straight afterwards.',
       confirmLabel: 'Replace the plan',
     }))) return
     const ex = examplePlan(plan.options.attic)
     const keep = Object.fromEntries(Object.entries(plan.options.measured).filter(([k]) => k[0] === 'A'))
-    editor.replacePlan({ ...ex, options: { ...ex.options, measured: keep } })
+    // the site describes the house, like the A-measurements: it survives a reset
+    editor.replacePlan({ ...ex, options: { ...ex.options, measured: keep, site: plan.options.site } })
     setSelectedId(null)
     showToast('Example plan loaded.')
   }
@@ -246,7 +248,7 @@ export default function Vindsplanen() {
     const area = (n: number) => fmt(n * z.cellArea, 1)
     body = (
       <main className="vp-main">
-        <section className="vp-stage" aria-label="3D view">
+        <section className={'vp-stage' + (view.sunMode === 'real' && !walking && !photoOn ? ' has-sun' : '')} aria-label="3D view">
           <SceneHost
             sceneRef={sceneRef}
             plan={plan}
@@ -291,6 +293,7 @@ export default function Vindsplanen() {
               </button>
             ))}
           </div>
+          {view.sunMode === 'real' && !walking && !photoOn && <SunControl view={view} site={plan.options.site} onView={setView} />}
           {photo && photoSt && (
             <div className="vp-photo" role="group" aria-label="Photo mode">
               <p className="vp-photo-status">
