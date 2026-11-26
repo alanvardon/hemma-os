@@ -7,7 +7,8 @@
 // Ported from v41 (planning/140-vindsplanen-ref/vindsplanen-v41.html):
 // renderer/lights/sky 544–591, cut-away 1429–1440, picking & drag 1441–1475,
 // cameras 1476–1494, composer 1496–1503, frame loop 1553–1575. Photo mode
-// (path tracing) is out of scope (plan 140, Decisions).
+// (plan 143) hands the frame loop to a path tracer: see `startPhoto` below and
+// ./photo.ts (its own lazy chunk).
 
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from 'react'
 import * as THREE from 'three'
@@ -20,6 +21,8 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import type { Pass } from 'three/examples/jsm/postprocessing/Pass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import { photoFileName, photoSettings, type PhotoPhase } from '../photoMode'
+import type { PhotoSession } from './photo'
 import { atticOf, clamp, deriveGeometry, snap, type Geometry } from '../../../lib/vindsplanen/attic'
 import { withFittedClosets } from '../../../lib/vindsplanen/items'
 import { lampSpots } from '../../../lib/vindsplanen/lamps'
@@ -71,6 +74,22 @@ export interface SceneHandle {
   setOrbitEnabled(on: boolean): void
   /** Called every frame before rendering, instead of the camera tween and OrbitControls. */
   setFrameHook(fn: ((dt: number, camera: THREE.PerspectiveCamera) => void) | null): void
+  /**
+   * Photo mode (plan 143): path-trace the current view. The camera is held
+   * still and labels are hidden; `onPhase('off')` reports the end, whoever
+   * ended it (a press or wheel on the view, a plan or view change, the tab
+   * hidden, `stopPhoto`), and `'failed'` a tracer that could not start.
+   */
+  startPhoto(opts: PhotoStartOptions): void
+  stopPhoto(): void
+  /** Save the image on screen as a PNG download. Rejects when there is no image or it cannot be read. */
+  savePhoto(): Promise<void>
+}
+
+export interface PhotoStartOptions {
+  onPhase(phase: PhotoPhase): void
+  /** Whole samples so far and the cap the tracer stops at. */
+  onSamples(samples: number, maxSamples: number): void
 }
 
 let rectLightsReady = false
@@ -95,6 +114,9 @@ export default function Scene(props: SceneProps) {
       flyTo: (c, o) => api.current?.flyTo(c, o),
       setOrbitEnabled: (on) => api.current?.setOrbitEnabled(on),
       setFrameHook: (fn) => api.current?.setFrameHook(fn),
+      startPhoto: (o) => api.current?.startPhoto(o),
+      stopPhoto: () => api.current?.stopPhoto(),
+      savePhoto: () => api.current?.savePhoto() ?? Promise.reject(new Error('no 3D view')),
     }),
     [],
   )
@@ -173,6 +195,19 @@ function makeGraph(): Graph {
   const g = (): THREE.Group => new THREE.Group()
   return { shell: g(), slope: { S: g(), N: g() }, east: g(), west: g(), rafterGroup: g(), below: g(), items: g(), winLights: g(), dims: g(), walk: g() }
 }
+
+type PhotoModule = typeof import('./photo')
+
+interface PhotoState {
+  opts: PhotoStartOptions
+  /** null while the tracer loads and builds its scene ("Preparing…") */
+  session: PhotoSession | null
+  /** orbiting as it was before, to give back */
+  orbit: boolean
+}
+
+/** Two animation frames: lets the page paint "Preparing…" before the blocking scene build. */
+const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
 
 interface CutLayer {
   g: THREE.Object3D
@@ -259,6 +294,19 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
   const stairSlice = useMemo<Slice>(() => ({ items: stairItems, options }), [stairItems, options])
   const zoneSlice = useMemo<Slice>(() => ({ items: zoneItems, options }), [zoneItems, options])
   const hlStable = useJson(highlights ?? null)
+
+  // ----- photo mode (plan 143). These effects come first so a plan, view or
+  // measuring-step change ends the session (putting the scene back) before the
+  // builders and lights below react to the change.
+  const photo = useRef<PhotoState | null>(null)
+  const photoMod = useRef<PhotoModule | null>(null)
+  const photoEnd = useRef<(phase: 'off' | 'failed') => void>(() => {})
+  useEffect(() => {
+    photoEnd.current('off')
+  }, [plan, view, hlStable, shellToday])
+  useEffect(() => {
+    if (camReq) photoEnd.current('off')
+  }, [camReq])
 
   // ----- long-lived objects
   const [graph] = useState(makeGraph)
@@ -427,6 +475,10 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
       { g: graph.west, p: V(0, 0, 0), n: V(-1, 0, 0), hidden: false },
     ]
   }, [geo, below, graph])
+  const cutsRef = useRef(cuts)
+  useEffect(() => {
+    cutsRef.current = cuts
+  })
 
   // ----- latest values for the event handlers and the frame loop
   const live = useRef({ props, geo, rplan })
@@ -581,6 +633,96 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
     flyRef.current(cameraPresets(g, rp)[camReq], { onDone: () => p.onCameraDone?.() })
   }, [camReq])
 
+  // ----- photo mode: start, end, save (the session itself is ./photo.ts)
+  const endPhoto = (phase: 'off' | 'failed') => {
+    const ph = photo.current
+    if (!ph) return
+    photo.current = null
+    ph.session?.stop()
+    ctl.current.orbit = ph.orbit
+    if (ctl.current.controls) ctl.current.controls.enabled = ph.orbit
+    if (layerRef.current) layerRef.current.style.visibility = ''
+    dirty.current = true // re-apply the cut-away and the labels
+    ph.opts.onPhase(phase)
+  }
+  const startPhoto = (opts: PhotoStartOptions) => {
+    if (photo.current) return
+    const settings = photoSettings(coarsePointer(), gl.getPixelRatio())
+    const ph: PhotoState = { opts, session: null, orbit: ctl.current.orbit }
+    photo.current = ph
+    // land a camera flight now (its caller hears it ended), then hold the camera still
+    const c = ctl.current
+    const tw = c.tween
+    if (tw) {
+      c.tween = null
+      camera.position.copy(tw.p)
+      c.controls?.target.copy(tw.t)
+      c.controls?.update()
+      tw.done?.()
+    }
+    c.orbit = false
+    if (c.controls) c.controls.enabled = false
+    if (layerRef.current) layerRef.current.style.visibility = 'hidden'
+    opts.onPhase('preparing')
+    opts.onSamples(0, settings.maxSamples)
+    const load: Promise<PhotoModule> = photoMod.current ? Promise.resolve(photoMod.current) : import('./photo')
+    load
+      .then(async (mod) => {
+        photoMod.current = mod
+        await twoFrames()
+        if (photo.current !== ph) return
+        ph.session = mod.startPhoto(gl, scene, camera, {
+          settings,
+          hide: [helper, graph.dims, graph.walk],
+          cutaway: cutsRef.current.filter((k) => k.hidden).map((k) => k.g),
+          reducedMotion: reducedMotion(),
+          onSamples: (n) => ph.opts.onSamples(n, settings.maxSamples),
+          onDone: () => ph.opts.onPhase('done'),
+        })
+        ph.opts.onPhase('rendering')
+      })
+      .catch((e: unknown) => {
+        console.error('Photo mode could not start', e)
+        if (photo.current === ph) photoEnd.current('failed')
+      })
+  }
+  const savePhoto = async () => {
+    const session = photo.current?.session
+    const mod = photoMod.current
+    if (!session || !mod) throw new Error('No photo to save')
+    const blob = await session.capture() // drawn and read in this same task, before the frame is presented
+    mod.downloadBlob(blob, photoFileName(new Date()))
+  }
+  const photoFns = useRef({ startPhoto, endPhoto, savePhoto })
+  useEffect(() => {
+    photoFns.current = { startPhoto, endPhoto, savePhoto }
+    photoEnd.current = endPhoto
+  })
+  // a press or wheel on the view (an attempt to move the camera) or the tab hidden ends photo mode
+  useEffect(() => {
+    const el = gl.domElement
+    const leave = () => photoEnd.current('off')
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') leave()
+    }
+    el.addEventListener('pointerdown', leave)
+    el.addEventListener('wheel', leave, { passive: true })
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      el.removeEventListener('pointerdown', leave)
+      el.removeEventListener('wheel', leave)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [gl])
+  // one tracer per scene lifetime: freed with the scene
+  useEffect(
+    () => () => {
+      photoEnd.current('off')
+      photoMod.current?.disposePhoto(gl)
+    },
+    [gl],
+  )
+
   useEffect(() => {
     apiRef.current = {
       getCamera: () => camera,
@@ -594,6 +736,9 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
         ctl.current.hook = fn
         if (fn) ctl.current.tween = null
       },
+      startPhoto: (o) => photoFns.current.startPhoto(o),
+      stopPhoto: () => photoFns.current.endPhoto('off'),
+      savePhoto: () => photoFns.current.savePhoto(),
     }
     return () => {
       apiRef.current = null
@@ -685,8 +830,14 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
   useFrame((_, delta) => {
     const c = ctl.current
     const dt = Math.min(0.05, delta)
-    if (c.hook) c.hook(dt, camera)
-    else {
+    // photo mode: the tracer draws; while it prepares, the camera holds still
+    const ph = photo.current
+    if (ph?.session) {
+      ph.session.frame()
+      return
+    }
+    if (!ph && c.hook) c.hook(dt, camera)
+    else if (!ph) {
       const tw = c.tween
       if (tw) {
         const kk = Math.min(1, (performance.now() - tw.start) / tw.dur)

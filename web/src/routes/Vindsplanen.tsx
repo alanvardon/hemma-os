@@ -27,6 +27,7 @@ import SavePanel, { ImportBox } from './vindsplanen/SavePanel'
 import SceneHost from './vindsplanen/SceneHost'
 import { fmt } from './vindsplanen/fmt'
 import { downloadJson } from './vindsplanen/importPlan'
+import { photoStatus, type PhotoPhase } from './vindsplanen/photoMode'
 import { addItem, duplicateItem, newItemId, patchItem, removeItem } from './vindsplanen/planOps'
 import { usePlanEditor } from './vindsplanen/usePlanEditor'
 import { loadViewPrefs, saveViewPrefs } from './vindsplanen/viewPrefs'
@@ -71,7 +72,11 @@ export default function Vindsplanen() {
   const [activeStep, setActiveStep] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
   const [walking, setWalking] = useState(false)
+  /** Photo mode (plan 143): the path tracer's phase and progress, null when off. */
+  const [photo, setPhoto] = useState<{ phase: Exclude<PhotoPhase, 'off' | 'failed'>; samples: number; max: number } | null>(null)
   const sceneRef = useRef<SceneHandle>(null)
+  const photoBtn = useRef<HTMLButtonElement>(null)
+  const photoExit = useRef<HTMLButtonElement>(null)
 
   // Everything derived comes from the pure core. The heavy parts follow a
   // deferred copy so dragging stays smooth.
@@ -96,11 +101,27 @@ export default function Vindsplanen() {
 
   // Esc closes the measuring walkthrough (v41 `endWalk`); walk mode handles its own Esc
   useEffect(() => {
-    if (tab !== 'measure' || !activeStep || walking) return
+    if (tab !== 'measure' || !activeStep || walking || photo) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setActiveStep(null) }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [tab, activeStep, walking])
+  }, [tab, activeStep, walking, photo])
+
+  // Photo mode: Esc leaves it; focus moves to Exit on the way in and back to the button on the way out
+  const photoOn = !!photo
+  const wasPhoto = useRef(false)
+  useEffect(() => {
+    const was = wasPhoto.current
+    wasPhoto.current = photoOn
+    if (!photoOn) {
+      if (was) photoBtn.current?.focus()
+      return
+    }
+    photoExit.current?.focus()
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') exitPhoto() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [photoOn])
 
   const changeTab = (t: Tab) => { setTab(t); if (t !== 'measure') setActiveStep(null) }
   // opening a measuring step leaves walk mode, and starting a walk closes the step (v41 openStep / fpStart)
@@ -108,6 +129,31 @@ export default function Vindsplanen() {
   const openMeasure = (code: string | null) => { setTab('measure'); openStep(code) }
   const startWalk = () => { setActiveStep(null); setSelectedId(null); setCam(null); setWalking(true) }
   const goCamera = (id: CameraPresetId) => { setWalking(false); setCam(id) }
+  const measuring = tab === 'measure' && !!activeStep
+  function startPhoto() {
+    const scene = sceneRef.current
+    if (!scene) return
+    setPhoto({ phase: 'preparing', samples: 0, max: 0 })
+    scene.startPhoto({
+      onPhase: (ph) => {
+        if (ph === 'off' || ph === 'failed') {
+          setPhoto(null)
+          if (ph === 'failed') showToast('Photo mode couldn’t start in this browser.')
+        } else setPhoto((p) => (p && p.phase !== ph ? { ...p, phase: ph } : p))
+      },
+      onSamples: (n, max) => setPhoto((p) => (p && (p.samples !== n || p.max !== max) ? { ...p, samples: n, max } : p)),
+    })
+  }
+  function exitPhoto() {
+    sceneRef.current?.stopPhoto()
+    setPhoto(null)
+  }
+  function savePhoto() {
+    const scene = sceneRef.current
+    if (!scene) return
+    // the image is read synchronously inside this click, before the next frame
+    scene.savePhoto().catch(() => showToast('Couldn’t save the image.'))
+  }
 
   function addNew(type: Parameters<typeof addItem>[1]) {
     const id = newItemId()
@@ -148,6 +194,8 @@ export default function Vindsplanen() {
     setSelectedId(null)
     showToast('Example plan loaded.')
   }
+
+  const photoSt = photo ? photoStatus(photo.phase, photo.samples, photo.max) : null
 
   let body
   if (phase.kind === 'loading') {
@@ -217,7 +265,7 @@ export default function Vindsplanen() {
               <WalkMode sceneRef={sceneRef} geo={geo} plan={plan} onExit={() => setWalking(false)} />
             </Suspense>
           )}
-          <div className="vp-hist" role="group" aria-label="History" hidden={walking}>
+          <div className="vp-hist" role="group" aria-label="History" hidden={walking || photoOn}>
             <button type="button" className="btn btn-ghost" onClick={editor.undo} disabled={!editor.canUndo} title="Undo (Cmd/Ctrl+Z)">
               ↶ Undo
             </button>
@@ -228,17 +276,38 @@ export default function Vindsplanen() {
               Measurements
             </button>
           </div>
-          <div className="vp-cams" role="group" aria-label="Camera" hidden={walking}>
+          <div className="vp-cams" role="group" aria-label="Camera" hidden={walking || photoOn}>
             <button type="button" className="btn btn-ghost vp-walk-btn" aria-pressed={walking} onClick={startWalk} title="Walk through the plan at eye level">
               Walk around
             </button>
+            {!measuring && (
+              <button ref={photoBtn} type="button" className="btn btn-ghost" onClick={startPhoto} title="Render this view like a photograph">
+                Photo mode
+              </button>
+            )}
             {CAMERAS.map((c) => (
               <button key={c.id} type="button" className="btn btn-ghost" onClick={() => goCamera(c.id)}>
                 {c.label}
               </button>
             ))}
           </div>
-          {view.zones && !walking && (
+          {photo && photoSt && (
+            <div className="vp-photo" role="group" aria-label="Photo mode">
+              <p className="vp-photo-status">
+                <span role="status" aria-live="polite">{photo.phase === 'done' ? `${photoSt.label} · ${photoSt.count}` : photoSt.label}</span>
+                {photo.phase === 'rendering' && <span className="vp-photo-count" aria-hidden="true">{photoSt.count}</span>}
+              </p>
+              <div className="vp-photo-acts">
+                <button type="button" className="btn btn-primary" onClick={savePhoto} disabled={photo.phase === 'preparing'}>
+                  Save image
+                </button>
+                <button ref={photoExit} type="button" className="btn btn-ghost" onClick={exitPhoto} title="Back to the 3D view (Esc)">
+                  Exit
+                </button>
+              </div>
+            </div>
+          )}
+          {view.zones && !walking && !photoOn && (
             <div className="vp-legend" aria-label="Legend">
               <span><i className="vp-sw vp-sw-stand" aria-hidden="true" />Standing height, ≥ 1,90 m</span>
               <span><i className="vp-sw vp-sw-boa" aria-hidden="true" />Also counts as living area (+60 cm)</span>

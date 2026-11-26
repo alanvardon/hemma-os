@@ -34,6 +34,9 @@ vi.mock('./vindsplanen/scene/Scene', () => ({
       flyTo: (c, o) => { h.flights.push({ ...c, instant: o?.instant }) },
       setOrbitEnabled: (on) => { h.orbit.push(on) },
       setFrameHook: (fn) => { h.hook = fn },
+      startPhoto: () => {},
+      stopPhoto: () => {},
+      savePhoto: () => Promise.resolve(),
     }), [])
     return <canvas data-testid="scene" />
   },
