@@ -1084,7 +1084,11 @@ test('Vindsplanen: a v41 export imported on the Save tab is saved and shown afte
 })
 
 test('Vindsplanen: a revision conflict asks which version to keep, and both choices work', async ({ page }) => {
-  test.setTimeout(60_000) // two debounced saves + two conflicts + a reload
+  // Four debounced saves, two conflicts and TWO full page loads after the
+  // first ("Ladda molnversionen" itself calls window.location.reload()). Each
+  // load restarts the 3D scene, which on SwiftShader blocks the page's main
+  // thread for several seconds; 60 s left no headroom on CI.
+  test.setTimeout(120_000)
   const errors = trackPageErrors(page)
   const backend = await mockBackend(page)
   await page.setViewportSize({ width: 390, height: 844 })
@@ -1097,7 +1101,11 @@ test('Vindsplanen: a revision conflict asks which version to keep, and both choi
   backend.remoteUpdateAtticPlan((p) => { p.items = p.items.filter((i) => i.type !== 'sofa') })
   await page.getByRole('button', { name: '+ Storage room' }).click()
   await expect(page.locator('.persistence-conflict')).toBeVisible({ timeout: 10_000 })
+  // "Ladda molnversionen" reloads the page: assert on the reloaded page, not
+  // on the old one racing its unload.
+  const reloaded = page.waitForEvent('load')
   await page.getByRole('button', { name: 'Ladda molnversionen' }).click()
+  await reloaded
   await expect(page.locator('.persistence-conflict')).not.toBeVisible()
   await expect(page.locator('.vp-list')).toBeVisible()
   await expect(page.locator('.vp-list')).not.toContainText('Sofa')
