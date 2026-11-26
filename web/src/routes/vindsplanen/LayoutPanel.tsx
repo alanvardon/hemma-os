@@ -5,18 +5,21 @@ import type { Geometry } from '../../lib/vindsplanen/attic'
 import { ADD_ORDER } from '../../lib/vindsplanen/items'
 import type { Item, ItemType, PlanV2 } from '../../lib/vindsplanen/plan'
 import type { Zones } from '../../lib/vindsplanen/zones'
+import type { RuleResult } from '../../lib/vindsplanen/rules'
 import { realWarnings, type Warning } from '../../lib/vindsplanen/warnings'
 import { fmt } from './fmt'
 import ItemEditor from './ItemEditor'
 import { TYPE_LABEL, describeItem } from './itemText'
+import RulesPanel from './RulesPanel'
 
 export default function LayoutPanel({
-  geo, plan, zones, warnings, holesOk, selectedId, onSelect, onAdd, onPatch, onDuplicate, onDelete,
+  geo, plan, zones, warnings, rules, holesOk, selectedId, onSelect, onAdd, onPatch, onDuplicate, onDelete,
 }: {
   geo: Geometry
   plan: PlanV2
   zones: Zones
   warnings: Record<string, Warning[]>
+  rules: readonly RuleResult[]
   holesOk: ReadonlySet<string>
   selectedId: string | null
   onSelect: (id: string | null) => void
@@ -96,6 +99,8 @@ export default function LayoutPanel({
           ))}
         </div>
       </div>
+
+      <RulesPanel rules={rules} items={plan.items} selectedId={selectedId} onSelect={onSelect} />
     </div>
   )
 }

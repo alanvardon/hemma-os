@@ -153,6 +153,12 @@ export interface CurvedInfo {
   downHead: number
   /** Narrowest walk-past width left in the hallway below. */
   minFree: number
+  /**
+   * Spiral stairs: the tightest clearance from a step to the underside of the
+   * top landing above it (Infinity for curved stairs, or when no step is under
+   * the landing). The number behind 'spiral-landing-head'.
+   */
+  landingHead: number
   warn: Warning[]
 }
 
@@ -213,9 +219,9 @@ export function curvedInfo(geo: Geometry, plan: PlanSlice, it: UpStair, holeClas
   }
   if (op.some(([x, z]) => Math.abs(z) > KZ + 0.01 && !bayOpen(x, z))) out.push(W('up-knee-wall'))
   if (holeClash.has(it.id)) out.push(W('up-hole-clash'))
+  let lowest = Infinity
   if (P.spiral) {
     const landing = P.landing as Pt[]
-    let lowest = Infinity
     let k = 0
     P.treads.forEach((tr, i) => {
       if (tr.landing) return
@@ -250,7 +256,7 @@ export function curvedInfo(geo: Geometry, plan: PlanSlice, it: UpStair, holeClas
     })
   })
   if (blockedDoors.length) out.push(W('up-door-blocked', { count: blockedDoors.length, walls: blockedDoors.map((d) => d.wall).join(',') }))
-  return { P, head, downHead, minFree, warn: out }
+  return { P, head, downHead, minFree, landingHead: lowest, warn: out }
 }
 
 // ---------- Storage room and closet
