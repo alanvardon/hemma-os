@@ -46,11 +46,32 @@
 //     it, KZ·(H + KNEE_H), counted on BOTH faces (a partition is finished on
 //     both sides)
 //   − the door opening, WALL_DOOR_W × dh from `wallInfo`, on both faces.
-//   Storage-room and closet walls are not included (plan 150 lists knee
-//   walls, gables and partition walls only).
+//   + storage rooms (owner decision 2026-11-26), the room-facing side of the
+//     new walls only, as buildStorage builds them from `storageGeom`:
+//       front wall x0..xe at zf, hF high (= roofY(zf)), (xe − x0)·hF
+//       side walls at x0 and x1 from zf back to zb, top following the roof,
+//         ∫ roofY dz over zf..zb — skipped where a partition wall already
+//         stands (sharedX0 / sharedX1) or where the side lies on a gable
+//         (within SHARED_TOL of x = 0 or L), so no surface counts twice
+//       with the corner part (ext) instead of the plain x1 side wall:
+//         the side wall at x1 from ext.zn to zb (∫ roofY), the wall along
+//         the stair run x1..ext.x2 at ext.zn, roofY(ext.zn) high, and the
+//         end piece at ext.x2, the trapezoid zf..ext.zn with heights hF and
+//         roofY(ext.zn) exactly as the scene draws it
+//       The back (knee wall, or eaves) is not a new wall.
+//   − the storage door opening dw × dh — for every door type: 'none' is an
+//     open doorway (ItemEditor "Open doorway"), and the scene cuts the same
+//     opening for it (buildStorage always passes the door to frontWall)
+//   + closets, as buildCloset builds them from `closetGeom`: the long side at
+//     xi from zd back to zb (∫ roofY dz) and the door end x0..x1 at zd, hD
+//     high, d·hD; the gable and the knee wall behind it are not new walls
+//   − the closet door opening dw × dh (as the drawing's schedule reports it).
+//   ∫ roofY is exact (piecewise linear, kinked at the ridge z = 0); the scene
+//   samples the same line with 8 points and floors it at 2 cm, which differs
+//   by less than a few cm² and is ignored.
 
-import { boardSpan, type Geometry } from './attic'
-import { gableWindowFit, skyHolesOk, skyRect } from './items'
+import { boardSpan, roofY, type Geometry } from './attic'
+import { closetGeom, gableWindowFit, skyHolesOk, skyRect, storageGeom } from './items'
 import { isPrice, PRICE_KEYS, type PlanV2, type PriceKey, type Prices, type SkylightItem } from './plan'
 import { clipBox, stairHoles, type Pt } from './stairs'
 import { WALL_DOOR_W, wallInfo } from './warnings'
@@ -85,6 +106,27 @@ export interface QuantityParts {
   partitions: number
   /** Partition door openings, both faces. */
   partitionDoors: number
+  /** Storage-room walls, room-facing side, before door openings. */
+  storageWalls: number
+  /** Storage-room door openings. */
+  storageDoors: number
+  /** Closet walls, room-facing side, before door openings. */
+  closetWalls: number
+  /** Closet door openings. */
+  closetDoors: number
+}
+
+/** How close (m) a storage side wall must be to a gable to count as standing on it — the tolerance storageGeom uses for partitions. */
+const SHARED_TOL = 0.12
+
+/** ∫ roofY dz from za to zb, ≥ 0, exact: roofY = SLOPE·(HALF − |z|), 0 beyond the eaves. */
+export function roofArea(geo: Pick<Geometry, 'HALF' | 'SLOPE'>, za: number, zb: number): number {
+  const { HALF, SLOPE } = geo
+  const F = (z: number) => {
+    const c = Math.max(-HALF, Math.min(HALF, z))
+    return SLOPE * (HALF * c - (c * Math.abs(c)) / 2)
+  }
+  return Math.abs(F(zb) - F(za))
 }
 
 /** Area of a simple polygon (shoelace), always ≥ 0. */
@@ -182,6 +224,27 @@ export function quantityParts(geo: Geometry, plan: Pick<PlanV2, 'items' | 'optio
     partitions += 2 * inner
     if (it.door) partitionDoors += 2 * WALL_DOOR_W * Math.max(0, wallInfo(geo, it).dh)
   })
+  let storageWalls = 0
+  let storageDoors = 0
+  let closetWalls = 0
+  let closetDoors = 0
+  const onGable = (x: number) => x < SHARED_TOL || x > L - SHARED_TOL
+  plan.items.forEach((it) => {
+    if (it.type === 'storage') {
+      const S = storageGeom(geo, plan, it)
+      storageWalls += (S.xe - S.x0) * S.hF
+      if (!S.sharedX0 && !onGable(S.x0)) storageWalls += roofArea(geo, S.zf, S.zb)
+      if (S.ext) {
+        const hn = roofY(geo, S.ext.zn)
+        storageWalls += roofArea(geo, S.ext.zn, S.zb) + (S.ext.x2 - S.x1) * hn + (Math.abs(S.ext.zn - S.zf) * (S.hF + hn)) / 2
+      } else if (!S.sharedX1 && !onGable(S.x1)) storageWalls += roofArea(geo, S.zf, S.zb)
+      storageDoors += Math.max(0, S.dw) * Math.max(0, S.dh)
+    } else if (it.type === 'closet') {
+      const C = closetGeom(geo, plan, it)
+      closetWalls += roofArea(geo, C.zd, C.zb) + (C.x1 - C.x0) * C.hD
+      closetDoors += Math.max(0, C.dw) * Math.max(0, C.dh)
+    }
+  })
 
   return {
     floorInside,
@@ -197,6 +260,10 @@ export function quantityParts(geo: Geometry, plan: Pick<PlanV2, 'items' | 'optio
     gableWindow,
     partitions,
     partitionDoors,
+    storageWalls,
+    storageDoors,
+    closetWalls,
+    closetDoors,
   }
 }
 
@@ -206,7 +273,8 @@ export function quantities(geo: Geometry, plan: Pick<PlanV2, 'items' | 'options'
   return {
     floor: p.floorInside - p.floorInsideHoles + p.floorEaves - p.floorEavesHoles,
     panel: p.panelGross - p.panelWindows,
-    walls: p.kneeWalls + p.gables - p.gableWindow + p.partitions - p.partitionDoors,
+    walls:
+      p.kneeWalls + p.gables - p.gableWindow + p.partitions - p.partitionDoors + p.storageWalls - p.storageDoors + p.closetWalls - p.closetDoors,
     insulation: p.insulationGross - p.insulationWindows,
   }
 }
@@ -217,28 +285,41 @@ export interface CostLine {
   m2: number
   /** kr/m² incl. VAT, or null when not entered. */
   price: number | null
-  /** m2 × price at full precision, or null when the price is not entered. */
+  /** m2 × price at full precision; 0 when m2 is 0; null when m2 > 0 and the price is not entered. */
   kr: number | null
 }
 
 /**
+ * Below this many m² a quantity counts as 0 (owner decision 2026-11-26). It
+ * absorbs float noise from subtracting openings (e.g. 1e-15 left over) — far
+ * below anything that could carry a price (1e-9 m² × 10 000 kr/m² = 0.00001 kr).
+ */
+export const ZERO_M2 = 1e-9
+
+/**
  * One line per quantity, in PRICE_KEYS order. A price that is not a finite
  * number ≥ 0 (null, missing, or anything sanitizePrices would refuse) counts
- * as not entered: kr is null, never 0. A price of 0 gives 0 kr.
+ * as not entered. A line with 0 m² (|m2| < ZERO_M2) is never missing: its kr
+ * is 0 whatever the price (owner decision 2026-11-26). A line with m² > 0 and
+ * no price has kr null, never 0. A price of 0 gives 0 kr.
  */
 export function costLines(q: Quantities, prices: Prices | undefined): CostLine[] {
   return PRICE_KEYS.map((key) => {
     const v = prices?.[key]
     const price = isPrice(v) ? v : null
-    return { key, m2: q[key], price, kr: price === null ? null : q[key] * price }
+    const m2 = q[key]
+    const kr = Math.abs(m2) < ZERO_M2 ? 0 : price === null ? null : m2 * price
+    return { key, m2, price, kr }
   })
 }
 
 /**
  * The estimated material cost: the sum of the priced lines, kr at full
  * precision (round for display only), and the lines left out because their
- * price is not entered. With every price missing, kr is 0 and `missing`
- * lists all four — the caller must not present that 0 as an estimate.
+ * price is not entered (only lines with m² > 0 can be missing; a 0 m² line
+ * adds 0 kr and never blocks the total). With every line missing, kr is 0
+ * and `missing` lists them all — the caller must not present that 0 as an
+ * estimate.
  */
 export function costTotal(lines: readonly CostLine[]): { kr: number; missing: QuantityKey[] } {
   let kr = 0

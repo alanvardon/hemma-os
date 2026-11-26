@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ATTIC_DEF, atticOf, deriveGeometry } from './attic'
 import { examplePlan, PRICES_NONE, type PlanV2, type Prices } from './plan'
-import { costLines, costTotal, polygonArea, quantities, quantityParts, type Quantities } from './quantities'
+import { costLines, costTotal, polygonArea, quantities, quantityParts, roofArea, ZERO_M2, type Quantities } from './quantities'
 
 // Hand calculation for the default attic (ATTIC_DEF):
 //   len L = 8.5, knee 2.87 → KZ = 1.435, kneeH 0.9418, ridge H = 2.6
@@ -92,6 +92,127 @@ describe('quantities — the example plan (hand-computed)', () => {
 
   it('insulation: nothing boarded = 0 m²', () => {
     expect(q.insulation).toBe(0)
+  })
+
+  it('has no storage room or closet, so their wall terms are 0', () => {
+    expect(p.items.some((i) => i.type === 'storage' || i.type === 'closet')).toBe(false)
+    expect([parts.storageWalls, parts.storageDoors, parts.closetWalls, parts.closetDoors]).toEqual([0, 0, 0, 0])
+  })
+})
+
+// Storage rooms and closets (owner decision 2026-11-26): the room-facing side
+// of their new walls, minus door openings. roofY(z) = (HALF − |z|)·SLOPE,
+//   HALF = 2.250030153, SLOPE = 1.155540070, roofY(KZ) = KNEE_H = 0.9418.
+// A wall under the roof from z = a to z = b (same side of the ridge) is a
+// trapezoid: |b − a|·(roofY(a) + roofY(b))/2.
+describe('quantities — storage rooms and closets (hand-computed)', () => {
+  type Storage = Extract<PlanV2['items'][number], { type: 'storage' }>
+  type Closet = Extract<PlanV2['items'][number], { type: 'closet' }>
+  const storage = (o: Partial<Storage>): Storage => ({ id: 'st', type: 'storage', x: 2.0, z: 0, rot: 0, w: 1.2, d: 1.0, side: 'S', door: 'slide', wrap: false, ...o })
+  const closet = (o: Partial<Closet>): Closet => ({ id: 'cl', type: 'closet', wall: 'W', side: 'S', fit: false, d: 0.55, len: 1.0, ...o })
+  // roofY(0.435) = (2.250030153 − 0.435)·1.155540070 = 1.815030153·1.155540070 = 2.097340070
+  const H435 = 2.09734007
+  const BASE_WALLS = 16.0106 + 10.164966 // knee walls + gables, no items
+
+  it('roofArea: trapezoid on one side, split at the ridge', () => {
+    // 0.435..1.435: 1.0·(2.097340070 + 0.9418)/2 = 1.519570035
+    expect(roofArea(geo, 0.435, 1.435)).toBeCloseTo(1.519570035, 8)
+    expect(roofArea(geo, 1.435, 0.435)).toBeCloseTo(1.519570035, 8)
+    // −KZ..KZ = the gable inside the knee walls, 5.082483
+    expect(roofArea(geo, -1.435, 1.435)).toBeCloseTo(GABLE_INNER, 9)
+    // beyond the eaves adds nothing
+    expect(roofArea(geo, 0, 5)).toBeCloseTo(roofArea(geo, 0, geo.HALF), 12)
+  })
+
+  it('storage room, south, x 1.4..2.6, d 1.0, sliding door: 5.555948 − 1.6 = 3.955948 m²', () => {
+    // storageGeom: x0 = 2.0 − 0.6 = 1.4, x1 = 2.6, zf = KZ − d = 0.435, zb = KZ = 1.435 (bay 1 knee wall kept)
+    //   hF = roofY(0.435) = 2.097340070; no stair → no corner part, xe = x1; no partitions → no shared sides
+    //   front wall: (2.6 − 1.4)·2.097340070 = 1.2·2.097340070 = 2.516808084
+    //   side walls x0 and x1: 2 · 1.0·(2.097340070 + 0.9418)/2 = 2 · 1.519570035 = 3.039140070
+    //   walls = 2.516808084 + 3.039140070 = 5.555948153
+    //   door: dw = min(0.8, 1.2 − 0.25) = 0.8, dh = min(2.0, 2.097340070 − 0.08) = 2.0 → 1.6
+    const plan = withOptions({}, [storage({})])
+    const p = quantityParts(geo, plan)
+    expect(p.storageWalls).toBeCloseTo(1.2 * H435 + 2 * 1.519570035, 8)
+    expect(p.storageWalls).toBeCloseTo(5.555948153, 8)
+    expect(p.storageDoors).toBeCloseTo(1.6, 12)
+    // total walls 26.175566 + 5.555948153 − 1.6 = 30.131514153
+    expect(quantities(geo, plan).walls).toBeCloseTo(BASE_WALLS + 3.955948153, 8)
+    expect(quantities(geo, plan).walls).toBeCloseTo(30.131514153, 8)
+  })
+
+  it("door 'hinge' and 'none' (an open doorway) cut the same opening as 'slide'", () => {
+    // 'none' is "Open doorway" in the editor; buildStorage cuts the dw × dh opening for every door type
+    const none = quantityParts(geo, withOptions({}, [storage({ door: 'none' })]))
+    const hinge = quantityParts(geo, withOptions({}, [storage({ door: 'hinge' })]))
+    expect(none.storageDoors).toBeCloseTo(1.6, 12)
+    expect(hinge.storageDoors).toBeCloseTo(1.6, 12)
+    expect(none.storageWalls).toBeCloseTo(5.555948153, 8)
+  })
+
+  it('storage room against a partition wall: that side is not counted again', () => {
+    // x 5.4, w 1.2 → x0 = 4.8, where w1 stands (sharedX0); south side, so no corner part by c1 (north)
+    //   front 2.516808084 + one side (x1 = 6.0) 1.519570035 = 4.036378119
+    const items = [...examplePlan().items, storage({ x: 5.4, wrap: true })]
+    const p = quantityParts(geo, withOptions({}, items))
+    expect(p.storageWalls).toBeCloseTo(4.036378119, 8)
+    expect(p.storageDoors).toBeCloseTo(1.6, 12)
+  })
+
+  it('storage room against the west gable: that side is not counted again', () => {
+    // x 0.6, w 1.2 → x0 = 0 (on the gable), x1 = 1.2: front 2.516808084 + one side 1.519570035 = 4.036378119
+    expect(quantityParts(geo, withOptions({}, [storage({ x: 0.6 })])).storageWalls).toBeCloseTo(4.036378119, 8)
+  })
+
+  it('storage room with the corner part beside the L-shaped stair opening: 7.010063 − 1.428986 m²', () => {
+    // north side, x 5.6, w 1.2, d 0.8, wrap; stair c1 only (its opening starts at x 6.32, pivot (7.04, −1.15))
+    //   x0 = 5.0, x1 = 6.2, zf = −(1.435 − 0.8) = −0.635, zb = −1.435
+    //   corner: x2 = 7.04 − 0.05 = 6.99, zn = −1.15 + 0.05 = −1.1; xe = 6.99
+    //   hF = roofY(0.635) = 1.615030153·1.155540070 = 1.866232056
+    //   hn = roofY(1.1) = 1.150030153·1.155540070 = 1.328905923
+    //   front wall x0..xe: 1.99·1.866232056 = 3.713801791
+    //   side x0, 0.635..1.435: 0.8·(1.866232056 + 0.9418)/2 = 1.123212822
+    //   side x1 behind the corner, 1.1..1.435: 0.335·(1.328905923 + 0.9418)/2 = 0.380343242
+    //   along the stair run x1..x2 at zn: 0.79·1.328905923 = 1.049835679
+    //   end piece at x2, zf..zn: 0.465·(1.866232056 + 1.328905923)/2 = 0.742869580
+    //   walls = 3.713801791 + 1.123212822 + 0.380343242 + 1.049835679 + 0.742869580 = 7.010063115
+    //   door: dw 0.8, dh = min(2.0, 1.866232056 − 0.08) = 1.786232056 → 1.428985645
+    const c1 = examplePlan().items.find((i) => i.id === 'c1')!
+    const p = quantityParts(geo, withOptions({}, [c1, storage({ x: 5.6, d: 0.8, side: 'N', wrap: true })]))
+    expect(p.storageWalls).toBeCloseTo(7.010063115, 8)
+    expect(p.storageDoors).toBeCloseTo(1.428985645, 8)
+  })
+
+  it('closet, west gable, south, d 0.55, len 1.0: 2.673107 − 0.86 = 1.813107 m²', () => {
+    // closetGeom (fit off): xg = 0, xi = 0.55, zb = KZ = 1.435 (bay 0 kept), zd = 1.435 − 1.0 = 0.435
+    //   hD = roofY(0.435) = 2.097340070
+    //   long side at xi, 0.435..1.435: 1.0·(2.097340070 + 0.9418)/2 = 1.519570035
+    //   door end x 0..0.55 at zd: 0.55·2.097340070 = 1.153537038
+    //   walls = 1.519570035 + 1.153537038 = 2.673107073
+    //   door: dw = max(0.3, min(0.6, 0.55 − 0.12)) = 0.43, dh = min(2.0, 2.097340070 − 0.08) = 2.0 → 0.86
+    const plan = withOptions({}, [closet({})])
+    const p = quantityParts(geo, plan)
+    expect(p.closetWalls).toBeCloseTo(2.673107073, 8)
+    expect(p.closetDoors).toBeCloseTo(0.86, 12)
+    // total walls 26.175566 + 2.673107073 − 0.86 = 27.988673073
+    expect(quantities(geo, plan).walls).toBeCloseTo(BASE_WALLS + 1.813107073, 8)
+    expect(quantities(geo, plan).walls).toBeCloseTo(27.988673073, 8)
+  })
+
+  it('closet whose long side crosses the ridge: the roof profile is split at z = 0', () => {
+    // len 1.5: zd = 1.435 − 1.5 = −0.065, hD = roofY(0.065) = 2.185030153·1.155540070 = 2.524889895
+    //   long side −0.065..1.435 = (0..1.435) + (0..0.065)
+    //     = 1.435·(2.6 + 0.9418)/2 + 0.065·(2.6 + 2.524889895)/2 = 2.5412415 + 0.166558922 = 2.707800422
+    //   door end 0.55·2.524889895 = 1.388689442 → walls 4.096489864; door 0.43·2.0 = 0.86
+    const p = quantityParts(geo, withOptions({}, [closet({ len: 1.5 })]))
+    expect(p.closetWalls).toBeCloseTo(4.096489864, 8)
+    expect(p.closetDoors).toBeCloseTo(0.86, 12)
+  })
+
+  it('the example plan plus the storage room and the closet', () => {
+    // 33.140532 + (5.555948153 − 1.6) + (2.673107073 − 0.86) = 33.140532 + 3.955948153 + 1.813107073 = 38.909587226
+    const items = [...examplePlan().items, storage({}), closet({})]
+    expect(quantities(geo, withOptions({}, items)).walls).toBeCloseTo(38.909587226, 8)
   })
 })
 
@@ -250,7 +371,7 @@ describe('costLines / costTotal', () => {
     expect(Number.isInteger(lines[0].kr)).toBe(false) // not rounded in the core
     const t = costTotal(lines)
     expect(t.kr).toBeCloseTo(9640.7, 9)
-    expect(t.missing).toEqual(['panel', 'walls', 'insulation'])
+    expect(t.missing).toEqual(['panel', 'walls']) // insulation is 0 m², never missing
   })
 
   it('price 0 is included as 0 kr, not missing', () => {
@@ -259,11 +380,19 @@ describe('costLines / costTotal', () => {
     expect(costTotal(lines)).toEqual({ kr: 0, missing: [] })
   })
 
-  it('null prices are excluded and listed as missing, never 0', () => {
+  it('null prices on lines with m² > 0 are excluded and listed as missing, never 0', () => {
+    // insulation is 0 m² here, so only the other three can be missing
     const lines = costLines(q, PRICES_NONE)
+    expect(lines.map((l) => l.kr)).toEqual([null, null, null, 0])
+    expect(costTotal(lines)).toEqual({ kr: 0, missing: ['floor', 'panel', 'walls'] })
+    expect(costTotal(costLines(q, undefined)).missing).toEqual(['floor', 'panel', 'walls'])
+  })
+
+  it('all four prices null with all four areas > 0: kr 0 and all four missing (not an estimate)', () => {
+    const all: Quantities = { floor: 21.4, panel: 34.5, walls: 33.1, insulation: 12 }
+    const lines = costLines(all, PRICES_NONE)
     expect(lines.map((l) => l.kr)).toEqual([null, null, null, null])
     expect(costTotal(lines)).toEqual({ kr: 0, missing: ['floor', 'panel', 'walls', 'insulation'] })
-    expect(costTotal(costLines(q, undefined)).missing).toEqual(['floor', 'panel', 'walls', 'insulation'])
   })
 
   it('mixed: priced lines summed, the rest missing', () => {
@@ -274,14 +403,30 @@ describe('costLines / costTotal', () => {
     expect(t.missing).toEqual(['walls'])
   })
 
-  it('a quantity of 0 with no price is still reported missing (owner rule: null is never 0)', () => {
-    const t = costTotal(costLines(q, { floor: 1, panel: 1, walls: 1, insulation: null }))
+  it('a 0 m² line with no price is not missing and does not block the total (owner decision 2026-11-26)', () => {
+    // insulation 0 m², price null → kr 0; floor 21.4 + panel 34.5 + walls 33.1 at 1 kr/m² = 89.0
+    const lines = costLines(q, { floor: 1, panel: 1, walls: 1, insulation: null })
+    expect(lines[3]).toEqual({ key: 'insulation', m2: 0, price: null, kr: 0 })
+    const t = costTotal(lines)
+    expect(t.missing).toEqual([])
+    expect(t.kr).toBeCloseTo(89, 12)
+  })
+
+  it('a line with m² > 0 and no price is missing', () => {
+    const t = costTotal(costLines({ ...q, insulation: 5 }, { floor: 1, panel: 1, walls: 1, insulation: null }))
     expect(t.missing).toEqual(['insulation'])
+    expect(t.kr).toBeCloseTo(89, 12)
+  })
+
+  it('float noise below ZERO_M2 counts as 0 m²; at ZERO_M2 it is a real area', () => {
+    expect(costLines({ ...q, insulation: 1e-15 }, PRICES_NONE)[3].kr).toBe(0)
+    expect(costLines({ ...q, insulation: 1e-15 }, { ...PRICES_NONE, insulation: 500 })[3].kr).toBe(0)
+    expect(costLines({ ...q, insulation: ZERO_M2 }, PRICES_NONE)[3].kr).toBeNull()
   })
 
   it('invalid prices that bypassed sanitize count as not entered', () => {
     const bad = { floor: -1, panel: Number.NaN, walls: '450', insulation: Number.POSITIVE_INFINITY } as unknown as Prices
-    const lines = costLines(q, bad)
+    const lines = costLines({ ...q, insulation: 12 }, bad)
     expect(lines.map((l) => l.price)).toEqual([null, null, null, null])
     expect(costTotal(lines).missing).toHaveLength(4)
   })
