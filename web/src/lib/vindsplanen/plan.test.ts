@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ATTIC_DEF, deriveGeometry } from './attic'
-import { defaultViewPrefs, examplePlan, isMonthDay, num, sanitizePlan, sanitizeShape, sanitizeSite, sanitizeViewPrefs, SITE_DEF, type BedItem, type PlanV2 } from './plan'
+import { defaultViewPrefs, examplePlan, isMonthDay, num, PRICES_NONE, sanitizePlan, sanitizePrices, sanitizeShape, sanitizeSite, sanitizeViewPrefs, SITE_DEF, type BedItem, type PlanV2 } from './plan'
 import { importV1 } from './legacy'
 import { expectClose, FIXTURE_NAMES, loadGold, loadJson, v1ToV2 } from './testkit'
 
@@ -138,6 +138,55 @@ describe('site (plan 144)', () => {
   it('a v1 (v41) import has no site and gets the default', () => {
     const r = importV1({ ...examplePlanAsV1(), v: 1 })
     expect(r.ok && r.plan.options.site).toEqual(SITE_DEF)
+  })
+})
+
+describe('prices (plan 150)', () => {
+  it('a plan without prices loads with every price not entered (null)', () => {
+    expect(PRICES_NONE).toEqual({ floor: null, panel: null, walls: null, insulation: null })
+    expect((sanitizePlan({ v: 2, items: [] }) as PlanV2).prices).toEqual(PRICES_NONE)
+    expect(examplePlan().prices).toEqual(PRICES_NONE)
+    expect(sanitizePrices(undefined)).toEqual(PRICES_NONE)
+    expect(sanitizePrices(null)).toEqual(PRICES_NONE)
+    expect(sanitizePrices('450')).toEqual(PRICES_NONE)
+    expect(sanitizePrices([450])).toEqual(PRICES_NONE)
+  })
+
+  it('keeps finite prices ≥ 0 exactly, including 0 and decimals', () => {
+    const p = sanitizePlan({ v: 2, items: [], prices: { floor: 450.5, panel: 0, walls: 1234567.89, insulation: 0.01 } }) as PlanV2
+    expect(p.prices).toEqual({ floor: 450.5, panel: 0, walls: 1234567.89, insulation: 0.01 })
+    expect(Object.is(sanitizePrices({ floor: -0 }).floor, 0)).toBe(true)
+  })
+
+  it('invalid prices become null — not clamped, not coerced', () => {
+    expect(sanitizePrices({ floor: -1, panel: Number.NaN, walls: '450', insulation: Number.POSITIVE_INFINITY })).toEqual(PRICES_NONE)
+    expect(sanitizePrices({ floor: true, panel: Number.NEGATIVE_INFINITY, walls: null, insulation: {} })).toEqual(PRICES_NONE)
+    expect(sanitizePrices({ floor: -0.01, panel: '', walls: false, insulation: [1] })).toEqual(PRICES_NONE)
+  })
+
+  it('one bad field does not touch the others; unknown fields are dropped', () => {
+    expect(sanitizePrices({ floor: 450, panel: -5, extra: 9 })).toEqual({ floor: 450, panel: null, walls: null, insulation: null })
+  })
+
+  it('round-trips through sanitizePlan and JSON, and is idempotent', () => {
+    const p = examplePlan()
+    p.prices = { floor: 450.5, panel: 0, walls: null, insulation: 199 }
+    const once = sanitizePlan(JSON.parse(JSON.stringify(p))) as PlanV2
+    expect(once.prices).toEqual({ floor: 450.5, panel: 0, walls: null, insulation: 199 })
+    expect(sanitizePlan(JSON.parse(JSON.stringify(once)))).toEqual(once)
+  })
+
+  it('an older plan without prices keeps the rest of its data', () => {
+    const p = examplePlan()
+    delete p.prices
+    const once = sanitizePlan(JSON.parse(JSON.stringify(p))) as PlanV2
+    expect(once.items).toEqual(examplePlan().items)
+    expect(once.prices).toEqual(PRICES_NONE)
+  })
+
+  it('a v1 (v41) import has no prices and gets all null', () => {
+    const r = importV1({ ...examplePlanAsV1(), v: 1 })
+    expect(r.ok && r.plan.prices).toEqual(PRICES_NONE)
   })
 })
 
