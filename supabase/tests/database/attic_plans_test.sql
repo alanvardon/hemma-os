@@ -2,9 +2,10 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 -- Plan 140: attic_plans is a household-owned, revisioned sync resource whose
--- `plan` jsonb document round-trips through sync_apply_rows. All data is
+-- `plan` jsonb document round-trips through sync_apply_rows; plan 149 adds
+-- durable variant deletes through sync_delete_rows. All data is
 -- fictional and everything rolls back.
-select plan(17);
+select plan(35);
 
 insert into auth.users(id, email) values
   ('61000000-0000-0000-0000-000000000001', 'attic-a@example.invalid'),
@@ -98,13 +99,74 @@ select is((public.sync_apply_rows(
   '[{"id":"63000000-0000-0000-0000-00000000000b","plan":{"v":2,"items":[]}}]',
   '{"attic_plans:63000000-0000-0000-0000-00000000000b":null}', false
 )->>'status'), 'conflict', 'household B''s row id cannot be written from household A');
+-- Plan 149: variants are separate rows that the household can delete through
+-- the durable, tombstone-writing sync_delete_rows RPC (as house_items).
+select is((public.sync_apply_rows(
+  'attic-create-variant', 'attic_plans',
+  '[{"id":"63000000-0000-0000-0000-00000000000c","name":"Plan B","schema_version":2,"plan":{"v":2,"items":[]}}]',
+  '{"attic_plans:63000000-0000-0000-0000-00000000000c":null}', false
+)->>'status'), 'applied', 'a second plan variant row can be created');
+select is((select count(*) from public.attic_plans), 2::bigint,
+  'household A now holds two plan variants');
 select throws_ok(
   $$select public.sync_delete_rows(
-    'attic-delete', 'attic_plans', array['63000000-0000-0000-0000-00000000000a'],
-    '{"attic_plans:63000000-0000-0000-0000-00000000000a":2}'
+    'attic-delete-bad-id', 'attic_plans', array['not-a-uuid'],
+    '{"attic_plans:not-a-uuid":null}'
   )$$,
-  '22023', 'unsupported generic delete resource', 'attic plans have no client delete path'
+  '22023', 'invalid attic plan id', 'a non-uuid attic plan id is rejected before any tombstone'
 );
+select is((public.sync_delete_rows(
+  'attic-delete-stale', 'attic_plans', array['63000000-0000-0000-0000-00000000000a'],
+  '{"attic_plans:63000000-0000-0000-0000-00000000000a":1}'
+)->>'status'), 'conflict', 'a delete from a stale revision is a conflict');
+select is((select count(*) from public.attic_plans where id = '63000000-0000-0000-0000-00000000000a'), 1::bigint,
+  'a conflicting delete leaves the plan in place');
+select is((public.sync_delete_rows(
+  'attic-delete-own', 'attic_plans', array['63000000-0000-0000-0000-00000000000a'],
+  '{"attic_plans:63000000-0000-0000-0000-00000000000a":2}'
+)), '{"status":"applied","revisions":{"attic_plans:63000000-0000-0000-0000-00000000000a":null}}'::jsonb,
+  'the household deletes its own plan variant at the current revision');
+select is((select count(*) from public.attic_plans where id = '63000000-0000-0000-0000-00000000000a'), 0::bigint,
+  'the deleted plan is absent');
+select ok((select (data #> '{resources,attic_plans}') ? '63000000-0000-0000-0000-00000000000a'
+  from public.tool_state where tool = 'sync-tombstones-v1'), 'the attic plan tombstone is recorded');
+select is((public.sync_delete_rows(
+  'attic-delete-own', 'attic_plans', array['63000000-0000-0000-0000-00000000000a'],
+  '{"attic_plans:63000000-0000-0000-0000-00000000000a":2}'
+)->>'status'), 'applied', 'repeating an acknowledged delete is idempotent');
+select is((public.sync_apply_rows(
+  'attic-resurrect', 'attic_plans',
+  '[{"id":"63000000-0000-0000-0000-00000000000a","plan":{"v":2,"items":[]}}]',
+  '{"attic_plans:63000000-0000-0000-0000-00000000000a":null}', false
+)->>'status'), 'conflict', 'stale replay cannot recreate a deleted plan id');
+select is((public.sync_delete_rows(
+  'attic-delete-missing', 'attic_plans', array['63000000-0000-0000-0000-0000000000ff'],
+  '{"attic_plans:63000000-0000-0000-0000-0000000000ff":null}'
+)->>'status'), 'applied', 'deleting a never-existing id is a no-op success, as for house_items');
+select is((public.sync_delete_rows(
+  'attic-delete-foreign', 'attic_plans', array['63000000-0000-0000-0000-00000000000b'],
+  '{"attic_plans:63000000-0000-0000-0000-00000000000b":null}'
+)->>'status'), 'applied', 'a foreign plan id does not disclose whether a row exists');
+select is((public.sync_delete_rows(
+  'attic-delete-foreign-rev', 'attic_plans', array['63000000-0000-0000-0000-00000000000b'],
+  '{"attic_plans:63000000-0000-0000-0000-00000000000b":1}'
+)), '{"status":"conflict","revisions":{"attic_plans:63000000-0000-0000-0000-00000000000b":null}}'::jsonb,
+  'guessing a foreign plan''s revision is a conflict that reveals nothing');
+select throws_ok(
+  $$delete from public.attic_plans where id = '63000000-0000-0000-0000-00000000000c'$$,
+  '42501', 'permission denied for table attic_plans', 'direct client deletes cannot bypass tombstones'
+);
+select is((public.sync_delete_rows(
+  'attic-delete-last', 'attic_plans', array['63000000-0000-0000-0000-00000000000c'],
+  '{"attic_plans:63000000-0000-0000-0000-00000000000c":1}'
+)->>'status'), 'applied', 'the household''s last plan can be deleted at DB level (the UI prevents it)');
+select is((select count(*) from public.attic_plans), 0::bigint,
+  'household A holds no plans after deleting the last one');
+select is((public.sync_apply_rows(
+  'attic-create-fresh', 'attic_plans',
+  '[{"id":"63000000-0000-0000-0000-00000000000d","plan":{"v":2,"items":[]}}]',
+  '{"attic_plans:63000000-0000-0000-0000-00000000000d":null}', false
+)->>'status'), 'applied', 'a fresh plan id remains writable after deletes');
 
 reset role;
 select is(
@@ -112,8 +174,20 @@ select is(
   '{"v":2,"items":[{"id":"secret","type":"bed"}]}'::jsonb,
   'household B''s plan is unchanged'
 );
-select is((select count(*) from public.attic_plans where id = '63000000-0000-0000-0000-00000000000a'), 1::bigint,
-  'the rejected delete left household A''s plan in place');
+select is((select count(*) from public.attic_plans where household_id = '62000000-0000-0000-0000-000000000002'), 1::bigint,
+  'household A''s deletes never removed household B''s row');
+select ok(
+  not has_function_privilege('authenticated', 'public.delete_household_rows(text,text[])', 'execute'),
+  'the retired delete_household_rows stays revoked from clients'
+);
+select ok(
+  exists (select 1 from pg_catalog.pg_trigger t
+    join pg_catalog.pg_proc p on p.oid = t.tgfoid
+    where t.tgrelid = 'public.attic_plans'::regclass and not t.tgisinternal
+      and t.tgname = 'reject_deleted_attic_plans' and p.proname = 'reject_tombstoned_row'
+      and encode(t.tgargs, 'escape') like 'attic_plans%'),
+  'attic_plans carries the tombstone guard trigger'
+);
 
 select * from finish();
 rollback;

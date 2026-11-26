@@ -48,7 +48,7 @@ select ok(
   (select count(*) from pg_catalog.pg_trigger t
     join pg_catalog.pg_proc p on p.oid = t.tgfoid
     join pg_catalog.pg_namespace n on n.oid = p.pronamespace
-    where not t.tgisinternal and n.nspname = 'private' and p.proname = 'reject_tombstoned_row') = 11
+    where not t.tgisinternal and n.nspname = 'private' and p.proname = 'reject_tombstoned_row') = 12
   and not exists (
     select 1 from (values
       ('scenarios','scenarios'), ('salary_submissions','salary_submissions'),
@@ -56,7 +56,7 @@ select ok(
       ('mortgage_loan_parts','mortgage_loan_parts'), ('mortgage_rate_periods','mortgage_rate_periods'),
       ('mortgage_payments','mortgage_payments'), ('mortgage_valuations','mortgage_valuations'),
       ('mortgage_contributions','mortgage_contributions'), ('house_items','house_items'),
-      ('mortgages','mortgages')
+      ('mortgages','mortgages'), ('attic_plans','attic_plans')
     ) expected(table_name, resource)
     left join pg_catalog.pg_class c on c.relname = expected.table_name
     left join pg_catalog.pg_namespace cn on cn.oid = c.relnamespace and cn.nspname = 'public'
@@ -64,7 +64,7 @@ select ok(
       and encode(t.tgargs, 'escape') like expected.resource || '%'
     left join pg_catalog.pg_proc p on p.oid = t.tgfoid and p.proname = 'reject_tombstoned_row'
     where p.oid is null
-  ), 'all eleven row stores map to the correct tombstone resource');
+  ), 'all twelve row stores map to the correct tombstone resource');
 select ok(
   not has_table_privilege('authenticated', 'public.tool_state', 'TRUNCATE')
   and not has_table_privilege('authenticated', 'public.scenarios', 'TRUNCATE')
