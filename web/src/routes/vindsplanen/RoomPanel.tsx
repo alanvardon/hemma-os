@@ -6,8 +6,10 @@ import { cm, type Geometry } from '../../lib/vindsplanen/attic'
 import { FF } from '../../lib/vindsplanen/below'
 import { gableWindowFit, SUN_IDS } from '../../lib/vindsplanen/items'
 import type { BelowDoor, Below, PlanV2, ViewPrefs } from '../../lib/vindsplanen/plan'
-import { CheckField, CmField, CmInput, SelectField } from './controls'
-import { patchAttic, patchBelow, patchGable, toggleBay } from './planOps'
+import { CheckField, CmField, CmInput, NumField, SelectField } from './controls'
+import { patchAttic, patchBelow, patchGable, patchSite, toggleBay } from './planOps'
+import { compassLabel } from './sunText'
+import { todayMonthDay } from './viewPrefs'
 
 const SUN_LABEL: Record<(typeof SUN_IDS)[number], string> = {
   morning: 'Morning sun from the east',
@@ -16,6 +18,13 @@ const SUN_LABEL: Record<(typeof SUN_IDS)[number], string> = {
   overcast: 'Overcast',
   night: 'Evening, lamps on',
 }
+
+/** The lighting select's value for the real sun (the other values are the preset ids). */
+const REAL_SUN = 'real'
+const LIGHT_OPTIONS: [string, string][] = [
+  ...SUN_IDS.map((s) => [s, SUN_LABEL[s]] as [string, string]),
+  [REAL_SUN, 'Real sun (date and time)'],
+]
 
 // [key, label, min cm, max cm] for the floor-below numbers (v41 renderBelow rows).
 const BELOW_ROWS: [keyof Below, string, number, number][] = [
@@ -62,6 +71,7 @@ export default function RoomPanel({
   const board = plan.options.board
   const setDoor = (i: number, patch: Partial<BelowDoor>) =>
     onChange(patchBelow(plan, { doors: B.doors.map((d, k) => (k === i ? { ...d, ...patch } : d)) }))
+  const site = plan.options.site
   const fit = gableWindowFit(geo, g).fits
 
   return (
@@ -69,12 +79,55 @@ export default function RoomPanel({
       <div className="vp-group">
         <h2>Light and view</h2>
         <p className="vp-note">Only applies to this device.</p>
-        <SelectField id="vp-sun" label="Lighting" value={view.sun} options={SUN_IDS.map((s) => [s, SUN_LABEL[s]] as [typeof s, string])} onChange={(sun) => onView({ ...view, sun })} />
+        <SelectField
+          id="vp-sun"
+          label="Lighting"
+          value={view.sunMode === 'real' ? REAL_SUN : view.sun}
+          options={LIGHT_OPTIONS}
+          onChange={(v) => {
+            if (v === REAL_SUN) {
+              if (view.sunMode !== 'real') onView({ ...view, sunMode: 'real', sunDate: todayMonthDay() })
+            } else onView({ ...view, sunMode: 'preset', sun: v as ViewPrefs['sun'] })
+          }}
+        />
+        {view.sunMode === 'real' && <p className="vp-note">Pick the date and time under the 3D view. The sun follows the house orientation and place below.</p>}
         <SelectField id="vp-quality" label="Quality" value={view.quality} options={[['nice', 'High (shading, sharper shadows)'], ['fast', 'Fast (for phones)']]} onChange={(quality) => onView({ ...view, quality })} />
         <CheckField id="vp-zones" label="Headroom zones" checked={view.zones} onChange={(zones) => onView({ ...view, zones })} />
         <CheckField id="vp-rafters" label="Show rafters" checked={view.rafters} onChange={(rafters) => onView({ ...view, rafters })} />
         <CheckField id="vp-cutaway" label="Hide the nearest walls" checked={view.cutaway} onChange={(cutaway) => onView({ ...view, cutaway })} />
         <CheckField id="vp-dims" label="Show measurements on the model" checked={view.dims} onChange={(dims) => onView({ ...view, dims })} />
+      </div>
+
+      <div className="vp-group">
+        <h2>Sun and site</h2>
+        <p className="vp-note">Shared with the household. Used by the real sun.</p>
+        <div className="vp-card">
+          <div className="vp-orient">
+            <NumField
+              id="vp-site-bearing"
+              label="House orientation"
+              value={site.ridgeBearing}
+              min={0}
+              max={359}
+              unit="°"
+              onChange={(ridgeBearing) => onChange(patchSite(plan, { ridgeBearing }))}
+            />
+            <div className="vp-compass-box">
+              <svg className="vp-compass" viewBox="-24 -24 48 48" role="img" aria-label={`The ridge points ${compassLabel(site.ridgeBearing)}`}>
+                <circle r="21" className="vp-compass-ring" />
+                <text y="-12" className="vp-compass-n" textAnchor="middle" aria-hidden="true">N</text>
+                <g transform={`rotate(${site.ridgeBearing})`}>
+                  <path d="M0 -12 L5 -1 L1.6 -1 L1.6 12 L-1.6 12 L-1.6 -1 L-5 -1 Z" className="vp-compass-arrow" transform="translate(0 3)" />
+                </g>
+              </svg>
+              <span className="vp-compass-label" aria-hidden="true">{compassLabel(site.ridgeBearing)}</span>
+            </div>
+          </div>
+          <p className="vp-note">Compass direction from the west gable to the east gable. 90° is due east; the default is the ridge running east–west.</p>
+          <NumField id="vp-site-lat" label="Latitude" value={site.lat} min={55} max={69} decimals={1} unit="°N" onChange={(lat) => onChange(patchSite(plan, { lat }))} />
+          <NumField id="vp-site-lon" label="Longitude" value={site.lon} min={10} max={25} decimals={1} unit="°E" onChange={(lon) => onChange(patchSite(plan, { lon }))} />
+          <p className="vp-note">Approximate is enough — one decimal. No address is stored.</p>
+        </div>
       </div>
 
       <div className="vp-group">

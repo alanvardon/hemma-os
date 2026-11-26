@@ -77,6 +77,21 @@ describe('attic plan load', () => {
     expect(rpcCalls()).toBe(0)
   })
 
+  it('loads a row saved before plan 144 (no site) with the default site, and keeps a stored site', async () => {
+    const legacy = examplePlan() as unknown as { options: Record<string, unknown> }
+    delete legacy.options.site
+    mock().tables[TABLE] = [cloudRow(legacy, 1)]
+    const old = await store.loadPlan()
+    expect(old.invalid).toBeUndefined()
+    expect(old.row?.plan.options.site).toEqual({ ridgeBearing: 90, lat: 59.3, lon: 18.0 })
+
+    const withSite = examplePlan()
+    withSite.options.site = { ridgeBearing: 135, lat: 63.8, lon: 20.3 }
+    mock().tables[TABLE] = [cloudRow(withSite, 2)]
+    const fresh = await store.loadPlan()
+    expect(fresh.row?.plan.options.site).toEqual({ ridgeBearing: 135, lat: 63.8, lon: 20.3 })
+  })
+
   it('returns null for a household with no plan', async () => {
     expect(await store.loadPlan()).toEqual({ row: null, fromCache: false })
     expect(store.cachedSnapshot()).toBeNull()

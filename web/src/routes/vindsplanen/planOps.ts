@@ -4,7 +4,7 @@
 
 import { atticOf, clamp, deriveGeometry, type Attic } from '../../lib/vindsplanen/attic'
 import { makeItem } from '../../lib/vindsplanen/items'
-import { sanitizeShape, type Below, type Gable, type Item, type ItemType, type PlanV2 } from '../../lib/vindsplanen/plan'
+import { sanitizeShape, type Below, type Gable, type Item, type ItemType, type PlanV2, type Site } from '../../lib/vindsplanen/plan'
 
 let counter = 1
 /** A fresh item id (v41 `newId`). */
@@ -34,6 +34,8 @@ export const patchItem = (plan: PlanV2, id: string, patch: Record<string, unknow
 
 export const patchBelow = (plan: PlanV2, patch: Partial<Below>): PlanV2 => ({ ...plan, options: { ...plan.options, below: { ...plan.options.below, ...patch } } })
 export const patchGable = (plan: PlanV2, patch: Partial<Gable>): PlanV2 => ({ ...plan, options: { ...plan.options, gable: { ...plan.options.gable, ...patch } } })
+
+export const patchSite = (plan: PlanV2, patch: Partial<Site>): PlanV2 => ({ ...plan, options: { ...plan.options, site: { ...plan.options.site, ...patch } } })
 
 /**
  * Change one attic measurement. `atticOf` normalises it; the rest of the plan

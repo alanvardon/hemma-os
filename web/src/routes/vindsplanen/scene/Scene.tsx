@@ -33,7 +33,9 @@ import { buildDims, buildHighlights, type MeasureHighlight } from './dims'
 import { buildItem } from './itemsScene'
 import { createModels, type SceneModels } from './models'
 import { buildLamps, roomEnvMap } from './lighting'
-import { createMats, ENV_INTENSITY, EXPOSURE, skyTexture, SUN_STYLE, type SceneMats } from './materials'
+import { createMats, ENV_INTENSITY, EXPOSURE, realSunLook, skyTexture, SUN_STYLE, type SceneMats } from './materials'
+import { sunVector } from '../../../lib/vindsplanen/sun'
+import { stockholmYear, sunAt } from '../sunText'
 import type { TexRes } from './textures'
 import { buildBoard, buildEast, buildEastLabel, buildFloors, buildKnee, buildRafters, buildSlopes, buildWestGable, buildZones } from './shell'
 import { disposeBuilt, disposeObject, type Built, type LabelData } from './util'
@@ -335,19 +337,37 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
     sun.shadow.camera.layers.enableAll() // cut-away surfaces still cast shadows
     return { hemi, sun }
   })
+  // the real sun (plan 144): where it is for the house at the chosen Swedish date and time
+  const site = useJson(plan.options.site)
+  const year = useMemo(() => stockholmYear(), [])
+  const realOn = view.sunMode === 'real'
+  const real = useMemo(() => (realOn ? sunAt(year, view.sunDate, view.sunMinutes, site) : null), [realOn, year, view.sunDate, view.sunMinutes, site])
+  const sunDown = !!real && real.altitude <= 0
   useEffect(() => {
     const { hemi, sun } = lights
-    const s = SUN_STYLE[view.sun]
     const c = new THREE.Vector3(geo.L / 2, 0, 0)
-    sun.position.copy(c).add(new THREE.Vector3(...s.off).multiplyScalar(1.6))
     sun.target.position.copy(c)
     sun.target.updateMatrixWorld()
+    if (real) {
+      const look = realSunLook(real.altitude)
+      // a unit vector towards the sun in scene axes, at the preset suns' distance (~13.6)
+      const v = sunVector(real.altitude, real.azimuth, site.ridgeBearing)
+      sun.position.copy(c).add(new THREE.Vector3(...v).multiplyScalar(13.6))
+      sun.intensity = look.int
+      sun.color.set(look.color)
+      sun.visible = look.int > 0
+      hemi.intensity = look.hemi
+      scene.environmentIntensity = ENV_INTENSITY * look.env
+      return
+    }
+    const s = SUN_STYLE[view.sun]
+    sun.position.copy(c).add(new THREE.Vector3(...s.off).multiplyScalar(1.6))
     sun.intensity = s.int
     sun.color.set(s.color)
     sun.visible = s.int > 0
     hemi.intensity = s.hemi
     scene.environmentIntensity = ENV_INTENSITY * s.env
-  }, [lights, scene, view.sun, geo.L])
+  }, [lights, scene, view.sun, geo.L, real, site.ridgeBearing])
   useEffect(() => {
     const { sun } = lights
     const sz = nice ? 2048 : 1024
@@ -390,15 +410,16 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
   }, [gl])
 
   // the sky gradient as background; RoomEnvironment as the image-based light (plan 141)
-  const night = view.sun === 'night'
+  const night = !realOn && view.sun === 'night'
+  const darkSky = night || sunDown
   useEffect(() => {
-    const sky = skyTexture(night)
+    const sky = skyTexture(darkSky)
     scene.background = sky
     return () => {
       scene.background = null
       sky.dispose()
     }
-  }, [scene, night])
+  }, [scene, darkSky])
   useEffect(() => {
     const env = roomEnvMap(gl)
     scene.environment = env.texture
@@ -413,7 +434,7 @@ function SceneContent(props: SceneProps & { layerRef: RefObject<HTMLDivElement |
   const lamps = useMemo(() => (lampItems ? buildLamps(lampSpots(geo, lampItems), nice) : null), [geo, lampItems, nice])
   useEffect(() => () => lamps?.dispose(), [lamps])
   // daylight through the windows (their area lights) is gone at night
-  graph.winLights.visible = !night
+  graph.winLights.visible = !darkSky
 
   // ----- shell builders
   const rafters = useMemo(() => buildRafters(geo, mats, options.board, today), [geo, mats, options.board, today])

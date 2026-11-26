@@ -503,7 +503,27 @@ export const SUN_STYLE = {
   night: { off: [-7, 1.2, 3.6], int: 0.15, color: '#ff9a5a', hemi: 0.04, env: 0.12 },
 } as const
 
-const DAY_SKY = ['#7fa6d4', '#b9d0e6', '#e8eef1', '#d3cfc4', '#a8a294'] as const
+/**
+ * The real sun's look (plan 144) from its altitude in radians: the lamp's
+ * intensity and colour, the hemisphere fill and the environment share. Below
+ * the horizon the sun is off and the room has only a dim sky ("dusk"); just
+ * above it the light is weak and warm; from ~30° up it is the midday look.
+ */
+export function realSunLook(altitude: number): { int: number; color: string; hemi: number; env: number; down: boolean } {
+  const alt = altitude * (180 / Math.PI)
+  if (alt <= 0) return { int: 0, color: '#ff9a5a', hemi: 0.14, env: 0.22, down: true }
+  const t = Math.min(1, alt / 30)
+  const mix = (a: string, b: string) => '#' + new THREE.Color(a).lerp(new THREE.Color(b), t).getHexString()
+  return {
+    int: 0.5 + (SUN_STYLE.midday.int - 0.5) * t,
+    color: mix('#ff9f5e', SUN_STYLE.midday.color),
+    hemi: 0.2 + (HEMI - 0.2) * t,
+    env: 0.35 + 0.65 * t,
+    down: false,
+  }
+}
+
+const DAY_SKY =['#7fa6d4', '#b9d0e6', '#e8eef1', '#d3cfc4', '#a8a294'] as const
 /** Late evening: deep blue overhead, a last warm band at the horizon, dark ground. */
 const NIGHT_SKY = ['#0b1222', '#18233a', '#4a3a44', '#1c1a1a', '#100f0e'] as const
 
