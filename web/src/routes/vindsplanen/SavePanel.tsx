@@ -2,7 +2,7 @@
 // example layout. The plan itself is saved automatically for the household;
 // this tab is for keeping a copy and for moving a plan in from the v41 artifact.
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { PlanV2 } from '../../lib/vindsplanen/plan'
 import type { SaveState } from './usePlanEditor'
 import { downloadJson, parsePlanText } from './importPlan'
@@ -50,9 +50,11 @@ export function ImportBox({ onImport, id = 'vp-import' }: { onImport: (plan: Pla
 }
 
 export default function SavePanel({
-  plan, saveState, onImport, onReset, onRetry, onPrint,
+  plan, saveState, onImport, onReset, onRetry, onPrint, compare,
 }: {
   plan: PlanV2
+  /** The "Compare variants" table (plan 149). */
+  compare?: ReactNode
   saveState: SaveState
   onImport: (plan: PlanV2) => void
   onReset: () => void
@@ -101,6 +103,7 @@ export default function SavePanel({
           {msg}
         </p>
       </div>
+      {compare}
       <div className="vp-group">
         <h2>Load a plan</h2>
         <p className="vp-note">Works with a plan copied from the artifact (Copy plan) and with an export from here. It replaces the current plan, but you can undo.</p>

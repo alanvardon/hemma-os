@@ -37,11 +37,15 @@ vi.mock('./vindsplanen/scene/Scene', () => ({
   },
 }))
 vi.mock('../lib/vindsplanen-store', () => ({
-  loadPlan: vi.fn(),
+  MAX_PLAN_NAME: 80,
+  loadPlans: vi.fn(),
   savePlan: vi.fn(),
+  deletePlan: vi.fn(),
   pendingConflict: vi.fn(() => null),
   onConflictChange: vi.fn(() => () => {}),
   newPlanRow: vi.fn(),
+  duplicatePlanRow: vi.fn(),
+  normalizePlanName: vi.fn((s: string) => s.trim() || null),
 }))
 
 const row = (plan: PlanV2): store.AtticPlanRow => ({ id: 'row-1', name: 'Vindsplanen', schema_version: 2, plan, created_at: '2026-11-25T10:00:00.000Z' })
@@ -67,7 +71,7 @@ beforeEach(() => {
   Object.assign(h, { opts: null, starts: 0, stops: 0, save: () => Promise.resolve() })
   localStorage.clear()
   HTMLCanvasElement.prototype.getContext = (() => ({})) as never // WebGL "available"
-  vi.mocked(store.loadPlan).mockResolvedValue({ row: row(examplePlan()), fromCache: false })
+  vi.mocked(store.loadPlans).mockResolvedValue({ rows: [row(examplePlan())], fromCache: false, invalid: [] })
   vi.mocked(store.savePlan).mockResolvedValue(undefined)
 })
 

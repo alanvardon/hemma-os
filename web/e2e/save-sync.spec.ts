@@ -219,6 +219,40 @@ async function mockBackend(page: Page): Promise<Backend> {
       receipts.set(body.p_operation_id, response)
       return route.fulfill({ json: response })
     }
+    // Plan 149 sync_delete_rows (attic_plans arm of
+    // supabase/migrations/20261126100000_attic_plans_delete.sql): revision-
+    // checked delete, receipt-backed, each deleted id acknowledged as null.
+    // The server-side tombstone ledger is not modelled — the row simply goes.
+    if (path === '/rest/v1/rpc/sync_delete_rows' && req.method() === 'POST') {
+      if (backend.failInserts) return route.abort('failed')
+      const body = req.postDataJSON() as {
+        p_operation_id: string
+        p_resource: string
+        p_ids: string[]
+        p_expected_revisions: Record<string, number | null>
+      }
+      const prior = receipts.get(body.p_operation_id)
+      if (prior) return route.fulfill({ json: prior })
+      const collection = resources[body.p_resource]
+      if (!collection) return route.fulfill({ status: 400, json: { code: '22023', message: 'unsupported resource' } })
+      const current = Object.fromEntries(body.p_ids.map((id) => {
+        const existing = collection.find((entry) => entry.id === id)
+        return [`${body.p_resource}:${id}`, existing ? Number(existing.revision) : null]
+      }))
+      if (Object.entries(current).some(([key, revision]) => body.p_expected_revisions[key] !== revision)) {
+        return route.fulfill({ json: { status: 'conflict', revisions: current } })
+      }
+      for (const id of body.p_ids) {
+        const index = collection.findIndex((entry) => entry.id === id)
+        if (index >= 0) collection.splice(index, 1)
+      }
+      const response = {
+        status: 'applied',
+        revisions: Object.fromEntries(body.p_ids.map((id) => [`${body.p_resource}:${id}`, null])),
+      }
+      receipts.set(body.p_operation_id, response)
+      return route.fulfill({ json: response })
+    }
     // Atomic bank change: archive the old agreement and insert the new
     // agreement + parts in one step, mirroring sync_change_mortgage_bank.
     if (path === '/rest/v1/rpc/sync_change_mortgage_bank' && req.method() === 'POST') {
@@ -1050,7 +1084,11 @@ test('Vindsplanen: a v41 export imported on the Save tab is saved and shown afte
 })
 
 test('Vindsplanen: a revision conflict asks which version to keep, and both choices work', async ({ page }) => {
-  test.setTimeout(60_000) // two debounced saves + two conflicts + a reload
+  // Four debounced saves, two conflicts and TWO full page loads after the
+  // first ("Ladda molnversionen" itself calls window.location.reload()). Each
+  // load restarts the 3D scene, which on SwiftShader blocks the page's main
+  // thread for several seconds; 60 s left no headroom on CI.
+  test.setTimeout(120_000)
   const errors = trackPageErrors(page)
   const backend = await mockBackend(page)
   await page.setViewportSize({ width: 390, height: 844 })
@@ -1063,7 +1101,11 @@ test('Vindsplanen: a revision conflict asks which version to keep, and both choi
   backend.remoteUpdateAtticPlan((p) => { p.items = p.items.filter((i) => i.type !== 'sofa') })
   await page.getByRole('button', { name: '+ Storage room' }).click()
   await expect(page.locator('.persistence-conflict')).toBeVisible({ timeout: 10_000 })
+  // "Ladda molnversionen" reloads the page: assert on the reloaded page, not
+  // on the old one racing its unload.
+  const reloaded = page.waitForEvent('load')
   await page.getByRole('button', { name: 'Ladda molnversionen' }).click()
+  await reloaded
   await expect(page.locator('.persistence-conflict')).not.toBeVisible()
   await expect(page.locator('.vp-list')).toBeVisible()
   await expect(page.locator('.vp-list')).not.toContainText('Sofa')
@@ -1085,5 +1127,39 @@ test('Vindsplanen: a revision conflict asks which version to keep, and both choi
   await page.reload()
   await expect(page.locator('.vp-list')).toContainText('Storage room')
   await expect(page.locator('.vp-list')).toContainText('Sofa')
+  expect(errors).toEqual([])
+})
+
+test('Vindsplanen: a new copy of the plan survives reload, and so does deleting it', async ({ page }) => {
+  test.setTimeout(60_000) // a debounced first save + two reloads
+  const errors = trackPageErrors(page)
+  const backend = await mockBackend(page)
+  await page.goto('/#/vindsplanen')
+  await page.getByRole('button', { name: 'Start with the example' }).click()
+  await expect(page.locator('.vp-list')).toBeVisible()
+  await expect.poll(() => backend.atticPlans.length, { timeout: 10_000 }).toBe(1)
+
+  const bar = page.getByRole('region', { name: 'Plan variants' })
+  const picker = bar.getByLabel('Plan', { exact: true })
+  await bar.getByRole('button', { name: 'New copy' }).click()
+  await expect(picker.locator('option:checked')).toHaveText('Vindsplanen (copy)')
+  await expect.poll(() => backend.atticPlans.map((r) => r.name), { timeout: 10_000 })
+    .toEqual(['Vindsplanen', 'Vindsplanen (copy)'])
+
+  await page.reload()
+  await expect(picker.locator('option')).toHaveText(['Vindsplanen', 'Vindsplanen (copy)'])
+  // the open variant is remembered on this device
+  await expect(picker.locator('option:checked')).toHaveText('Vindsplanen (copy)')
+
+  await bar.getByRole('button', { name: 'Delete', exact: true }).click()
+  await page.getByRole('button', { name: 'Delete plan' }).click()
+  await expect(picker.locator('option')).toHaveText(['Vindsplanen'])
+  await expect.poll(() => backend.atticPlans.map((r) => r.name), { timeout: 10_000 }).toEqual(['Vindsplanen'])
+
+  await page.reload()
+  await expect(picker.locator('option')).toHaveText(['Vindsplanen'])
+  await expect(page.locator('.vp-list')).toContainText('Roof window')
+  // one variant left: delete is not offered
+  await expect(bar.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0)
   expect(errors).toEqual([])
 })

@@ -179,6 +179,37 @@
   }
   .vp-tabs { position: sticky; top: 0; z-index: 4; background: var(--paper); padding: 4px 0; }
 
+  /* ── Plan variants (plan 149) ───────────────────────────────────────────── */
+  .vp-variants { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; min-width: 0; }
+  .vp-variant-pick, .vp-variant-rename { flex: 1 1 12rem; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .vp-variant-pick label, .vp-variant-rename label { font: 650 12px var(--font-ui); text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); }
+  .vp-variant-pick select, .vp-variant-rename input {
+    width: 100%; min-width: 0; min-height: 40px; font-family: var(--font-ui); font-size: 16px; font-weight: 600; color: var(--ink);
+    background: var(--input-bg); border: 1px solid var(--rule); border-radius: var(--r-sm); padding: 6px 8px;
+  }
+  .vp-variant-pick select:disabled { opacity: 0.7; }
+  .vp-variant-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .vp-variant-acts[hidden] { display: none; }
+  .vp-variant-acts .btn { padding: 6px 12px; }
+  .vp-variant-err { margin: 0; font-size: 12.5px; color: var(--warn); min-height: 0; }
+  .vp-variant-err:empty { display: none; }
+  .vp-variants > .vp-note { flex-basis: 100%; }
+
+  .vp-compare {
+    max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain;
+    border: 1px solid var(--rule); border-radius: var(--r-sm); background: var(--paper-card);
+  }
+  .vp-compare:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .vp-compare table { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+  .vp-compare th, .vp-compare td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  .vp-compare tbody tr:last-child > * { border-bottom: none; }
+  .vp-compare thead th { font-weight: 650; color: var(--ink); min-width: 7.5rem; max-width: 12rem; overflow-wrap: anywhere; }
+  .vp-compare thead th small { display: block; font-weight: 500; font-size: 11.5px; color: var(--accent); }
+  .vp-compare thead th[aria-current='true'] { background: var(--accent-faint); }
+  .vp-compare tbody th, .vp-compare thead td { min-width: 9rem; position: sticky; left: 0; z-index: 1; background: var(--paper-card); }
+  .vp-compare tbody th { font-weight: 500; color: var(--ink-mid); }
+  .vp-compare tbody td { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink); }
+
   /* Segmented (shared markup from components/Segmented.tsx). */
   .segmented {
     display: flex; width: 100%; background: var(--input-bg); border: 1px solid var(--rule);

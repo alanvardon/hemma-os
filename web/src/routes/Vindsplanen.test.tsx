@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
     onDragEnd: () => void
   },
   listener: null as null | ((c: unknown) => void),
+  copies: 0,
 }))
 
 vi.mock('./vindsplanen/scene/Scene', () => ({
@@ -33,17 +34,27 @@ vi.mock('./vindsplanen/scene/Scene', () => ({
   },
 }))
 vi.mock('../lib/vindsplanen-store', () => ({
-  loadPlan: vi.fn(),
+  MAX_PLAN_NAME: 80,
+  loadPlans: vi.fn(),
   savePlan: vi.fn(),
+  deletePlan: vi.fn(),
   pendingConflict: vi.fn(() => null),
   onConflictChange: vi.fn((l: (c: unknown) => void) => {
     h.listener = l
     return () => {}
   }),
   newPlanRow: vi.fn((plan: PlanV2) => ({ id: 'row-1', name: 'Vindsplanen', schema_version: 2, plan, created_at: '2026-11-25T10:00:00.000Z' })),
+  duplicatePlanRow: vi.fn((src: { name: string; plan: PlanV2 }) => ({
+    id: `copy-${++h.copies}`, name: `${src.name} (copy)`, schema_version: 2, plan: structuredClone(src.plan), created_at: '2026-11-26T10:00:00.000Z',
+  })),
+  normalizePlanName: vi.fn((s: string) => {
+    const t = s.trim()
+    return t && t.length <= 80 ? t : null
+  }),
 }))
 
-const loadPlan = vi.mocked(store.loadPlan)
+const loadPlans = vi.mocked(store.loadPlans)
+const deletePlan = vi.mocked(store.deletePlan)
 const savePlan = vi.mocked(store.savePlan)
 
 const row = (plan: PlanV2): store.AtticPlanRow => ({ id: 'row-1', name: 'Vindsplanen', schema_version: 2, plan, created_at: '2026-11-25T10:00:00.000Z' })
@@ -73,10 +84,12 @@ beforeEach(() => {
   vi.clearAllMocks()
   h.props = null
   h.listener = null
+  h.copies = 0
   localStorage.clear()
   HTMLCanvasElement.prototype.getContext = (() => ({})) as never // WebGL "available"
-  loadPlan.mockResolvedValue({ row: row(examplePlan()), fromCache: false })
+  loadPlans.mockResolvedValue({ rows: [row(examplePlan())], fromCache: false, invalid: [] })
   savePlan.mockResolvedValue(undefined)
+  deletePlan.mockResolvedValue(undefined)
 })
 
 describe('Vindsplanen route', () => {
@@ -138,7 +151,7 @@ describe('Vindsplanen route', () => {
   })
 
   it('shows the read-error state for an invalid cloud row and never saves', async () => {
-    loadPlan.mockResolvedValue({ row: null, fromCache: false, invalid: { v: 2, junk: true } })
+    loadPlans.mockResolvedValue({ rows: [], fromCache: false, invalid: [{ id: 'row-1', raw: { v: 2, junk: true } }] })
     renderRoute()
     expect(await screen.findByText('The plan could not be read')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Download raw data (JSON)' })).toBeTruthy()
@@ -160,7 +173,7 @@ describe('Vindsplanen route', () => {
   })
 
   it('does not offer a first plan when the cloud could not be read', async () => {
-    loadPlan.mockResolvedValue({ row: null, fromCache: true })
+    loadPlans.mockResolvedValue({ rows: [], fromCache: true, invalid: [] })
     renderRoute()
     expect(await screen.findByText('The plan could not be fetched')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Start with the example' })).toBeNull()
@@ -175,13 +188,13 @@ describe('Vindsplanen route', () => {
     expect(h.props!.plan.items).toHaveLength(11)
     expect(h.listener).toBeTruthy()
 
-    loadPlan.mockResolvedValue({ row: row(theirs), fromCache: false })
+    loadPlans.mockResolvedValue({ rows: [row(theirs)], fromCache: false, invalid: [] })
     act(() => h.listener!({ id: 'op-1', resource: 'attic_plans' }))
-    expect(loadPlan).toHaveBeenCalledTimes(1) // nothing reloaded while the conflict is open
+    expect(loadPlans).toHaveBeenCalledTimes(1) // nothing reloaded while the conflict is open
     act(() => h.listener!(null))
 
     await waitFor(() => expect(h.props!.plan.items).toHaveLength(2))
-    expect(loadPlan).toHaveBeenCalledTimes(2)
+    expect(loadPlans).toHaveBeenCalledTimes(2)
     expect((screen.getByRole('button', { name: /Undo/ }) as HTMLButtonElement).disabled).toBe(true)
   })
 
@@ -191,7 +204,7 @@ describe('Vindsplanen route', () => {
     act(() => h.listener!({ id: 'op-1', resource: 'attic_plans' }))
     dragBed(2.05, 0.5)
     act(() => h.listener!(null))
-    expect(loadPlan).toHaveBeenCalledTimes(1)
+    expect(loadPlans).toHaveBeenCalledTimes(1)
     expect(bed().x).toBe(2.05)
     hide()
     await waitFor(() => expect(savePlan).toHaveBeenCalledTimes(1))
@@ -203,7 +216,7 @@ describe('Vindsplanen route', () => {
     await screen.findByTestId('scene')
     dragBed(2.05, 0.5)
     act(() => h.listener!({ id: 'op-1', resource: 'attic_plans' }))
-    loadPlan.mockResolvedValue({ row: row(theirs), fromCache: false })
+    loadPlans.mockResolvedValue({ rows: [row(theirs)], fromCache: false, invalid: [] })
     act(() => h.listener!(null))
     await waitFor(() => expect(h.props!.plan.items).toHaveLength(2))
     hide()
@@ -211,7 +224,7 @@ describe('Vindsplanen route', () => {
   })
 
   describe('empty household', () => {
-    beforeEach(() => { loadPlan.mockResolvedValue({ row: null, fromCache: false }) })
+    beforeEach(() => { loadPlans.mockResolvedValue({ rows: [], fromCache: false, invalid: [] }) })
 
     it('offers import first, example second, and creates the plan from the example', async () => {
       renderRoute()
@@ -283,7 +296,7 @@ describe('Vindsplanen route', () => {
 
   it('lists items with their warning counts and English warning text', async () => {
     const r = ownerLike.input
-    loadPlan.mockResolvedValue({ row: row(importOwnerLike(r)), fromCache: false })
+    loadPlans.mockResolvedValue({ rows: [row(importOwnerLike(r))], fromCache: false, invalid: [] })
     renderRoute()
     await screen.findByTestId('scene')
     expect(document.querySelectorAll('.vp-badge').length).toBeGreaterThan(0)
@@ -342,6 +355,180 @@ describe('Vindsplanen route', () => {
     await userEvent.type(input, '260')
     await userEvent.click(screen.getByRole('button', { name: 'Save and continue' }))
     expect(h.props!.plan.options.measured.A4).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+})
+
+describe('Plan variants (plan 149)', () => {
+  const planA = examplePlan()
+  const planB: PlanV2 = { ...examplePlan(), items: examplePlan().items.slice(0, 3) }
+  const rowA: store.AtticPlanRow = { ...row(planA), id: 'row-a', name: 'Plan A' }
+  const rowB: store.AtticPlanRow = { id: 'row-b', name: 'Plan B', schema_version: 2, plan: planB, created_at: '2026-11-25T11:00:00.000Z' }
+  const picker = () => screen.getByLabelText('Plan') as HTMLSelectElement
+  const optionNames = () => Array.from(picker().options).map((o) => o.textContent)
+
+  beforeEach(() => {
+    loadPlans.mockResolvedValue({ rows: [rowA, rowB], fromCache: false, invalid: [] })
+  })
+
+  it('opens the variant this device chose, and the oldest (remembered) when that one is gone', async () => {
+    localStorage.setItem('vp-active-plan-v1', 'row-b')
+    const first = renderRoute()
+    await screen.findByTestId('scene')
+    expect(picker().value).toBe('row-b')
+    expect(h.props!.plan.items).toHaveLength(3)
+    first.unmount()
+
+    localStorage.setItem('vp-active-plan-v1', 'row-gone')
+    renderRoute()
+    await screen.findByTestId('scene')
+    expect(picker().value).toBe('row-a')
+    expect(localStorage.getItem('vp-active-plan-v1')).toBe('row-a')
+  })
+
+  it('switching saves the previous variant\'s pending edit first, then opens the other with a fresh history', async () => {
+    renderRoute()
+    await screen.findByTestId('scene')
+    dragBed(2.05, 0.5)
+    expect(savePlan).not.toHaveBeenCalled() // still inside the debounce
+    await userEvent.selectOptions(picker(), 'row-b')
+    await waitFor(() => expect(h.props!.plan.items).toHaveLength(3))
+    expect(savePlan).toHaveBeenCalledTimes(1)
+    const sent = savePlan.mock.calls[0][0]
+    expect(sent.id).toBe('row-a')
+    expect((sent.plan.items.find((i) => i.id === 'b1') as { x: number }).x).toBe(2.05)
+    expect(localStorage.getItem('vp-active-plan-v1')).toBe('row-b')
+    expect((screen.getByRole('button', { name: /Undo/ }) as HTMLButtonElement).disabled).toBe(true)
+    // conflicts are watched for the open variant only
+    expect(vi.mocked(store.onConflictChange)).toHaveBeenLastCalledWith(expect.any(Function), 'row-b')
+    // back again: the saved edit is what Plan A shows
+    await userEvent.selectOptions(picker(), 'row-a')
+    await waitFor(() => expect(bed().x).toBe(2.05))
+  })
+
+  it('stays on a variant whose pending edit could not be saved', async () => {
+    savePlan.mockRejectedValueOnce(new PersistenceError('offline'))
+    renderRoute()
+    await screen.findByTestId('scene')
+    dragBed(2.05, 0.5)
+    await userEvent.selectOptions(picker(), 'row-b')
+    expect(await screen.findByText(/not saved yet/)).toBeTruthy()
+    expect(picker().value).toBe('row-a')
+    expect(bed().x).toBe(2.05)
+  })
+
+  it('"New copy" saves a copy of the open variant and opens it', async () => {
+    renderRoute()
+    await screen.findByTestId('scene')
+    dragBed(2.05, 0.5)
+    await userEvent.click(screen.getByRole('button', { name: 'New copy' }))
+    await waitFor(() => expect(picker().value).toBe('copy-1'))
+    expect(optionNames()).toEqual(['Plan A', 'Plan B', 'Plan A (copy)'])
+    // the open variant's edit lands first, then the copy (with that edit)
+    expect(savePlan.mock.calls.map((c) => c[0].id)).toEqual(['row-a', 'copy-1'])
+    expect((savePlan.mock.calls[1][0].plan.items.find((i) => i.id === 'b1') as { x: number }).x).toBe(2.05)
+    expect(bed().x).toBe(2.05)
+  })
+
+  it('renames the open variant with a trimmed name, refuses an empty one, and Esc cancels', async () => {
+    renderRoute()
+    await screen.findByTestId('scene')
+    await userEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    const input = screen.getByLabelText('Plan name')
+    await userEvent.clear(input)
+    await userEvent.type(input, '   {Enter}')
+    expect(screen.getByRole('alert').textContent).toBe('Give the plan a name of 1–80 characters.')
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(savePlan).not.toHaveBeenCalled()
+
+    await userEvent.type(input, '{Escape}')
+    expect(screen.queryByLabelText('Plan name')).toBeNull()
+    expect(optionNames()).toEqual(['Plan A', 'Plan B'])
+    expect(savePlan).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await userEvent.clear(screen.getByLabelText('Plan name'))
+    await userEvent.type(screen.getByLabelText('Plan name'), '  Two rooms  {Enter}')
+    await waitFor(() => expect(savePlan).toHaveBeenCalledTimes(1))
+    expect(savePlan.mock.calls[0][0]).toMatchObject({ id: 'row-a', name: 'Two rooms' })
+    expect(optionNames()).toEqual(['Two rooms', 'Plan B'])
+  })
+
+  it('deletes the open variant after confirming: it leaves the list and the other one opens', async () => {
+    renderRoute()
+    await screen.findByTestId('scene')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(await screen.findByText('Delete “Plan A”?')).toBeTruthy()
+    expect(screen.getByText('This can’t be undone.')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Delete plan' }))
+    await waitFor(() => expect(deletePlan).toHaveBeenCalledWith('row-a'))
+    await waitFor(() => expect(optionNames()).toEqual(['Plan B']))
+    expect(picker().value).toBe('row-b')
+    expect(h.props!.plan.items).toHaveLength(3)
+    expect(await screen.findByText('“Plan A” deleted.')).toBeTruthy()
+    // one variant left: delete is no longer offered
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+  })
+
+  it('cancelling the confirmation deletes nothing', async () => {
+    renderRoute()
+    await screen.findByTestId('scene')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    expect(deletePlan).not.toHaveBeenCalled()
+    expect(optionNames()).toEqual(['Plan A', 'Plan B'])
+  })
+
+  it('shows a failed delete as a toast and keeps the variant listed', async () => {
+    deletePlan.mockRejectedValueOnce(new PersistenceError('offline'))
+    renderRoute()
+    await screen.findByTestId('scene')
+    await userEvent.selectOptions(picker(), 'row-b')
+    await waitFor(() => expect(picker().value).toBe('row-b'))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete plan' }))
+    expect(await screen.findByText('Ingen anslutning. Ändringen sparades inte i molnet.')).toBeTruthy()
+    expect(deletePlan).toHaveBeenCalledWith('row-b')
+    expect(optionNames()).toEqual(['Plan A', 'Plan B'])
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy()
+  })
+
+  it('words a refused delete (server without the delete arm) and a conflicted one in English', async () => {
+    deletePlan.mockRejectedValueOnce(new PersistenceError('validation')).mockRejectedValueOnce(new PersistenceError('conflict'))
+    renderRoute()
+    await screen.findByTestId('scene')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete plan' }))
+    expect(await screen.findByText('This plan can’t be deleted right now. Nothing was removed.')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete plan' }))
+    expect(await screen.findByText('Someone else changed this plan — reload and try again.')).toBeTruthy()
+    expect(optionNames()).toEqual(['Plan A', 'Plan B'])
+  })
+
+  it('does not offer delete with a single variant, nor for a list served from the cache', async () => {
+    loadPlans.mockResolvedValue({ rows: [rowA], fromCache: false, invalid: [{ id: 'row-x', raw: {} }] })
+    const first = renderRoute()
+    await screen.findByTestId('scene')
+    expect(screen.getByRole('button', { name: 'New copy' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+    expect(screen.getByText('1 saved plan can’t be read and is left untouched.')).toBeTruthy()
+    first.unmount()
+
+    loadPlans.mockResolvedValue({ rows: [rowA, rowB], fromCache: true, invalid: [] })
+    renderRoute()
+    await screen.findByTestId('scene')
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+  })
+
+  it('compares the variants side by side on the Save tab', async () => {
+    renderRoute()
+    await screen.findByTestId('scene')
+    await userEvent.click(screen.getByRole('radio', { name: 'Save' }))
+    const table = screen.getByRole('region', { name: 'Compare variants' })
+    const heads = Array.from(table.querySelectorAll('thead th')).map((t) => t.textContent)
+    expect(heads).toEqual(['Plan Aopen', 'Plan B'])
+    const windows = Array.from(table.querySelectorAll('tbody tr')).find((tr) => tr.textContent?.startsWith('Roof windows'))!
+    expect(Array.from(windows.querySelectorAll('td')).map((td) => td.textContent)).toEqual(['3', '0'])
   })
 })
 
